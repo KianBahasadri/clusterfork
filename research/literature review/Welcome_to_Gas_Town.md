@@ -1,8 +1,8 @@
 # Welcome to Gas Town
 
-**Authors:** Steve Yegge
-**Venue:** Medium, 2026
-**Link:** https://steve-yegge.medium.com/welcome-to-gas-town-4f25ee16dd04
+**Authors:** Steve Yegge  
+**Venue:** Medium, 2026  
+**Link:** https://steve-yegge.medium.com/welcome-to-gas-town-4f25ee16dd04  
 
 ## Summary
 
