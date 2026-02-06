@@ -1,13 +1,15 @@
 # Clusterfork
 
-vibe coding at the speed of light.
+Burn money on LLM usage at the speed of light.
 
-## Project Structure
+Build large autonomous systems. LLM agents at every level—workers, managers, decision makers. Networks that think, plan, and execute together at scale.
 
 ```
-clusterfork/
-├── README.md
-└── research/
-    ├── proposals/          # Orchestration proposals
-    └── reviews/            # Reviews of existing tools
+research/
+├── proposals/
+└── literature review/
 ```
+
+## To Review
+
+Nothing right now.
