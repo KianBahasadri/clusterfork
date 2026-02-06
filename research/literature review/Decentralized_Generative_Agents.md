@@ -25,9 +25,10 @@ DAMCS addresses these by implementing two core components:
 ### 1. Adaptive Hierarchical Knowledge Graph (Memory)
 
 Instead of a flat list of memories, agents maintain a **multi-modal memory system** organized as a hierarchical knowledge graph.
-*   **Structure:** Concepts and experiences are linked hierarchically (e.g., "Make Wood Pickaxe" -> requires "Wood" -> found in "Forest").
-*   **Reasoning:** Agents traverse this graph to plan actions and reason about dependencies, allowing them to break down complex goals into sub-goals based on past experience.
-*   **Adaptivity:** The graph updates dynamically as agents explore and learn, refining the relationships between nodes.
+
+-   **Structure:** Concepts and experiences are linked hierarchically (e.g., "Make Wood Pickaxe" -> requires "Wood" -> found in "Forest").
+-   **Reasoning:** Agents traverse this graph to plan actions and reason about dependencies, allowing them to break down complex goals into sub-goals based on past experience.
+-   **Adaptivity:** The graph updates dynamically as agents explore and learn, refining the relationships between nodes.
 
 ### 2. Structured Communication Protocol
 
@@ -35,28 +36,28 @@ Agents do not broadcast their entire memory. Instead, they use the knowledge gra
 
 ## Key Contributions
 
-*   **DAMCS Framework:** A novel decentralized framework combining LLMs with hierarchical knowledge graphs.
-*   **Efficiency Gains:** Demonstrated that 2 agents can complete tasks with **63% fewer steps** than a single agent, and 6 agents with **74% fewer steps**.
-*   **Decentralized Coordination:** Proved that structured knowledge sharing allows for effective cooperation without a central coordinator.
+-   **DAMCS Framework:** A novel decentralized framework combining LLMs with hierarchical knowledge graphs.
+-   **Efficiency Gains:** Demonstrated that 2 agents can complete tasks with **63% fewer steps** than a single agent, and 6 agents with **74% fewer steps**.
+-   **Decentralized Coordination:** Proved that structured knowledge sharing allows for effective cooperation without a central coordinator.
 
 ## Relevance to Clusterfork
 
 For Clusterfork, the **Adaptive Hierarchical Knowledge Graph** is the critical takeaway:
 
-*   **Shared "Brain":** Instead of just vector databases for memory, we should consider a graph structure that links *tasks*, *files*, and *concepts*.
-*   **Contextual Retrieval:** When an agent needs to work on a task, it shouldn't just search for "similar text"; it should traverse the graph to find *dependencies* (e.g., "Editing `auth.ts` requires checking `user_model.ts`").
-*   **Decentralized Handoffs:** If we move towards a swarm model, agents can pass "sub-graphs" of context to each other rather than full conversation logs.
+-   **Shared "Brain":** Instead of just vector databases for memory, we should consider a graph structure that links _tasks_, _files_, and _concepts_.
+-   **Contextual Retrieval:** When an agent needs to work on a task, it shouldn't just search for "similar text"; it should traverse the graph to find _dependencies_ (e.g., "Editing `auth.ts` requires checking `user_model.ts`").
+-   **Decentralized Handoffs:** If we move towards a swarm model, agents can pass "sub-graphs" of context to each other rather than full conversation logs.
 
 ## Strengths
 
-*   **High Efficiency:** Drastic reduction in steps required to solve problems compared to single agents.
-*   **Structured Reasoning:** The graph structure forces agents to "think" in dependencies rather than just predicting the next token.
-*   **Scalability:** The decentralized nature allows adding more agents without retraining a central policy.
+-   **High Efficiency:** Drastic reduction in steps required to solve problems compared to single agents.
+-   **Structured Reasoning:** The graph structure forces agents to "think" in dependencies rather than just predicting the next token.
+-   **Scalability:** The decentralized nature allows adding more agents without retraining a central policy.
 
 ## Limitations
 
-*   **Graph Maintenance:** Constructing and updating a knowledge graph in real-time can be computationally expensive and prone to errors (e.g., wrong links).
-*   **Environment Specificity:** The "Crafter" environment is well-suited for hierarchical tasks (craft wood -> plank -> stick -> pickaxe). It's unclear how well this translates to less structured tasks like "creative writing" or "debugging vague errors."
+-   **Graph Maintenance:** Constructing and updating a knowledge graph in real-time can be computationally expensive and prone to errors (e.g., wrong links).
+-   **Environment Specificity:** The "Crafter" environment is well-suited for hierarchical tasks (craft wood -> plank -> stick -> pickaxe). It's unclear how well this translates to less structured tasks like "creative writing" or "debugging vague errors."
 
 ## Key Takeaways
 
@@ -66,14 +67,14 @@ For Clusterfork, the **Adaptive Hierarchical Knowledge Graph** is the critical t
 
 ## Benchmarks
 
-*   **Environment:** Multi-agent Crafter (collecting a diamond by crafting tools).
-*   **Results:**
-    *   **2 Agents:** 63% fewer steps than 1 agent.
-    *   **6 Agents:** 74% fewer steps than 1 agent.
-    *   **Comparison:** Outperforms MARL (PPO, MAPPO) and standard LLM baselines (ReAct, Reflexion) in success rate and efficiency.
+-   **Environment:** Multi-agent Crafter (collecting a diamond by crafting tools).
+-   **Results:**
+    -   **2 Agents:** 63% fewer steps than 1 agent.
+    -   **6 Agents:** 74% fewer steps than 1 agent.
+    -   **Comparison:** Outperforms MARL (PPO, MAPPO) and standard LLM baselines (ReAct, Reflexion) in success rate and efficiency.
 
 ## Technologies Used
 
-*   **LLMs:** Used for reasoning and graph traversal.
-*   **Knowledge Graph:** Dynamic, hierarchical structure for memory.
-*   **Environment:** Multi-agent Crafter.
+-   **LLMs:** Used for reasoning and graph traversal.
+-   **Knowledge Graph:** Dynamic, hierarchical structure for memory.
+-   **Environment:** Multi-agent Crafter.
