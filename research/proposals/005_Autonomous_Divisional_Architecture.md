@@ -127,6 +127,7 @@ class Agent:
     agent_id: str               # Unique identifier (e.g. "dev-manager", "coder-alpha")
     division: Division          # Which division this agent belongs to
     role: str                   # e.g. "manager", "architect", "coder", "reviewer"
+    seniority_level: str        # "intern", "junior", "mid", "senior", "staff"
     capabilities: set[str]      # Granted by the division's capability token
     system_prompt: str          # Role definition + SOP + constraints (see §4.2)
     tools: list[Tool]           # Tools this agent can invoke (filtered by capabilities)
@@ -137,7 +138,7 @@ class Agent:
         The orchestrator calls this method. The agent:
         1. Retrieves relevant context from memory (§4.4)
         2. Constructs an LLM prompt from system_prompt + message + context
-        3. Calls the Provider Bus for completion (§8)
+        3. Calls the Provider Bus for completion (using self.seniority_level)
         4. Validates the response against its role constraints
         5. Returns a structured Message with typed artifacts
         """
@@ -182,6 +183,11 @@ class AgentIdentity:
     #    7. When QA passes, send a Requisition to Ops for deployment.
     #    8. Send a Memo to Comms with the results."
     sop: list[str]
+
+    # Seniority Level
+    # Defines the complexity of model backing this agent.
+    # Managers delegate to agents with appropriate seniority for the task.
+    seniority_level: Literal["intern", "junior", "mid", "senior", "staff"]
 ```
 
 The system prompt is assembled as:
@@ -568,7 +574,7 @@ class ProviderCapabilities:
 class ModelSpec:
     """A specific model available from a provider."""
     model_id: str                       # e.g. "claude-sonnet-4-20250514"
-    model_class: Literal["reasoning", "standard", "fast"]   # Capability tier
+    seniority_level: Literal["intern", "junior", "mid", "senior", "staff", "principal"]
     cost_per_1k_input_tokens: float     # USD
     cost_per_1k_output_tokens: float    # USD
     max_context_tokens: int
@@ -577,7 +583,7 @@ class ModelSpec:
 class CompletionRequest:
     """Provider-agnostic completion request."""
     messages: list[dict]                # OpenAI-format messages
-    model_class: str                    # Requested capability tier (not a specific model)
+    seniority_level: str                # Requested capability tier (e.g. "senior")
     max_tokens: int
     temperature: float
     tools: list[dict] | None           # Tool definitions if needed
@@ -624,6 +630,17 @@ class ProviderRegistry:
 
 The Router is a **deterministic scoring engine** managed by Finance. It selects the best provider for each request based on multi-factor scoring. No LLM calls — this is pure code (P1).
 
+Instead of abstract "capability classes," we map models to **Seniority Levels**. This allows Managers to request resources using organizational language ("I need a Senior Engineer for this architecture task" vs "I need an Intern to summarize this text").
+
+| Seniority     | Typical Model Class     | Use Case                                           | Cost Profile |
+| :------------ | :---------------------- | :------------------------------------------------- | :----------- |
+| **Intern**    | GPT-4o-mini, Haiku      | Summarization, simple formatting, fast tasks       | Very Low     |
+| **Junior**    | GPT-3.5, Llama 3 8B     | Routine code changes, simple tests                 | Low          |
+| **Mid**       | GPT-4o, Sonnet 3.5      | Standard feature implementation, debugging         | Medium       |
+| **Senior**    | Opus, GPT-4-Turbo       | Complex architecture, refactoring, critical review | High         |
+| **Staff**     | o1, o3-mini (Reasoning) | Deep reasoning, planning, root cause analysis      | Very High    |
+| **Principal** | o1-pro (High Reasoning) | System design, resolving "impossible" bugs         | Extreme      |
+
 ```python
 class SmartRouter:
     """Selects optimal provider per-request. Deterministic, no LLM calls."""
@@ -632,8 +649,8 @@ class SmartRouter:
         """Score all available providers and return the best match.
 
         Scoring factors (weights configurable by Finance policy):
-          1. capability_match:  Does the provider have a model matching
-                                the requested model_class? (binary filter)
+          1. seniority_match:   Does the provider have a model matching
+                                the requested seniority_level? (binary filter)
           2. cost_score:        Inverse of estimated cost for this request.
                                 Normalized against cheapest available option.
           3. latency_score:     Inverse of recent p50 latency from health cache.
@@ -642,7 +659,7 @@ class SmartRouter:
                                 increases (Finance policy lever).
 
         Final score = w1*cost + w2*latency + w3*reliability
-        (only among providers that pass the capability filter)
+        (only among providers that pass the seniority filter)
         """
         ...
 ```
