@@ -2,6 +2,8 @@
 description: Primary orchestrator that plans with the user and delegates execution to specialized mini workers.
 mode: primary
 model: openai/gpt-5.3-codex
+tools:
+  context7_*: true
 permission:
   task:
     "*": allow
@@ -44,7 +46,7 @@ Write a plan file to `.opencode/plans/<slug>.md` where `<slug>` is a short kebab
 ...
 ```
 
-This is an example, not a prescribed sequence. Choose workers, stages, and parallelism based on what the task actually needs. A plan might use one worker or all four, have one stage or five. Workers in a stage run in parallel when a stage has more than one worker.
+This is an example, not a prescribed sequence. Choose workers, stages, and parallelism based on what the task actually needs. A plan might use one worker or all four, have one stage or five. Workers in a stage should be run in parallel when a stage has more than one worker.
 
 After writing the plan file, tell the user and ask for approval. Do not execute until they approve.
 

@@ -19,7 +19,7 @@ The orchestrator has its own tools disabled (no write, edit, bash, webfetch) so 
 ## Repo structure
 
 ```
-opencode.json              # Sets orchestrator as default agent
+opencode.json              # Sets orchestrator as default agent, Context7 MCP
 .opencode/
   agents/
     orchestrator.md        # Primary agent - plans and delegates
@@ -27,6 +27,17 @@ opencode.json              # Sets orchestrator as default agent
     mini-tester.md         # Subagent - verification
     mini-ui-builder.md     # Subagent - frontend work
     mini-researcher.md     # Subagent - research
+tools/
+  browser-tools/           # Chromium automation scripts (source)
+    browser-start.js       # Launch Chromium with remote debugging
+    browser-nav.js         # Navigate tabs to URLs
+    browser-eval.js        # Execute JS in page context
+    browser-screenshot.js  # Capture viewport screenshots
+    SKILL.md               # OpenCode skill definition
+    package.json           # Dependencies (puppeteer-core)
+scripts/
+  install-opencode-tools.sh   # Install tools globally
+  uninstall-opencode-tools.sh # Remove global install
 research/
   literature review/       # Paper and framework analyses
   proposals/               # Original design documents (001-007)
@@ -37,6 +48,32 @@ research/
 Clone this repo and run `opencode` from the root. OpenCode picks up `opencode.json` and `.opencode/agents/` automatically.
 
 To use these agents in a different project, copy `opencode.json` and `.opencode/` into that project's root.
+
+## Global tools setup
+
+The browser tools are installed globally so OpenCode agents can use them from any project. The install script copies scripts to `~/.local/share/opencode-tools/browser-tools/`, symlinks them into `~/.local/bin/`, and registers a SKILL.md so agents discover them automatically.
+
+```bash
+# Install
+./scripts/install-opencode-tools.sh
+
+# Verify
+browser-start && browser-nav https://example.com
+
+# Uninstall
+./scripts/uninstall-opencode-tools.sh
+```
+
+**Requirements:** Chromium (or Chrome) installed, `~/.local/bin` on your PATH, Node.js.
+
+### What lives where
+
+| Location | What | Why |
+|---|---|---|
+| `tools/browser-tools/` (repo) | Source scripts and SKILL.md | Versioned, portable |
+| `~/.local/share/opencode-tools/browser-tools/` | Installed scripts + node_modules | Available system-wide |
+| `~/.local/bin/browser-*` | Symlinks to installed scripts | On PATH for bash calls |
+| `~/.config/opencode/skills/browser-tools/SKILL.md` | Skill definition | OpenCode agent discovery |
 
 ## Background
 

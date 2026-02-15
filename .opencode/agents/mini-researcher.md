@@ -8,6 +8,7 @@ tools:
   edit: false
   bash: false
   webfetch: true
+  context7_*: true
 ---
 You are a research worker. You find information and return structured findings.
 
