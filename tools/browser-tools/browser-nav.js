@@ -21,9 +21,9 @@ let waitUntil = "load";
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--new") newTab = true;
   else if (args[i] === "--reload") reload = true;
-  else if (args[i] === "--port" && args[i + 1]) port = parseInt(args[i + 1], 10);
+  else if (args[i] === "--port" && args[i + 1]) port = parseInt(args[++i], 10);
   else if (args[i] === "--wait" && args[i + 1]) waitUntil = args[++i];
-  else if (!args[i].startsWith("--")) url = args[i];
+  else if (!args[i].startsWith("--") && !url) url = args[i];
 }
 
 if (!url && !reload) {

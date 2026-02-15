@@ -12,7 +12,7 @@ const path = require("path");
 const args = process.argv.slice(2);
 let port = 9222;
 for (let i = 0; i < args.length; i++) {
-  if (args[i] === "--port" && args[i + 1]) port = parseInt(args[i + 1], 10);
+  if (args[i] === "--port" && args[i + 1]) port = parseInt(args[++i], 10);
 }
 
 // Detect Chromium binary
