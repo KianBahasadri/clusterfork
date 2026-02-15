@@ -7,6 +7,7 @@
 #   2. Runs pnpm/npm install there for dependencies (puppeteer-core)
 #   3. Adds browser-tools directory to PATH in ~/.bashrc
 #   4. Copies SKILL.md to ~/.config/opencode/skills/browser-tools/ for agent discovery
+#   5. Copies .opencode/agents/*.md to ~/.config/opencode/agents/
 #
 # Usage: ./install-opencode-tools.sh
 
@@ -15,6 +16,8 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 TOOLS_DIR="$HOME/.local/share/opencode-tools/browser-tools"
 SKILL_DIR="$HOME/.config/opencode/skills/browser-tools"
+AGENTS_SRC_DIR="$REPO_DIR/.opencode/agents"
+AGENTS_DIR="$HOME/.config/opencode/agents"
 BASHRC="$HOME/.bashrc"
 PATH_LINE='export PATH="$HOME/.local/share/opencode-tools/browser-tools:$PATH"'
 
@@ -66,6 +69,11 @@ fi
 echo "  Installing SKILL.md to $SKILL_DIR"
 mkdir -p "$SKILL_DIR"
 cp "$REPO_DIR/tools/browser-tools/SKILL.md" "$SKILL_DIR/SKILL.md"
+
+# 6. Install agent config files so local instructions match the repo
+echo "  Installing agent configs to $AGENTS_DIR"
+mkdir -p "$AGENTS_DIR"
+cp "$AGENTS_SRC_DIR"/*.md "$AGENTS_DIR/"
 
 echo "==> Done. Installed commands: browser-start, browser-nav, browser-eval, browser-screenshot"
 echo "    Skill file: $SKILL_DIR/SKILL.md"

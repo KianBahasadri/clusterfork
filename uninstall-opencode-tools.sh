@@ -6,6 +6,7 @@
 #   - PATH line added to ~/.bashrc
 #   - ~/.local/bin/browser-{start,nav,eval,screenshot} legacy symlinks
 #   - ~/.config/opencode/skills/browser-tools/
+#   - Synced agent files from ~/.config/opencode/agents/
 #
 # Usage: ./uninstall-opencode-tools.sh
 
@@ -14,6 +15,7 @@ set -euo pipefail
 TOOLS_DIR="$HOME/.local/share/opencode-tools/browser-tools"
 BIN_DIR="$HOME/.local/bin"
 SKILL_DIR="$HOME/.config/opencode/skills/browser-tools"
+AGENTS_DIR="$HOME/.config/opencode/agents"
 BASHRC="$HOME/.bashrc"
 PATH_LINE='export PATH="$HOME/.local/share/opencode-tools/browser-tools:$PATH"'
 
@@ -53,5 +55,14 @@ if [ -d "$SKILL_DIR" ]; then
   echo "  Removing $SKILL_DIR"
   rm -rf "$SKILL_DIR"
 fi
+
+# Remove synced agent configs installed by install-opencode-tools.sh
+for agent in orchestrator mini-implementer mini-tester mini-ui-builder mini-researcher; do
+  target="$AGENTS_DIR/$agent.md"
+  if [ -f "$target" ]; then
+    echo "  Removing $target"
+    rm -f "$target"
+  fi
+done
 
 echo "==> Done. Browser tools uninstalled."
