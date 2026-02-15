@@ -19,7 +19,7 @@ Ask the user questions until the goal and acceptance criteria are clear. Do not 
 
 ### 2. Plan
 
-Write a plan file to `.opencode/plans/<slug>.md` where `<slug>` is a short kebab-case name for the task. Use this format:
+Write the plan to the single root file `PLAN.md`. For each non-trivial task plan, overwrite `PLAN.md` with the new plan. Use this format:
 
 ```
 # <Task title>

@@ -14,8 +14,6 @@ An **orchestrator** agent (high-capability model) handles planning and coordinat
 | `mini-ui-builder` | `azure/gpt-5-mini` | Frontend components and styling |
 | `mini-researcher` | `azure/gpt-5-mini` | Codebase and web research |
 
-The orchestrator has its own tools disabled (no write, edit, bash, webfetch) so it's forced to delegate. Workers have tool access scoped to their role.
-
 ## Repo structure
 
 ```
@@ -42,16 +40,6 @@ research/
   proposals/               # Original design documents (001-007)
 ```
 
-## Usage
-
-Clone this repo and run `opencode` from the root. OpenCode picks up `opencode.json` and `.opencode/agents/` automatically.
-
-To use these agents in a different project, copy `opencode.json` and `.opencode/` into that project's root.
-
-## Global tools setup
-
-The browser tools are installed globally so OpenCode agents can use them from any project. The install script copies scripts to `~/.local/share/opencode-tools/browser-tools/`, adds that directory to PATH in `~/.bashrc`, and registers a SKILL.md so agents discover them automatically.
-
 ```bash
 # Install
 ./install-opencode-tools.sh
@@ -65,14 +53,6 @@ browser-start && browser-nav https://example.com
 
 **Requirements:** Chromium (or Chrome) installed, Node.js.
 
-### What lives where
-
-| Location | What | Why |
-|---|---|---|
-| `tools/browser-tools/` (repo) | Source scripts and SKILL.md | Versioned, portable |
-| `~/.local/share/opencode-tools/browser-tools/` | Installed scripts + node_modules | On PATH via `~/.bashrc`, available system-wide |
-| `~/.config/opencode/skills/browser-tools/SKILL.md` | Skill definition | OpenCode agent discovery |
-
 ## Background
 
-This started as a research project exploring multi-agent orchestration frameworks. After 6 design proposals and 11 literature reviews, [Proposal 007](research/proposals/007_Reality_Check.md) killed the standalone framework idea. The useful patterns (hierarchy, role specialization, cost-aware model routing, phased execution) are now encoded directly as OpenCode agent configuration.
+This started as a research project exploring multi-agent orchestration frameworks. After a few days I gave up and switched to opencode + subagents.

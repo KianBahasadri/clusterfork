@@ -4,6 +4,9 @@ mode: subagent
 model: azure/gpt-5-mini
 reasoningEffort: high
 tools:
+  read: true
+  glob: true
+  grep: true
   write: false
   edit: false
   bash: false
