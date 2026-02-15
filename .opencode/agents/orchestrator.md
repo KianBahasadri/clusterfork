@@ -4,6 +4,7 @@ mode: primary
 model: openai/gpt-5.3-codex
 tools:
   context7_*: true
+  question: true
 permission:
   task:
     "*": allow
