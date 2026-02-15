@@ -6,7 +6,7 @@
 #   - ~/.local/bin/browser-{start,nav,eval,screenshot} symlinks
 #   - ~/.config/opencode/skills/browser-tools/
 #
-# Usage: ./scripts/uninstall-opencode-tools.sh
+# Usage: ./uninstall-opencode-tools.sh
 
 set -euo pipefail
 

@@ -8,11 +8,11 @@
 #   3. Symlinks the CLI scripts into ~/.local/bin/ (should already be on PATH)
 #   4. Copies SKILL.md to ~/.config/opencode/skills/browser-tools/ for agent discovery
 #
-# Usage: ./scripts/install-opencode-tools.sh
+# Usage: ./install-opencode-tools.sh
 
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 TOOLS_DIR="$HOME/.local/share/opencode-tools/browser-tools"
 BIN_DIR="$HOME/.local/bin"
 SKILL_DIR="$HOME/.config/opencode/skills/browser-tools"

@@ -35,9 +35,8 @@ tools/
     browser-screenshot.js  # Capture viewport screenshots
     SKILL.md               # OpenCode skill definition
     package.json           # Dependencies (puppeteer-core)
-scripts/
-  install-opencode-tools.sh   # Install tools globally
-  uninstall-opencode-tools.sh # Remove global install
+install-opencode-tools.sh     # Install tools globally
+uninstall-opencode-tools.sh   # Remove global install
 research/
   literature review/       # Paper and framework analyses
   proposals/               # Original design documents (001-007)
@@ -55,13 +54,13 @@ The browser tools are installed globally so OpenCode agents can use them from an
 
 ```bash
 # Install
-./scripts/install-opencode-tools.sh
+./install-opencode-tools.sh
 
 # Verify
 browser-start && browser-nav https://example.com
 
 # Uninstall
-./scripts/uninstall-opencode-tools.sh
+./uninstall-opencode-tools.sh
 ```
 
 **Requirements:** Chromium (or Chrome) installed, `~/.local/bin` on your PATH, Node.js.
