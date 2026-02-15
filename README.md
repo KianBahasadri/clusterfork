@@ -50,7 +50,7 @@ To use these agents in a different project, copy `opencode.json` and `.opencode/
 
 ## Global tools setup
 
-The browser tools are installed globally so OpenCode agents can use them from any project. The install script copies scripts to `~/.local/share/opencode-tools/browser-tools/`, symlinks them into `~/.local/bin/`, and registers a SKILL.md so agents discover them automatically.
+The browser tools are installed globally so OpenCode agents can use them from any project. The install script copies scripts to `~/.local/share/opencode-tools/browser-tools/`, adds that directory to PATH in `~/.bashrc`, and registers a SKILL.md so agents discover them automatically.
 
 ```bash
 # Install
@@ -63,15 +63,14 @@ browser-start && browser-nav https://example.com
 ./uninstall-opencode-tools.sh
 ```
 
-**Requirements:** Chromium (or Chrome) installed, `~/.local/bin` on your PATH, Node.js.
+**Requirements:** Chromium (or Chrome) installed, Node.js.
 
 ### What lives where
 
 | Location | What | Why |
 |---|---|---|
 | `tools/browser-tools/` (repo) | Source scripts and SKILL.md | Versioned, portable |
-| `~/.local/share/opencode-tools/browser-tools/` | Installed scripts + node_modules | Available system-wide |
-| `~/.local/bin/browser-*` | Symlinks to installed scripts | On PATH for bash calls |
+| `~/.local/share/opencode-tools/browser-tools/` | Installed scripts + node_modules | On PATH via `~/.bashrc`, available system-wide |
 | `~/.config/opencode/skills/browser-tools/SKILL.md` | Skill definition | OpenCode agent discovery |
 
 ## Background

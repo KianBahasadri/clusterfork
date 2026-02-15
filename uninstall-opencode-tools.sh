@@ -3,7 +3,8 @@
 #
 # Removes:
 #   - ~/.local/share/opencode-tools/browser-tools/
-#   - ~/.local/bin/browser-{start,nav,eval,screenshot} symlinks
+#   - PATH line added to ~/.bashrc
+#   - ~/.local/bin/browser-{start,nav,eval,screenshot} legacy symlinks
 #   - ~/.config/opencode/skills/browser-tools/
 #
 # Usage: ./uninstall-opencode-tools.sh
@@ -13,10 +14,20 @@ set -euo pipefail
 TOOLS_DIR="$HOME/.local/share/opencode-tools/browser-tools"
 BIN_DIR="$HOME/.local/bin"
 SKILL_DIR="$HOME/.config/opencode/skills/browser-tools"
+BASHRC="$HOME/.bashrc"
+PATH_LINE='export PATH="$HOME/.local/share/opencode-tools/browser-tools:$PATH"'
 
 echo "==> Uninstalling browser-tools"
 
-# Remove symlinks
+# Remove PATH line from ~/.bashrc
+if [ -f "$BASHRC" ]; then
+  tmp="$(mktemp)"
+  grep -Fvx "$PATH_LINE" "$BASHRC" > "$tmp" || true
+  mv "$tmp" "$BASHRC"
+  echo "  Removed PATH entry from $BASHRC (if present)"
+fi
+
+# Remove legacy symlinks
 for script in browser-start browser-nav browser-eval browser-screenshot; do
   target="$BIN_DIR/$script"
   if [ -L "$target" ] || [ -f "$target" ]; then
