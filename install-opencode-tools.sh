@@ -8,6 +8,7 @@
 #   3. Adds browser-tools directory to PATH in ~/.bashrc
 #   4. Copies SKILL.md to ~/.config/opencode/skills/browser-tools/ for agent discovery
 #   5. Copies .opencode/agents/*.md to ~/.config/opencode/agents/
+#   6. Overwrites ~/.config/opencode/opencode.json from repo
 #
 # Usage: ./install-opencode-tools.sh
 
@@ -18,6 +19,8 @@ TOOLS_DIR="$HOME/.local/share/opencode-tools/browser-tools"
 SKILL_DIR="$HOME/.config/opencode/skills/browser-tools"
 AGENTS_SRC_DIR="$REPO_DIR/.opencode/agents"
 AGENTS_DIR="$HOME/.config/opencode/agents"
+OPENCODE_CONFIG_DIR="$HOME/.config/opencode"
+OPENCODE_CONFIG="$OPENCODE_CONFIG_DIR/opencode.json"
 BASHRC="$HOME/.bashrc"
 PATH_LINE='export PATH="$HOME/.local/share/opencode-tools/browser-tools:$PATH"'
 
@@ -75,8 +78,14 @@ echo "  Installing agent configs to $AGENTS_DIR"
 mkdir -p "$AGENTS_DIR"
 cp "$AGENTS_SRC_DIR"/*.md "$AGENTS_DIR/"
 
+# 7. Install repo OpenCode config
+echo "  Installing OpenCode config to $OPENCODE_CONFIG"
+mkdir -p "$OPENCODE_CONFIG_DIR"
+cp "$REPO_DIR/opencode.json" "$OPENCODE_CONFIG"
+
 echo "==> Done. Installed commands: browser-start, browser-nav, browser-eval, browser-screenshot"
 echo "    Skill file: $SKILL_DIR/SKILL.md"
+echo "    OpenCode config: $OPENCODE_CONFIG"
 echo ""
 echo "    Reload shell: source ~/.bashrc"
 echo "    Test it: browser-start && browser-nav https://example.com"

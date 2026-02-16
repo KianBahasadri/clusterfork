@@ -40,7 +40,6 @@ tools/
     SKILL.md               # OpenCode skill definition
     package.json           # Dependencies (puppeteer-core)
 install-opencode-tools.sh     # Install tools globally
-uninstall-opencode-tools.sh   # Remove global install
 research/
   literature review/       # Paper and framework analyses
   proposals/               # Original design documents (001-007)
@@ -52,9 +51,6 @@ research/
 
 # Verify
 browser-start && browser-nav https://example.com
-
-# Uninstall
-./uninstall-opencode-tools.sh
 ```
 
 **Requirements:** Chromium (or Chrome) installed, Node.js.
