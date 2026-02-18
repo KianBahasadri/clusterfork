@@ -1,6 +1,12 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "default_agent": "orchestrator",
+  "permission": {
+    "read": {
+      "*.env": "allow",
+      "*.env.*": "allow"
+    }
+  },
   "mcp": {
     "context7": {
       "type": "remote",
