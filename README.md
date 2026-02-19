@@ -4,7 +4,7 @@ Orchestrated agent workflow for AI-assisted software development in [OpenCode](h
 
 ## How it works
 
-An **orchestrator** agent (high-capability model) handles planning and coordination with the user. It delegates execution to four specialized **mini workers** (cost-efficient models) through OpenCode's Task tool.
+An **orchestrator** agent (high-capability model) handles planning and coordination with the user. It delegates execution to specialized **mini workers** (cost-efficient models) through OpenCode's Task tool.
 
 This repo also defines a **masturbator** agent: a user-facing proxy you talk to directly that relays requests to `orchestrator` on your behalf.
 It just plays with itself.
@@ -16,6 +16,7 @@ It just plays with itself.
 | `orchestrator` | `openai/gpt-5.3-codex` | Plans, delegates, reviews results |
 | `mini-implementer` | `azure/gpt-5-mini` | Writes and edits code |
 | `mini-tester` | `azure/gpt-5-mini` | Runs tests, builds, lints |
+| `mini-browser-tester` | `azure/gpt-5-mini` | Browser-based UI flow validation with Chromium automation |
 | `mini-ui-builder` | `azure/gpt-5-mini` | Frontend components and styling |
 | `mini-researcher` | `azure/gpt-5-mini` | Codebase and web research |
 
@@ -29,6 +30,7 @@ opencode.json              # Sets orchestrator as default agent, Context7 MCP
     orchestrator.md        # Primary agent - plans and delegates
     mini-implementer.md    # Subagent - code changes
     mini-tester.md         # Subagent - verification
+    mini-browser-tester.md # Subagent - browser verification
     mini-ui-builder.md     # Subagent - frontend work
     mini-researcher.md     # Subagent - research
 tools/

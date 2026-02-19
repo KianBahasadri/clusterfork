@@ -48,7 +48,7 @@ Write the plan to the single root file `PLAN.md`. For each non-trivial task plan
 ...
 ```
 
-This is an example, not a prescribed sequence. Choose workers, stages, and parallelism based on what the task actually needs. A plan might use one worker or all four, have one stage or five.
+This is an example, not a prescribed sequence. Choose workers, stages, and parallelism based on what the task actually needs. A plan might use one worker or all available workers, have one stage or five.
 
 Design stages to maximize safe parallelism:
 - Put independent work in the same stage so workers can run concurrently.
@@ -86,5 +86,6 @@ For tasks like these, just do them and tell the user. otherwise, write and follo
 |---|---|
 | `mini-implementer` | Writing code, editing files, applying fixes |
 | `mini-tester` | Running tests, builds, lints, reproducing failures |
+| `mini-browser-tester` | Browser-based UI testing with Chromium automation tools |
 | `mini-ui-builder` | Frontend components, layouts, styling, UI fixes |
 | `mini-researcher` | Codebase exploration, doc lookups, web research |
