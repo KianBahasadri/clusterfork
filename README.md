@@ -23,25 +23,17 @@ It just plays with itself.
 ## Repo structure
 
 ```
-opencode.json              # Sets orchestrator as default agent, Context7 MCP
+opencode.json              # Sets orchestrator as default agent + MCP servers
 .opencode/
   agents/
     masturbator.md         # User-facing proxy agent
     orchestrator.md        # Primary agent - plans and delegates
     mini-implementer.md    # Subagent - code changes
     mini-tester.md         # Subagent - verification
-    mini-browser-tester.md # Subagent - browser verification
+    mini-browser-tester.md # Subagent - browser verification (chrome-devtools MCP)
     mini-ui-builder.md     # Subagent - frontend work
     mini-researcher.md     # Subagent - research
-tools/
-  browser-tools/           # Chromium automation scripts (source)
-    browser-start.js       # Launch Chromium with remote debugging
-    browser-nav.js         # Navigate tabs to URLs
-    browser-eval.js        # Execute JS in page context
-    browser-screenshot.js  # Capture viewport screenshots
-    SKILL.md               # OpenCode skill definition
-    package.json           # Dependencies (puppeteer-core)
-install-opencode-tools.sh     # Install tools globally
+install-opencode-tools.sh  # Install config + agents to ~/.config/opencode
 research/
   literature review/       # Paper and framework analyses
   proposals/               # Original design documents (001-007)
@@ -52,10 +44,10 @@ research/
 ./install-opencode-tools.sh
 
 # Verify
-browser-start && browser-nav https://example.com
+opencode run "Use chrome-devtools_new_page to open https://example.com and report the page title"
 ```
 
-**Requirements:** Chromium (or Chrome) installed, Node.js.
+**Requirements:** Chromium/Chrome installed, Node.js, pnpm.
 
 ## Background
 

@@ -15,6 +15,18 @@
         "CONTEXT7_API_KEY": "{env:CONTEXT7_API_KEY}"
       },
       "enabled": true
+    },
+    "chrome-devtools": {
+      "type": "local",
+      "command": [
+        "pnpm",
+        "dlx",
+        "chrome-devtools-mcp@latest",
+        "--no-usage-statistics",
+        "--browserUrl",
+        "http://127.0.0.1:9222"
+      ],
+      "enabled": true
     }
   }
 }
