@@ -24,7 +24,7 @@ It just plays with itself.
 
 ```
 opencode.json              # Sets orchestrator as default agent + MCP servers
-.opencode/
+opencode/
   agents/
     masturbator.md         # User-facing proxy agent
     orchestrator.md        # Primary agent - plans and delegates
@@ -34,9 +34,6 @@ opencode.json              # Sets orchestrator as default agent + MCP servers
     mini-ui-builder.md     # Subagent - frontend work
     mini-researcher.md     # Subagent - research
 install-opencode-tools.sh  # Install config + agents to ~/.config/opencode
-research/
-  literature review/       # Paper and framework analyses
-  proposals/               # Original design documents (001-007)
 ```
 
 ```bash
@@ -53,4 +50,4 @@ Configured MCP servers in `opencode.json`: `context7`, `linear`, and `chrome-dev
 
 ## Background
 
-This started as a research project exploring multi-agent orchestration frameworks. After a few days I gave up and switched to opencode + subagents.
+This repo focuses on practical OpenCode agent orchestration with lightweight, task-specific subagents.
