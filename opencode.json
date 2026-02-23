@@ -16,6 +16,11 @@
       },
       "enabled": true
     },
+    "linear": {
+      "type": "remote",
+      "url": "https://mcp.linear.app/mcp",
+      "enabled": true
+    },
     "chrome-devtools": {
       "type": "local",
       "command": [

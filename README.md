@@ -49,6 +49,8 @@ opencode run "Use chrome-devtools_new_page to open https://example.com and repor
 
 **Requirements:** Chromium/Chrome installed, Node.js, pnpm.
 
+Configured MCP servers in `opencode.json`: `context7`, `linear`, and `chrome-devtools`.
+
 ## Background
 
 This started as a research project exploring multi-agent orchestration frameworks. After a few days I gave up and switched to opencode + subagents.

@@ -34,7 +34,7 @@ mkdir -p "$OPENCODE_CONFIG_DIR"
 cp "$REPO_DIR/opencode.json" "$OPENCODE_CONFIG"
 
 echo "==> Done. Installed OpenCode config + agent definitions"
-echo "    MCP server: chrome-devtools (local via pnpm dlx)"
+echo "    MCP servers: context7 (remote), linear (remote), chrome-devtools (local via pnpm dlx)"
 echo "    OpenCode config: $OPENCODE_CONFIG"
 echo ""
 echo "    Restart OpenCode to reload MCP servers"
