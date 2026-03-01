@@ -85,6 +85,7 @@ For tasks like these, just do them and tell the user. otherwise, write and follo
 | Worker | Use for |
 |---|---|
 | `mini-implementer` | Writing code, editing files, applying fixes |
+| `context7` | Writing code with Context7-first library/framework documentation checks |
 | `mini-tester` | Running tests, builds, lints, reproducing failures |
 | `mini-browser-tester` | Browser-based UI testing with Chromium automation tools |
 | `mini-ui-builder` | Frontend components, layouts, styling, UI fixes |

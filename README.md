@@ -15,6 +15,7 @@ It just plays with itself.
 | `masturbator` | `openrouter/z-ai/glm-5` | User-facing proxy that confers with `orchestrator` |
 | `orchestrator` | `openai/gpt-5.3-codex` | Plans, delegates, reviews results |
 | `mini-implementer` | `azure/gpt-5-mini` | Writes and edits code |
+| `context7` | `azure/gpt-5-mini` | Writes and edits code, using Context7 docs before implementation |
 | `mini-tester` | `azure/gpt-5-mini` | Runs tests, builds, lints |
 | `mini-browser-tester` | `azure/gpt-5-mini` | Browser-based UI flow validation with Chromium automation |
 | `mini-ui-builder` | `azure/gpt-5-mini` | Frontend components and styling |
@@ -29,6 +30,7 @@ opencode/
     masturbator.md         # User-facing proxy agent
     orchestrator.md        # Primary agent - plans and delegates
     mini-implementer.md    # Subagent - code changes
+    context7.md            # Subagent - code changes with Context7 doc lookups
     mini-tester.md         # Subagent - verification
     mini-browser-tester.md # Subagent - browser verification (chrome-devtools MCP)
     mini-ui-builder.md     # Subagent - frontend work

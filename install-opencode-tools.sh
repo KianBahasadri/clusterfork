@@ -7,7 +7,10 @@
 #   3. Overwrites ~/.config/opencode/.env from repo-local .env
 #   4. Overwrites ~/.config/opencode/bash_profile.sh from repo-local file
 #
-# Usage: ./install-opencode-tools.sh
+# Usage:
+#   ./install-opencode-tools.sh                    # install all agents (default)
+#   ./install-opencode-tools.sh --agent orchestrator --agent mini-tester
+#   ./install-opencode-tools.sh --agents orchestrator,mini-tester
 
 set -euo pipefail
 
@@ -21,6 +24,116 @@ DOTENV_DEST="$OPENCODE_CONFIG_DIR/.env"
 LOCAL_ENV_SRC="$REPO_DIR/bash_profile.sh"
 LOCAL_ENV_DEST="$OPENCODE_CONFIG_DIR/bash_profile.sh"
 
+usage() {
+  cat <<'EOF'
+Install clusterfork OpenCode config + selected agents.
+
+Usage:
+  ./install-opencode-tools.sh [options]
+
+Options:
+  -a, --agent <name>      Install one agent by name (repeatable)
+      --agents <list>     Install agents from comma-separated list
+  -h, --help              Show this help message
+
+Examples:
+  ./install-opencode-tools.sh
+  ./install-opencode-tools.sh --agent orchestrator --agent mini-tester
+  ./install-opencode-tools.sh --agents orchestrator,mini-tester
+
+Behavior:
+  - If no --agent/--agents flags are provided, all repo agents are installed.
+  - If one or more agents are specified, only those agents are installed.
+  - Any clusterfork-managed agent files not selected are removed from
+    ~/.config/opencode/agents so omitted agents are not left behind.
+EOF
+}
+
+shopt -s nullglob
+
+declare -a AVAILABLE_AGENTS=()
+for file in "$AGENTS_SRC_DIR"/*.md; do
+  AVAILABLE_AGENTS+=("$(basename "$file" .md)")
+done
+
+if [[ ${#AVAILABLE_AGENTS[@]} -eq 0 ]]; then
+  echo "ERROR: no agent files found in $AGENTS_SRC_DIR"
+  exit 1
+fi
+
+declare -A AVAILABLE_SET=()
+for agent in "${AVAILABLE_AGENTS[@]}"; do
+  AVAILABLE_SET["$agent"]=1
+done
+
+declare -a REQUESTED_AGENTS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -a|--agent)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        echo "ERROR: $1 requires an agent name"
+        usage
+        exit 1
+      fi
+      REQUESTED_AGENTS+=("$2")
+      shift 2
+      ;;
+    --agents)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        echo "ERROR: --agents requires a comma-separated list"
+        usage
+        exit 1
+      fi
+      IFS=',' read -r -a split_agents <<< "$2"
+      for agent in "${split_agents[@]}"; do
+        agent="${agent//[[:space:]]/}"
+        [[ -n "$agent" ]] && REQUESTED_AGENTS+=("$agent")
+      done
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "ERROR: unknown option: $1"
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+declare -a INSTALL_AGENTS=()
+
+if [[ ${#REQUESTED_AGENTS[@]} -eq 0 ]]; then
+  INSTALL_AGENTS=("${AVAILABLE_AGENTS[@]}")
+else
+  declare -A REQUESTED_SET=()
+  for agent in "${REQUESTED_AGENTS[@]}"; do
+    REQUESTED_SET["$agent"]=1
+  done
+
+  for agent in "${!REQUESTED_SET[@]}"; do
+    if [[ -z "${AVAILABLE_SET[$agent]:-}" ]]; then
+      echo "ERROR: unknown agent '$agent'"
+      echo "Available agents: ${AVAILABLE_AGENTS[*]}"
+      exit 1
+    fi
+  done
+
+  for agent in "${AVAILABLE_AGENTS[@]}"; do
+    if [[ -n "${REQUESTED_SET[$agent]:-}" ]]; then
+      INSTALL_AGENTS+=("$agent")
+    fi
+  done
+fi
+
+if [[ ${#INSTALL_AGENTS[@]} -eq 0 ]]; then
+  echo "ERROR: no agents selected for installation"
+  exit 1
+fi
+
 echo "==> Installing clusterfork OpenCode config from $REPO_DIR"
 
 # 1. Verify pnpm is available for chrome-devtools MCP launcher
@@ -29,10 +142,18 @@ if ! command -v pnpm &>/dev/null; then
   exit 1
 fi
 
-# 2. Install agent config files so local instructions match the repo
-echo "  Installing agent configs to $AGENTS_DIR"
+# 2. Install selected agent config files so local instructions match the repo
+echo "  Installing selected agent configs to $AGENTS_DIR"
 mkdir -p "$AGENTS_DIR"
-cp "$AGENTS_SRC_DIR"/*.md "$AGENTS_DIR/"
+
+# Remove all clusterfork-managed agent files first so omitted agents are not left behind.
+for agent in "${AVAILABLE_AGENTS[@]}"; do
+  rm -f "$AGENTS_DIR/$agent.md"
+done
+
+for agent in "${INSTALL_AGENTS[@]}"; do
+  cp "$AGENTS_SRC_DIR/$agent.md" "$AGENTS_DIR/"
+done
 
 # 3. Install repo OpenCode config
 echo "  Installing OpenCode config to $OPENCODE_CONFIG"
@@ -60,6 +181,7 @@ echo "  Installing local shell config to $LOCAL_ENV_DEST"
 cp "$LOCAL_ENV_SRC" "$LOCAL_ENV_DEST"
 
 echo "==> Done. Installed OpenCode config + agent definitions"
+echo "    Installed agents: ${INSTALL_AGENTS[*]}"
 echo "    MCP servers: context7 (remote), linear (remote), chrome-devtools (local via pnpm dlx)"
 echo "    OpenCode config: $OPENCODE_CONFIG"
 echo "    Local env file: $DOTENV_DEST"
