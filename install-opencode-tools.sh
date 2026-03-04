@@ -56,11 +56,6 @@ for file in "$AGENTS_SRC_DIR"/*.md; do
   AVAILABLE_AGENTS+=("$(basename "$file" .md)")
 done
 
-if [[ ${#AVAILABLE_AGENTS[@]} -eq 0 ]]; then
-  echo "ERROR: no agent files found in $AGENTS_SRC_DIR"
-  exit 1
-fi
-
 declare -A AVAILABLE_SET=()
 for agent in "${AVAILABLE_AGENTS[@]}"; do
   AVAILABLE_SET["$agent"]=1
@@ -117,7 +112,11 @@ else
   for agent in "${!REQUESTED_SET[@]}"; do
     if [[ -z "${AVAILABLE_SET[$agent]:-}" ]]; then
       echo "ERROR: unknown agent '$agent'"
-      echo "Available agents: ${AVAILABLE_AGENTS[*]}"
+      if [[ ${#AVAILABLE_AGENTS[@]} -eq 0 ]]; then
+        echo "Available agents: (none found in $AGENTS_SRC_DIR)"
+      else
+        echo "Available agents: ${AVAILABLE_AGENTS[*]}"
+      fi
       exit 1
     fi
   done
@@ -129,11 +128,6 @@ else
   done
 fi
 
-if [[ ${#INSTALL_AGENTS[@]} -eq 0 ]]; then
-  echo "ERROR: no agents selected for installation"
-  exit 1
-fi
-
 echo "==> Installing clusterfork OpenCode config from $REPO_DIR"
 
 # 1. Verify pnpm is available for chrome-devtools MCP launcher
@@ -143,17 +137,25 @@ if ! command -v pnpm &>/dev/null; then
 fi
 
 # 2. Install selected agent config files so local instructions match the repo
-echo "  Installing selected agent configs to $AGENTS_DIR"
+echo "  Syncing selected agent configs to $AGENTS_DIR"
 mkdir -p "$AGENTS_DIR"
 
 # Remove all clusterfork-managed agent files first so omitted agents are not left behind.
-for agent in "${AVAILABLE_AGENTS[@]}"; do
-  rm -f "$AGENTS_DIR/$agent.md"
-done
+if [[ ${#AVAILABLE_AGENTS[@]} -eq 0 ]]; then
+  rm -f "$AGENTS_DIR"/*.md
+else
+  for agent in "${AVAILABLE_AGENTS[@]}"; do
+    rm -f "$AGENTS_DIR/$agent.md"
+  done
+fi
 
 for agent in "${INSTALL_AGENTS[@]}"; do
   cp "$AGENTS_SRC_DIR/$agent.md" "$AGENTS_DIR/"
 done
+
+if [[ ${#INSTALL_AGENTS[@]} -eq 0 ]]; then
+  echo "    No repo agent files found; skipped agent installation"
+fi
 
 # 3. Install repo OpenCode config
 echo "  Installing OpenCode config to $OPENCODE_CONFIG"

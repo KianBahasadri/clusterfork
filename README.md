@@ -1,43 +1,5 @@
 # Clusterfork
 
-Orchestrated agent workflow for AI-assisted software development in [OpenCode](https://opencode.ai).
-
-## How it works
-
-An **orchestrator** agent (high-capability model) handles planning and coordination with the user. It delegates execution to specialized **mini workers** (cost-efficient models) through OpenCode's Task tool.
-
-This repo also defines a **masturbator** agent: a user-facing proxy you talk to directly that relays requests to `orchestrator` on your behalf.
-It just plays with itself.
-
-
-| Agent | Model | Role |
-|---|---|---|
-| `masturbator` | `openrouter/z-ai/glm-5` | User-facing proxy that confers with `orchestrator` |
-| `orchestrator` | `openai/gpt-5.3-codex` | Plans, delegates, reviews results |
-| `mini-implementer` | `azure/gpt-5-mini` | Writes and edits code |
-| `context7` | `azure/gpt-5-mini` | Writes and edits code, using Context7 docs before implementation |
-| `mini-tester` | `azure/gpt-5-mini` | Runs tests, builds, lints |
-| `mini-browser-tester` | `azure/gpt-5-mini` | Browser-based UI flow validation with Chromium automation |
-| `mini-ui-builder` | `azure/gpt-5-mini` | Frontend components and styling |
-| `mini-researcher` | `azure/gpt-5-mini` | Codebase and web research |
-
-## Repo structure
-
-```
-opencode.json              # Sets orchestrator as default agent + MCP servers
-opencode/
-  agents/
-    masturbator.md         # User-facing proxy agent
-    orchestrator.md        # Primary agent - plans and delegates
-    mini-implementer.md    # Subagent - code changes
-    context7.md            # Subagent - code changes with Context7 doc lookups
-    mini-tester.md         # Subagent - verification
-    mini-browser-tester.md # Subagent - browser verification (chrome-devtools MCP)
-    mini-ui-builder.md     # Subagent - frontend work
-    mini-researcher.md     # Subagent - research
-install-opencode-tools.sh  # Install config + agents to ~/.config/opencode
-```
-
 ```bash
 # Install
 ./install-opencode-tools.sh
@@ -50,6 +12,3 @@ opencode run "Use chrome-devtools_new_page to open https://example.com and repor
 
 Configured MCP servers in `opencode.json`: `context7`, `linear`, and `chrome-devtools`.
 
-## Background
-
-This repo focuses on practical OpenCode agent orchestration with lightweight, task-specific subagents.

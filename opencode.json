@@ -22,7 +22,7 @@
     "linear": {
       "type": "remote",
       "url": "https://mcp.linear.app/mcp",
-      "enabled": true
+      "enabled": false
     },
     "chrome-devtools": {
       "type": "local",
@@ -34,7 +34,7 @@
         "--browserUrl",
         "http://127.0.0.1:9222"
       ],
-      "enabled": true
+      "enabled": false
     }
   }
 }
