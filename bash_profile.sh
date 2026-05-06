@@ -22,7 +22,7 @@ rotate-codex() {
     return 1
   fi
 
-  if [[ -e "$codex_auth" && ! -L "$codex_auth" ]]; then
+  if [[ -f "$codex_auth" && ! -L "$codex_auth" ]]; then
     echo "rotate-codex: $codex_auth is not a symlink" >&2
     echo "  Choose an unused suffix N, then move the current file and link auth.json to it:" >&2
     echo "  mv \"$codex_auth\" \"$codex_auth.N\"" >&2
@@ -30,7 +30,7 @@ rotate-codex() {
     return 1
   fi
 
-  if [[ -e "$opencode_auth" && ! -L "$opencode_auth" ]]; then
+  if [[ -f "$opencode_auth" && ! -L "$opencode_auth" ]]; then
     echo "rotate-codex: $opencode_auth is not a symlink" >&2
     echo "  Choose an unused suffix N, then move the current file and link auth.json to it:" >&2
     echo "  mv \"$opencode_auth\" \"$opencode_auth.N\"" >&2
@@ -62,41 +62,25 @@ rotate-codex() {
 
   mapfile -t paired_suffixes < <(printf '%s\n' "${paired_suffixes[@]}" | sort)
 
-  if [[ ! -e "$codex_auth" && ! -e "$opencode_auth" ]]; then
-    next_suffix="${paired_suffixes[0]}"
-    _rotate_codex_point_symlink "$codex_dir" "$next_suffix" || return 1
-    _rotate_codex_point_symlink "$opencode_dir" "$next_suffix" || return 1
-
-    echo "rotate-codex: selected auth.json.$next_suffix"
-    echo "  Codex: $codex_auth -> $(readlink "$codex_auth")"
-    echo "  OpenCode: $opencode_auth -> $(readlink "$opencode_auth")"
-    return 0
-  fi
-
-  if [[ ! -L "$codex_auth" || ! -L "$opencode_auth" ]]; then
-    echo "rotate-codex: active auth.json files must both exist as symlinks or both be missing" >&2
-    return 1
-  fi
-
-  codex_suffix="$(_rotate_codex_current_suffix "$codex_auth")" || return 1
-  opencode_suffix="$(_rotate_codex_current_suffix "$opencode_auth")" || return 1
-
-  if [[ "$codex_suffix" != "$opencode_suffix" ]]; then
-    echo "rotate-codex: active auth suffixes are not aligned" >&2
-    echo "  Codex: $codex_suffix" >&2
-    echo "  OpenCode: $opencode_suffix" >&2
-    return 1
-  fi
-
-  current_suffix="$codex_suffix"
   next_suffix="${paired_suffixes[0]}"
 
-  for ((i = 0; i < ${#paired_suffixes[@]}; i++)); do
-    if [[ "${paired_suffixes[$i]}" == "$current_suffix" ]]; then
-      next_suffix="${paired_suffixes[$(((i + 1) % ${#paired_suffixes[@]}))]}"
-      break
-    fi
-  done
+  codex_suffix="$(_rotate_codex_current_suffix "$codex_auth")"
+  opencode_suffix="$(_rotate_codex_current_suffix "$opencode_auth")"
+
+  if [[ -n "$codex_suffix" ]]; then
+    current_suffix="$codex_suffix"
+  else
+    current_suffix="$opencode_suffix"
+  fi
+
+  if [[ -n "$current_suffix" ]]; then
+    for ((i = 0; i < ${#paired_suffixes[@]}; i++)); do
+      if [[ "${paired_suffixes[$i]}" == "$current_suffix" ]]; then
+        next_suffix="${paired_suffixes[$(((i + 1) % ${#paired_suffixes[@]}))]}"
+        break
+      fi
+    done
+  fi
 
   _rotate_codex_point_symlink "$codex_dir" "$next_suffix" || return 1
   _rotate_codex_point_symlink "$opencode_dir" "$next_suffix" || return 1
@@ -110,12 +94,13 @@ _rotate_codex_current_suffix() {
   local auth_path="$1"
   local target target_base
 
-  target="$(readlink "$auth_path")" || return 1
+  [[ -L "$auth_path" ]] || return 0
+
+  target="$(readlink "$auth_path")" || return 0
   target_base="${target##*/}"
 
   if [[ "$target_base" != auth.json.* ]]; then
-    echo "rotate-codex: $auth_path points to '$target', not an auth.json.* variant" >&2
-    return 1
+    return 0
   fi
 
   printf '%s\n' "${target_base#auth.json.}"
