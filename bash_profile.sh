@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-alias oc='opencode --continue'
-alias o='opencode'
+alias o='ulimit -v 14206967 && opencode'
+alias oc='o --continue'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENCODE_ENV_FILE="$SCRIPT_DIR/.env"
