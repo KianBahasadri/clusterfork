@@ -2,5 +2,5 @@
 
 ```bash
 # Install
-./install-opencode-tools.sh
+./install-clusterfork.sh
 ```
