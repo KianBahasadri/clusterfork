@@ -1,3 +1,5 @@
+alias ca='cursor-agent'
+
 rotate-cursor-cli() {
   local cursor_dir="${ROTATE_CURSOR_DIR:-$HOME/.config/cursor}"
   local cursor_auth="$cursor_dir/auth.json"

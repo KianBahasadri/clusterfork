@@ -1,4 +1,4 @@
-alias ag='agy --dangerously-skip-permissions --continue'
+alias ag='agy --dangerously-skip-permissions'
 
 rotate-antigravity() {
   local restore_xtrace=""
