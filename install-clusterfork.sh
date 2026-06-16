@@ -4,6 +4,7 @@
 # What this does:
 #   1. Overwrites ~/.config/clusterfork/.env from repo-local .env
 #   2. Overwrites ~/.config/clusterfork/bash_profile.sh and shell/*.sh from repo
+#   3. Overwrites ~/.config/opencode/opencode.json from repo-local opencode.json
 #
 # Usage:
 #   ./install-clusterfork.sh
@@ -18,6 +19,8 @@ LOCAL_ENV_SRC="$REPO_DIR/bash_profile.sh"
 LOCAL_ENV_DEST="$CLUSTERFORK_CONFIG_DIR/bash_profile.sh"
 SHELL_SRC_DIR="$REPO_DIR/shell"
 SHELL_DEST_DIR="$CLUSTERFORK_CONFIG_DIR/shell"
+OPENCODE_CONFIG_SRC="$REPO_DIR/opencode.json"
+OPENCODE_CONFIG_DEST="$HOME/.config/opencode/opencode.json"
 
 usage() {
   cat <<'EOF'
@@ -78,8 +81,18 @@ rm -rf -- "$SHELL_DEST_DIR"
 mkdir -p "$SHELL_DEST_DIR"
 cp -r "$SHELL_SRC_DIR"/. "$SHELL_DEST_DIR"/
 
+if [[ ! -f "$OPENCODE_CONFIG_SRC" ]]; then
+  echo "ERROR: missing $OPENCODE_CONFIG_SRC"
+  exit 1
+fi
+
+echo "  Installing opencode config to $OPENCODE_CONFIG_DEST"
+mkdir -p "$(dirname "$OPENCODE_CONFIG_DEST")"
+cp "$OPENCODE_CONFIG_SRC" "$OPENCODE_CONFIG_DEST"
+
 echo "==> Done. Installed clusterfork config"
 echo "    Local env file: $DOTENV_DEST"
 echo "    Local shell config: $LOCAL_ENV_DEST"
+echo "    OpenCode config: $OPENCODE_CONFIG_DEST"
 echo ""
 echo "    Ensure ~/.bashrc sources: source \"$LOCAL_ENV_DEST\""
