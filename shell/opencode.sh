@@ -1,1 +1,2 @@
-alias oc='ulimit -v 14206967 && opencode --continue'
+alias oc='opencode --continue'
+alias o='opencode'

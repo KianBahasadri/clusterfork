@@ -1,5 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "permission": "allow",
   "default_agent": "build",
   "provider": {
     "pioneer": {
@@ -10,27 +11,52 @@
         "apiKey": "{env:PIONEER_API_KEY}"
       },
       "models": {
-        "claude-opus-4-8": { "name": "Claude Opus 4.8" },
-        "claude-opus-4-7": { "name": "Claude Opus 4.7" },
-        "claude-opus-4-6": { "name": "Claude Opus 4.6" },
-        "claude-opus-4-5": { "name": "Claude Opus 4.5" },
-        "claude-sonnet-4-6": { "name": "Claude Sonnet 4.6" },
-        "claude-haiku-4-5": { "name": "Claude Haiku 4.5" },
-        "gpt-5.5": { "name": "GPT-5.5" },
-        "gpt-5.4": { "name": "GPT-5.4" },
-        "gpt-5.1": { "name": "GPT-5.1" },
-        "gpt-4.1": { "name": "GPT-4.1" },
-        "gpt-4o": { "name": "GPT-4o" },
-        "gpt-4o-mini": { "name": "GPT-4o mini" },
-        "gemini-3.1-pro": { "name": "Gemini 3.1 Pro" },
-        "gemini-3.5-flash": { "name": "Gemini 3.5 Flash" }
+        "pioneer/auto": {
+          "name": "Pioneer Auto"
+        },
+        "gemini-3.5-flash": {
+          "name": "Gemini 3.5 Flash",
+          "options": {
+            "reasoningEffort": "high"
+          }
+        },
+        "qwen3.7-max": {
+          "name": "Qwen 3.7 Max",
+          "options": {
+            "reasoningEffort": "high"
+          }
+        },
+        "deepseek-ai/DeepSeek-V4-Pro": {
+          "name": "DeepSeek V4 Pro",
+          "options": {
+            "reasoningEffort": "high"
+          }
+        },
+        "moonshotai/Kimi-K2.6": {
+          "name": "Kimi K2.6",
+          "options": {
+            "reasoningEffort": "high"
+          }
+        },
+        "zai-org/GLM-5.1": {
+          "name": "GLM 5.1",
+          "options": {
+            "reasoningEffort": "high"
+          }
+        },
+        "gpt-5.5": {
+          "name": "GPT 5.5",
+          "options": {
+            "reasoningEffort": "high"
+          }
+        },
+        "claude-opus-4-8": {
+          "name": "Opus 4.8",
+          "options": {
+            "reasoningEffort": "high"
+          }
+        }
       }
-    }
-  },
-  "permission": {
-    "read": {
-      "*.env": "allow",
-      "*.env.*": "allow"
     }
   },
   "mcp": {
@@ -57,7 +83,7 @@
         "--browserUrl",
         "http://127.0.0.1:9222"
       ],
-      "enabled": true
+      "enabled": false
     }
   }
 }
