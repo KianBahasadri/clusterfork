@@ -17,43 +17,43 @@
         "gemini-3.5-flash": {
           "name": "Gemini 3.5 Flash",
           "options": {
-            "reasoningEffort": "high"
+            "reasoningEffort": "xhigh"
           }
         },
         "qwen3.7-max": {
           "name": "Qwen 3.7 Max",
           "options": {
-            "reasoningEffort": "high"
+            "reasoningEffort": "xhigh"
           }
         },
         "deepseek-ai/DeepSeek-V4-Pro": {
           "name": "DeepSeek V4 Pro",
           "options": {
-            "reasoningEffort": "high"
+            "reasoningEffort": "xhigh"
           }
         },
         "moonshotai/Kimi-K2.6": {
           "name": "Kimi K2.6",
           "options": {
-            "reasoningEffort": "high"
+            "reasoningEffort": "xhigh"
           }
         },
         "zai-org/GLM-5.1": {
           "name": "GLM 5.1",
           "options": {
-            "reasoningEffort": "high"
+            "reasoningEffort": "xhigh"
           }
         },
         "gpt-5.5": {
           "name": "GPT 5.5",
           "options": {
-            "reasoningEffort": "high"
+            "reasoningEffort": "xhigh"
           }
         },
         "claude-opus-4-8": {
           "name": "Opus 4.8",
           "options": {
-            "reasoningEffort": "high"
+            "reasoningEffort": "xhigh"
           }
         }
       }
