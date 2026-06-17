@@ -1,4 +1,4 @@
-alias cl='claude --dangerously-skip-permissions --effort max'
+alias cl='claude --dangerously-skip-permissions --effort xhigh'
 
 rotate-claude() {
   local claude_dir="${ROTATE_CLAUDE_DIR:-$HOME/.claude}"
