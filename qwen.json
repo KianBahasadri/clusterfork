@@ -1,0 +1,24 @@
+{
+  "$version": 4,
+  "model": {
+    "name": "deepseek-v4-pro"
+  },
+  "security": {
+    "auth": {
+      "selectedType": "openai"
+    }
+  },
+  "modelProviders": {
+    "openai": [
+      {
+        "id": "deepseek-v4-pro",
+        "name": "DeepSeek V4 Pro",
+        "envKey": "AGENT_ROUTER_API_KEY",
+        "baseUrl": "https://agentrouter.org/v1",
+        "generationConfig": {
+          "reasoning": { "effort": "xhigh" }
+        }
+      }
+    ]
+  }
+}
