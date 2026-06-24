@@ -19,25 +19,21 @@ PI_PIONEER_CAPABILITIES="effort,xhigh_effort"
 # Short key -> Pioneer model id. Ids match opencode.json (the source of truth).
 declare -gA PI_PIONEER_MODELS=(
   [auto]="pioneer/auto"
-  [gemini]="gemini-3.5-flash"
   [qwen]="qwen3.7-max"
   [deepseek]="deepseek-ai/DeepSeek-V4-Pro"
-  [kimi]="moonshotai/Kimi-K2.6"
-  [glm]="zai-org/GLM-5.1"
-  [gpt]="gpt-5.5"
-  [opus]="claude-opus-4-8"
+  [kimi]="moonshotai/Kimi-K2.7-Code"
+  [glm]="zai-org/GLM-5.2"
+  [minimax]="MiniMaxAI/MiniMax-M3"
 )
 
 # Short key -> display name shown in the /model picker.
 declare -gA PI_PIONEER_MODEL_NAMES=(
   [auto]="Pioneer Auto"
-  [gemini]="Gemini 3.5 Flash"
   [qwen]="Qwen 3.7 Max"
   [deepseek]="DeepSeek V4 Pro"
-  [kimi]="Kimi K2.6"
-  [glm]="GLM 5.1"
-  [gpt]="GPT 5.5"
-  [opus]="Opus 4.8"
+  [kimi]="Kimi K2.7 Code"
+  [glm]="GLM 5.2"
+  [minimax]="MiniMax M3"
 )
 
 # Model-family alias -> model key. These four are always in the picker and back
@@ -46,7 +42,7 @@ declare -gA PI_PIONEER_MODEL_NAMES=(
 declare -gA PI_PIONEER_ALIAS_MODELS=(
   [opus]="kimi"
   [sonnet]="deepseek"
-  [haiku]="gemini"
+  [haiku]="glm"
   [fable]="qwen"
 )
 

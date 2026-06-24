@@ -1,1 +1,1 @@
-alias ar=qwen
+alias ar="qwen"

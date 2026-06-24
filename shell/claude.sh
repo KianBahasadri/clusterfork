@@ -1,3 +1,4 @@
+export CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1
 alias cl='claude --dangerously-skip-permissions --effort xhigh'
 
 rotate-claude() {

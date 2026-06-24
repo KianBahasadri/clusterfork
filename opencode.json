@@ -14,12 +14,6 @@
         "pioneer/auto": {
           "name": "Pioneer Auto"
         },
-        "gemini-3.5-flash": {
-          "name": "Gemini 3.5 Flash",
-          "options": {
-            "reasoningEffort": "xhigh"
-          }
-        },
         "qwen3.7-max": {
           "name": "Qwen 3.7 Max",
           "options": {
@@ -32,26 +26,20 @@
             "reasoningEffort": "xhigh"
           }
         },
-        "moonshotai/Kimi-K2.6": {
-          "name": "Kimi K2.6",
+        "moonshotai/Kimi-K2.7-Code": {
+          "name": "Kimi K2.7 Code",
           "options": {
             "reasoningEffort": "xhigh"
           }
         },
-        "zai-org/GLM-5.1": {
-          "name": "GLM 5.1",
+        "zai-org/GLM-5.2": {
+          "name": "GLM 5.2",
           "options": {
             "reasoningEffort": "xhigh"
           }
         },
-        "gpt-5.5": {
-          "name": "GPT 5.5",
-          "options": {
-            "reasoningEffort": "xhigh"
-          }
-        },
-        "claude-opus-4-8": {
-          "name": "Opus 4.8",
+        "MiniMaxAI/MiniMax-M3": {
+          "name": "MiniMax M3",
           "options": {
             "reasoningEffort": "xhigh"
           }
