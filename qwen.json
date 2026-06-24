@@ -1,7 +1,7 @@
 {
   "$version": 4,
   "model": {
-    "name": "deepseek-v4-pro"
+    "name": "qwen3.7-max"
   },
   "security": {
     "auth": {
@@ -11,10 +11,55 @@
   "modelProviders": {
     "openai": [
       {
-        "id": "deepseek-v4-pro",
+        "id": "pioneer/auto",
+        "name": "Pioneer Auto",
+        "envKey": "PIONEER_API_KEY",
+        "baseUrl": "https://api.pioneer.ai/v1",
+        "generationConfig": {
+          "reasoning": { "effort": "xhigh" }
+        }
+      },
+      {
+        "id": "qwen3.7-max",
+        "name": "Qwen 3.7 Max",
+        "envKey": "PIONEER_API_KEY",
+        "baseUrl": "https://api.pioneer.ai/v1",
+        "generationConfig": {
+          "reasoning": { "effort": "xhigh" }
+        }
+      },
+      {
+        "id": "deepseek-ai/DeepSeek-V4-Pro",
         "name": "DeepSeek V4 Pro",
-        "envKey": "AGENT_ROUTER_API_KEY",
-        "baseUrl": "https://agentrouter.org/v1",
+        "envKey": "PIONEER_API_KEY",
+        "baseUrl": "https://api.pioneer.ai/v1",
+        "generationConfig": {
+          "reasoning": { "effort": "xhigh" }
+        }
+      },
+      {
+        "id": "moonshotai/Kimi-K2.7-Code",
+        "name": "Kimi K2.7 Code",
+        "envKey": "PIONEER_API_KEY",
+        "baseUrl": "https://api.pioneer.ai/v1",
+        "generationConfig": {
+          "reasoning": { "effort": "xhigh" }
+        }
+      },
+      {
+        "id": "zai-org/GLM-5.2",
+        "name": "GLM 5.2",
+        "envKey": "PIONEER_API_KEY",
+        "baseUrl": "https://api.pioneer.ai/v1",
+        "generationConfig": {
+          "reasoning": { "effort": "xhigh" }
+        }
+      },
+      {
+        "id": "MiniMaxAI/MiniMax-M3",
+        "name": "MiniMax M3",
+        "envKey": "PIONEER_API_KEY",
+        "baseUrl": "https://api.pioneer.ai/v1",
         "generationConfig": {
           "reasoning": { "effort": "xhigh" }
         }
