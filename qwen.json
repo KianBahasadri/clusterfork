@@ -3,6 +3,10 @@
   "model": {
     "name": "qwen3.7-max"
   },
+  "memory": {
+    "enableManagedAutoMemory": false,
+    "enableManagedAutoDream": false
+  },
   "security": {
     "auth": {
       "selectedType": "openai"
