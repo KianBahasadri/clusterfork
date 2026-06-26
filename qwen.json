@@ -70,6 +70,14 @@
       }
     ]
   },
+  "privacy": {
+    "usageStatisticsEnabled": false
+  },
+  "ui": {
+    "accessibility": {
+      "enableLoadingPhrases": false
+    }
+  },
   "mcpServers": {
     "context7": {
       "httpUrl": "https://mcp.context7.com/mcp",
