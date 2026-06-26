@@ -1,0 +1,10 @@
+{
+  "colorScheme": "dark",
+  "enableTelemetry": false,
+  "model": "Gemini 3.5 Flash (High)",
+  "showFeedbackSurvey": false,
+  "trustedWorkspaces": [
+    "/home/kian/.config/clusterfork",
+    "/home/kian/steam_cart_evaluator"
+  ]
+}

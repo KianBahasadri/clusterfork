@@ -6,6 +6,7 @@
 #   2. Overwrites ~/.config/clusterfork/bash_profile.sh and shell/*.sh from repo
 #   3. Overwrites ~/.config/opencode/opencode.json from repo-local opencode.json
 #   4. Overwrites ~/.qwen/settings.json from repo-local qwen.json
+#   5. Overwrites ~/.gemini/antigravity-cli/settings.json from repo-local antigravity.json
 #
 # Usage:
 #   ./install-clusterfork.sh
@@ -24,6 +25,8 @@ OPENCODE_CONFIG_SRC="$REPO_DIR/opencode.json"
 OPENCODE_CONFIG_DEST="$HOME/.config/opencode/opencode.json"
 QWEN_CONFIG_SRC="$REPO_DIR/qwen.json"
 QWEN_CONFIG_DEST="$HOME/.qwen/settings.json"
+ANTIGRAVITY_CONFIG_SRC="$REPO_DIR/antigravity.json"
+ANTIGRAVITY_CONFIG_DEST="$HOME/.gemini/antigravity-cli/settings.json"
 
 usage() {
   cat <<'EOF'
@@ -102,10 +105,20 @@ echo "  Installing Qwen Code config to $QWEN_CONFIG_DEST"
 mkdir -p "$(dirname "$QWEN_CONFIG_DEST")"
 cp "$QWEN_CONFIG_SRC" "$QWEN_CONFIG_DEST"
 
+if [[ ! -f "$ANTIGRAVITY_CONFIG_SRC" ]]; then
+  echo "ERROR: missing $ANTIGRAVITY_CONFIG_SRC"
+  exit 1
+fi
+
+echo "  Installing Antigravity CLI config to $ANTIGRAVITY_CONFIG_DEST"
+mkdir -p "$(dirname "$ANTIGRAVITY_CONFIG_DEST")"
+cp "$ANTIGRAVITY_CONFIG_SRC" "$ANTIGRAVITY_CONFIG_DEST"
+
 echo "==> Done. Installed clusterfork config"
 echo "    Local env file: $DOTENV_DEST"
 echo "    Local shell config: $LOCAL_ENV_DEST"
 echo "    OpenCode config: $OPENCODE_CONFIG_DEST"
 echo "    Qwen Code config: $QWEN_CONFIG_DEST"
+echo "    Antigravity CLI config: $ANTIGRAVITY_CONFIG_DEST"
 echo ""
 echo "    Ensure ~/.bashrc sources: source \"$LOCAL_ENV_DEST\""
