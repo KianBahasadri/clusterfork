@@ -28,6 +28,25 @@ QWEN_CONFIG_DEST="$HOME/.qwen/settings.json"
 ANTIGRAVITY_CONFIG_SRC="$REPO_DIR/antigravity.json"
 ANTIGRAVITY_CONFIG_DEST="$HOME/.gemini/antigravity-cli/settings.json"
 
+# Replace a leading $HOME with ~ for shorter display paths.
+tildify() {
+  if [[ "$1" == "$HOME" || "$1" == "$HOME/"* ]]; then
+    printf '~%s' "${1#"$HOME"}"
+  else
+    printf '%s' "$1"
+  fi
+}
+
+# A completed step: check, padded label, arrow, shortened dest.
+step() { printf '  ✓  %-13s  →  %s\n' "$1" "$(tildify "$2")"; }
+
+# A fatal error with an optional hint line, then exit.
+fail() {
+  printf '  ✗  %s\n' "$1" >&2
+  [[ -n "${2:-}" ]] && printf '       %s\n' "$2" >&2
+  exit 1
+}
+
 usage() {
   cat <<'EOF'
 Install clusterfork config.
@@ -57,68 +76,54 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-echo "==> Installing clusterfork config from $REPO_DIR"
+printf '  clusterfork  ›  installing config\n'
+printf '  from  %s\n\n' "$(tildify "$REPO_DIR")"
 
-if [[ ! -f "$DOTENV_SRC" ]]; then
-  echo "ERROR: missing $DOTENV_SRC"
-  echo "Create it in the repo root with your local environment values."
-  exit 1
-fi
-
+[[ -f "$DOTENV_SRC" ]] || fail "missing $(tildify "$DOTENV_SRC")" "Create it in the repo root with your local environment values."
 mkdir -p "$CLUSTERFORK_CONFIG_DIR"
-echo "  Installing local env file to $DOTENV_DEST"
 cp "$DOTENV_SRC" "$DOTENV_DEST"
+step "env file" "$DOTENV_DEST"
 
-if [[ ! -f "$LOCAL_ENV_SRC" ]]; then
-  echo "ERROR: missing $LOCAL_ENV_SRC"
-  echo "Create it in the repo root with your local shell aliases/functions."
-  exit 1
-fi
+[[ -f "$LOCAL_ENV_SRC" ]] || fail "missing $(tildify "$LOCAL_ENV_SRC")" "Create it in the repo root with your local shell aliases/functions."
+[[ -d "$SHELL_SRC_DIR" ]] || fail "missing $(tildify "$SHELL_SRC_DIR")"
 
-if [[ ! -d "$SHELL_SRC_DIR" ]]; then
-  echo "ERROR: missing $SHELL_SRC_DIR"
-  exit 1
-fi
-
-echo "  Installing local shell config to $LOCAL_ENV_DEST"
 cp "$LOCAL_ENV_SRC" "$LOCAL_ENV_DEST"
-echo "  Installing shell modules to $SHELL_DEST_DIR"
+step "shell config" "$LOCAL_ENV_DEST"
+
 rm -rf -- "$SHELL_DEST_DIR"
 mkdir -p "$SHELL_DEST_DIR"
 cp -r "$SHELL_SRC_DIR"/. "$SHELL_DEST_DIR"/
+step "shell modules" "$SHELL_DEST_DIR"
 
-if [[ ! -f "$OPENCODE_CONFIG_SRC" ]]; then
-  echo "ERROR: missing $OPENCODE_CONFIG_SRC"
-  exit 1
-fi
-
-echo "  Installing opencode config to $OPENCODE_CONFIG_DEST"
+[[ -f "$OPENCODE_CONFIG_SRC" ]] || fail "missing $(tildify "$OPENCODE_CONFIG_SRC")"
 mkdir -p "$(dirname "$OPENCODE_CONFIG_DEST")"
 cp "$OPENCODE_CONFIG_SRC" "$OPENCODE_CONFIG_DEST"
+step "opencode" "$OPENCODE_CONFIG_DEST"
 
-if [[ ! -f "$QWEN_CONFIG_SRC" ]]; then
-  echo "ERROR: missing $QWEN_CONFIG_SRC"
-  exit 1
-fi
-
-echo "  Installing Qwen Code config to $QWEN_CONFIG_DEST"
+[[ -f "$QWEN_CONFIG_SRC" ]] || fail "missing $(tildify "$QWEN_CONFIG_SRC")"
 mkdir -p "$(dirname "$QWEN_CONFIG_DEST")"
 cp "$QWEN_CONFIG_SRC" "$QWEN_CONFIG_DEST"
+step "qwen code" "$QWEN_CONFIG_DEST"
 
-if [[ ! -f "$ANTIGRAVITY_CONFIG_SRC" ]]; then
-  echo "ERROR: missing $ANTIGRAVITY_CONFIG_SRC"
-  exit 1
-fi
-
-echo "  Installing Antigravity CLI config to $ANTIGRAVITY_CONFIG_DEST"
+[[ -f "$ANTIGRAVITY_CONFIG_SRC" ]] || fail "missing $(tildify "$ANTIGRAVITY_CONFIG_SRC")"
 mkdir -p "$(dirname "$ANTIGRAVITY_CONFIG_DEST")"
 cp "$ANTIGRAVITY_CONFIG_SRC" "$ANTIGRAVITY_CONFIG_DEST"
+step "antigravity" "$ANTIGRAVITY_CONFIG_DEST"
 
-echo "==> Done. Installed clusterfork config"
-echo "    Local env file: $DOTENV_DEST"
-echo "    Local shell config: $LOCAL_ENV_DEST"
-echo "    OpenCode config: $OPENCODE_CONFIG_DEST"
-echo "    Qwen Code config: $QWEN_CONFIG_DEST"
-echo "    Antigravity CLI config: $ANTIGRAVITY_CONFIG_DEST"
-echo ""
-echo "    Ensure ~/.bashrc sources: source \"$LOCAL_ENV_DEST\""
+# Shell modules: the basename (sans .sh) of each module under shell/.
+modules=()
+for f in "$SHELL_SRC_DIR"/*.sh; do
+  [[ -e "$f" ]] || continue
+  modules+=("$(basename "$f" .sh)")
+done
+if (( ${#modules[@]} > 0 )); then
+  mid=$(( (${#modules[@]} + 1) / 2 ))
+  printf '\n  Shell modules\n'
+  printf '    %s\n' "${modules[*]:0:$mid}"
+  (( ${#modules[@]} > mid )) && printf '    %s\n' "${modules[*]:$mid}"
+fi
+
+printf '\n  ✓  done\n\n'
+printf '  Make sure ~/.bashrc sources clusterfork:\n'
+printf '    source "%s"\n' "$LOCAL_ENV_DEST"
+printf '\n'
