@@ -1,5 +1,5 @@
 ---
-name: commit
+name: commit_and_push
 description: Commit and push staged changes to the current branch
 ---
 
