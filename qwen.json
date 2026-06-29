@@ -5,7 +5,8 @@
   },
   "memory": {
     "enableManagedAutoMemory": false,
-    "enableManagedAutoDream": false
+    "enableManagedAutoDream": false,
+    "enableAutoSkill": false
   },
   "security": {
     "auth": {
