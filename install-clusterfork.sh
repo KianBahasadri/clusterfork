@@ -7,6 +7,7 @@
 #   3. Overwrites ~/.config/opencode/opencode.json from repo-local opencode.json
 #   4. Overwrites ~/.qwen/settings.json from repo-local qwen.json
 #   5. Overwrites ~/.gemini/antigravity-cli/settings.json from repo-local antigravity.json
+#   6. Overwrites ~/.qwen/skills/ from repo-local skills/
 #
 # Usage:
 #   ./install-clusterfork.sh
@@ -27,6 +28,8 @@ QWEN_CONFIG_SRC="$REPO_DIR/qwen.json"
 QWEN_CONFIG_DEST="$HOME/.qwen/settings.json"
 ANTIGRAVITY_CONFIG_SRC="$REPO_DIR/antigravity.json"
 ANTIGRAVITY_CONFIG_DEST="$HOME/.gemini/antigravity-cli/settings.json"
+SKILLS_SRC_DIR="$REPO_DIR/skills"
+SKILLS_DEST_DIR="$HOME/.qwen/skills"
 
 # Replace a leading $HOME with ~ for shorter display paths.
 tildify() {
@@ -110,6 +113,13 @@ mkdir -p "$(dirname "$ANTIGRAVITY_CONFIG_DEST")"
 cp "$ANTIGRAVITY_CONFIG_SRC" "$ANTIGRAVITY_CONFIG_DEST"
 step "antigravity" "$ANTIGRAVITY_CONFIG_DEST"
 
+if [[ -d "$SKILLS_SRC_DIR" ]]; then
+  rm -rf -- "$SKILLS_DEST_DIR"
+  mkdir -p "$(dirname "$SKILLS_DEST_DIR")"
+  cp -r "$SKILLS_SRC_DIR" "$SKILLS_DEST_DIR"
+  step "qwen skills" "$SKILLS_DEST_DIR"
+fi
+
 # Shell modules: the basename (sans .sh) of each module under shell/.
 modules=()
 for f in "$SHELL_SRC_DIR"/*.sh; do
@@ -121,6 +131,19 @@ if (( ${#modules[@]} > 0 )); then
   printf '\n  Shell modules\n'
   printf '    %s\n' "${modules[*]:0:$mid}"
   (( ${#modules[@]} > mid )) && printf '    %s\n' "${modules[*]:$mid}"
+fi
+
+# Qwen skills: list each subdirectory name under skills/.
+skills=()
+if [[ -d "$SKILLS_SRC_DIR" ]]; then
+  for d in "$SKILLS_SRC_DIR"/*/; do
+    [[ -d "$d" ]] || continue
+    skills+=("$(basename "$d")")
+  done
+fi
+if (( ${#skills[@]} > 0 )); then
+  printf '\n  Qwen skills\n'
+  printf '    %s\n' "${skills[*]}"
 fi
 
 printf '\n  ✓  done\n\n'

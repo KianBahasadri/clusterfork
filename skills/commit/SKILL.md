@@ -1,0 +1,22 @@
+---
+name: commit
+description: Commit and push staged changes to the current branch
+---
+
+# Commit and Push
+
+## Instructions
+
+1. Run `git status` and `git diff HEAD` to see what has changed.
+2. Run `git log -n 3` to match recent commit style (verbosity, formatting).
+3. Propose a concise, focused commit message based on the diffs.
+4. Stage all relevant files with `git add`.
+5. Commit with the proposed message.
+6. Run `git status` to confirm the commit succeeded and nothing is left behind.
+7. Push to the current branch on `origin`.
+
+## Notes
+
+- Keep commit messages clear and concise — focus on _why_, not _what_.
+- Do not commit unrelated or unintended changes.
+- If nothing is staged and there are no modifications, tell the user instead of trying to commit.
