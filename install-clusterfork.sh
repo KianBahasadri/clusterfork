@@ -8,6 +8,7 @@
 #   4. Overwrites ~/.qwen/settings.json from repo-local qwen.json
 #   5. Overwrites ~/.gemini/antigravity-cli/settings.json from repo-local antigravity.json
 #   6. Overwrites ~/.qwen/skills/ from repo-local skills/
+#   7. Appends a source line to ~/.bashrc if it is not already present
 #
 # Usage:
 #   ./install-clusterfork.sh
@@ -30,6 +31,7 @@ ANTIGRAVITY_CONFIG_SRC="$REPO_DIR/antigravity.json"
 ANTIGRAVITY_CONFIG_DEST="$HOME/.gemini/antigravity-cli/settings.json"
 SKILLS_SRC_DIR="$REPO_DIR/skills"
 SKILLS_DEST_DIR="$HOME/.qwen/skills"
+BASHRC="$HOME/.bashrc"
 
 # Replace a leading $HOME with ~ for shorter display paths.
 tildify() {
@@ -120,6 +122,16 @@ if [[ -d "$SKILLS_SRC_DIR" ]]; then
   step "qwen skills" "$SKILLS_DEST_DIR"
 fi
 
+# Ensure ~/.bashrc sources clusterfork. Keep $HOME literal so it stays portable,
+# and skip if the source line is already present so re-running is idempotent.
+SOURCE_LINE="source \"\$HOME${LOCAL_ENV_DEST#"$HOME"}\""
+if [[ -f "$BASHRC" ]] && grep -qF 'clusterfork/bash_profile.sh' "$BASHRC"; then
+  step "bashrc" "already sourced"
+else
+  printf '\n# clusterfork\n%s\n' "$SOURCE_LINE" >> "$BASHRC"
+  step "bashrc" "$BASHRC"
+fi
+
 # Shell modules: the basename (sans .sh) of each module under shell/.
 modules=()
 for f in "$SHELL_SRC_DIR"/*.sh; do
@@ -147,6 +159,6 @@ if (( ${#skills[@]} > 0 )); then
 fi
 
 printf '\n  ✓  done\n\n'
-printf '  Make sure ~/.bashrc sources clusterfork:\n'
-printf '    source "%s"\n' "$LOCAL_ENV_DEST"
+printf '  Restart your shell or run:\n'
+printf '    source ~/.bashrc\n'
 printf '\n'
