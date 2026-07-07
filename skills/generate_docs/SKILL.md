@@ -18,39 +18,48 @@ accurate to the implementation.
 
 ## Instructions
 
-1. **Read everything.** Read every source file in the repo — shell scripts,
+1. **Check for existing files.** Before reading or writing anything, check
+   whether `AGENTS.md` and/or `docs/` already exist in the repo root. If either
+   is present, stop and do not proceed automatically. Present a brief summary
+   of what exists — list the files (e.g. `AGENTS.md`, `docs/README.md`,
+   `docs/installation.md`, …) with a one-line note on each — then ask the user
+   openly how they would like to proceed (overwrite, back up first, cancel,
+   etc.). Wait for their response before continuing. If neither exists, skip
+   this step and proceed.
+
+2. **Read everything.** Read every source file in the repo — shell scripts,
    config files, Python scripts, the installer, existing docs, AGENTS.md, and
    README.md. Do not skip files. Do not assume content from filenames.
 
-2. **Generate AGENTS.md.** Write a minimal AGENTS.md: one line describing the
+3. **Generate AGENTS.md.** Write a minimal AGENTS.md: one line describing the
    project, one line pointing to `docs/`. No detail, no repeated info.
 
-3. **Create CLAUDE.md symlink.** Create a symlink `CLAUDE.md → AGENTS.md` in
+4. **Create CLAUDE.md symlink.** Create a symlink `CLAUDE.md → AGENTS.md` in
    the repo root so Claude Code picks up the same instructions. If the symlink
    already exists, recreate it to ensure it points to AGENTS.md.
 
-4. **Plan doc topics.** Identify distinct topics from what you read. Each topic
+5. **Plan doc topics.** Identify distinct topics from what you read. Each topic
    gets its own file under `docs/`. Topics should be concrete and scoped —
    "installation", "shell-modules", "auth-rotation", etc. If something was
    tried but not shipped (experiments, dead-ends, reverted features), it gets
    its own doc file too.
 
-5. **Write docs/README.md.** Create an index listing every doc file with a
+6. **Write docs/README.md.** Create an index listing every doc file with a
    short em-dash description. Include the Notes section verbatim from the
    existing docs/README.md if one already exists — do not rewrite it.
 
-6. **Write one file per topic.** Each doc file covers exactly one topic.
+7. **Write one file per topic.** Each doc file covers exactly one topic.
    Information must not be repeated across files. If a detail belongs to two
    topics, pick the better fit and reference it from the other file.
 
-7. **Preserve the Notes section.** The docs/README.md must always contain the
+8. **Preserve the Notes section.** The docs/README.md must always contain the
    Notes section explaining:
    - Docs are AI-generated, after-the-fact, implementation-accurate not
      design-accurate.
    - Information should not be repeated anywhere else.
    - Experiments and dead-ends should get their own doc files.
 
-8. **Do not create files for things that don't exist.** Only document what's
+9. **Do not create files for things that don't exist.** Only document what's
    actually in the repo. If a file or feature isn't present, don't invent it.
 
 ## Notes
