@@ -7,6 +7,7 @@
 - [Scripts](scripts.md) — standalone Python utilities
 - [Skills](skills.md) — Qwen Code skills bundled in the repo
 - [Conventions](conventions.md) — style, safety, and idempotency rules
+- [aerolink.sh (removed)](aerolink-removed.md) — historical record of the deleted Aerolink proxy launcher
 
 ## Notes
 

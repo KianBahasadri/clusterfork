@@ -22,10 +22,6 @@
 
 `oc` is an alias for `opencode --continue`. `o` is an alias for `opencode`.
 
-## aerolink.sh
-
-`aero` launches Claude Code against the Aerolink proxy using `ANTHROPIC_API_KEY` and `ANTHROPIC_BASE_URL`. Requires `AEROLINK_API_KEY`. Builds settings JSON inline and passes it via `--settings`.
-
 ## antigravity.sh
 
 `ag` is an alias for `agy --dangerously-skip-permissions`. `rotate-antigravity` switches between saved Antigravity accounts using `secret-tool` (GNOME Keyring).
