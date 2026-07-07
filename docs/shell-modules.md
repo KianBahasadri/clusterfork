@@ -4,7 +4,7 @@
 
 ## pioneer.sh
 
-`pi` launches Qwen Code against the Pioneer OpenAI-compatible gateway using model `qwen3.7-max`. Requires `PIONEER_API_KEY`. Sets `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_MODEL` inside a subshell so they don't leak into the parent session.
+`pi` launches Qwen Code against the Pioneer OpenAI-compatible gateway using model `zai-org/GLM-5.2`. Requires `PIONEER_API_KEY`. Sets `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_MODEL` inside a subshell so they don't leak into the parent session.
 
 ## claude.sh
 

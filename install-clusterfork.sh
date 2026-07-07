@@ -7,7 +7,7 @@
 #   3. Overwrites ~/.config/opencode/opencode.json from repo-local opencode.json
 #   4. Overwrites ~/.qwen/settings.json from repo-local qwen.json
 #   5. Overwrites ~/.gemini/antigravity-cli/settings.json from repo-local antigravity.json
-#   6. Overwrites ~/.qwen/skills/ from repo-local skills/
+#   6. Overwrites ~/.qwen/skills/ and ~/.grok/skills/ from repo-local skills/
 #   7. Appends a source line to ~/.bashrc if it is not already present
 #
 # Usage:
@@ -30,7 +30,8 @@ QWEN_CONFIG_DEST="$HOME/.qwen/settings.json"
 ANTIGRAVITY_CONFIG_SRC="$REPO_DIR/antigravity.json"
 ANTIGRAVITY_CONFIG_DEST="$HOME/.gemini/antigravity-cli/settings.json"
 SKILLS_SRC_DIR="$REPO_DIR/skills"
-SKILLS_DEST_DIR="$HOME/.qwen/skills"
+QWEN_SKILLS_DEST_DIR="$HOME/.qwen/skills"
+GROK_SKILLS_DEST_DIR="$HOME/.grok/skills"
 BASHRC="$HOME/.bashrc"
 
 # Replace a leading $HOME with ~ for shorter display paths.
@@ -116,10 +117,15 @@ cp "$ANTIGRAVITY_CONFIG_SRC" "$ANTIGRAVITY_CONFIG_DEST"
 step "antigravity" "$ANTIGRAVITY_CONFIG_DEST"
 
 if [[ -d "$SKILLS_SRC_DIR" ]]; then
-  rm -rf -- "$SKILLS_DEST_DIR"
-  mkdir -p "$(dirname "$SKILLS_DEST_DIR")"
-  cp -r "$SKILLS_SRC_DIR" "$SKILLS_DEST_DIR"
-  step "qwen skills" "$SKILLS_DEST_DIR"
+  rm -rf -- "$QWEN_SKILLS_DEST_DIR"
+  mkdir -p "$(dirname "$QWEN_SKILLS_DEST_DIR")"
+  cp -r "$SKILLS_SRC_DIR" "$QWEN_SKILLS_DEST_DIR"
+  step "qwen skills" "$QWEN_SKILLS_DEST_DIR"
+
+  rm -rf -- "$GROK_SKILLS_DEST_DIR"
+  mkdir -p "$(dirname "$GROK_SKILLS_DEST_DIR")"
+  cp -r "$SKILLS_SRC_DIR" "$GROK_SKILLS_DEST_DIR"
+  step "grok skills" "$GROK_SKILLS_DEST_DIR"
 fi
 
 # Ensure ~/.bashrc sources clusterfork. Keep $HOME literal so it stays portable,
@@ -145,7 +151,7 @@ if (( ${#modules[@]} > 0 )); then
   (( ${#modules[@]} > mid )) && printf '    %s\n' "${modules[*]:$mid}"
 fi
 
-# Qwen skills: list each subdirectory name under skills/.
+# Skills: list each subdirectory name under skills/.
 skills=()
 if [[ -d "$SKILLS_SRC_DIR" ]]; then
   for d in "$SKILLS_SRC_DIR"/*/; do
@@ -154,7 +160,7 @@ if [[ -d "$SKILLS_SRC_DIR" ]]; then
   done
 fi
 if (( ${#skills[@]} > 0 )); then
-  printf '\n  Qwen skills\n'
+  printf '\n  Skills\n'
   printf '    %s\n' "${skills[*]}"
 fi
 

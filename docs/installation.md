@@ -18,7 +18,7 @@
 | `opencode.json`                   | `~/.config/opencode/opencode.json`       | OpenCode settings                 |
 | `qwen.json`                       | `~/.qwen/settings.json`                  | Qwen Code settings                |
 | `antigravity.json`                | `~/.gemini/antigravity-cli/settings.json`| Antigravity settings              |
-| `skills/`                         | `~/.qwen/skills/`                        | Qwen skills                       |
+| `skills/`                         | `~/.qwen/skills/` and `~/.grok/skills/`  | Shared skills for Qwen and Grok   |
 
 The installer also appends a `source` line to `~/.bashrc` so `bash_profile.sh` is loaded in every new shell.
 

@@ -3,7 +3,7 @@
 # from this repo's qwen.json.
 
 PI_PIONEER_BASE_URL="https://api.pioneer.ai/v1"
-PI_PIONEER_DEFAULT_MODEL="qwen3.7-max"
+PI_PIONEER_DEFAULT_MODEL="zai-org/GLM-5.2"
 
 pi() {
   local arg

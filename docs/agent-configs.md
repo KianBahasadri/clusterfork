@@ -6,7 +6,7 @@ Three JSON files in the repo root configure individual agents. The installer cop
 
 Qwen Code settings:
 
-- **Model:** `qwen3.7-max`
+- **Model:** `zai-org/GLM-5.2`
 - **Auth:** OpenAI type (reads `PIONEER_API_KEY`)
 - **Providers:** six models on `https://api.pioneer.ai/v1` — Pioneer Auto, Qwen 3.7 Max, DeepSeek V4 Pro, Kimi K2.7 Code, GLM 5.2, MiniMax M3. All use reasoning effort `xhigh`.
 - **MCP servers:** context7 (remote, requires `CONTEXT7_API_KEY`)
