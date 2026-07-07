@@ -1,4 +1,4 @@
-alias cc='codex resume -c approval_policy=never'
+alias cc='codex resume -c --yolo'
 
 rotate-codex() {
   local codex_dir="${ROTATE_CODEX_CODEX_DIR:-$HOME/.codex}"
