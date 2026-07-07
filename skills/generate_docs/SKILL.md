@@ -25,28 +25,32 @@ accurate to the implementation.
 2. **Generate AGENTS.md.** Write a minimal AGENTS.md: one line describing the
    project, one line pointing to `docs/`. No detail, no repeated info.
 
-3. **Plan doc topics.** Identify distinct topics from what you read. Each topic
+3. **Create CLAUDE.md symlink.** Create a symlink `CLAUDE.md → AGENTS.md` in
+   the repo root so Claude Code picks up the same instructions. If the symlink
+   already exists, recreate it to ensure it points to AGENTS.md.
+
+4. **Plan doc topics.** Identify distinct topics from what you read. Each topic
    gets its own file under `docs/`. Topics should be concrete and scoped —
    "installation", "shell-modules", "auth-rotation", etc. If something was
    tried but not shipped (experiments, dead-ends, reverted features), it gets
    its own doc file too.
 
-4. **Write docs/README.md.** Create an index listing every doc file with a
+5. **Write docs/README.md.** Create an index listing every doc file with a
    short em-dash description. Include the Notes section verbatim from the
    existing docs/README.md if one already exists — do not rewrite it.
 
-5. **Write one file per topic.** Each doc file covers exactly one topic.
+6. **Write one file per topic.** Each doc file covers exactly one topic.
    Information must not be repeated across files. If a detail belongs to two
    topics, pick the better fit and reference it from the other file.
 
-6. **Preserve the Notes section.** The docs/README.md must always contain the
+7. **Preserve the Notes section.** The docs/README.md must always contain the
    Notes section explaining:
    - Docs are AI-generated, after-the-fact, implementation-accurate not
      design-accurate.
    - Information should not be repeated anywhere else.
    - Experiments and dead-ends should get their own doc files.
 
-7. **Do not create files for things that don't exist.** Only document what's
+8. **Do not create files for things that don't exist.** Only document what's
    actually in the repo. If a file or feature isn't present, don't invent it.
 
 ## Notes
