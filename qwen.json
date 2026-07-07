@@ -1,7 +1,8 @@
 {
   "$version": 4,
   "model": {
-    "name": "zai-org/GLM-5.2"
+    "name": "zai-org/GLM-5.2",
+    "skipLoopDetection": true
   },
   "memory": {
     "enableManagedAutoMemory": false,
