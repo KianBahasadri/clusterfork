@@ -1,6 +1,6 @@
 # Agent Configs
 
-Three JSON files in the repo root configure individual agents. The installer copies each to its destination.
+JSON/TOML files in the repo root configure individual agents. The installer copies each to its destination.
 
 ## qwen.json → ~/.qwen/settings.json
 
@@ -30,3 +30,14 @@ Antigravity CLI settings:
 - **Theme:** dark
 - **Telemetry:** disabled
 - **Trusted workspaces:** `~/.config/clusterfork`, `~/steam_cart_evaluator`
+
+## grok.toml → ~/.grok/config.toml
+
+Grok CLI settings:
+
+- **Model:** `grok-composer-2.5-fast` (fork secondary: `grok-build`)
+- **UI:** oscura-midnight theme, `permission_mode = bypassPermissions` (always-approve)
+- **Marketplace:** xAI Official plugin marketplace source
+- **MCP servers:** context7 (remote, requires `CONTEXT7_API_KEY`), chrome-devtools (local, disabled — uses Chromium on port 9222)
+- **Plugins:** chrome-devtools-mcp disabled
+- **Updates:** auto-update enabled

@@ -8,7 +8,8 @@
 #   4. Overwrites ~/.qwen/settings.json from repo-local qwen.json
 #   5. Overwrites ~/.gemini/antigravity-cli/settings.json from repo-local antigravity.json
 #   6. Overwrites ~/.qwen/skills/ and ~/.grok/skills/ from repo-local skills/
-#   7. Appends a source line to ~/.bashrc if it is not already present
+#   7. Overwrites ~/.grok/config.toml from repo-local grok.toml
+#   8. Appends a source line to ~/.bashrc if it is not already present
 #
 # Usage:
 #   ./install-clusterfork.sh
@@ -32,6 +33,8 @@ ANTIGRAVITY_CONFIG_DEST="$HOME/.gemini/antigravity-cli/settings.json"
 SKILLS_SRC_DIR="$REPO_DIR/skills"
 QWEN_SKILLS_DEST_DIR="$HOME/.qwen/skills"
 GROK_SKILLS_DEST_DIR="$HOME/.grok/skills"
+GROK_CONFIG_SRC="$REPO_DIR/grok.toml"
+GROK_CONFIG_DEST="$HOME/.grok/config.toml"
 BASHRC="$HOME/.bashrc"
 
 # Replace a leading $HOME with ~ for shorter display paths.
@@ -127,6 +130,11 @@ if [[ -d "$SKILLS_SRC_DIR" ]]; then
   cp -r "$SKILLS_SRC_DIR" "$GROK_SKILLS_DEST_DIR"
   step "grok skills" "$GROK_SKILLS_DEST_DIR"
 fi
+
+[[ -f "$GROK_CONFIG_SRC" ]] || fail "missing $(tildify "$GROK_CONFIG_SRC")"
+mkdir -p "$(dirname "$GROK_CONFIG_DEST")"
+cp "$GROK_CONFIG_SRC" "$GROK_CONFIG_DEST"
+step "grok config" "$GROK_CONFIG_DEST"
 
 # Ensure ~/.bashrc sources clusterfork. Keep $HOME literal so it stays portable,
 # and skip if the source line is already present so re-running is idempotent.

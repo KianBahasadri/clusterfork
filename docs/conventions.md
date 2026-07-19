@@ -5,3 +5,18 @@
 - **Env isolation:** launch wrappers set environment variables inside a subshell so they don't leak into the parent session.
 - **Idempotency:** `install-clusterfork.sh` can be re-run safely. It won't add duplicate `source` lines to `~/.bashrc`.
 - **Testing changes:** re-run `./install-clusterfork.sh` and open a fresh shell to verify.
+
+## Repo is the source of truth
+
+Clusterfork is a **dotfile installer**. The files in this repo are authoritative for every destination they map to. The installer's job is to **overwrite** those destinations from the repo — full file (or full directory for `skills/` and `shell/`), every time.
+
+Do **not**:
+
+- Merge fragments into an existing home-dir config
+- Preserve "user customizations" outside the repo
+- Use marker blocks, partial section replacement, or `agent mcp add`-style surgery to avoid clobbering a live file
+- Treat `~/.grok/config.toml` (or any other mapped dest) as sacred local state the installer must carefully edit
+
+If a setting belongs on the machine, it belongs **in the repo** first, then gets installed by overwrite. Local-only tweaks that aren't committed will be wiped on the next `./install-clusterfork.sh` — that is intentional.
+
+The only exception is `~/.bashrc`: the installer appends a single `source` line if missing, and does not rewrite the whole file.

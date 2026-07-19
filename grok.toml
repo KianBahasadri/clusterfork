@@ -1,0 +1,39 @@
+[cli]
+auto_update = true
+
+[ui]
+max_thoughts_width = 120
+theme = "oscura-midnight"
+fork_secondary_model = "grok-build"
+compact_mode = false
+permission_mode = "bypassPermissions"
+
+[models]
+default = "grok-composer-2.5-fast"
+
+[[marketplace.sources]]
+name = "xAI Official"
+git = "https://github.com/xai-org/plugin-marketplace.git"
+
+[plugins]
+enabled = []
+disabled = ["chrome-devtools-mcp"]
+
+[mcp_servers.chrome-devtools]
+command = "pnpm"
+args = [
+    "dlx",
+    "chrome-devtools-mcp@latest",
+    "--no-usage-statistics",
+    "--browserUrl",
+    "http://127.0.0.1:9222",
+]
+enabled = false
+
+[mcp_servers.context7]
+url = "https://mcp.context7.com/mcp"
+enabled = true
+
+[mcp_servers.context7.headers]
+CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}"
+Accept = "application/json, text/event-stream"
