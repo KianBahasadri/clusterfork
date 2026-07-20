@@ -19,7 +19,7 @@
 | `qwen.json`                       | `~/.qwen/settings.json`                  | Qwen Code settings                |
 | `antigravity.json`                | `~/.gemini/antigravity-cli/settings.json`| Antigravity settings              |
 | `grok.toml`                       | `~/.grok/config.toml`                    | Grok CLI settings                 |
-| `skills/`                         | `~/.qwen/skills/`, `~/.grok/skills/`, and `~/.codex/skills/` | Shared skills (Codex keeps `.system`) |
+| `skills/`                         | `~/.qwen/skills/`, `~/.grok/skills/`, `~/.claude/skills/`, and `~/.codex/skills/` | Shared skills (Codex keeps `.system`) |
 
 The installer also appends a `source` line to `~/.bashrc` so `bash_profile.sh` is loaded in every new shell.
 

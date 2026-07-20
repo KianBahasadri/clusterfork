@@ -7,8 +7,9 @@
 #   3. Overwrites ~/.config/opencode/opencode.json from repo-local opencode.json
 #   4. Overwrites ~/.qwen/settings.json from repo-local qwen.json
 #   5. Overwrites ~/.gemini/antigravity-cli/settings.json from repo-local antigravity.json
-#   6. Overwrites ~/.qwen/skills/, ~/.grok/skills/, and ~/.codex/skills/
-#      (user skills only; preserves ~/.codex/skills/.system) from repo-local skills/
+#   6. Overwrites ~/.qwen/skills/, ~/.grok/skills/, ~/.claude/skills/, and
+#      ~/.codex/skills/ (user skills only; preserves ~/.codex/skills/.system)
+#      from repo-local skills/
 #   7. Overwrites ~/.grok/config.toml from repo-local grok.toml
 #   8. Appends a source line to ~/.bashrc if it is not already present
 #
@@ -34,6 +35,7 @@ ANTIGRAVITY_CONFIG_DEST="$HOME/.gemini/antigravity-cli/settings.json"
 SKILLS_SRC_DIR="$REPO_DIR/skills"
 QWEN_SKILLS_DEST_DIR="$HOME/.qwen/skills"
 GROK_SKILLS_DEST_DIR="$HOME/.grok/skills"
+CLAUDE_SKILLS_DEST_DIR="$HOME/.claude/skills"
 CODEX_SKILLS_DEST_DIR="$HOME/.codex/skills"
 GROK_CONFIG_SRC="$REPO_DIR/grok.toml"
 GROK_CONFIG_DEST="$HOME/.grok/config.toml"
@@ -131,6 +133,11 @@ if [[ -d "$SKILLS_SRC_DIR" ]]; then
   mkdir -p "$(dirname "$GROK_SKILLS_DEST_DIR")"
   cp -r "$SKILLS_SRC_DIR" "$GROK_SKILLS_DEST_DIR"
   step "grok skills" "$GROK_SKILLS_DEST_DIR"
+
+  rm -rf -- "$CLAUDE_SKILLS_DEST_DIR"
+  mkdir -p "$(dirname "$CLAUDE_SKILLS_DEST_DIR")"
+  cp -r "$SKILLS_SRC_DIR" "$CLAUDE_SKILLS_DEST_DIR"
+  step "claude skills" "$CLAUDE_SKILLS_DEST_DIR"
 
   # Codex owns ~/.codex/skills/.system; only replace non-dot user skill dirs.
   mkdir -p "$CODEX_SKILLS_DEST_DIR"
