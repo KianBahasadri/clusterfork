@@ -5,7 +5,7 @@
 - [Agent Configs](agent-configs.md) — per-agent settings files
 - [Auth Rotation](auth-rotation.md) — switching between saved accounts
 - [Scripts](scripts.md) — standalone Python utilities
-- [Skills](skills.md) — Qwen Code skills bundled in the repo
+- [Skills](skills.md) — shared skills for Qwen, Grok, and Codex
 - [Conventions](conventions.md) — style, safety, idempotency, and repo-as-source-of-truth
 - [aerolink.sh (removed)](aerolink-removed.md) — historical record of the deleted Aerolink proxy launcher
 

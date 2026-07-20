@@ -10,6 +10,8 @@
 
 Clusterfork is a **dotfile installer**. The files in this repo are authoritative for every destination they map to. The installer's job is to **overwrite** those destinations from the repo — full file (or full directory for `skills/` and `shell/`), every time.
 
+Exception: `~/.codex/skills/.system` is Codex-managed. The installer replaces only non-dot skill directories under `~/.codex/skills/` from `skills/`, and leaves `.system` intact.
+
 Do **not**:
 
 - Merge fragments into an existing home-dir config
