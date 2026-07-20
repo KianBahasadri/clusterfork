@@ -52,7 +52,7 @@ REPO="$(pwd)"   # real workspace root for the task
 PROMPT_FILE="$(mktemp /tmp/ask-grok-prompt.XXXXXX)"
 trap 'rm -f "$PROMPT_FILE"' EXIT
 # write brief to $PROMPT_FILE
-grok --prompt-file "$PROMPT_FILE" --cwd "$REPO" --effort xhigh \
+grok --prompt-file "$PROMPT_FILE" --cwd "$REPO" --effort high \
   --output-format plain
 # attach --always-approve, --sandbox, --tools, -c/-r, etc. only when context needs them
 ```
@@ -65,7 +65,7 @@ Useful flags (pick from context; none of these is a bare-call default):
 | `-p` / `--single "..."` | Inline single-turn prompt |
 | `--cwd PATH` | Workspace root for the session |
 | `--always-approve` | Auto-approve tool use (needed when Grok must edit, run commands, or generate images unattended). Alias often documented as `--yolo` |
-| `--effort` / `--reasoning-effort` | e.g. `xhigh`, `high`, `medium`, `low`, `max` |
+| `--effort` / `--reasoning-effort` | one of: `high`, `medium`, `low` |
 | `--output-format plain\|json\|streaming-json` | `json` when you need `sessionId` or machine parsing |
 | `-c` / `--continue` | Continue the most recent session for this cwd |
 | `-r` / `--resume ID` | Resume a specific session |
@@ -99,12 +99,12 @@ bare-call default — pick what the situation needs.
 
 ```bash
 # Continue most recent session for this cwd
-grok --prompt-file "$PROMPT_FILE" --cwd "$REPO" -c --effort xhigh
+grok --prompt-file "$PROMPT_FILE" --cwd "$REPO" -c --effort high
 # add --always-approve when the continued work must use tools unattended
 
 # Resume a known session id (from a prior --output-format json run)
 grok --prompt-file "$PROMPT_FILE" --cwd "$REPO" --resume "$SESSION_ID" \
-  --effort xhigh
+  --effort high
 ```
 
 If continue/resume fails, start a new session with the same intent and note
@@ -123,7 +123,7 @@ Example tool narrowing for a pure read-side review (only when that matches
 intent):
 
 ```bash
-grok --prompt-file "$PROMPT_FILE" --cwd "$REPO" --effort xhigh \
+grok --prompt-file "$PROMPT_FILE" --cwd "$REPO" --effort high \
   --always-approve \
   --tools "read_file,grep,list_dir,web_search,web_fetch"
 ```
@@ -209,7 +209,7 @@ Do not modify other project files. After generation, reply with the saved
 image path(s) and a one-line description of what you produced.
 PROMPT
 
-grok --prompt-file "$PROMPT_FILE" --cwd "$REPO" --always-approve --effort xhigh
+grok --prompt-file "$PROMPT_FILE" --cwd "$REPO" --always-approve --effort high
 ```
 
 Example edit ask:
