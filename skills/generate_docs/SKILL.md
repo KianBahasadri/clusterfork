@@ -4,8 +4,8 @@ description: >
   Generate or regenerate the AGENTS.md file and docs/ directory from the
   current state of the repo. Reads all source files, creates one doc per
   topic with no repeated information, and writes a slim AGENTS.md that
-  points to docs/. Use when asked to "generate docs", "update docs",
-  "regenerate docs", or "/generate_docs".
+  instructs agents to read and maintain docs/. Use when asked to
+  "generate docs", "update docs", "regenerate docs", or "/generate_docs".
 ---
 
 # Generate Docs
@@ -38,9 +38,38 @@ accurate to the implementation.
    credentials), and no credential or token value may ever appear in the
    docs.
 
-3. **Generate AGENTS.md.** Write a minimal AGENTS.md: one line describing the
-   project, one line pointing to `docs/`, and one line noting that `CLAUDE.md`
-   is a symlink to this file. No detail, no repeated info.
+3. **Generate AGENTS.md.** Write a slim AGENTS.md: minimal **domain** content,
+   but explicit **process** instructions for using docs. Do not paste topic
+   detail from `docs/` into AGENTS.md.
+
+   Use this structure (adapt only the project one-liner; keep the Documentation
+   section wording stable so regenerations stay consistent):
+
+   ```markdown
+   # AGENTS.md
+
+   <one sentence: what this project is>
+
+   ## Documentation (read/write)
+
+   - **Read first:** For how this repo works, start at `docs/README.md`, then
+     open only the topic files you need. Do not re-derive behavior from
+     filenames alone when a doc covers it.
+   - **Before non-trivial changes:** Check the relevant doc so you match
+     existing patterns.
+   - **After behavior changes:** Update the **one** topic file under `docs/`
+     that owns that fact. Do not copy the same detail into AGENTS.md,
+     README.md, or multiple docs.
+   - **Regenerate vs patch:** Prefer the `generate_docs` skill when docs are
+     broadly stale or many topics shifted; for small, targeted edits, patch
+     the single topic file (and `docs/README.md` if you add/remove a topic).
+   - `CLAUDE.md` is a symlink to this file.
+
+   Do not put implementation detail in this file — it lives under `docs/`.
+   ```
+
+   Replace `<one sentence: what this project is>` with a single accurate
+   sentence from what you read. Nothing else from the docs belongs here.
 
 4. **Create CLAUDE.md symlink.** Create a symlink `CLAUDE.md → AGENTS.md` in
    the repo root so Claude Code picks up the same instructions. If CLAUDE.md
@@ -74,3 +103,5 @@ accurate to the implementation.
 
 - Re-running this skill is a regeneration, not an append — the same repo
   state should produce equivalent output.
+- AGENTS.md holds process rules for reading/writing docs; topic facts live
+  only under `docs/`. Do not grow AGENTS.md into a second docs tree.
