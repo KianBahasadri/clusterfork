@@ -16,7 +16,7 @@
 
 ## cursor.sh
 
-`ca` is an alias for `cursor-agent`. `rotate-cursor-cli` switches between saved Cursor accounts via symlinks.
+`ca` is an alias for `cursor-agent --yolo` (Run Everything / force-allow). `rotate-cursor-cli` switches between saved Cursor accounts via symlinks.
 
 ## opencode.sh
 

@@ -1,4 +1,4 @@
-alias ca='cursor-agent'
+alias ca='cursor-agent --yolo'
 
 rotate-cursor-cli() {
   local cursor_dir="${ROTATE_CURSOR_DIR:-$HOME/.config/cursor}"
