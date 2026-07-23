@@ -4,14 +4,15 @@
 # What this does:
 #   1. Overwrites ~/.config/clusterfork/.env from repo-local .env
 #   2. Overwrites ~/.config/clusterfork/bash_profile.sh and shell/*.sh from repo
-#   3. Overwrites ~/.config/opencode/opencode.json from repo-local opencode.json
-#   4. Overwrites ~/.qwen/settings.json from repo-local qwen.json
-#   5. Overwrites ~/.gemini/antigravity-cli/settings.json from repo-local antigravity.json
-#   6. Overwrites ~/.qwen/skills/, ~/.grok/skills/, ~/.claude/skills/, and
+#   3. Overwrites agent settings from repo-local agents/
+#   4. Overwrites ~/.qwen/skills/, ~/.grok/skills/, ~/.claude/skills/, and
 #      ~/.codex/skills/ (user skills only; preserves ~/.codex/skills/.system)
 #      from repo-local skills/
-#   7. Overwrites ~/.grok/config.toml from repo-local grok.toml
-#   8. Appends a source line to ~/.bashrc if it is not already present
+#   5. Overwrites Claude/Cursor statusline scripts + usage fetchers from
+#      repo-local statusline/
+#   6. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
+#      replace the whole file)
+#   7. Appends a source line to ~/.bashrc if it is not already present
 #
 # Usage:
 #   ./install-clusterfork.sh
@@ -26,19 +27,32 @@ LOCAL_ENV_SRC="$REPO_DIR/bash_profile.sh"
 LOCAL_ENV_DEST="$CLUSTERFORK_CONFIG_DIR/bash_profile.sh"
 SHELL_SRC_DIR="$REPO_DIR/shell"
 SHELL_DEST_DIR="$CLUSTERFORK_CONFIG_DIR/shell"
-OPENCODE_CONFIG_SRC="$REPO_DIR/opencode.json"
+AGENTS_SRC_DIR="$REPO_DIR/agents"
+OPENCODE_CONFIG_SRC="$AGENTS_SRC_DIR/opencode.json"
 OPENCODE_CONFIG_DEST="$HOME/.config/opencode/opencode.json"
-QWEN_CONFIG_SRC="$REPO_DIR/qwen.json"
+QWEN_CONFIG_SRC="$AGENTS_SRC_DIR/qwen.json"
 QWEN_CONFIG_DEST="$HOME/.qwen/settings.json"
-ANTIGRAVITY_CONFIG_SRC="$REPO_DIR/antigravity.json"
+ANTIGRAVITY_CONFIG_SRC="$AGENTS_SRC_DIR/antigravity.json"
 ANTIGRAVITY_CONFIG_DEST="$HOME/.gemini/antigravity-cli/settings.json"
 SKILLS_SRC_DIR="$REPO_DIR/skills"
 QWEN_SKILLS_DEST_DIR="$HOME/.qwen/skills"
 GROK_SKILLS_DEST_DIR="$HOME/.grok/skills"
 CLAUDE_SKILLS_DEST_DIR="$HOME/.claude/skills"
 CODEX_SKILLS_DEST_DIR="$HOME/.codex/skills"
-GROK_CONFIG_SRC="$REPO_DIR/grok.toml"
+GROK_CONFIG_SRC="$AGENTS_SRC_DIR/grok.toml"
 GROK_CONFIG_DEST="$HOME/.grok/config.toml"
+CLAUDE_CONFIG_SRC="$AGENTS_SRC_DIR/claude.json"
+CLAUDE_CONFIG_DEST="$HOME/.claude/settings.json"
+STATUSLINE_SRC_DIR="$REPO_DIR/statusline"
+CLAUDE_STATUSLINE_SRC="$STATUSLINE_SRC_DIR/claude/statusline.sh"
+CLAUDE_STATUSLINE_DEST="$HOME/.claude/statusline-command.sh"
+CLAUDE_USAGE_FETCH_SRC="$STATUSLINE_SRC_DIR/claude/usage-fetch.py"
+CLAUDE_USAGE_FETCH_DEST="$HOME/.claude/claude-usage-fetch.py"
+CURSOR_STATUSLINE_SRC="$STATUSLINE_SRC_DIR/cursor/statusline.sh"
+CURSOR_STATUSLINE_DEST="$HOME/.cursor/statusline.sh"
+CURSOR_USAGE_FETCH_SRC="$STATUSLINE_SRC_DIR/cursor/usage-fetch.py"
+CURSOR_USAGE_FETCH_DEST="$HOME/.cursor/cursor-usage-fetch.py"
+CURSOR_CLI_CONFIG="$HOME/.cursor/cli-config.json"
 BASHRC="$HOME/.bashrc"
 
 # Replace a leading $HOME with ~ for shorter display paths.
@@ -156,6 +170,70 @@ fi
 mkdir -p "$(dirname "$GROK_CONFIG_DEST")"
 cp "$GROK_CONFIG_SRC" "$GROK_CONFIG_DEST"
 step "grok config" "$GROK_CONFIG_DEST"
+
+[[ -f "$CLAUDE_CONFIG_SRC" ]] || fail "missing $(tildify "$CLAUDE_CONFIG_SRC")"
+mkdir -p "$(dirname "$CLAUDE_CONFIG_DEST")"
+cp "$CLAUDE_CONFIG_SRC" "$CLAUDE_CONFIG_DEST"
+step "claude" "$CLAUDE_CONFIG_DEST"
+
+[[ -f "$CLAUDE_STATUSLINE_SRC" ]] || fail "missing $(tildify "$CLAUDE_STATUSLINE_SRC")"
+[[ -f "$CLAUDE_USAGE_FETCH_SRC" ]] || fail "missing $(tildify "$CLAUDE_USAGE_FETCH_SRC")"
+mkdir -p "$(dirname "$CLAUDE_STATUSLINE_DEST")"
+cp "$CLAUDE_STATUSLINE_SRC" "$CLAUDE_STATUSLINE_DEST"
+chmod +x "$CLAUDE_STATUSLINE_DEST"
+cp "$CLAUDE_USAGE_FETCH_SRC" "$CLAUDE_USAGE_FETCH_DEST"
+chmod +x "$CLAUDE_USAGE_FETCH_DEST"
+step "claude status" "$CLAUDE_STATUSLINE_DEST"
+
+[[ -f "$CURSOR_STATUSLINE_SRC" ]] || fail "missing $(tildify "$CURSOR_STATUSLINE_SRC")"
+[[ -f "$CURSOR_USAGE_FETCH_SRC" ]] || fail "missing $(tildify "$CURSOR_USAGE_FETCH_SRC")"
+mkdir -p "$(dirname "$CURSOR_STATUSLINE_DEST")"
+cp "$CURSOR_STATUSLINE_SRC" "$CURSOR_STATUSLINE_DEST"
+chmod +x "$CURSOR_STATUSLINE_DEST"
+cp "$CURSOR_USAGE_FETCH_SRC" "$CURSOR_USAGE_FETCH_DEST"
+chmod +x "$CURSOR_USAGE_FETCH_DEST"
+step "cursor status" "$CURSOR_STATUSLINE_DEST"
+
+# Ensure Cursor CLI statusLine points at the installed script. Unlike other
+# agent configs, cli-config.json holds session/auth caches we must not replace.
+if [[ -f "$CURSOR_CLI_CONFIG" ]]; then
+  python3 - "$CURSOR_CLI_CONFIG" <<'PY'
+import json, sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    data = json.load(f)
+wanted = {
+    "type": "command",
+    "command": "~/.cursor/statusline.sh",
+    "padding": 2,
+}
+if data.get("statusLine") != wanted:
+    data["statusLine"] = wanted
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+PY
+  step "cursor cli" "$CURSOR_CLI_CONFIG"
+else
+  mkdir -p "$(dirname "$CURSOR_CLI_CONFIG")"
+  python3 - "$CURSOR_CLI_CONFIG" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = {
+    "permissions": {"allow": [], "deny": []},
+    "version": 1,
+    "statusLine": {
+        "type": "command",
+        "command": "~/.cursor/statusline.sh",
+        "padding": 2,
+    },
+}
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+PY
+  step "cursor cli" "$CURSOR_CLI_CONFIG"
+fi
 
 # Ensure ~/.bashrc sources clusterfork. Keep $HOME literal so it stays portable,
 # and skip if the source line is already present so re-running is idempotent.

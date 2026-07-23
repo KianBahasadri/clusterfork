@@ -1,8 +1,8 @@
 # Agent Configs
 
-JSON/TOML files in the repo root configure individual agents. The installer copies each to its destination.
+JSON/TOML files under `agents/` configure individual agents. The installer copies each to its destination.
 
-## qwen.json → ~/.qwen/settings.json
+## agents/qwen.json → ~/.qwen/settings.json
 
 Qwen Code settings:
 
@@ -13,7 +13,7 @@ Qwen Code settings:
 - **Privacy:** usage statistics disabled
 - **Memory:** managed auto-memory, auto-dream, and auto-skill all disabled
 
-## opencode.json → ~/.config/opencode/opencode.json
+## agents/opencode.json → ~/.config/opencode/opencode.json
 
 OpenCode settings:
 
@@ -22,7 +22,7 @@ OpenCode settings:
 - **Provider:** Pioneer (OpenAI-compatible), same six models as Qwen config
 - **MCP servers:** context7 (remote), linear (remote, disabled), chrome-devtools (local, disabled — uses Chromium on port 9222)
 
-## antigravity.json → ~/.gemini/antigravity-cli/settings.json
+## agents/antigravity.json → ~/.gemini/antigravity-cli/settings.json
 
 Antigravity CLI settings:
 
@@ -31,7 +31,7 @@ Antigravity CLI settings:
 - **Telemetry:** disabled
 - **Trusted workspaces:** `~/.config/clusterfork`, `~/steam_cart_evaluator`
 
-## grok.toml → ~/.grok/config.toml
+## agents/grok.toml → ~/.grok/config.toml
 
 Grok CLI settings:
 
@@ -41,3 +41,14 @@ Grok CLI settings:
 - **MCP servers:** context7 (remote, requires `CONTEXT7_API_KEY`), chrome-devtools (local, disabled — uses Chromium on port 9222)
 - **Plugins:** chrome-devtools-mcp disabled
 - **Updates:** auto-update enabled
+
+## agents/claude.json → ~/.claude/settings.json
+
+Claude Code settings:
+
+- **Model:** `opus`, effort `xhigh`
+- **Status line:** command `bash ~/.claude/statusline-command.sh`, refresh every 60s (see [Statusline](statusline.md))
+- **Plugins:** context7 enabled
+- **UI:** dark theme, fullscreen TUI, prompt suggestions off
+- **Voice:** enabled, hold mode
+- **Other:** auto-memory off, skip dangerous-mode permission prompt, agent push notifications on

@@ -1,6 +1,6 @@
 # Launch Qwen Code against the Pioneer OpenAI-compatible gateway. Qwen reads
 # the Pioneer model catalog and endpoint from ~/.qwen/settings.json, installed
-# from this repo's qwen.json.
+# from this repo's agents/qwen.json.
 
 PI_PIONEER_BASE_URL="https://api.pioneer.ai/v1"
 PI_PIONEER_DEFAULT_MODEL="zai-org/GLM-5.2"

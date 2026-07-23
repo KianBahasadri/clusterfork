@@ -21,4 +21,7 @@ Do **not**:
 
 If a setting belongs on the machine, it belongs **in the repo** first, then gets installed by overwrite. Local-only tweaks that aren't committed will be wiped on the next `./install-clusterfork.sh` — that is intentional.
 
-The only exception is `~/.bashrc`: the installer appends a single `source` line if missing, and does not rewrite the whole file.
+Exceptions (key/line only — not full-file replace):
+
+- `~/.bashrc`: appends a single `source` line if missing
+- `~/.cursor/cli-config.json`: sets/updates only the `statusLine` key so the installed Cursor statusline script is wired up; session/auth caches in that file stay untouched

@@ -3,6 +3,7 @@
 - [Installation](installation.md) — running the installer and what it writes
 - [Shell Modules](shell-modules.md) — launch wrappers and aliases per agent
 - [Agent Configs](agent-configs.md) — per-agent settings files
+- [Statusline](statusline.md) — Claude Code and Cursor Agent status lines
 - [Auth Rotation](auth-rotation.md) — switching between saved accounts
 - [Scripts](scripts.md) — standalone Python utilities
 - [Skills](skills.md) — shared skills for Qwen, Grok, Claude, and Codex
