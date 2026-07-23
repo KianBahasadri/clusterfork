@@ -10,6 +10,13 @@ if [ -f "$CLUSTERFORK_ENV_FILE" ]; then
 fi
 unset CLUSTERFORK_ENV_FILE
 
+# MCP launchers and other small helpers shipped with clusterfork.
+case ":${PATH}:" in
+  *":$CLUSTERFORK_DIR/bin:"*) ;;
+  *) PATH="$CLUSTERFORK_DIR/bin:$PATH" ;;
+esac
+export PATH
+
 for script in "$CLUSTERFORK_DIR"/shell/*.sh; do
   [ -f "$script" ] || continue
   # shellcheck source=/dev/null

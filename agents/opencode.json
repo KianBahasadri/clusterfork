@@ -72,6 +72,15 @@
         "http://127.0.0.1:9222"
       ],
       "enabled": false
+    },
+    "ElevenLabs": {
+      "type": "local",
+      "command": [
+        "bash",
+        "-c",
+        "exec \"$HOME/.config/clusterfork/bin/elevenlabs-mcp\""
+      ],
+      "enabled": true
     }
   }
 }

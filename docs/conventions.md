@@ -25,3 +25,5 @@ Exceptions (key/line only — not full-file replace):
 
 - `~/.bashrc`: appends a single `source` line if missing
 - `~/.cursor/cli-config.json`: sets/updates only the `statusLine` key so the installed Cursor statusline script is wired up; session/auth caches in that file stay untouched
+- `~/.claude.json`: upserts only the `mcpServers.ElevenLabs` entry; the rest of Claude's local state stays untouched
+- `~/.cursor/mcp.json`: full overwrite from `agents/cursor-mcp.json`, but `${ENV}` placeholders are expanded from the clusterfork `.env` at install time so secrets are not committed

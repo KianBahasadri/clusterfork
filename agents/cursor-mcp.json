@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "context7": {
+      "command": "pnpx",
+      "args": [
+        "@upstash/context7-mcp",
+        "--api-key",
+        "${CONTEXT7_API_KEY}"
+      ]
+    },
+    "ElevenLabs": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "exec \"$HOME/.config/clusterfork/bin/elevenlabs-mcp\""
+      ]
+    }
+  }
+}

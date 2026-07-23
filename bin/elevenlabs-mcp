@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Launch the official ElevenLabs MCP server with the key from clusterfork .env.
+set -euo pipefail
+
+env_file="${CLUSTERFORK_ENV_FILE:-$HOME/.config/clusterfork/.env}"
+if [[ -f "$env_file" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  . "$env_file"
+  set +a
+fi
+
+if [[ -z "${ELEVENLABS_API_KEY:-}" ]]; then
+  echo "elevenlabs-mcp: ELEVENLABS_API_KEY is not set (expected in $env_file)" >&2
+  exit 1
+fi
+
+exec uvx elevenlabs-mcp "$@"
