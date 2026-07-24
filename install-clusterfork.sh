@@ -18,6 +18,9 @@
 #   8. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
 #      replace the whole file)
 #   9. Appends a source line to ~/.bashrc if it is not already present
+#  10. Best-effort migrates Codex/Cursor auth profiles into
+#      ~/.local/share/clusterfork-auth and points each agent's auth.json
+#      through the shared current symlink
 #
 # Usage:
 #   ./install-clusterfork.sh
@@ -63,6 +66,11 @@ CURSOR_USAGE_FETCH_DEST="$HOME/.cursor/cursor-usage-fetch.py"
 CURSOR_MCP_SRC="$AGENTS_SRC_DIR/cursor-mcp.json"
 CURSOR_MCP_DEST="$HOME/.cursor/mcp.json"
 CURSOR_CLI_CONFIG="$HOME/.cursor/cli-config.json"
+SHARED_AUTH_ROOT="$HOME/.local/share/clusterfork-auth"
+CODEX_AUTH_DIR="$HOME/.codex"
+CODEX_AUTH_STORE_DIR="$SHARED_AUTH_ROOT/codex"
+CURSOR_AUTH_DIR="$HOME/.config/cursor"
+CURSOR_AUTH_STORE_DIR="$SHARED_AUTH_ROOT/cursor"
 BASHRC="$HOME/.bashrc"
 
 # Replace a leading $HOME with ~ for shorter display paths.
@@ -82,6 +90,159 @@ fail() {
   printf '  ✗  %s\n' "$1" >&2
   [[ -n "${2:-}" ]] && printf '       %s\n' "$2" >&2
   exit 1
+}
+
+warn() {
+  printf '  !  %s\n' "$1" >&2
+  [[ -n "${2:-}" ]] && printf '       %s\n' "$2" >&2
+}
+
+# Move legacy auth.json.* profiles into a small shared store and point the
+# agent's auth.json through store/current. The relative agent link remains
+# portable when the shared store is mounted into a home with a different name.
+AUTH_STORE_CONFIGURED=0
+configure_shared_auth() {
+  local label="$1"
+  local agent_dir="$2"
+  local store_dir="$3"
+  local store_root="${store_dir%/*}"
+  local auth_path="$agent_dir/auth.json"
+  local current_path="$store_dir/current"
+  local agent_link_target
+  local active_suffix="" stored_suffix="" only_suffix=""
+  local path dest target target_base suffix tmp_link
+  local -a legacy_profiles=()
+  local -A available=()
+
+  AUTH_STORE_CONFIGURED=0
+  agent_link_target="$(realpath -ms --relative-to="$agent_dir" "$current_path")" ||
+    return 1
+
+  if [[ -L "$current_path" ]]; then
+    target="$(readlink "$current_path")" || return 1
+    target_base="${target##*/}"
+    if [[ "$target_base" != auth.json.* ]]; then
+      printf '%s auth: invalid current target: %s\n' "$label" "$target" >&2
+      return 1
+    fi
+    stored_suffix="${target_base#auth.json.}"
+  elif [[ -e "$current_path" ]]; then
+    printf '%s auth: %s must be a symlink\n' "$label" "$current_path" >&2
+    return 1
+  fi
+
+  if [[ -L "$auth_path" ]]; then
+    target="$(readlink "$auth_path")" || return 1
+    target_base="${target##*/}"
+    case "$target_base" in
+      auth.json.*)
+        active_suffix="${target_base#auth.json.}"
+        ;;
+      current)
+        active_suffix="$stored_suffix"
+        ;;
+      *)
+        printf '%s auth: unsupported auth link target: %s\n' "$label" "$target" >&2
+        return 1
+        ;;
+    esac
+  fi
+
+  for path in "$store_dir"/auth.json.*; do
+    [[ -e "$path" || -L "$path" ]] || continue
+    if [[ ! -f "$path" || -L "$path" ]]; then
+      printf '%s auth: profile must be a regular file: %s\n' "$label" "$path" >&2
+      return 1
+    fi
+    suffix="${path##*/auth.json.}"
+    if [[ -z "$suffix" ]]; then
+      printf '%s auth: profile suffix is empty: %s\n' "$label" "$path" >&2
+      return 1
+    fi
+    available["$suffix"]=1
+  done
+
+  for path in "$agent_dir"/auth.json.*; do
+    [[ -e "$path" || -L "$path" ]] || continue
+    if [[ ! -f "$path" || -L "$path" ]]; then
+      printf '%s auth: profile must be a regular file: %s\n' "$label" "$path" >&2
+      return 1
+    fi
+    suffix="${path##*/auth.json.}"
+    if [[ -z "$suffix" ]]; then
+      printf '%s auth: profile suffix is empty: %s\n' "$label" "$path" >&2
+      return 1
+    fi
+    dest="$store_dir/auth.json.$suffix"
+    if [[ -e "$dest" || -L "$dest" ]]; then
+      if [[ ! -f "$dest" || -L "$dest" ]] || ! cmp -s -- "$path" "$dest"; then
+        printf '%s auth: conflicting profile exists: %s\n' "$label" "$dest" >&2
+        return 1
+      fi
+    fi
+    legacy_profiles+=("$path")
+    available["$suffix"]=1
+  done
+
+  # A normal single-account installation has only auth.json and no suffixed
+  # profiles. Leave it alone until the user opts into profile rotation.
+  if (( ${#available[@]} == 0 )); then
+    return 0
+  fi
+
+  if [[ -e "$auth_path" && ! -L "$auth_path" ]]; then
+    printf '%s auth: %s must be a symlink before profiles can be migrated\n' \
+      "$label" "$auth_path" >&2
+    return 1
+  fi
+
+  if [[ -z "$active_suffix" ]]; then
+    active_suffix="$stored_suffix"
+  fi
+  if [[ -z "$active_suffix" ]]; then
+    if (( ${#available[@]} != 1 )); then
+      printf '%s auth: cannot determine the active profile\n' "$label" >&2
+      return 1
+    fi
+    for only_suffix in "${!available[@]}"; do
+      active_suffix="$only_suffix"
+    done
+  fi
+  if [[ -z "${available[$active_suffix]:-}" ]]; then
+    printf '%s auth: active profile is missing: auth.json.%s\n' \
+      "$label" "$active_suffix" >&2
+    return 1
+  fi
+
+  mkdir -p "$agent_dir" "$store_dir" || return 1
+  chmod 700 "$store_root" "$store_dir" || return 1
+
+  for path in "${legacy_profiles[@]}"; do
+    suffix="${path##*/auth.json.}"
+    dest="$store_dir/auth.json.$suffix"
+    if [[ -e "$dest" ]]; then
+      rm -- "$path" || return 1
+    else
+      mv -- "$path" "$dest" || return 1
+    fi
+    chmod 600 "$dest" || return 1
+  done
+  for path in "$store_dir"/auth.json.*; do
+    [[ -f "$path" && ! -L "$path" ]] || continue
+    chmod 600 "$path" || return 1
+  done
+
+  tmp_link="$store_dir/.current.tmp.$$"
+  rm -f -- "$tmp_link" || return 1
+  ln -s "auth.json.$active_suffix" "$tmp_link" || return 1
+  mv -Tf -- "$tmp_link" "$current_path" || return 1
+
+  tmp_link="$agent_dir/.auth.json.clusterfork.tmp.$$"
+  rm -f -- "$tmp_link" || return 1
+  ln -s "$agent_link_target" "$tmp_link" || return 1
+  mv -Tf -- "$tmp_link" "$auth_path" || return 1
+
+  AUTH_STORE_CONFIGURED=1
 }
 
 usage() {
@@ -321,6 +482,28 @@ if [[ -f "$BASHRC" ]] && grep -qF 'clusterfork/bash_profile.sh' "$BASHRC"; then
 else
   printf '\n# clusterfork\n%s\n' "$SOURCE_LINE" >> "$BASHRC"
   step "bashrc" "$BASHRC"
+fi
+
+# Auth migration depends on pre-existing home-directory state, so it is
+# intentionally best-effort and runs after the deterministic install steps.
+if configure_shared_auth "Codex" "$CODEX_AUTH_DIR" "$CODEX_AUTH_STORE_DIR"; then
+  if (( AUTH_STORE_CONFIGURED )); then
+    step "codex auth" "$CODEX_AUTH_STORE_DIR"
+  fi
+else
+  warn \
+    "Codex shared auth was not configured; the rest of the install is complete." \
+    "Fix the reported auth state, then re-run the installer."
+fi
+
+if configure_shared_auth "Cursor" "$CURSOR_AUTH_DIR" "$CURSOR_AUTH_STORE_DIR"; then
+  if (( AUTH_STORE_CONFIGURED )); then
+    step "cursor auth" "$CURSOR_AUTH_STORE_DIR"
+  fi
+else
+  warn \
+    "Cursor shared auth was not configured; the rest of the install is complete." \
+    "Fix the reported auth state, then re-run the installer."
 fi
 
 # Shell modules: the basename (sans .sh) of each module under shell/.

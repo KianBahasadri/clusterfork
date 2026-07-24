@@ -2,9 +2,11 @@ alias ca='cursor-agent --yolo'
 
 rotate-cursor-cli() {
   local cursor_dir="${ROTATE_CURSOR_DIR:-$HOME/.config/cursor}"
+  local auth_store_dir="${ROTATE_CURSOR_AUTH_STORE_DIR:-$HOME/.local/share/clusterfork-auth/cursor}"
   local cursor_auth="$cursor_dir/auth.json"
+  local current_link="$auth_store_dir/current"
   local requested_suffix="${1:-}"
-  local path suffix current_suffix next_suffix
+  local path suffix current_suffix next_suffix auth_target resolved_auth_target
   local -A suffix_lookup=()
   local -a suffixes=()
 
@@ -13,20 +15,44 @@ rotate-cursor-cli() {
     return 1
   fi
 
-  if [[ ! -d "$cursor_dir" ]]; then
-    echo "rotate-cursor-cli: missing Cursor auth directory: $cursor_dir" >&2
+  if [[ -e "$cursor_auth" && ! -L "$cursor_auth" ]]; then
+    echo "rotate-cursor-cli: $cursor_auth exists but is not a symlink" >&2
+    echo "  Choose an unused suffix NAME, then run:" >&2
+    printf '  mkdir -p "%s"\n' "$auth_store_dir" >&2
+    printf '  chmod 700 "%s" "%s"\n' "${auth_store_dir%/*}" "$auth_store_dir" >&2
+    printf '  mv "%s" "%s/auth.json.NAME"\n' "$cursor_auth" "$auth_store_dir" >&2
+    printf '  chmod 600 "%s/auth.json.NAME"\n' "$auth_store_dir" >&2
+    printf '  ln -sfn "auth.json.NAME" "%s/current"\n' "$auth_store_dir" >&2
+    printf '  ln -s "%s/current" "%s"\n' "$auth_store_dir" "$cursor_auth" >&2
     return 1
   fi
 
-  if [[ -f "$cursor_auth" && ! -L "$cursor_auth" ]]; then
-    echo "rotate-cursor-cli: $cursor_auth is not a symlink" >&2
-    echo "  Choose an unused suffix N, then move the current file and link auth.json to it:" >&2
-    echo "  mv \"$cursor_auth\" \"$cursor_auth.N\"" >&2
-    echo "  ln -s auth.json.N \"$cursor_auth\"" >&2
+  if [[ ! -L "$cursor_auth" ]]; then
+    echo "rotate-cursor-cli: missing shared auth link: $cursor_auth" >&2
+    echo "  Run install-clusterfork.sh to configure it." >&2
     return 1
   fi
 
-  for path in "$cursor_dir"/auth.json.*; do
+  if [[ ! -d "$auth_store_dir" ]]; then
+    echo "rotate-cursor-cli: missing shared auth directory: $auth_store_dir" >&2
+    echo "  Run install-clusterfork.sh to migrate existing profiles." >&2
+    return 1
+  fi
+
+  auth_target="$(readlink "$cursor_auth")" || return 1
+  if [[ "$auth_target" == /* ]]; then
+    resolved_auth_target="$auth_target"
+  else
+    resolved_auth_target="$cursor_dir/$auth_target"
+  fi
+  if [[ ! -L "$current_link" ||
+        "$(realpath -ms "$resolved_auth_target")" != "$(realpath -ms "$current_link")" ]]; then
+    echo "rotate-cursor-cli: $cursor_auth does not link directly to $current_link" >&2
+    echo "  Run install-clusterfork.sh to repair it." >&2
+    return 1
+  fi
+
+  for path in "$auth_store_dir"/auth.json.*; do
     [[ -e "$path" || -L "$path" ]] || continue
     suffix="${path##*/auth.json.}"
     suffixes+=("$suffix")
@@ -54,7 +80,7 @@ rotate-cursor-cli() {
 
   if [[ -z "$requested_suffix" ]]; then
     next_suffix="${suffixes[0]}"
-    current_suffix="$(_rotate_cursor_current_suffix "$cursor_auth")"
+    current_suffix="$(_rotate_cursor_current_suffix "$current_link")"
 
     if [[ -n "$current_suffix" ]]; then
       for ((i = 0; i < ${#suffixes[@]}; i++)); do
@@ -66,10 +92,10 @@ rotate-cursor-cli() {
     fi
   fi
 
-  _rotate_cursor_point_symlink "$cursor_dir" "$next_suffix" || return 1
+  _rotate_cursor_point_symlink "$auth_store_dir" "$next_suffix" || return 1
 
   echo "rotate-cursor-cli: selected auth.json.$next_suffix"
-  echo "  Cursor: $cursor_auth -> $(readlink "$cursor_auth")"
+  echo "  Cursor: $cursor_auth -> $(readlink "$cursor_auth") -> $(readlink "$current_link")"
 }
 
 _rotate_cursor_current_suffix() {
@@ -89,11 +115,11 @@ _rotate_cursor_current_suffix() {
 }
 
 _rotate_cursor_point_symlink() {
-  local auth_dir="$1"
+  local auth_store_dir="$1"
   local suffix="$2"
-  local tmp_link="$auth_dir/.auth.json.tmp.$$"
+  local tmp_link="$auth_store_dir/.current.tmp.$$"
 
   rm -f "$tmp_link"
   ln -s "auth.json.$suffix" "$tmp_link" || return 1
-  mv -Tf "$tmp_link" "$auth_dir/auth.json"
+  mv -Tf "$tmp_link" "$auth_store_dir/current"
 }

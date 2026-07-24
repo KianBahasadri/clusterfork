@@ -2,9 +2,11 @@ alias cc='codex resume --yolo'
 
 rotate-codex() {
   local codex_dir="${ROTATE_CODEX_CODEX_DIR:-$HOME/.codex}"
+  local auth_store_dir="${ROTATE_CODEX_AUTH_STORE_DIR:-$HOME/.local/share/clusterfork-auth/codex}"
   local codex_auth="$codex_dir/auth.json"
+  local current_link="$auth_store_dir/current"
   local requested_suffix="${1:-}"
-  local path suffix current_suffix next_suffix
+  local path suffix current_suffix next_suffix auth_target resolved_auth_target
   local -A suffix_lookup=()
   local -a suffixes=()
 
@@ -13,20 +15,44 @@ rotate-codex() {
     return 1
   fi
 
-  if [[ ! -d "$codex_dir" ]]; then
-    echo "rotate-codex: missing Codex auth directory: $codex_dir" >&2
+  if [[ -e "$codex_auth" && ! -L "$codex_auth" ]]; then
+    echo "rotate-codex: $codex_auth exists but is not a symlink" >&2
+    echo "  Choose an unused suffix NAME, then run:" >&2
+    printf '  mkdir -p "%s"\n' "$auth_store_dir" >&2
+    printf '  chmod 700 "%s" "%s"\n' "${auth_store_dir%/*}" "$auth_store_dir" >&2
+    printf '  mv "%s" "%s/auth.json.NAME"\n' "$codex_auth" "$auth_store_dir" >&2
+    printf '  chmod 600 "%s/auth.json.NAME"\n' "$auth_store_dir" >&2
+    printf '  ln -sfn "auth.json.NAME" "%s/current"\n' "$auth_store_dir" >&2
+    printf '  ln -s "%s/current" "%s"\n' "$auth_store_dir" "$codex_auth" >&2
     return 1
   fi
 
-  if [[ -f "$codex_auth" && ! -L "$codex_auth" ]]; then
-    echo "rotate-codex: $codex_auth is not a symlink" >&2
-    echo "  Choose an unused suffix N, then move the current file and link auth.json to it:" >&2
-    echo "  mv \"$codex_auth\" \"$codex_auth.N\"" >&2
-    echo "  ln -s auth.json.N \"$codex_auth\"" >&2
+  if [[ ! -L "$codex_auth" ]]; then
+    echo "rotate-codex: missing shared auth link: $codex_auth" >&2
+    echo "  Run install-clusterfork.sh to configure it." >&2
     return 1
   fi
 
-  for path in "$codex_dir"/auth.json.*; do
+  if [[ ! -d "$auth_store_dir" ]]; then
+    echo "rotate-codex: missing shared auth directory: $auth_store_dir" >&2
+    echo "  Run install-clusterfork.sh to migrate existing profiles." >&2
+    return 1
+  fi
+
+  auth_target="$(readlink "$codex_auth")" || return 1
+  if [[ "$auth_target" == /* ]]; then
+    resolved_auth_target="$auth_target"
+  else
+    resolved_auth_target="$codex_dir/$auth_target"
+  fi
+  if [[ ! -L "$current_link" ||
+        "$(realpath -ms "$resolved_auth_target")" != "$(realpath -ms "$current_link")" ]]; then
+    echo "rotate-codex: $codex_auth does not link directly to $current_link" >&2
+    echo "  Run install-clusterfork.sh to repair it." >&2
+    return 1
+  fi
+
+  for path in "$auth_store_dir"/auth.json.*; do
     [[ -e "$path" || -L "$path" ]] || continue
     suffix="${path##*/auth.json.}"
     suffixes+=("$suffix")
@@ -54,7 +80,7 @@ rotate-codex() {
 
   if [[ -z "$requested_suffix" ]]; then
     next_suffix="${suffixes[0]}"
-    current_suffix="$(_rotate_codex_current_suffix "$codex_auth")"
+    current_suffix="$(_rotate_codex_current_suffix "$current_link")"
 
     if [[ -n "$current_suffix" ]]; then
       for ((i = 0; i < ${#suffixes[@]}; i++)); do
@@ -66,10 +92,10 @@ rotate-codex() {
     fi
   fi
 
-  _rotate_codex_point_symlink "$codex_dir" "$next_suffix" || return 1
+  _rotate_codex_point_symlink "$auth_store_dir" "$next_suffix" || return 1
 
   echo "rotate-codex: selected auth.json.$next_suffix"
-  echo "  Codex: $codex_auth -> $(readlink "$codex_auth")"
+  echo "  Codex: $codex_auth -> $(readlink "$codex_auth") -> $(readlink "$current_link")"
 }
 
 _rotate_codex_current_suffix() {
@@ -89,11 +115,11 @@ _rotate_codex_current_suffix() {
 }
 
 _rotate_codex_point_symlink() {
-  local auth_dir="$1"
+  local auth_store_dir="$1"
   local suffix="$2"
-  local tmp_link="$auth_dir/.auth.json.tmp.$$"
+  local tmp_link="$auth_store_dir/.current.tmp.$$"
 
   rm -f "$tmp_link"
   ln -s "auth.json.$suffix" "$tmp_link" || return 1
-  mv -Tf "$tmp_link" "$auth_dir/auth.json"
+  mv -Tf "$tmp_link" "$auth_store_dir/current"
 }
