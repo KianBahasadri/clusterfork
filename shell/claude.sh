@@ -10,8 +10,23 @@ rotate-claude() {
   local -A suffix_lookup=()
   local -a suffixes=()
 
+  case "${1:-}" in
+    --list)
+      if [[ $# -ne 1 ]]; then
+        echo "rotate-claude: usage: rotate-claude [--list | [name]]" >&2
+        return 1
+      fi
+      _rotate_claude_list_profiles "$claude_dir" "$claude_auth"
+      return
+      ;;
+    --*)
+      echo "rotate-claude: usage: rotate-claude [--list | [name]]" >&2
+      return 1
+      ;;
+  esac
+
   if [[ $# -gt 1 ]]; then
-    echo "rotate-claude: usage: rotate-claude [name]" >&2
+    echo "rotate-claude: usage: rotate-claude [--list | [name]]" >&2
     return 1
   fi
 
@@ -103,4 +118,34 @@ _rotate_claude_install_credentials() {
   cp -- "$source_path" "$tmp_copy" || return 1
   chmod 600 "$tmp_copy" || { rm -f "$tmp_copy"; return 1; }
   mv -Tf "$tmp_copy" "$auth_dir/.credentials.json"
+}
+
+_rotate_claude_list_profiles() {
+  local claude_dir="$1"
+  local claude_auth="$2"
+  local current_suffix profile
+  local -a suffixes=()
+
+  for path in "$claude_dir"/.credentials.json.*; do
+    [[ -e "$path" || -L "$path" ]] || continue
+    suffix="${path##*/.credentials.json.}"
+    suffixes+=("$suffix")
+  done
+
+  if [[ ${#suffixes[@]} -eq 0 ]]; then
+    echo "rotate-claude: no saved profiles"
+    return 0
+  fi
+
+  mapfile -t suffixes < <(printf '%s\n' "${suffixes[@]}" | sort)
+  current_suffix="$(_rotate_claude_current_suffix "$claude_auth")"
+
+  echo "rotate-claude: saved profiles"
+  for profile in "${suffixes[@]}"; do
+    if [[ "$profile" == "$current_suffix" ]]; then
+      echo "  * $profile"
+    else
+      echo "    $profile"
+    fi
+  done
 }

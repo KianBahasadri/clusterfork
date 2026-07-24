@@ -11,8 +11,23 @@ rotate-opencode() {
   local -A suffix_lookup=()
   local -a suffixes=()
 
+  case "${1:-}" in
+    --list)
+      if [[ $# -ne 1 ]]; then
+        echo "rotate-opencode: usage: rotate-opencode [--list | [name]]" >&2
+        return 1
+      fi
+      _rotate_opencode_list_profiles "$auth_store_dir" "$current_link"
+      return
+      ;;
+    --*)
+      echo "rotate-opencode: usage: rotate-opencode [--list | [name]]" >&2
+      return 1
+      ;;
+  esac
+
   if [[ $# -gt 1 ]]; then
-    echo "rotate-opencode: usage: rotate-opencode [name]" >&2
+    echo "rotate-opencode: usage: rotate-opencode [--list | [name]]" >&2
     return 1
   fi
 
@@ -123,4 +138,36 @@ _rotate_opencode_point_symlink() {
   rm -f "$tmp_link"
   ln -s "auth.json.$suffix" "$tmp_link" || return 1
   mv -Tf "$tmp_link" "$auth_store_dir/current"
+}
+
+_rotate_opencode_list_profiles() {
+  local auth_store_dir="$1"
+  local current_link="$2"
+  local current_suffix profile
+  local -a suffixes=()
+
+  for path in "$auth_store_dir"/auth.json.*; do
+    [[ -e "$path" || -L "$path" ]] || continue
+    suffix="${path##*/auth.json.}"
+    suffixes+=("$suffix")
+  done
+
+  if [[ ${#suffixes[@]} -eq 0 ]]; then
+    echo "rotate-opencode: no saved profiles"
+    return 0
+  fi
+
+  mapfile -t suffixes < <(printf '%s\n' "${suffixes[@]}" | sort)
+  if [[ -L "$current_link" ]]; then
+    current_suffix="$(_rotate_opencode_current_suffix "$current_link")"
+  fi
+
+  echo "rotate-opencode: saved profiles"
+  for profile in "${suffixes[@]}"; do
+    if [[ "$profile" == "$current_suffix" ]]; then
+      echo "  * $profile"
+    else
+      echo "    $profile"
+    fi
+  done
 }

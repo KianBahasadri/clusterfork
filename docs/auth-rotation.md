@@ -6,6 +6,7 @@ Several agents support switching between multiple saved accounts without re-logg
 
 Switches Claude Code accounts stored as `~/.claude/.credentials.json.*` files.
 
+- `rotate-claude --list` — list saved profiles (`*` marks the current one)
 - `rotate-claude` — rotate to the next account in sorted order
 - `rotate-claude NAME` — switch to a specific account
 
@@ -16,6 +17,7 @@ Claude Code rewrites `.credentials.json` on every token refresh, so rotation cop
 Switches Codex accounts stored under
 `~/.local/share/clusterfork-auth/codex/`.
 
+- `rotate-codex --list` — list saved profiles (`*` marks the current one)
 - `rotate-codex` — rotate to the next account
 - `rotate-codex NAME` — switch to a specific account
 
@@ -41,6 +43,7 @@ Same pattern as `rotate-codex`, with profiles stored under
   → auth.json.SUFFIX
 ```
 
+- `rotate-cursor-cli --list` — list saved profiles (`*` marks the current one)
 - `rotate-cursor-cli` — rotate to the next account
 - `rotate-cursor-cli NAME` — switch to a specific account
 
@@ -55,6 +58,7 @@ Same pattern as `rotate-codex`, with profiles stored under
   → auth.json.SUFFIX
 ```
 
+- `rotate-opencode --list` — list saved profiles (`*` marks the current one)
 - `rotate-opencode` — rotate to the next account
 - `rotate-opencode NAME` — switch to a specific account
 
