@@ -27,6 +27,8 @@
 | `statusline/cursor/statusline.sh` | `~/.cursor/statusline.sh`                | Cursor status line script         |
 | `statusline/cursor/usage-fetch.py`| `~/.cursor/cursor-usage-fetch.py`        | Cursor usage cache helper         |
 | `skills/`                         | `~/.qwen/skills/`, `~/.grok/skills/`, `~/.claude/skills/`, and `~/.codex/skills/` | Shared skills (Codex keeps `.system`) |
+| `skills/`                         | `~/.gemini/antigravity-cli/skills/` | Antigravity CLI skills (normalized for its global skill directory) |
+| `skills/`                         | `~/.config/opencode/skills/`     | OpenCode compatibility aliases; other shared skills are discovered through `~/.claude/skills/` |
 
 The installer also:
 

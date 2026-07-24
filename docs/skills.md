@@ -1,16 +1,20 @@
 # Skills
 
-The `skills/` directory contains skills in the shared `SKILL.md` format. The installer copies them to `~/.qwen/skills/` (Qwen Code), `~/.grok/skills/` (Grok CLI), `~/.claude/skills/` (Claude Code), and `~/.codex/skills/` (Codex). All four agents use the same convention.
+The `skills/` directory contains skills in the shared `SKILL.md` format. The installer copies them to `~/.qwen/skills/` (Qwen Code), `~/.grok/skills/` (Grok CLI), `~/.claude/skills/` (Claude Code), and `~/.codex/skills/` (Codex). It also installs a normalized copy to `~/.gemini/antigravity-cli/skills/` for Antigravity CLI and compatibility aliases to `~/.config/opencode/skills/` for OpenCode.
 
 For Codex, only non-dot skill directories under `~/.codex/skills/` are replaced. `~/.codex/skills/.system` is left alone (Codex-managed system skills).
 
+OpenCode additionally discovers global Claude-compatible skills from `~/.claude/skills/`, so the native OpenCode directory only contains aliases for source names that OpenCode rejects. OpenCode requires lowercase hyphenated names matching the skill directory; for example, `commit_and_push` and `generate_docs` are installed there as `commit-and-push` and `generate-docs`. OpenCode loads skills through its native `skill` tool. See the [OpenCode skill documentation](https://opencode.ai/docs/skills).
+
+Antigravity CLI discovers global skills from `~/.gemini/antigravity-cli/skills/`. Its normalized copy uses the same hyphenated names and is available to all workspaces. See the [Antigravity CLI skill documentation](https://antigravity.google/docs/cli/plugins).
+
 ## commit_and_push
 
-Commits and pushes staged changes to the current branch. Invoked via the `/commit_and_push` slash command in Qwen Code, Grok, Claude Code, or Codex.
+Commits and pushes staged changes to the current branch. Invoked via the `/commit_and_push` slash command in Qwen Code, Grok, Claude Code, or Codex. OpenCode and Antigravity receive the compatible `commit-and-push` skill name.
 
 ## generate_docs
 
-Regenerates `AGENTS.md` and the `docs/` directory from the current state of the repo. Reads all source files, creates one doc per topic with no repeated information, and writes a slim `AGENTS.md` with process rules for reading and maintaining `docs/` (not topic detail). Invoked via the `/generate_docs` slash command in Qwen Code, Grok, Claude Code, or Codex.
+Regenerates `AGENTS.md` and the `docs/` directory from the current state of the repo. Reads all source files, creates one doc per topic with no repeated information, and writes a slim `AGENTS.md` with process rules for reading and maintaining `docs/` (not topic detail). Invoked via the `/generate_docs` slash command in Qwen Code, Grok, Claude Code, or Codex. OpenCode and Antigravity receive the compatible `generate-docs` skill name.
 
 Creates a `CLAUDE.md → AGENTS.md` symlink so Claude Code picks up the same instructions. **Do not** add a matching `GEMINI.md` symlink for Google Antigravity: current Antigravity (and Antigravity CLI) reads root `AGENTS.md` natively, in addition to `GEMINI.md` and `.agents/rules/`. Official sources: [changelog](https://antigravity.google/changelog) (“reading rules from AGENTS.md in addition to GEMINI.md”) and [CLI best practices](https://antigravity.google/docs/cli/best-practices) (`GEMINI.md` or `AGENTS.md` at workspace root). Global Antigravity rules still live in `~/.gemini/GEMINI.md`; workspace rule files live under `.agents/rules/`.
 

@@ -8,7 +8,8 @@
 #   3. Overwrites agent settings from repo-local agents/
 #   4. Overwrites ~/.qwen/skills/, ~/.grok/skills/, ~/.claude/skills/, and
 #      ~/.codex/skills/ (user skills only; preserves ~/.codex/skills/.system)
-#      from repo-local skills/
+#      from repo-local skills/. Also installs normalized skills for
+#      Antigravity and OpenCode compatibility.
 #   5. Overwrites Claude/Cursor statusline scripts + usage fetchers from
 #      repo-local statusline/
 #   6. Overwrites ~/.cursor/mcp.json from agents/cursor-mcp.json (expands
@@ -49,6 +50,8 @@ QWEN_SKILLS_DEST_DIR="$HOME/.qwen/skills"
 GROK_SKILLS_DEST_DIR="$HOME/.grok/skills"
 CLAUDE_SKILLS_DEST_DIR="$HOME/.claude/skills"
 CODEX_SKILLS_DEST_DIR="$HOME/.codex/skills"
+OPENCODE_SKILLS_DEST_DIR="$HOME/.config/opencode/skills"
+ANTIGRAVITY_SKILLS_DEST_DIR="$HOME/.gemini/antigravity-cli/skills"
 GROK_CONFIG_SRC="$AGENTS_SRC_DIR/grok.toml"
 GROK_CONFIG_DEST="$HOME/.grok/config.toml"
 CLAUDE_CONFIG_SRC="$AGENTS_SRC_DIR/claude.json"
@@ -97,6 +100,42 @@ fail() {
 warn() {
   printf '  !  %s\n' "$1" >&2
   [[ -n "${2:-}" ]] && printf '       %s\n' "$2" >&2
+}
+
+# Copy skills for agents whose skill names must use hyphens. The shared source
+# keeps its existing names for the agents that already use them as slash
+# commands (for example, /commit_and_push). OpenCode discovers the valid names
+# through ~/.claude/skills, so its native directory only needs incompatible
+# aliases; Antigravity gets the complete normalized tree.
+copy_normalized_skills() {
+  local dest_dir="$1"
+  local only_incompatible="$2"
+  local source_dir source_name dest_name dest_skill_dir skill_file
+
+  rm -rf -- "$dest_dir"
+  mkdir -p "$dest_dir"
+
+  for source_dir in "$SKILLS_SRC_DIR"/*/; do
+    [[ -d "$source_dir" ]] || continue
+    source_name="$(basename "$source_dir")"
+    dest_name="${source_name//_/-}"
+
+    if [[ "$only_incompatible" == 1 && "$source_name" == "$dest_name" ]]; then
+      continue
+    fi
+
+    dest_skill_dir="$dest_dir/$dest_name"
+    mkdir -p "$dest_skill_dir"
+    cp -r "$source_dir"/. "$dest_skill_dir"/
+
+    if [[ "$source_name" != "$dest_name" ]]; then
+      skill_file="$dest_skill_dir/SKILL.md"
+      sed -i \
+        -e "s/^name: ${source_name}\$/name: ${dest_name}/" \
+        -e "s#/${source_name}#/${dest_name}#g" \
+        "$skill_file"
+    fi
+  done
 }
 
 # Move legacy auth.json.* profiles into a small shared store and point the
@@ -344,6 +383,16 @@ if [[ -d "$SKILLS_SRC_DIR" ]]; then
     cp -r "$d" "$CODEX_SKILLS_DEST_DIR/$(basename "$d")"
   done
   step "codex skills" "$CODEX_SKILLS_DEST_DIR"
+
+  # Antigravity CLI uses ~/.gemini/antigravity-cli/skills and expects
+  # hyphenated skill IDs.
+  copy_normalized_skills "$ANTIGRAVITY_SKILLS_DEST_DIR" 0
+  step "antigravity skills" "$ANTIGRAVITY_SKILLS_DEST_DIR"
+
+  # OpenCode also searches ~/.claude/skills. Keep its native directory for
+  # aliases of the source skills whose underscore names OpenCode rejects.
+  copy_normalized_skills "$OPENCODE_SKILLS_DEST_DIR" 1
+  step "opencode skills" "$OPENCODE_SKILLS_DEST_DIR"
 fi
 
 [[ -f "$GROK_CONFIG_SRC" ]] || fail "missing $(tildify "$GROK_CONFIG_SRC")"

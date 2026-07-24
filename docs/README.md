@@ -6,7 +6,7 @@
 - [Statusline](statusline.md) — Claude Code and Cursor Agent status lines
 - [Auth Rotation](auth-rotation.md) — switching between saved accounts
 - [Scripts](scripts.md) — standalone Python utilities
-- [Skills](skills.md) — shared skills for Qwen, Grok, Claude, and Codex
+- [Skills](skills.md) — shared skills and per-CLI discovery behavior
 - [Conventions](conventions.md) — style, safety, idempotency, and repo-as-source-of-truth
 - [aerolink.sh (removed)](aerolink-removed.md) — historical record of the deleted Aerolink proxy launcher
 - [Pioneer (removed)](pioneer-removed.md) — historical record of the deleted Pioneer gateway integration
