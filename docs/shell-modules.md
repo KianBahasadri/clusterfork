@@ -2,10 +2,6 @@
 
 `bash_profile.sh` sources every `shell/*.sh` on shell startup. Each module defines launch wrappers, aliases, or credential rotation functions for one agent.
 
-## pioneer.sh
-
-`pi` launches Qwen Code against the Pioneer OpenAI-compatible gateway using model `zai-org/GLM-5.2`. Requires `PIONEER_API_KEY`. Sets `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_MODEL` inside a subshell so they don't leak into the parent session.
-
 ## claude.sh
 
 `cl` is an alias for `claude --dangerously-skip-permissions --effort xhigh`. `rotate-claude` switches between multiple saved Claude account credentials.

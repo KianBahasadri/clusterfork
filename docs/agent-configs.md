@@ -6,9 +6,7 @@ JSON/TOML files under `agents/` configure individual agents. The installer copie
 
 Qwen Code settings:
 
-- **Model:** `zai-org/GLM-5.2`
-- **Auth:** OpenAI type (reads `PIONEER_API_KEY`)
-- **Providers:** six models on `https://api.pioneer.ai/v1` — Pioneer Auto, Qwen 3.7 Max, DeepSeek V4 Pro, Kimi K2.7 Code, GLM 5.2, MiniMax M3. All use reasoning effort `xhigh`.
+- **Model / auth:** not pinned by clusterfork — use Qwen Code's built-in login or add providers locally
 - **MCP servers:** context7 (remote, requires `CONTEXT7_API_KEY`), ElevenLabs (local via `~/.config/clusterfork/bin/elevenlabs-mcp`, requires `ELEVENLABS_API_KEY`)
 - **Privacy:** usage statistics disabled
 - **Memory:** managed auto-memory, auto-dream, and auto-skill all disabled
@@ -19,7 +17,6 @@ OpenCode settings:
 
 - **Permission:** `allow`
 - **Default agent:** `build`
-- **Provider:** Pioneer (OpenAI-compatible), same six models as Qwen config
 - **MCP servers:** context7 (remote), linear (remote, disabled), chrome-devtools (local, disabled — uses Chromium on port 9222), ElevenLabs (local via clusterfork launcher)
 
 ## agents/antigravity.json → ~/.gemini/antigravity-cli/settings.json
