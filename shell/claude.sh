@@ -46,7 +46,7 @@ rotate-claude() {
     if [[ -z "${suffix_lookup[$requested_suffix]:-}" ]]; then
       echo "rotate-claude: no matching .credentials.json.$requested_suffix file" >&2
       if [[ ${#suffixes[@]} -gt 0 ]]; then
-        printf '  suffixes: %s\n' "$(printf '%s\n' "${suffixes[@]}" | sort | paste -sd ' ' -)" >&2
+        printf '  suffixes: %s\n' "$(printf '%s\n' "${suffixes[@]}" | sort | command paste -sd ' ' -)" >&2
       fi
       return 1
     fi
@@ -54,7 +54,7 @@ rotate-claude() {
   elif [[ ${#suffixes[@]} -lt 2 ]]; then
     echo "rotate-claude: need at least two .credentials.json.* files" >&2
     if [[ ${#suffixes[@]} -gt 0 ]]; then
-      printf '  suffixes: %s\n' "$(printf '%s\n' "${suffixes[@]}" | sort | paste -sd ' ' -)" >&2
+      printf '  suffixes: %s\n' "$(printf '%s\n' "${suffixes[@]}" | sort | command paste -sd ' ' -)" >&2
     fi
     return 1
   fi

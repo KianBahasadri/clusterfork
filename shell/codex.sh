@@ -78,7 +78,7 @@ rotate-codex() {
     if [[ -z "${suffix_lookup[$requested_suffix]:-}" ]]; then
       echo "rotate-codex: no matching auth.json.$requested_suffix file" >&2
       if [[ ${#suffixes[@]} -gt 0 ]]; then
-        printf '  suffixes: %s\n' "$(printf '%s\n' "${suffixes[@]}" | sort | paste -sd ' ' -)" >&2
+        printf '  suffixes: %s\n' "$(printf '%s\n' "${suffixes[@]}" | sort | command paste -sd ' ' -)" >&2
       fi
       return 1
     fi
@@ -86,7 +86,7 @@ rotate-codex() {
   elif [[ ${#suffixes[@]} -lt 2 ]]; then
     echo "rotate-codex: need at least two auth.json.* files" >&2
     if [[ ${#suffixes[@]} -gt 0 ]]; then
-      printf '  suffixes: %s\n' "$(printf '%s\n' "${suffixes[@]}" | sort | paste -sd ' ' -)" >&2
+      printf '  suffixes: %s\n' "$(printf '%s\n' "${suffixes[@]}" | sort | command paste -sd ' ' -)" >&2
     fi
     return 1
   fi

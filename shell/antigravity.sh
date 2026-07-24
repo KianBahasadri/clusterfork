@@ -241,7 +241,7 @@ _rotate_antigravity_print_suffixes() {
   shift
 
   if [[ $# -gt 0 ]]; then
-    printf '%s: %s\n' "$label" "$(printf '%s\n' "$@" | sort -u | paste -sd ' ' -)"
+    printf '%s: %s\n' "$label" "$(printf '%s\n' "$@" | sort -u | command paste -sd ' ' -)"
   fi
 }
 

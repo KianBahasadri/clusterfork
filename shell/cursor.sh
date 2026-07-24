@@ -78,7 +78,7 @@ rotate-cursor-cli() {
     if [[ -z "${suffix_lookup[$requested_suffix]:-}" ]]; then
       echo "rotate-cursor-cli: no matching auth.json.$requested_suffix file" >&2
       if [[ ${#suffixes[@]} -gt 0 ]]; then
-        printf '  suffixes: %s\n' "$(printf '%s\n' "${suffixes[@]}" | sort | paste -sd ' ' -)" >&2
+        printf '  suffixes: %s\n' "$(printf '%s\n' "${suffixes[@]}" | sort | command paste -sd ' ' -)" >&2
       fi
       return 1
     fi
@@ -86,7 +86,7 @@ rotate-cursor-cli() {
   elif [[ ${#suffixes[@]} -lt 2 ]]; then
     echo "rotate-cursor-cli: need at least two auth.json.* files" >&2
     if [[ ${#suffixes[@]} -gt 0 ]]; then
-      printf '  suffixes: %s\n' "$(printf '%s\n' "${suffixes[@]}" | sort | paste -sd ' ' -)" >&2
+      printf '  suffixes: %s\n' "$(printf '%s\n' "${suffixes[@]}" | sort | command paste -sd ' ' -)" >&2
     fi
     return 1
   fi
