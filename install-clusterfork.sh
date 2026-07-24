@@ -18,7 +18,7 @@
 #   8. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
 #      replace the whole file)
 #   9. Appends a source line to ~/.bashrc if it is not already present
-#  10. Best-effort migrates Codex/Cursor auth profiles into
+#  10. Best-effort migrates Codex/Cursor/OpenCode auth profiles into
 #      ~/.local/share/clusterfork-auth and points each agent's auth.json
 #      through the shared current symlink
 #
@@ -71,6 +71,8 @@ CODEX_AUTH_DIR="$HOME/.codex"
 CODEX_AUTH_STORE_DIR="$SHARED_AUTH_ROOT/codex"
 CURSOR_AUTH_DIR="$HOME/.config/cursor"
 CURSOR_AUTH_STORE_DIR="$SHARED_AUTH_ROOT/cursor"
+OPENCODE_AUTH_DIR="$HOME/.local/share/opencode"
+OPENCODE_AUTH_STORE_DIR="$SHARED_AUTH_ROOT/opencode"
 BASHRC="$HOME/.bashrc"
 
 # Replace a leading $HOME with ~ for shorter display paths.
@@ -503,6 +505,16 @@ if configure_shared_auth "Cursor" "$CURSOR_AUTH_DIR" "$CURSOR_AUTH_STORE_DIR"; t
 else
   warn \
     "Cursor shared auth was not configured; the rest of the install is complete." \
+    "Fix the reported auth state, then re-run the installer."
+fi
+
+if configure_shared_auth "OpenCode" "$OPENCODE_AUTH_DIR" "$OPENCODE_AUTH_STORE_DIR"; then
+  if (( AUTH_STORE_CONFIGURED )); then
+    step "opencode auth" "$OPENCODE_AUTH_STORE_DIR"
+  fi
+else
+  warn \
+    "OpenCode shared auth was not configured; the rest of the install is complete." \
     "Fix the reported auth state, then re-run the installer."
 fi
 

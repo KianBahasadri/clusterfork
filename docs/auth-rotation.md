@@ -44,6 +44,20 @@ Same pattern as `rotate-codex`, with profiles stored under
 - `rotate-cursor-cli` — rotate to the next account
 - `rotate-cursor-cli NAME` — switch to a specific account
 
+## rotate-opencode
+
+Same pattern as `rotate-codex`, with profiles stored under
+`~/.local/share/clusterfork-auth/opencode/` and this link chain:
+
+```text
+~/.local/share/opencode/auth.json
+  → ../clusterfork-auth/opencode/current
+  → auth.json.SUFFIX
+```
+
+- `rotate-opencode` — rotate to the next account
+- `rotate-opencode NAME` — switch to a specific account
+
 ## Sharing with a container
 
 Mount `~/.local/share/clusterfork-auth` at the same home-relative path in the

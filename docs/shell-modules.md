@@ -16,7 +16,7 @@
 
 ## opencode.sh
 
-`oc` is an alias for `opencode --continue`. `o` is an alias for `opencode`.
+`oc` is an alias for `opencode --continue`. `o` is an alias for `opencode`. `rotate-opencode` switches between saved OpenCode accounts via symlinks.
 
 ## antigravity.sh
 
