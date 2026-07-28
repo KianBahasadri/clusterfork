@@ -24,7 +24,7 @@ Invokes the Claude Code CLI so the agent can get help from Claude on difficult w
 
 ## ask-codex
 
-Invokes Codex (`codex exec`; currently model `gpt-5.5`, effort `xhigh` — see the skill file for pins) so the agent can get help from Codex on difficult work. The agent chooses new vs resume, sandbox (`read-only` / `workspace-write` / `danger-full-access`), approval (`-a never` for unattended runs), and prompt shape from task context; the user only runs `/ask-codex`. Scope is general — not code-only.
+Invokes Codex (`codex exec`; currently model `gpt-5.6`, effort `xhigh` — see the skill file for pins) so the agent can get help from Codex on difficult work. The agent chooses new vs resume, sandbox (`read-only` / `workspace-write` / `danger-full-access`), approval (`-a never` for unattended runs), and prompt shape from task context; the user only runs `/ask-codex`. Scope is general — not code-only.
 
 ## ask-grok
 
