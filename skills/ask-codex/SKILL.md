@@ -41,7 +41,7 @@ Preconditions:
 Shared settings every call:
 
 ```text
--m gpt-5.6-sol -c model_reasoning_effort=xhigh
+-m gpt-5.6-sol -c model_reasoning_effort=xhigh -c approval_policy=never
 ```
 
 I/O pattern:
@@ -60,9 +60,15 @@ trap 'rm -f "$PROMPT_FILE"' EXIT   # do not trap OUT_FILE — read it after the 
 ```
 
 **Approval for unattended runs:** non-interactive agent calls that may execute
-tools should pass `-a never` (`--ask-for-approval never`) so Codex does not
-hang waiting for a human prompt this skill cannot answer. Pair it with the
-sandbox you chose — approval and sandbox are separate knobs.
+tools should pass `-c approval_policy=never` so Codex does not hang waiting for
+a human prompt this skill cannot answer.
+
+Do **not** pass `-a never` / `--ask-for-approval never` as options *after*
+`exec` — on current Codex CLI those flags are top-level only
+(`codex -a never exec …`) and `codex exec -a never` fails. Prefer the
+`-c approval_policy=never` form so the same shared flags work on both
+`codex exec` and `codex exec resume`. Pair approval with the sandbox you
+chose — they are separate knobs.
 
 Never put secrets, tokens, or credential file contents in the prompt.
 
@@ -85,13 +91,15 @@ Resume constraints (verified on current `codex exec resume`):
 - Prefer not to pass `-s` / `-C` on resume; if the CLI rejects them, set
   sandbox only via `-c 'sandbox_mode="..."'` and take cwd from the shell
   (`cd "$REPO"` first). `--last` is filtered by cwd.
-- Still pass `-a never` when the run must not block on approval prompts.
+- Still pass `-c approval_policy=never` when the run must not block on
+  approval prompts.
 
 ```bash
 # Resume (sandbox via -c; shell cwd = repo)
 cd "$REPO"
 codex exec resume --last -m gpt-5.6-sol -c model_reasoning_effort=xhigh \
-  -a never -c 'sandbox_mode="read-only"' -o "$OUT_FILE" - < "$PROMPT_FILE"
+  -c approval_policy=never -c 'sandbox_mode="read-only"' \
+  -o "$OUT_FILE" - < "$PROMPT_FILE"
 # or sandbox_mode="workspace-write" / "danger-full-access" from context
 ```
 
@@ -112,16 +120,19 @@ New session forms:
 
 ```bash
 # Read-only
-codex exec -m gpt-5.6-sol -c model_reasoning_effort=xhigh -s read-only \
-  -a never -C "$REPO" -o "$OUT_FILE" - < "$PROMPT_FILE"
+codex exec -m gpt-5.6-sol -c model_reasoning_effort=xhigh \
+  -c approval_policy=never -s read-only \
+  -C "$REPO" -o "$OUT_FILE" - < "$PROMPT_FILE"
 
 # Workspace writes (typical implementation)
-codex exec -m gpt-5.6-sol -c model_reasoning_effort=xhigh -s workspace-write \
-  -a never -C "$REPO" -o "$OUT_FILE" - < "$PROMPT_FILE"
+codex exec -m gpt-5.6-sol -c model_reasoning_effort=xhigh \
+  -c approval_policy=never -s workspace-write \
+  -C "$REPO" -o "$OUT_FILE" - < "$PROMPT_FILE"
 
 # Full access (only when broader access is required)
-codex exec -m gpt-5.6-sol -c model_reasoning_effort=xhigh -s danger-full-access \
-  -a never -C "$REPO" -o "$OUT_FILE" - < "$PROMPT_FILE"
+codex exec -m gpt-5.6-sol -c model_reasoning_effort=xhigh \
+  -c approval_policy=never -s danger-full-access \
+  -C "$REPO" -o "$OUT_FILE" - < "$PROMPT_FILE"
 ```
 
 ## Brief to send
