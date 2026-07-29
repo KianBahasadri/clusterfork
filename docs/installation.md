@@ -42,4 +42,4 @@ The installer also:
 
 ## Re-running
 
-The installer is idempotent — running it again **overwrites** every mapped destination from the repo (full replace, not merge). It will not add a duplicate `source` line to `~/.bashrc`. See [Conventions](conventions.md) for the source-of-truth rule.
+The installer is idempotent — running it again **overwrites** every mapped destination from the repo (full replace, not merge). It will not add a duplicate `source` line to `~/.bashrc`. Exception: `~/.grok/config.toml` is replaced from the repo, but an existing `theme` value is kept. See [Conventions](conventions.md) for the source-of-truth rule.

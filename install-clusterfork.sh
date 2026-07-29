@@ -5,7 +5,8 @@
 #   1. Overwrites ~/.config/clusterfork/.env from repo-local .env
 #   2. Overwrites ~/.config/clusterfork/bash_profile.sh, shell/*.sh, and bin/
 #      from repo
-#   3. Overwrites agent settings from repo-local agents/
+#   3. Overwrites agent settings from repo-local agents/ (Grok keeps existing
+#      theme from ~/.grok/config.toml if set)
 #   4. Overwrites ~/.qwen/skills/, ~/.grok/skills/, ~/.claude/skills/, and
 #      ~/.codex/skills/ (user skills only; preserves ~/.codex/skills/.system)
 #      from repo-local skills/. Also installs normalized skills for
@@ -239,7 +240,15 @@ fi
 
 [[ -f "$GROK_CONFIG_SRC" ]] || fail "missing $(tildify "$GROK_CONFIG_SRC")"
 mkdir -p "$(dirname "$GROK_CONFIG_DEST")"
+# Keep the user's current theme; everything else comes from the repo.
+grok_theme=""
+if [[ -f "$GROK_CONFIG_DEST" ]]; then
+  grok_theme="$(sed -n 's/^theme = "\(.*\)"/\1/p' "$GROK_CONFIG_DEST" | head -n1)"
+fi
 cp "$GROK_CONFIG_SRC" "$GROK_CONFIG_DEST"
+if [[ -n "$grok_theme" ]]; then
+  sed -i "s/^theme = \".*\"/theme = \"$grok_theme\"/" "$GROK_CONFIG_DEST"
+fi
 step "grok config" "$GROK_CONFIG_DEST"
 
 [[ -f "$CLAUDE_CONFIG_SRC" ]] || fail "missing $(tildify "$CLAUDE_CONFIG_SRC")"

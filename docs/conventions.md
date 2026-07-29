@@ -17,13 +17,14 @@ Do **not**:
 - Merge fragments into an existing home-dir config
 - Preserve "user customizations" outside the repo
 - Use marker blocks, partial section replacement, or `agent mcp add`-style surgery to avoid clobbering a live file
-- Treat `~/.grok/config.toml` (or any other mapped dest) as sacred local state the installer must carefully edit
+- Treat mapped dest files as sacred local state the installer must carefully edit (beyond the key/line exceptions below)
 
 If a setting belongs on the machine, it belongs **in the repo** first, then gets installed by overwrite. Local-only tweaks that aren't committed will be wiped on the next `./install-clusterfork.sh` — that is intentional.
 
 Exceptions (key/line only — not full-file replace):
 
 - `~/.bashrc`: appends a single `source` line if missing
+- `~/.grok/config.toml`: full overwrite from `agents/grok.toml`, but the existing `theme` value is restored if one was already set
 - `~/.cursor/cli-config.json`: sets/updates only the `statusLine` key so the installed Cursor statusline script is wired up; session/auth caches in that file stay untouched
 - `~/.claude.json`: upserts only the `mcpServers.ElevenLabs` entry; the rest of Claude's local state stays untouched
 - `~/.cursor/mcp.json`: full overwrite from `agents/cursor-mcp.json`, but `${ENV}` placeholders are expanded from the clusterfork `.env` at install time so secrets are not committed

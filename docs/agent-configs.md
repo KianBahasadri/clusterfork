@@ -33,7 +33,7 @@ Antigravity CLI settings:
 Grok CLI settings:
 
 - **Model:** `grok-4.5` (high effort is that model’s default; fork secondary: `grok-4.5`)
-- **UI:** tokyonight theme, `permission_mode = always-approve`, `yolo = false`
+- **UI:** default theme `tokyonight` (installer preserves an existing theme in `~/.grok/config.toml`), `permission_mode = always-approve`, `yolo = false`
 - **Marketplace:** xAI Official plugin marketplace source; default skills installs are not purged (`default_skills_installs_purged = false`)
 - **MCP servers:** context7 (remote, requires `CONTEXT7_API_KEY`), chrome-devtools (local, disabled — uses Chromium on port 9222), ElevenLabs (local via clusterfork launcher)
 - **Plugins:** chrome-devtools-mcp disabled
