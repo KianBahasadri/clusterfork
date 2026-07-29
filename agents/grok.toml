@@ -1,15 +1,21 @@
 [cli]
 auto_update = true
+installer = "internal"
 
 [ui]
 max_thoughts_width = 120
-theme = "oscura-midnight"
-fork_secondary_model = "grok-build"
+theme = "tokyonight"
+fork_secondary_model = "grok-4.5"
+yolo = false
 compact_mode = false
-permission_mode = "bypassPermissions"
+permission_mode = "always-approve"
 
 [models]
-default = "grok-composer-2.5-fast"
+default = "grok-4.5"
+
+[marketplace]
+default_skills_installs_purged = false
+official_marketplace_auto_installed = true
 
 [[marketplace.sources]]
 name = "xAI Official"

@@ -32,12 +32,13 @@ Antigravity CLI settings:
 
 Grok CLI settings:
 
-- **Model:** `grok-composer-2.5-fast` (fork secondary: `grok-build`)
-- **UI:** oscura-midnight theme, `permission_mode = bypassPermissions` (always-approve)
-- **Marketplace:** xAI Official plugin marketplace source
+- **Model:** `grok-4.5` (high effort is that model’s default; fork secondary: `grok-4.5`)
+- **UI:** tokyonight theme, `permission_mode = always-approve`, `yolo = false`
+- **Marketplace:** xAI Official plugin marketplace source; default skills installs are not purged (`default_skills_installs_purged = false`)
 - **MCP servers:** context7 (remote, requires `CONTEXT7_API_KEY`), chrome-devtools (local, disabled — uses Chromium on port 9222), ElevenLabs (local via clusterfork launcher)
 - **Plugins:** chrome-devtools-mcp disabled
-- **Updates:** auto-update enabled
+- **Updates:** auto-update enabled; `installer = internal`
+
 
 ## agents/claude.json → ~/.claude/settings.json
 
