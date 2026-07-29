@@ -29,3 +29,11 @@ Invokes Codex (`codex exec`; currently model `gpt-5.6-sol`, effort `xhigh` — s
 ## ask-grok
 
 Invokes Grok headlessly (`grok --prompt-file` / `-p`, with session, sandbox, and permission flags chosen from context) so the agent can get help from Grok on difficult work, including image generation via `image_gen` / `image_edit`. The agent decides how to use the CLI; the user only runs `/ask-grok`. Scope is general — not code-only.
+
+## ask-cursor
+
+Invokes the Cursor Agent CLI headlessly (`cursor-agent --print`; default model `cursor-grok-4.5-high` — Grok 4.5 High — see the skill file for the pin) so the agent can get help from Cursor on difficult work. The agent chooses new vs continue/resume, mode (`--mode ask` / `--mode plan` read-only vs default action mode), approval (`--yolo` for unattended write/shell work; `--trust` to skip the workspace-trust prompt), and model from task context; the user only runs `/ask-cursor`. Models are listed via `cursor-agent --list-models` (or `cursor-agent models`) and switched with `--model <id>` / bracket overrides. Scope is general — not code-only.
+
+## ask-opencode
+
+Invokes OpenCode headlessly (`opencode run`; default `-m opencode-go/glm-5.2 --variant max` — GLM-5.2 at `max` effort — see the skill file for the pin) so the agent can get help from OpenCode on difficult work. The agent chooses new vs continue/resume (`-c` / `-s`), permissions (`--auto` auto-approves permissions for tool-heavy handoffs; without it, pending asks are auto-rejected — fail closed, no hang), agent (`plan` for judgment, default `build` for implementation), and model/variant from task context; the user only runs `/ask-opencode`. `opencode run` reads the prompt from stdin or positional args. Models and variants are listed via `opencode models [provider] [--verbose]` and switched with `-m <provider/model>` plus `--variant <effort>`. Scope is general — not code-only.
