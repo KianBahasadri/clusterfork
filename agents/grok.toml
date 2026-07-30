@@ -36,6 +36,10 @@ args = [
 ]
 enabled = false
 
+[mcp_servers.linear]
+url = "https://mcp.linear.app/mcp"
+enabled = false
+
 [mcp_servers.context7]
 url = "https://mcp.context7.com/mcp"
 enabled = true

@@ -13,6 +13,9 @@
       "enableLoadingPhrases": false
     }
   },
+  "mcp": {
+    "excluded": ["linear", "chrome-devtools"]
+  },
   "mcpServers": {
     "context7": {
       "httpUrl": "https://mcp.context7.com/mcp",
@@ -24,6 +27,19 @@
     "ElevenLabs": {
       "command": "bash",
       "args": ["-c", "exec \"$HOME/.config/clusterfork/bin/elevenlabs-mcp\""]
+    },
+    "linear": {
+      "httpUrl": "https://mcp.linear.app/mcp"
+    },
+    "chrome-devtools": {
+      "command": "pnpm",
+      "args": [
+        "dlx",
+        "chrome-devtools-mcp@latest",
+        "--no-usage-statistics",
+        "--browserUrl",
+        "http://127.0.0.1:9222"
+      ]
     }
   }
 }
