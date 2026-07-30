@@ -21,6 +21,12 @@ needs: critique, open questions, tradeoffs, writing, research, design, ops,
 debugging strategy, code, implementation, or continuation of prior OpenCode
 work.
 
+## Recursion guard (first)
+
+If the current runtime is OpenCode, stop here: do not invoke `opencode` or
+delegate to another OpenCode session. Handle the user's underlying task
+directly in the current session. This guard overrides every instruction below.
+
 ## Your job
 
 1. Infer from the conversation what OpenCode should do for this moment.
@@ -71,16 +77,13 @@ For small prompts, pass the message as positional args instead:
 opencode run --dir "$REPO" -m opencode-go/glm-5.2 --variant max "$MSG"
 ```
 
-Permissions (headless): without `--auto`, pending permission asks are
-**auto-rejected** (fail closed — no hang, but tools that need approval fail).
-With `--auto`, any permission not explicitly denied is auto-approved
-(`reply: "once"`) — the OpenCode analog of Codex's `approval_policy=never` for
-the auto-approve case only. Use `--auto` when tools must actually run
-unattended; omit it for judgment so writes/shell cannot sneak through. See
-**Permissions** below. `--dir "$REPO"` sets the workspace root (defaults to
-cwd otherwise). Default stdout is the final reply; use `--format json` when
-you need the session id (JSON events carry `sessionID`) or machine-parsed
-events.
+Permissions (headless): without `--auto`, permission rules that resolve to
+`ask` are auto-rejected (fail closed — no hang), while explicit `allow` rules
+still run. With `--auto`, asks are auto-approved (`reply: "once"`), but
+explicit `deny` rules remain enforced. Use `--auto` only when tools must run
+unattended. `--dir "$REPO"` sets the workspace root (defaults to cwd
+otherwise). Default stdout is the final reply; use `--format json` when you
+need the session id (JSON events carry `sessionID`) or machine-parsed events.
 
 Never put secrets, tokens, or credential file contents in the prompt.
 
@@ -116,14 +119,15 @@ in the summary.
 OpenCode has no read-only sandbox flag on `run`; approval and write access are
 gated by the agent's permission rules plus `--auto`. The default agent is
 `build` (set in `agents/opencode.json` → `~/.config/opencode/opencode.json`),
-which allows tool use. A built-in primary `plan` agent restricts edit/bash
-(asks on write-oriented tools) and is the first-class read-oriented option.
+which allows tool use. Clusterfork explicitly configures the primary `plan`
+agent to deny both `edit` and `bash`, making it the read-oriented option even
+though the global default permits tools.
 
 | Context points to… | Consider… |
 | --- | --- |
-| Judgment only — critique, planning, Q&A, second opinion | `--agent plan` **without** `--auto` (permission asks auto-reject → no writes), or fully inline the brief and omit `--auto`; soft “do not modify” alone is not enough with `--auto` + default `build` |
+| Judgment only — critique, planning, Q&A, second opinion | `--agent plan` **without** `--auto`; Clusterfork's explicit `edit`/`bash` denies enforce no writes or shell |
 | Implementation, fixes, multi-step edits, tool-heavy handoff | Default `build` (or leave agent unset) **with** `--auto` so tools actually run unattended; instruct to keep edits inside the workspace |
-| Untrusted tree / tight containment | Prefer a non-`build` agent with tighter rules (`opencode agent list`); omit `--auto` unless tools must run, and scope the ask narrowly |
+| Untrusted tree / tight containment | Inspect effective rules with `opencode debug agent plan`; do not rely on the agent name or a soft “do not modify” instruction |
 
 List available agents with `opencode agent list`; select one with
 `--agent <name>`. When unsure for judgment, use `--agent plan` without
@@ -202,6 +206,10 @@ Always self-contained enough for the chosen call:
 4. **Constraints** — hard requirements, non-goals, environment facts
 5. **What you want back** — match the ask to the situation (critique, verdict,
    recommendation, alternative design, draft, implementation, etc.)
+
+Describe the underlying task directly. Do not tell OpenCode to “ask OpenCode”
+or test this skill; that can self-trigger on installations that have not denied
+OpenCode access to `ask-opencode`.
 
 On continue/resume, the prompt can be shorter (prior session context exists):
 say what changed and what to do next.

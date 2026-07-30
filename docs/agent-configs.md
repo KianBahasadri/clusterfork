@@ -15,7 +15,9 @@ Qwen Code settings:
 
 OpenCode settings:
 
-- **Permission:** `allow`
+- **Permissions:** tools are allowed by default; the `plan` agent explicitly
+  denies shell commands and file edits, and OpenCode itself cannot load the
+  self-delegating `ask-opencode` skill
 - **Default agent:** `build`
 - **MCP servers:** context7 (remote), linear (remote, disabled), chrome-devtools (local, disabled — uses Chromium on port 9222), ElevenLabs (local via clusterfork launcher)
 
