@@ -86,31 +86,36 @@ Switches Antigravity accounts using `secret-tool` (GNOME Keyring). State is kept
 
 The active account lives at keyring entry `service=gemini username=antigravity`. Saved profiles live at `service=rotate-antigravity username=NAME`. Before switching, the current keyring item is backed up to the outgoing profile.
 
-## History: installer migration (removed)
+## Installer repair
 
-The original `install-clusterfork.sh` contained a `configure_shared_auth`
-function (~150 lines) that ran as a best-effort, non-fatal step at the end of
-every install. It detected legacy `auth.json.*` profile files sitting directly
-in each agent's own directory (before the shared store existed), moved them
-into `~/.local/share/clusterfork-auth/<agent>/`, updated permissions, and
-atomically repointed `auth.json` through the shared `current` symlink.
+`install-clusterfork.sh` runs `configure_shared_auth` as a best-effort,
+non-fatal step for Codex, Cursor, and OpenCode. When multi-account profiles
+exist under `~/.local/share/clusterfork-auth/<agent>/`, it:
 
-It was intentionally idempotent: if no suffixed profiles existed it was a
-no-op, so it was safe to leave in place indefinitely. It was removed in July
-2026 once the single user's setup was confirmed fully migrated — all three
-agents (`codex`, `cursor`, `opencode`) had their `auth.json` already
-symlinked through `clusterfork-auth/<agent>/current`, with no legacy files
-remaining in the agent directories.
+- migrates any leftover `auth.json.*` files still in the agent directory into
+  the shared store
+- ensures permissions on the store and profile files
+- atomically repoints `store/current` and the agent's `auth.json` through the
+  shared link chain
 
-If you ever need to set up the link chain from scratch on a new machine, do it
-manually:
+It is a no-op when no suffixed profiles exist (plain single-account
+`auth.json`). Re-running the installer repairs a missing agent-side
+`auth.json` symlink as long as the shared store still has profiles and a
+valid `current` link.
+
+If the agent's `auth.json` is a regular file (for example after a login that
+replaced the symlink), repair refuses and you must move that file into the
+store as a named profile first:
 
 ```bash
 STORE=~/.local/share/clusterfork-auth/<agent>
 mkdir -p "$STORE"
 chmod 700 ~/.local/share/clusterfork-auth "$STORE"
-cp <your-auth-file> "$STORE/auth.json.NAME"
+mv <agent-dir>/auth.json "$STORE/auth.json.NAME"
 chmod 600 "$STORE/auth.json.NAME"
-ln -s auth.json.NAME "$STORE/current"
-ln -sfT "$(realpath --relative-to=<agent-dir> "$STORE/current")" <agent-dir>/auth.json
+ln -sfn auth.json.NAME "$STORE/current"
+ln -sfn "$(realpath -ms --relative-to=<agent-dir> "$STORE/current")" <agent-dir>/auth.json
 ```
+
+From-scratch setup on a new machine is the same pattern with `cp` instead of
+`mv` if you are importing an auth file from elsewhere.

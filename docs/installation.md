@@ -35,6 +35,7 @@ The installer also:
 - Appends a `source` line to `~/.bashrc` so `bash_profile.sh` is loaded in every new shell
 - Ensures the `statusLine` key in `~/.cursor/cli-config.json` (without replacing that whole file). See [Statusline](statusline.md)
 - Ensures the ElevenLabs entry in `~/.claude.json` `mcpServers` (without replacing that whole file)
+- Best-effort repair of Codex/Cursor/OpenCode shared auth links under `~/.local/share/clusterfork-auth/`. See [Auth Rotation](auth-rotation.md)
 
 ## Requirements
 
