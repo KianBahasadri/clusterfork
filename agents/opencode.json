@@ -48,7 +48,7 @@
         "-c",
         "exec \"$HOME/.config/clusterfork/bin/elevenlabs-mcp\""
       ],
-      "enabled": true
+      "enabled": false
     }
   }
 }
