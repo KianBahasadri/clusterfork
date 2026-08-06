@@ -31,11 +31,19 @@ Two properties of the endpoint shape the module:
 
 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is derived per-model from the models.dev cache OpenCode maintains at `~/.cache/opencode/models.json`. Without it Claude Code assumes a 200k window for models it has no metadata for and auto-compacts far too early — the usable models range from 204k to 1M. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` keeps everything except inference off the third-party gateway.
 
-Defaults, all overridable: `OCC_MODEL=deepseek-v4-flash`, `OCC_SONNET_MODEL=deepseek-v4-flash`, `OCC_SMALL_MODEL=minimax-m3`. The small slot stays on a cheaper model because it drives the background classifier and other trivial calls. Also honoured: `OPENCODE_GO_BASE_URL`, `OCC_MAX_CONTEXT_TOKENS`, `OCC_OPENCODE_AUTH_FILE`, `OCC_MODELS_CACHE`.
+Defaults, all overridable: `OCC_MODEL=deepseek-v4-flash`, `OCC_SONNET_MODEL=deepseek-v4-flash`, `OCC_SMALL_MODEL=minimax-m3`. The small slot stays on a cheaper model because it drives the background classifier and other trivial calls. Also honoured: `OPENCODE_GO_BASE_URL`, `OCC_MAX_CONTEXT_TOKENS`, `OCC_OPENCODE_AUTH_FILE`, `OCC_MODELS_CACHE`, `OCC_GATEWAY_MODELS`, `OCC_MODEL_DISCOVERY`.
 
 Claude Code prints a one-time warning that claude.ai connectors are disabled because `ANTHROPIC_API_KEY` takes precedence over the claude.ai login. That is expected under `occ` and does not affect the session.
 
 Only 9 of the 25 catalog models can drive the agent loop over this endpoint, and the defaults above are chosen from that set. Verify with `python scripts/opencode_go_probe.py` before changing `OCC_MODEL` — some models fail this endpoint while working fine under `oc`. See [OpenCode Go endpoint](opencode-go.md) for the matrix and the failure modes.
+
+### All 9 in `/model`
+
+The picker only offers the four alias slots plus a default row, so `occ` also writes Claude Code's gateway-discovery cache (`~/.claude/cache/gateway-models.json`, or under `CLAUDE_CONFIG_DIR`) and exports `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, which adds one row per cached model. Rows are labelled with the raw id — Claude Code reuses that label for the session header and the status line — and ones already shown by an alias slot are deduplicated away. `OCC_GATEWAY_MODELS` sets the list; `OCC_MODEL_DISCOVERY=0` skips both steps.
+
+Claude Code's own discovery fetcher never maintains that file for this gateway — it keeps only ids matching `/claude|anthropic/i`, which drops the whole catalog — so it neither populates nor overwrites what `occ` writes. The file holds one gateway at a time, so writing it discards another gateway's entry; for any gateway serving `claude-*` ids that fetcher regenerates it.
+
+Selecting a row with Enter writes that raw id to `~/.claude/settings.json` as the global default, where it would be a broken model under `cl`. Use `s` (this session only), or pick an alias row — those re-resolve per environment.
 
 The Claude statusline detects `occ` from `ANTHROPIC_BASE_URL` and swaps in the OpenCode account and Go plan usage; see [Statusline](statusline.md).
 

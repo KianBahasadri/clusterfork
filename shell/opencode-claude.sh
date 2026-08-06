@@ -21,6 +21,11 @@ OCC_SONNET_MODEL="${OCC_SONNET_MODEL:-deepseek-v4-flash}"
 # other trivial calls, where deepseek's 384k output ceiling buys nothing.
 OCC_SMALL_MODEL="${OCC_SMALL_MODEL:-minimax-m3}"
 
+# Everything /v1/messages can drive an agent loop with, in the order /model
+# should list them. Perishable — re-verify with scripts/opencode_go_probe.py.
+OCC_GATEWAY_MODELS="${OCC_GATEWAY_MODELS:-deepseek-v4-flash qwen3.8-max qwen3.7-max qwen3.7-plus qwen3.6-plus qwen3.5-plus minimax-m3 minimax-m2.7 minimax-m2.5}"
+OCC_MODEL_DISCOVERY="${OCC_MODEL_DISCOVERY:-1}"
+
 _occ_api_key() {
   # Prefer the clusterfork .env; otherwise read the live OpenCode auth store so
   # occ follows whichever account rotate-opencode currently has selected.
@@ -42,6 +47,50 @@ _occ_context_tokens() {
   local cache="${OCC_MODELS_CACHE:-$HOME/.cache/opencode/models.json}"
   [[ -r "$cache" ]] || return 1
   jq -re --arg m "$1" '.["opencode-go"].models[$m].limit.context // empty' "$cache" 2>/dev/null
+}
+
+_occ_sync_model_options() {
+  # Make every usable model selectable from /model. The picker offers only the
+  # four alias slots (opus/sonnet/haiku/fable) plus a default row — five rows for
+  # a catalog of nine — but Claude Code has a gateway-discovery path that adds
+  # one row per model from a cache file, unlocked by the env var occ() exports.
+  #
+  # Its own fetcher never maintains that file for us: it GETs /v1/models and
+  # keeps only ids matching /claude|anthropic/i, which drops this catalog whole,
+  # so it gives up before writing. That cuts both ways — it will not overwrite
+  # what we write here either.
+  #
+  # The file holds one gateway at a time (a baseUrl and its models), so writing
+  # it discards any other gateway's entry. That is recoverable: for a gateway
+  # serving claude-* ids the fetcher above repopulates it automatically, which is
+  # exactly the case this catalog fails.
+  #
+  # Rows are labelled with the raw id, not the models.dev display name OpenCode
+  # caches: Claude Code reuses display_name for the session header and the status
+  # line, where "DeepSeek V4 Flash (New)" is both noisier and inconsistent with
+  # the alias rows, which show ids.
+  local cache="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/cache/gateway-models.json"
+  local doc
+  doc="$(jq -n --arg base "$OPENCODE_GO_BASE_URL" --arg ids "$OCC_GATEWAY_MODELS" '
+    {baseUrl: $base,
+     models: [$ids | split(" ") | .[] | select(length > 0) | {id: ., display_name: .}]}
+  ' 2>/dev/null)" || return 0
+  [[ -n "$doc" ]] || return 0
+
+  # Nothing to do when the catalog already matches — leaves fetchedAt alone.
+  if [[ -r "$cache" ]] && jq -e --argjson new "$doc" \
+       '.baseUrl == $new.baseUrl and .models == $new.models' "$cache" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  mkdir -p "${cache%/*}" 2>/dev/null || return 0
+  local tmp="$cache.occ.$$"
+  if jq -n --argjson doc "$doc" --argjson now "$(date +%s)000" \
+       '$doc + {fetchedAt: $now}' >"$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$cache" 2>/dev/null || rm -f "$tmp"
+  else
+    rm -f "$tmp"
+  fi
 }
 
 occ() {
@@ -82,6 +131,11 @@ occ() {
 
     # Keep everything except inference off a third-party gateway.
     export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+
+    if [[ "$OCC_MODEL_DISCOVERY" != 0 ]]; then
+      _occ_sync_model_options
+      export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
+    fi
 
     exec claude --dangerously-skip-permissions "$@"
   )
