@@ -41,9 +41,11 @@ Only 9 of the 25 catalog models can drive the agent loop over this endpoint, and
 
 The picker only offers the four alias slots plus a default row, so `occ` also writes Claude Code's gateway-discovery cache (`~/.claude/cache/gateway-models.json`, or under `CLAUDE_CONFIG_DIR`) and exports `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, which adds one row per cached model. Rows are labelled with the raw id — Claude Code reuses that label for the session header and the status line — and ones already shown by an alias slot are deduplicated away. `OCC_GATEWAY_MODELS` sets the list; `OCC_MODEL_DISCOVERY=0` skips both steps.
 
+Three alias rows show `deepseek-v4-flash`, because opus, fable, and sonnet all resolve to `OCC_MODEL`. Alias slots are not deduplicated against each other the way gateway rows are against them, so the same id appears once per slot. This is expected: every slot has to name a real id or it 401s, and collapsing them onto the strongest model means anything that lands on an alias — `settings.json`, `--model sonnet`, subagents — gets it. Pointing `OCC_SONNET_MODEL` at another model reclaims a row and gives that up.
+
 Claude Code's own discovery fetcher never maintains that file for this gateway — it keeps only ids matching `/claude|anthropic/i`, which drops the whole catalog — so it neither populates nor overwrites what `occ` writes. The file holds one gateway at a time, so writing it discards another gateway's entry; for any gateway serving `claude-*` ids that fetcher regenerates it.
 
-Selecting a row with Enter writes that raw id to `~/.claude/settings.json` as the global default, where it would be a broken model under `cl`. Use `s` (this session only), or pick an alias row — those re-resolve per environment.
+The two row types persist differently. A gateway row carries the raw id, so Enter writes e.g. `qwen3.8-max` to `~/.claude/settings.json` as the global default, where it is a broken model under `cl`. An alias row carries the alias name (`opus`, `sonnet`, `haiku`, `fable`) and only shows the id as its label, so Enter writes `sonnet` — which re-resolves per environment. Prefer an alias row, or `s` for this session only.
 
 The Claude statusline detects `occ` from `ANTHROPIC_BASE_URL` and swaps in the OpenCode account and Go plan usage; see [Statusline](statusline.md).
 
