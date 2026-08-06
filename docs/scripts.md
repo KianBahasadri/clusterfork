@@ -28,11 +28,12 @@ Reads the key from `OPENCODE_API_KEY` or `~/.local/share/opencode/auth.json`, an
 
 ## scripts/opencode_go_effort_probe.py
 
-Measures whether OpenCode Go honours the reasoning effort Claude Code sends. Status codes cannot answer this — the gateway validates the enum and 400s a bogus value, then ignores the field — so the script samples each level and compares how much thinking comes back, with a rank test on the extremes.
+Measures whether OpenCode Go honours the reasoning effort a client sends. Status codes cannot answer this — an accepted enum value says nothing about effect — so the script samples each level and compares how much thinking comes back, with a rank test on `low` vs `max`. Two routes: `--route messages` (default) replays what Claude Code sends (`output_config.effort` on `/v1/messages`); `--route chat` replays what OpenCode itself sends (`reasoning_effort` on `/v1/chat/completions`).
 
 ```bash
-python scripts/opencode_go_effort_probe.py                    # default model
-python scripts/opencode_go_effort_probe.py qwen3.8-max -n 20  # more samples
+python scripts/opencode_go_effort_probe.py                       # Claude Code route
+python scripts/opencode_go_effort_probe.py --route chat          # OpenCode route
+python scripts/opencode_go_effort_probe.py qwen3.8-max -n 20     # more samples
 ```
 
-Every run includes a positive control (`thinking: {"type": "disabled"}`, which must return zero thinking); the script exits non-zero if the control fails, since a null result from a harness that cannot detect change is worthless. See [OpenCode Go endpoint](opencode-go.md#reasoning-effort-is-accepted-and-ignored) for the measured result.
+Every run includes a positive control (`thinking: {"type": "disabled"}` on messages, `reasoning_effort: "none"` on chat — both must return zero thinking), and samples are interleaved across levels so mid-run upstream drift cannot masquerade as an effort effect. The script exits non-zero if the control fails, since a null result from a harness that cannot detect change is worthless. See [OpenCode Go endpoint](opencode-go.md#reasoning-effort-is-accepted-and-ignored--mostly) for the measured result.

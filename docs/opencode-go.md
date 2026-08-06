@@ -148,7 +148,7 @@ One real quirk survives: on this route the model returns a `thinking` block whos
 `signature` is just the message id echoed back, not a real signature. Claude Code
 does not validate it, and blanking it changes nothing.
 
-### Reasoning effort is accepted and ignored
+### Reasoning effort is accepted and ignored — mostly
 
 Claude Code sends the effort level as `output_config: {"effort": "xhigh"}`, under
 the `effort-2025-11-24` beta header. Captured off a log-and-forward proxy, that
@@ -156,20 +156,41 @@ string is the **only** difference between `--effort low` and `--effort xhigh` �
 same `thinking: {"type": "adaptive", "display": "omitted"}`, same `max_tokens`,
 nothing else changes client-side.
 
-The gateway validates the enum: a bogus effort value is a 400, so the field is
-parsed rather than dropped. It still reaches no upstream. Measured on
-`deepseek-v4-flash`, 14 samples per level, comparing how much thinking comes
-back: `low` vs `max` gives **p = 0.61** on a rank test — the levels reorder run
-to run on noise alone. `qwen3.8-max` and `minimax-m3` behave the same.
+Enum validation is not evidence of implementation, and it is not stable either.
+On `/v1/messages` a bogus effort value was a 400 when first measured on
+2026-08-06 and was accepted by every model tested by end of day
+(`deepseek-v4-flash`, `qwen3.8-max`, `minimax-m3`) — whatever validated it was
+upstream-side and went away. `/v1/chat/completions` still validates
+gateway-side: a bogus `reasoning_effort` is a 400 whose serde error lists the
+seven variants `none/minimal/low/medium/high/xhigh/max`. Since parsing says
+nothing about effect, this has to be settled by measurement, with
+`scripts/opencode_go_effort_probe.py` — same prompt, n≥12 samples per level,
+rank test on `low` vs `max`, thinking volume as the signal:
 
-This is not the Anthropic-format shim losing the field. The same upstreams
-ignore `reasoning_effort` on `/v1/chat/completions` too, so no route on this
-gateway exposes a graded reasoning budget.
+| Route | `deepseek-v4-flash` | `qwen3.8-max` | `minimax-m3` |
+| --- | --- | --- | --- |
+| `/v1/messages` (Claude Code) | ignored, p = 0.61 | ignored, p = 0.64 | ignored |
+| `/v1/chat/completions` (OpenCode) | ignored, p = 0.84 | **inverted**, p ≈ 0.00 | — |
 
-What *does* survive the trip is the on/off switch: `thinking: {"type":
-"disabled"}` returns zero thinking, deterministically, on all three models —
-which is the control that makes the null result above meaningful.
-`thinking.display` is ignored, so `"omitted"` still returns the thinking text.
+Inverted means what it says: `qwen3.8-max` reasons *less* at higher effort —
+medians step down from ~1300 thinking chars at minimal/low/medium to ~650 at
+xhigh/max, with the upstream's own `reasoning_tokens` counter dropping in step
+(~430 → ~180). Reproduced across two runs, so the field does reach that
+upstream — it just does the opposite of what the ladder promises. There is no
+route on this gateway with a usable graded reasoning budget.
+
+Two methodology notes, bought with one scare. The control is what makes a null
+result mean anything: `thinking: {"type": "disabled"}` on `/v1/messages` and
+`reasoning_effort: "none"` on chat both return zero thinking, deterministically
+(`none` is in the same enum, which makes it the cleaner control). And the
+samples must be submitted **interleaved across levels** — submitting all of one
+level before the next turns any mid-run upstream drift into a spurious effort
+effect. The qwen inversion survives interleaving, so it is not drift; a first
+un-interleaved run of it looked identical, which is how the confound was found.
+
+`thinking.display` is ignored, so `"omitted"` still returns the thinking text,
+and `enable_thinking: false` on chat is silently dropped — the two on/off
+switches above are the only thinking controls that reach upstream.
 
 So `/effort` and `--effort` are inert under `occ`. Nothing is malfunctioning —
 the request is well-formed and accepted — there is simply no implementation
@@ -298,7 +319,8 @@ The Anthropic-route sweep is committed as
 before trusting the tables above, and after any `OCC_MODEL` change. The effort
 measurement is
 [`scripts/opencode_go_effort_probe.py`](scripts.md#scriptsopencode_go_effort_probepy),
-which re-runs the null result with its control attached.
+which covers both agent routes (`--route messages` for Claude Code, `--route
+chat` for OpenCode) with an on/off control attached to each.
 
 The other probes were throwaway scripts, which is precisely how the
 `deepseek-v4-flash` error above went unexplained. To rebuild them, the shapes

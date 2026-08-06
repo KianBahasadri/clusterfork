@@ -1,18 +1,27 @@
 #!/usr/bin/env python3
-"""Probe whether OpenCode Go honours Claude Code's reasoning-effort setting.
+"""Probe whether OpenCode Go honours a client's reasoning-effort setting.
 
-Claude Code sends the effort level as `output_config.effort` on /v1/messages.
-The gateway validates the enum — a bogus value is a 400 — so the field is
+Two routes, two clients:
+
+- `--route messages` (default): what Claude Code sends — `output_config.effort`
+  on /v1/messages. Control is `thinking: {"type": "disabled"}`, which must come
+  back with zero thinking.
+- `--route chat`: what OpenCode itself sends — `reasoning_effort` on
+  /v1/chat/completions. Control is `reasoning_effort: "none"`, same enum, which
+  must come back with zero reasoning_content. This is the first-party control:
+  the gateway's own client uses this route and field, so if a graded budget
+  exists anywhere on this gateway it has to be here.
+
+Both gateways validate the enum — a bogus value is a 400 — so the field is
 clearly parsed, which makes "is it honoured?" impossible to answer from status
 codes. This script answers it by measurement: same prompt at each effort level,
-N samples, comparing how much thinking the model emits.
+N samples, comparing how much thinking the model emits. Reasoning volume is
+noisy, so if the control does not separate, the numbers mean nothing and the
+run fails.
 
-Reasoning volume is noisy, so every run includes a positive control —
-`thinking: {"type": "disabled"}`, which must come back with zero thinking. If
-the control does not separate, the numbers mean nothing and the run fails.
-
-    python scripts/opencode_go_effort_probe.py                    # default model
-    python scripts/opencode_go_effort_probe.py qwen3.8-max -n 20  # more samples
+    python scripts/opencode_go_effort_probe.py                       # Claude Code route
+    python scripts/opencode_go_effort_probe.py --route chat          # OpenCode route
+    python scripts/opencode_go_effort_probe.py qwen3.8-max -n 20     # more samples
 
 Exits non-zero if the control fails. See docs/opencode-go.md for the results
 this was written to support, and re-run it before trusting them.
@@ -32,7 +41,7 @@ AUTH = os.path.expanduser("~/.local/share/opencode/auth.json")
 
 # Cloudflare 403s a default urllib user agent with a bare `error code: 1010`
 # body, before the request ever reaches the gateway. Look like a real client.
-HEADERS = {
+MESSAGES_HEADERS = {
     "content-type": "application/json",
     "accept": "application/json",
     "anthropic-version": "2023-06-01",
@@ -40,7 +49,19 @@ HEADERS = {
     "user-agent": "claude-cli/2.1.223 (external, cli)",
 }
 
+CHAT_HEADERS = {
+    "content-type": "application/json",
+    "accept": "application/json",
+    "user-agent": "opencode/0.16.0",
+}
+
 LEVELS = ["low", "medium", "high", "xhigh", "max"]
+# The chat enum validates two more values: `minimal` (sampled here) and `none`
+# (the control — it must return zero reasoning for the run to mean anything).
+CHAT_LEVELS = ["minimal"] + LEVELS
+
+# Exactly what Claude Code sends alongside the effort field.
+THINKING = {"type": "adaptive", "display": "omitted"}
 
 # Needs enough rope for effort to show up as a difference: a prompt with a real
 # trap in it, where more deliberation would plausibly buy a better answer.
@@ -52,9 +73,6 @@ PROMPT = (
     "Reason carefully and completely before answering."
 )
 
-# Exactly what Claude Code sends alongside the effort field.
-THINKING = {"type": "adaptive", "display": "omitted"}
-
 
 def api_key():
     key = os.environ.get("OPENCODE_API_KEY")
@@ -64,36 +82,58 @@ def api_key():
         return json.load(fh)["opencode-go"]["key"]
 
 
-def sample(key, model, effort, thinking=THINKING):
-    """One non-streaming turn. Returns (thinking_chars, output_tokens) or error."""
-    body = {
-        "model": model,
-        "max_tokens": 8192,
-        "messages": [{"role": "user", "content": PROMPT}],
-        "thinking": thinking,
-    }
-    if effort is not None:
-        body["output_config"] = {"effort": effort}
+def post_json(key, route, body):
+    if route == "messages":
+        url = f"{BASE}/v1/messages?beta=true"
+        headers = dict(MESSAGES_HEADERS, **{"x-api-key": key})
+    else:
+        url = f"{BASE}/v1/chat/completions"
+        headers = dict(CHAT_HEADERS, authorization=f"Bearer {key}")
 
-    req = urllib.request.Request(
-        f"{BASE}/v1/messages?beta=true",
-        data=json.dumps(body).encode(),
-        headers=dict(HEADERS, **{"x-api-key": key}),
-    )
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=240) as resp:
-            data = json.load(resp)
+            return json.load(resp)
     except urllib.error.HTTPError as exc:
         return {"error": f"HTTP {exc.code}: {exc.read().decode()[:120]}"}
     except Exception as exc:  # noqa: BLE001 - probe reports, never raises
         return {"error": repr(exc)}
 
-    blocks = data.get("content", [])
-    thought = "".join(b.get("thinking", "") for b in blocks if b.get("type") == "thinking")
-    return {"chars": len(thought), "tokens": data.get("usage", {}).get("output_tokens")}
+
+def sample(key, model, route, effort, thinking=THINKING):
+    """One non-streaming turn. Returns reasoning volume, or an error."""
+    body = {
+        "model": model,
+        "max_tokens": 8192,
+        "messages": [{"role": "user", "content": PROMPT}],
+    }
+    if route == "messages":
+        body["thinking"] = thinking
+        if effort is not None:
+            body["output_config"] = {"effort": effort}
+    elif effort is not None:
+        body["reasoning_effort"] = effort
+
+    data = post_json(key, route, body)
+    if "error" in data:
+        return data
+
+    if route == "messages":
+        blocks = data.get("content", [])
+        thought = "".join(b.get("thinking", "") for b in blocks if b.get("type") == "thinking")
+        tokens = (data.get("usage") or {}).get("output_tokens")
+    else:
+        choices = data.get("choices") or []
+        if not choices:
+            return {"error": f"no choices in response: {json.dumps(data)[:120]}"}
+        message = choices[0].get("message") or {}
+        thought = message.get("reasoning_content") or ""
+        tokens = ((data.get("usage") or {}).get("completion_tokens_details") or {}) \
+            .get("reasoning_tokens")
+    return {"chars": len(thought), "tokens": tokens}
 
 
-def summarise(label, results):
+def summarise(label, results, tok_label):
     """Print one row; return the thinking lengths, or [] if every sample failed."""
     ok = [r for r in results if "chars" in r]
     bad = [r for r in results if "error" in r]
@@ -104,7 +144,7 @@ def summarise(label, results):
     tokens = [r["tokens"] for r in ok if r["tokens"] is not None]
     note = f"   ({len(bad)} failed)" if bad else ""
     print(f"  {label:<22} n={len(ok):<3} thinking chars med={statistics.median(chars):>6.0f} "
-          f"min={min(chars):>5} max={max(chars):>6}   out_tok med="
+          f"min={min(chars):>5} max={max(chars):>6}   {tok_label} med="
           f"{statistics.median(tokens) if tokens else 0:>5.0f}{note}")
     return chars
 
@@ -139,35 +179,55 @@ def mann_whitney_p(a, b):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("model", nargs="?", default="deepseek-v4-flash")
+    ap.add_argument("--route", choices=["messages", "chat"], default="messages",
+                    help="messages = what Claude Code sends; chat = what OpenCode sends")
     ap.add_argument("-n", "--samples", type=int, default=12, help="samples per level")
     ap.add_argument("-j", "--jobs", type=int, default=12, help="parallel requests")
     args = ap.parse_args()
 
+    chat = args.route == "chat"
+    levels = CHAT_LEVELS if chat else LEVELS
+    tok_label = "rsn_tok" if chat else "out_tok"
+    control_label = "effort=none (control)" if chat else "thinking=off (control)"
+    endpoint = "/v1/chat/completions" if chat else "/v1/messages"
+
     key = api_key()
-    print(f"{args.model} — {args.samples} samples per level\n")
+    print(f"{args.model} over {endpoint} — {args.samples} samples per level\n")
 
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        pending = {lv: [pool.submit(sample, key, args.model, lv) for _ in range(args.samples)]
-                   for lv in LEVELS}
-        control_futs = [pool.submit(sample, key, args.model, None, {"type": "disabled"})
-                        for _ in range(max(4, args.samples // 3))]
-        bogus = pool.submit(sample, key, args.model, "banana")
-        samples = {lv: summarise(f"effort={lv}", [f.result() for f in futs])
+        # Submit round-robin, not level-by-level: with n == jobs, submitting all
+        # of one level first runs each level as its own time slice, and a
+        # mid-run upstream change then shows up as a spurious effort effect.
+        pending = {lv: [] for lv in levels}
+        for _ in range(args.samples):
+            for lv in levels:
+                pending[lv].append(pool.submit(sample, key, args.model, args.route, lv))
+        if chat:
+            control_futs = [pool.submit(sample, key, args.model, args.route, "none")
+                            for _ in range(max(4, args.samples // 3))]
+        else:
+            control_futs = [pool.submit(sample, key, args.model, args.route, None,
+                                        {"type": "disabled"})
+                            for _ in range(max(4, args.samples // 3))]
+        bogus = pool.submit(sample, key, args.model, args.route, "banana")
+        samples = {lv: summarise(f"effort={lv}", [f.result() for f in futs], tok_label)
                    for lv, futs in pending.items()}
-        control = summarise("thinking=off (control)", [f.result() for f in control_futs])
+        control = summarise(control_label, [f.result() for f in control_futs], tok_label)
 
     print(f"\n  bogus effort value     "
           f"{bogus.result().get('error', 'ACCEPTED — enum no longer validated')}")
 
     if not control or max(control) > 0:
-        print("\ncontrol failed: thinking:disabled still returned thinking, so the "
-              "harness cannot detect a real change. Numbers above mean nothing.",
+        print(f"\ncontrol failed: {control_label.split(' (')[0]} still returned thinking, "
+              "so the harness cannot detect a real change. Numbers above mean nothing.",
               file=sys.stderr)
         return 1
     print(f"\ncontrol separated ({len(control)}/{len(control)} at zero), "
           "so the measurement can see a real change.")
 
-    lo, hi = samples.get(LEVELS[0], []), samples.get(LEVELS[-1], [])
+    # minimal can be quasi-off, so the extremes worth testing are low vs max —
+    # if the graded budget exists anywhere, it has to separate those.
+    lo, hi = samples.get("low", []), samples.get("max", [])
     if not lo or not hi:
         print("could not compare the extremes", file=sys.stderr)
         return 1
@@ -175,7 +235,7 @@ def main():
     p = mann_whitney_p(lo, hi)
     verdict = ("effort is now doing something — re-measure and update docs/opencode-go.md"
                if p < 0.05 else "consistent with effort being ignored")
-    print(f"{LEVELS[0]} vs {LEVELS[-1]}: p={p:.2f} — {verdict}.")
+    print(f"low vs max: p={p:.2f} — {verdict}.")
     return 0
 
 
