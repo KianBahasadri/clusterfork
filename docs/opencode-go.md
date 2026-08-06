@@ -148,6 +148,37 @@ One real quirk survives: on this route the model returns a `thinking` block whos
 `signature` is just the message id echoed back, not a real signature. Claude Code
 does not validate it, and blanking it changes nothing.
 
+### Reasoning effort is accepted and ignored
+
+Claude Code sends the effort level as `output_config: {"effort": "xhigh"}`, under
+the `effort-2025-11-24` beta header. Captured off a log-and-forward proxy, that
+string is the **only** difference between `--effort low` and `--effort xhigh` —
+same `thinking: {"type": "adaptive", "display": "omitted"}`, same `max_tokens`,
+nothing else changes client-side.
+
+The gateway validates the enum: a bogus effort value is a 400, so the field is
+parsed rather than dropped. It still reaches no upstream. Measured on
+`deepseek-v4-flash`, 14 samples per level, comparing how much thinking comes
+back: `low` vs `max` gives **p = 0.61** on a rank test — the levels reorder run
+to run on noise alone. `qwen3.8-max` and `minimax-m3` behave the same.
+
+This is not the Anthropic-format shim losing the field. The same upstreams
+ignore `reasoning_effort` on `/v1/chat/completions` too, so no route on this
+gateway exposes a graded reasoning budget.
+
+What *does* survive the trip is the on/off switch: `thinking: {"type":
+"disabled"}` returns zero thinking, deterministically, on all three models —
+which is the control that makes the null result above meaningful.
+`thinking.display` is ignored, so `"omitted"` still returns the thinking text.
+
+So `/effort` and `--effort` are inert under `occ`. Nothing is malfunctioning —
+the request is well-formed and accepted — there is simply no implementation
+behind the graded budget. Claude Code offers the full ladder anyway because its
+capability check falls through to "first-party ⇒ supported" for any model id it
+does not recognise; a custom `ANTHROPIC_BASE_URL` does not make it think
+otherwise, since its `gateway` provider mode keys off a gateway *auth session*,
+not off `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`.
+
 ### Client fingerprinting
 
 Requests are behind Cloudflare, and a default `Python-urllib/3.x` user agent gets
@@ -264,7 +295,10 @@ guesses.
 
 The Anthropic-route sweep is committed as
 [`scripts/opencode_go_probe.py`](scripts.md#scriptsopencode_go_probepy) — run it
-before trusting the tables above, and after any `OCC_MODEL` change.
+before trusting the tables above, and after any `OCC_MODEL` change. The effort
+measurement is
+[`scripts/opencode_go_effort_probe.py`](scripts.md#scriptsopencode_go_effort_probepy),
+which re-runs the null result with its control attached.
 
 The other probes were throwaway scripts, which is precisely how the
 `deepseek-v4-flash` error above went unexplained. To rebuild them, the shapes
