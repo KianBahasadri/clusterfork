@@ -28,12 +28,13 @@ Reads the key from `OPENCODE_API_KEY` or `~/.local/share/opencode/auth.json`, an
 
 ## scripts/opencode_go_effort_probe.py
 
-Measures whether OpenCode Go honours the reasoning effort a client sends. Status codes cannot answer this — an accepted enum value says nothing about effect — so the script samples each level and compares how much thinking comes back, with a rank test on `low` vs `max`. Two routes: `--route messages` (default) replays what Claude Code sends (`output_config.effort` on `/v1/messages`); `--route chat` replays what OpenCode itself sends (`reasoning_effort` on `/v1/chat/completions`).
+Measures whether OpenCode Go honours the reasoning effort a client sends. Status codes cannot answer this — an accepted enum value says nothing about effect — so the script samples each level and compares how much reasoning comes back, with a rank test on the extremes. Three routes: `--route messages` (default) replays what Claude Code sends (`output_config.effort` on `/v1/messages`); `--route chat` replays what OpenCode itself sends (`reasoning_effort` on `/v1/chat/completions`); `--route responses` replays what Codex sends (`reasoning.effort` on `/v1/responses`).
 
 ```bash
-python scripts/opencode_go_effort_probe.py                       # Claude Code route
-python scripts/opencode_go_effort_probe.py --route chat          # OpenCode route
-python scripts/opencode_go_effort_probe.py qwen3.8-max -n 20     # more samples
+python scripts/opencode_go_effort_probe.py                           # Claude Code route
+python scripts/opencode_go_effort_probe.py --route chat              # OpenCode route
+python scripts/opencode_go_effort_probe.py --route responses gpt-5.6-luna  # Codex route
+python scripts/opencode_go_effort_probe.py qwen3.8-max -n 20         # more samples
 ```
 
-Every run includes a positive control (`thinking: {"type": "disabled"}` on messages, `reasoning_effort: "none"` on chat — both must return zero thinking), and samples are interleaved across levels so mid-run upstream drift cannot masquerade as an effort effect. The script exits non-zero if the control fails, since a null result from a harness that cannot detect change is worthless. See [OpenCode Go endpoint](opencode-go.md#reasoning-effort-is-accepted-and-ignored--mostly) for the measured result.
+The signal is thinking-text volume on messages and chat, and the upstream's `reasoning_tokens` counter on responses (which never returns reasoning text). Every run includes an off-switch control (`thinking: {"type": "disabled"}` on messages, `effort: "none"` on the OpenAI routes — both must return zero reasoning), and samples are interleaved across levels so mid-run upstream drift cannot masquerade as an effort effect. The script exits non-zero if the control fails, or if every level reads zero — a route that exposes no reasoning signal makes effort unmeasurable, not "ignored". See [OpenCode Go endpoint](opencode-go.md#reasoning-effort-is-accepted-and-ignored--mostly) for the measured matrix.

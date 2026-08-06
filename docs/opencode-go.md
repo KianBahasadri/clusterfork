@@ -156,46 +156,62 @@ string is the **only** difference between `--effort low` and `--effort xhigh` �
 same `thinking: {"type": "adaptive", "display": "omitted"}`, same `max_tokens`,
 nothing else changes client-side.
 
-Enum validation is not evidence of implementation, and it is not stable either.
-On `/v1/messages` a bogus effort value was a 400 when first measured on
-2026-08-06 and was accepted by every model tested by end of day
-(`deepseek-v4-flash`, `qwen3.8-max`, `minimax-m3`) — whatever validated it was
-upstream-side and went away. `/v1/chat/completions` still validates
-gateway-side: a bogus `reasoning_effort` is a 400 whose serde error lists the
-seven variants `none/minimal/low/medium/high/xhigh/max`. Since parsing says
-nothing about effect, this has to be settled by measurement, with
-`scripts/opencode_go_effort_probe.py` — same prompt, n≥12 samples per level,
-rank test on `low` vs `max`, thinking volume as the signal:
+Enum validation is not evidence of implementation, and where it happens at all
+is per-upstream and unstable. A bogus value 400s against `deepseek-v4-flash` on
+both OpenAI routes (a serde "unknown variant" error listing
+`none/minimal/low/medium/high/xhigh/max`), but is silently accepted by
+`gpt-5.6-luna` on chat, and by everything tested on `/v1/messages` — which
+400ed a bogus value on the morning of 2026-08-06 and accepted it by evening.
+Since parsing says nothing about effect, this has to be settled by measurement:
+`scripts/opencode_go_effort_probe.py`, same prompt, n = 12 samples per level
+interleaved, rank test on `low` vs `max`, reasoning volume as the signal:
 
-| Route | `deepseek-v4-flash` | `qwen3.8-max` | `minimax-m3` |
+| Model | `/v1/messages` (Claude Code) | `/v1/chat/completions` (OpenCode) | `/v1/responses` (Codex) |
 | --- | --- | --- | --- |
-| `/v1/messages` (Claude Code) | ignored, p = 0.61 | ignored, p = 0.64 | ignored |
-| `/v1/chat/completions` (OpenCode) | ignored, p = 0.84 | **inverted**, p ≈ 0.00 | — |
+| `deepseek-v4-flash` | ignored, p = 0.61 | ignored, p = 0.84 | ignored, p = 0.42 |
+| `qwen3.8-max` | ignored, p = 0.64 | **inverted**, p ≈ 0.00 | not served |
+| `minimax-m3` | ignored | — | not served |
+| `gpt-5.6-luna` | never emits `tool_use` | unmeasurable — no signal | **works**, p ≈ 0.00 |
+| `grok-4.5` | 401 | dead (503) | nearly flat; no control possible |
 
-Inverted means what it says: `qwen3.8-max` reasons *less* at higher effort —
-medians step down from ~1300 thinking chars at minimal/low/medium to ~650 at
-xhigh/max, with the upstream's own `reasoning_tokens` counter dropping in step
-(~430 → ~180). Reproduced across two runs, so the field does reach that
-upstream — it just does the opposite of what the ladder promises. There is no
-route on this gateway with a usable graded reasoning budget.
+**The one working ladder in the catalog is `gpt-5.6-luna` over
+`/v1/responses`**: median reasoning tokens step monotonically 82 → 94 → 116 →
+216 → 379 → 474 from `minimal` to `max`, with `none` pinned at zero. The token
+counter is the only signal on that route — reasoning text is never returned, so
+the upstream's own `output_tokens_details.reasoning_tokens` is the measurement.
 
-Two methodology notes, bought with one scare. The control is what makes a null
-result mean anything: `thinking: {"type": "disabled"}` on `/v1/messages` and
-`reasoning_effort: "none"` on chat both return zero thinking, deterministically
-(`none` is in the same enum, which makes it the cleaner control). And the
-samples must be submitted **interleaved across levels** — submitting all of one
+Inverted means what it says: `qwen3.8-max` on chat reasons *less* at higher
+effort — medians step down from ~1300 thinking chars at minimal/low/medium to
+~650 at xhigh/max, with the upstream's own `reasoning_tokens` counter dropping
+in step (~430 → ~180). Reproduced across two runs, so the field does reach that
+upstream — it just does the opposite of what the ladder promises.
+
+The two "unmeasurable" cells fail differently. `gpt-5.6-luna` on chat exposes
+no reasoning signal at all — no `reasoning_content`, no token count — so every
+level, control included, reads zero (the probe refuses to call that "ignored").
+`grok-4.5`'s upstream 400s `none` *and* `max`, accepting only the middle five
+rungs, so the off-switch control cannot run; the five that do run creep from
+262 to 305 reasoning tokens, which without a control is recorded as nearly
+flat, not certified.
+
+The controls are what make the null results mean anything: `thinking: {"type":
+"disabled"}` on `/v1/messages`, `reasoning_effort: "none"` on chat, and
+`reasoning: {"effort": "none"}` on responses each return zero thinking,
+deterministically, wherever the upstream accepts them. `thinking.display` is
+ignored (`"omitted"` still returns the thinking text), and `enable_thinking:
+false` on chat is silently dropped — the enum's off-switch is the only thinking
+control that reaches upstream on those routes.
+
+Samples must be submitted **interleaved across levels** — submitting all of one
 level before the next turns any mid-run upstream drift into a spurious effort
 effect. The qwen inversion survives interleaving, so it is not drift; a first
 un-interleaved run of it looked identical, which is how the confound was found.
 
-`thinking.display` is ignored, so `"omitted"` still returns the thinking text,
-and `enable_thinking: false` on chat is silently dropped — the two on/off
-switches above are the only thinking controls that reach upstream.
-
 So `/effort` and `--effort` are inert under `occ`. Nothing is malfunctioning —
 the request is well-formed and accepted — there is simply no implementation
-behind the graded budget. Claude Code offers the full ladder anyway because its
-capability check falls through to "first-party ⇒ supported" for any model id it
+behind the graded budget on any model `occ` can reach. Claude Code offers the
+full ladder anyway because its capability check falls through to "first-party
+⇒ supported" for any model id it
 does not recognise; a custom `ANTHROPIC_BASE_URL` does not make it think
 otherwise, since its `gateway` provider mode keys off a gateway *auth session*,
 not off `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`.
@@ -296,15 +312,17 @@ Codex is **not** the smoother experience.
 | --- | --- | --- |
 | Setup | env vars only, no flags | 8 config overrides, or a checked-in provider profile |
 | Usable models | 9 | 3 |
+| Reasoning effort | inert on every reachable model | **works on `gpt-5.6-luna`** — the only graded ladder on the gateway ([measured](#reasoning-effort-is-accepted-and-ignored--mostly)) |
 | Startup noise | one cosmetic connectors warning | `failed to refresh available models` error every run (Codex expects `{"models":[…]}`, gateway returns OpenAI's `{"data":[…]}`), plus a `Model metadata … not found` warning per model |
 | Failure mode | loud | silent — sessions end with no output |
 
-Codex's one advantage was reach — it was the only way to get at `gpt-5.6-luna`,
-`grok-4.5`, and `deepseek-v4-flash`. Now that `deepseek-v4-flash` works under
-`occ`, that argument covers only `gpt-5.6-luna` and `grok-4.5`, and the case for
-shipping a Codex launcher is weaker than when it was already declined. The
-invocation above is known-good and would drop into `shell/` the same way `occ`
-did if either of those two models is ever specifically wanted.
+Codex's advantages are reach and, it turns out, effort: it is the only way to
+get at `gpt-5.6-luna` and `grok-4.5`, and `gpt-5.6-luna` is the only model on
+the gateway with a working graded effort ladder — though Codex's own
+`model_reasoning_effort` must stay at `high` or below on `grok-4.5`, whose
+upstream 400s `max`. The invocation above is known-good and would drop into
+`shell/` the same way `occ` did if either of those two models is ever
+specifically wanted.
 
 Codex also has no config key for per-model output limits — `model_max_output_tokens`
 and `models.<id>.*` are both rejected as unknown fields. `model_context_window` is
@@ -319,8 +337,9 @@ The Anthropic-route sweep is committed as
 before trusting the tables above, and after any `OCC_MODEL` change. The effort
 measurement is
 [`scripts/opencode_go_effort_probe.py`](scripts.md#scriptsopencode_go_effort_probepy),
-which covers both agent routes (`--route messages` for Claude Code, `--route
-chat` for OpenCode) with an on/off control attached to each.
+which covers all three agent routes (`--route messages` for Claude Code,
+`--route chat` for OpenCode, `--route responses` for Codex) with an on/off
+control attached to each.
 
 The other probes were throwaway scripts, which is precisely how the
 `deepseek-v4-flash` error above went unexplained. To rebuild them, the shapes

@@ -11,16 +11,21 @@ Two routes, two clients:
   must come back with zero reasoning_content. This is the first-party control:
   the gateway's own client uses this route and field, so if a graded budget
   exists anywhere on this gateway it has to be here.
+- `--route responses`: what Codex sends — `reasoning.effort` on /v1/responses.
+  Control is `effort: "none"` again. Reasoning text is not returned on this
+  route (the reasoning item's summary is empty), so the signal is the
+  upstream's own `output_tokens_details.reasoning_tokens` counter.
 
-Both gateways validate the enum — a bogus value is a 400 — so the field is
-clearly parsed, which makes "is it honoured?" impossible to answer from status
-codes. This script answers it by measurement: same prompt at each effort level,
-N samples, comparing how much thinking the model emits. Reasoning volume is
-noisy, so if the control does not separate, the numbers mean nothing and the
-run fails.
+The chat and responses routes validate the enum gateway-side — a bogus value is
+a 400 — but parsing says nothing about effect, and /v1/messages no longer
+validates at all. This script answers it by measurement: same prompt at each
+effort level, N samples, comparing how much thinking the model emits. Reasoning
+volume is noisy, so if the control does not separate, the numbers mean nothing
+and the run fails.
 
     python scripts/opencode_go_effort_probe.py                       # Claude Code route
     python scripts/opencode_go_effort_probe.py --route chat          # OpenCode route
+    python scripts/opencode_go_effort_probe.py --route responses gpt-5.6-luna  # Codex
     python scripts/opencode_go_effort_probe.py qwen3.8-max -n 20     # more samples
 
 Exits non-zero if the control fails. See docs/opencode-go.md for the results
@@ -55,9 +60,16 @@ CHAT_HEADERS = {
     "user-agent": "opencode/0.16.0",
 }
 
+RESPONSES_HEADERS = {
+    "content-type": "application/json",
+    "accept": "application/json",
+    "user-agent": "codex_cli_rs/0.146.0",
+}
+
 LEVELS = ["low", "medium", "high", "xhigh", "max"]
-# The chat enum validates two more values: `minimal` (sampled here) and `none`
-# (the control — it must return zero reasoning for the run to mean anything).
+# The OpenAI-route enums validate two more values: `minimal` (sampled here) and
+# `none` (the control — it must return zero reasoning for the run to mean
+# anything).
 CHAT_LEVELS = ["minimal"] + LEVELS
 
 # Exactly what Claude Code sends alongside the effort field.
@@ -86,9 +98,12 @@ def post_json(key, route, body):
     if route == "messages":
         url = f"{BASE}/v1/messages?beta=true"
         headers = dict(MESSAGES_HEADERS, **{"x-api-key": key})
-    else:
+    elif route == "chat":
         url = f"{BASE}/v1/chat/completions"
         headers = dict(CHAT_HEADERS, authorization=f"Bearer {key}")
+    else:
+        url = f"{BASE}/v1/responses"
+        headers = dict(RESPONSES_HEADERS, authorization=f"Bearer {key}")
 
     req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers)
     try:
@@ -101,28 +116,45 @@ def post_json(key, route, body):
 
 
 def sample(key, model, route, effort, thinking=THINKING):
-    """One non-streaming turn. Returns reasoning volume, or an error."""
-    body = {
-        "model": model,
-        "max_tokens": 8192,
-        "messages": [{"role": "user", "content": PROMPT}],
-    }
-    if route == "messages":
-        body["thinking"] = thinking
+    """One non-streaming turn. Returns reasoning volume, or an error.
+
+    Volume is measured in whatever the route exposes: thinking-text characters
+    on messages and chat, the upstream's reasoning_tokens counter on responses
+    (where reasoning text is not returned at all).
+    """
+    if route == "responses":
+        body = {
+            "model": model,
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": PROMPT}]}],
+        }
         if effort is not None:
-            body["output_config"] = {"effort": effort}
-    elif effort is not None:
-        body["reasoning_effort"] = effort
+            body["reasoning"] = {"effort": effort}
+    else:
+        body = {
+            "model": model,
+            "max_tokens": 8192,
+            "messages": [{"role": "user", "content": PROMPT}],
+        }
+        if route == "messages":
+            body["thinking"] = thinking
+            if effort is not None:
+                body["output_config"] = {"effort": effort}
+        elif effort is not None:
+            body["reasoning_effort"] = effort
 
     data = post_json(key, route, body)
-    if "error" in data:
+    # NB: a *successful* /v1/responses payload carries "error": null, so this
+    # must be a value check, not a key-presence check.
+    if data.get("error") is not None:
         return data
 
     if route == "messages":
         blocks = data.get("content", [])
         thought = "".join(b.get("thinking", "") for b in blocks if b.get("type") == "thinking")
-        tokens = (data.get("usage") or {}).get("output_tokens")
-    else:
+        return {"volume": len(thought), "tokens": (data.get("usage") or {}).get("output_tokens")}
+
+    if route == "chat":
         choices = data.get("choices") or []
         if not choices:
             return {"error": f"no choices in response: {json.dumps(data)[:120]}"}
@@ -130,23 +162,31 @@ def sample(key, model, route, effort, thinking=THINKING):
         thought = message.get("reasoning_content") or ""
         tokens = ((data.get("usage") or {}).get("completion_tokens_details") or {}) \
             .get("reasoning_tokens")
-    return {"chars": len(thought), "tokens": tokens}
+        return {"volume": len(thought), "tokens": tokens}
+
+    usage = data.get("usage") or {}
+    volume = (usage.get("output_tokens_details") or {}).get("reasoning_tokens")
+    if volume is None:
+        return {"error": f"no reasoning_tokens in response: {json.dumps(data)[:120]}"}
+    if data.get("status") and data["status"] != "completed":
+        return {"error": f"status={data['status']}"}
+    return {"volume": volume, "tokens": usage.get("output_tokens")}
 
 
-def summarise(label, results, tok_label):
-    """Print one row; return the thinking lengths, or [] if every sample failed."""
-    ok = [r for r in results if "chars" in r]
-    bad = [r for r in results if "error" in r]
+def summarise(label, results, vol_label, tok_label):
+    """Print one row; return the volumes, or [] if every sample failed."""
+    ok = [r for r in results if "volume" in r]
+    bad = [r for r in results if r.get("error") is not None]
     if not ok:
         print(f"  {label:<22} all {len(bad)} failed: {bad[0]['error']}")
         return []
-    chars = [r["chars"] for r in ok]
+    volumes = [r["volume"] for r in ok]
     tokens = [r["tokens"] for r in ok if r["tokens"] is not None]
     note = f"   ({len(bad)} failed)" if bad else ""
-    print(f"  {label:<22} n={len(ok):<3} thinking chars med={statistics.median(chars):>6.0f} "
-          f"min={min(chars):>5} max={max(chars):>6}   {tok_label} med="
+    print(f"  {label:<22} n={len(ok):<3} {vol_label} med={statistics.median(volumes):>6.0f} "
+          f"min={min(volumes):>5} max={max(volumes):>6}   {tok_label} med="
           f"{statistics.median(tokens) if tokens else 0:>5.0f}{note}")
-    return chars
+    return volumes
 
 
 def mann_whitney_p(a, b):
@@ -179,17 +219,21 @@ def mann_whitney_p(a, b):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("model", nargs="?", default="deepseek-v4-flash")
-    ap.add_argument("--route", choices=["messages", "chat"], default="messages",
-                    help="messages = what Claude Code sends; chat = what OpenCode sends")
+    ap.add_argument("--route", choices=["messages", "chat", "responses"],
+                    default="messages",
+                    help="messages = what Claude Code sends; chat = what OpenCode "
+                         "sends; responses = what Codex sends")
     ap.add_argument("-n", "--samples", type=int, default=12, help="samples per level")
     ap.add_argument("-j", "--jobs", type=int, default=12, help="parallel requests")
     args = ap.parse_args()
 
-    chat = args.route == "chat"
-    levels = CHAT_LEVELS if chat else LEVELS
-    tok_label = "rsn_tok" if chat else "out_tok"
-    control_label = "effort=none (control)" if chat else "thinking=off (control)"
-    endpoint = "/v1/chat/completions" if chat else "/v1/messages"
+    levels = LEVELS if args.route == "messages" else CHAT_LEVELS
+    vol_label = "reasoning tok" if args.route == "responses" else "thinking chars"
+    tok_label = "rsn_tok" if args.route == "chat" else "out_tok"
+    control_label = ("thinking=off (control)" if args.route == "messages"
+                     else "effort=none (control)")
+    endpoint = {"messages": "/v1/messages", "chat": "/v1/chat/completions",
+                "responses": "/v1/responses"}[args.route]
 
     key = api_key()
     print(f"{args.model} over {endpoint} — {args.samples} samples per level\n")
@@ -202,17 +246,19 @@ def main():
         for _ in range(args.samples):
             for lv in levels:
                 pending[lv].append(pool.submit(sample, key, args.model, args.route, lv))
-        if chat:
-            control_futs = [pool.submit(sample, key, args.model, args.route, "none")
-                            for _ in range(max(4, args.samples // 3))]
-        else:
+        if args.route == "messages":
             control_futs = [pool.submit(sample, key, args.model, args.route, None,
                                         {"type": "disabled"})
                             for _ in range(max(4, args.samples // 3))]
+        else:
+            control_futs = [pool.submit(sample, key, args.model, args.route, "none")
+                            for _ in range(max(4, args.samples // 3))]
         bogus = pool.submit(sample, key, args.model, args.route, "banana")
-        samples = {lv: summarise(f"effort={lv}", [f.result() for f in futs], tok_label)
+        samples = {lv: summarise(f"effort={lv}", [f.result() for f in futs],
+                                 vol_label, tok_label)
                    for lv, futs in pending.items()}
-        control = summarise(control_label, [f.result() for f in control_futs], tok_label)
+        control = summarise(control_label, [f.result() for f in control_futs],
+                            vol_label, tok_label)
 
     print(f"\n  bogus effort value     "
           f"{bogus.result().get('error', 'ACCEPTED — enum no longer validated')}")
@@ -225,17 +271,29 @@ def main():
     print(f"\ncontrol separated ({len(control)}/{len(control)} at zero), "
           "so the measurement can see a real change.")
 
-    # minimal can be quasi-off, so the extremes worth testing are low vs max —
-    # if the graded budget exists anywhere, it has to separate those.
-    lo, hi = samples.get("low", []), samples.get("max", [])
-    if not lo or not hi:
+    # A control at zero is necessary but not sufficient: some shims expose no
+    # reasoning signal at all (gpt-5.6-luna on chat returns neither
+    # reasoning_content nor a token count), which zeroes every level and would
+    # print a vacuous p=1.00 that reads as "ignored" instead of "unmeasurable".
+    if all(v == 0 for vs in samples.values() for v in vs):
+        print("every level also returned zero — this route exposes no reasoning "
+              "signal for this model, so effort is unmeasurable here, not "
+              "proven ignored.", file=sys.stderr)
+        return 1
+
+    # Compare the widest pair that actually has samples: upstreams may reject
+    # the top of the ladder (grok-4.5 400s on max), and minimal can be
+    # quasi-off, so low is the preferred bottom rung.
+    lo_name = next((lv for lv in ("low", "minimal") if samples.get(lv)), None)
+    hi_name = next((lv for lv in reversed(levels) if samples.get(lv)), None)
+    if lo_name is None or hi_name is None or lo_name == hi_name:
         print("could not compare the extremes", file=sys.stderr)
         return 1
 
-    p = mann_whitney_p(lo, hi)
+    p = mann_whitney_p(samples[lo_name], samples[hi_name])
     verdict = ("effort is now doing something — re-measure and update docs/opencode-go.md"
                if p < 0.05 else "consistent with effort being ignored")
-    print(f"low vs max: p={p:.2f} — {verdict}.")
+    print(f"{lo_name} vs {hi_name}: p={p:.2f} — {verdict}.")
     return 0
 
 
