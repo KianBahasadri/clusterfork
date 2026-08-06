@@ -39,6 +39,13 @@ The key lives at `.["opencode-go"].key` in `~/.local/share/opencode/auth.json`.
 Per-model context windows are in the models.dev cache OpenCode maintains at
 `~/.cache/opencode/models.json` (`.["opencode-go"].models[ID].limit.context`).
 
+The gateway exposes **no usage or quota data**. `/usage`, `/v1/usage`, `/account`,
+`/v1/account`, `/billing`, and `/quota` all 404 into the marketing SPA, and a
+successful `/v1/messages` call returns no rate-limit headers. The only source of
+Go plan usage is the authenticated web dashboard, which is why the `occ`
+statusline reads a scrape of it rather than asking the gateway — see
+[Statusline](statusline.md).
+
 Error codes are not what you would expect. An unknown or unsupported model id on
 a given route comes back as **401 `Model … is not supported for format …`**, not
 404. Upstream failures surface as 400/422/500/503 with the generic message

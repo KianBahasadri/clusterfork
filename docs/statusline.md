@@ -31,6 +31,35 @@ fields are omitted, so the installed `claude-usage-fetch.py` refreshes
 `~/.claude/.usage-cache.json` in the background (harvest from payload or a
 throttled quota API call).
 
+### OpenCode Go mode
+
+Under [`occ`](shell-modules.md) the same script renders
+`model · go · account · ctx% · 5h% · wk% · mo%` instead. Claude Code spawns the
+statusline as a child process, so it inherits the launcher's environment and
+detects the mode from `ANTHROPIC_BASE_URL` — no second script and no
+`--settings` override. (CLI `--settings` *does* outrank `~/.claude/settings.json`
+for `statusLine` if a fully separate line is ever wanted.)
+
+Every Anthropic-side segment is replaced, because under `occ` each one would
+otherwise describe an account the session is not billing against:
+
+- **Account** is the profile `rotate-opencode` selected, read as the suffix of
+  the `~/.local/share/clusterfork-auth/opencode/current` symlink. No token
+  matching needed — unlike Claude's credentials file, nothing rewrites this link.
+- **Usage** is OpenCode Go's three dashboard windows: 5h (`$12`), weekly (`$30`),
+  and monthly (`$60`). The payload's `rate_limits` are discarded.
+
+The gateway serves no usage data at all (see
+[OpenCode Go endpoint](opencode-go.md)), so the authenticated web dashboard is
+the only source. conky-linear-HUP already scrapes it (Firefox `auth` cookie →
+the three usage cards) and is the system of record, so the statusline reads its
+`cache/opencode-usage.json` rather than duplicating that HTML parser. conky
+repolls on its own every 60–300s; only if that cache ages past `OCC_USAGE_TTL`
+(default 300s) does the statusline drive conky's fetcher itself, in the
+background. A figure served from a stale cache is prefixed `~`; if the cache is
+missing or its last fetch failed, the segments show `—` rather than a stale
+number. Overridable: `OCC_USAGE_CACHE`, `OCC_USAGE_FETCHER`, `OCC_USAGE_TTL`.
+
 ## Cursor line
 
 Renders: `model · params/max · account · ctx% · auto% · api%`.

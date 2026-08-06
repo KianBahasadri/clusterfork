@@ -37,6 +37,8 @@ Claude Code prints a one-time warning that claude.ai connectors are disabled bec
 
 Only 9 of the 25 catalog models can drive the agent loop over this endpoint, and the defaults above are chosen from that set. Verify with `python scripts/opencode_go_probe.py` before changing `OCC_MODEL` — some models fail this endpoint while working fine under `oc`. See [OpenCode Go endpoint](opencode-go.md) for the matrix and the failure modes.
 
+The Claude statusline detects `occ` from `ANTHROPIC_BASE_URL` and swaps in the OpenCode account and Go plan usage; see [Statusline](statusline.md).
+
 `occ` exists only because OpenCode has no `/goal` command; `oc` is otherwise the better path, since it reaches the whole catalog with no remapping. If OpenCode ever ships `/goal`, `occ` can be deleted.
 
 ## antigravity.sh
