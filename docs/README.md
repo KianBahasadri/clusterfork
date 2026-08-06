@@ -8,6 +8,7 @@
 - [Scripts](scripts.md) — standalone Python utilities
 - [Skills](skills.md) — shared skills and per-CLI discovery behavior
 - [Conventions](conventions.md) — style, safety, idempotency, and repo-as-source-of-truth
+- [OpenCode Go endpoint](opencode-go.md) — what the subscription's three wire formats serve, per-model, and the Codex experiment that was not shipped
 - [aerolink.sh (removed)](aerolink-removed.md) — historical record of the deleted Aerolink proxy launcher
 - [Pioneer (removed)](pioneer-removed.md) — historical record of the deleted Pioneer gateway integration
 
