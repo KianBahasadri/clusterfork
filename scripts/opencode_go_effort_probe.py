@@ -32,7 +32,14 @@ even where a ladder exists — deepseek-v4-flash reads "ignored" with it and
     python scripts/opencode_go_effort_probe.py --route chat          # OpenCode route
     python scripts/opencode_go_effort_probe.py --route responses gpt-5.6-luna  # Codex
     python scripts/opencode_go_effort_probe.py --route chat --prompt absproof glm-5.1
+    python scripts/opencode_go_effort_probe.py --route chat --prompt stack \
+        --max-tokens 384000 --timeout 3600 deepseek-v4-flash
     python scripts/opencode_go_effort_probe.py qwen3.8-max -n 20     # more samples
+
+The default 8192 `max_tokens` is itself a confound: deepseek-v4-flash on
+`stack` flatlines every level against it and shows a clear ladder once the
+cap is raised to the model's advertised 384000. Pass `--timeout` high enough
+to match — a filled high cap takes minutes per request.
 
 Exits non-zero if the control fails. See docs/opencode-go.md for the results
 this was written to support, and re-run it before trusting them.
@@ -121,7 +128,7 @@ def api_key():
         return json.load(fh)["opencode-go"]["key"]
 
 
-def post_json(key, route, body):
+def post_json(key, route, body, timeout=240):
     if route == "messages":
         url = f"{BASE}/v1/messages?beta=true"
         headers = dict(MESSAGES_HEADERS, **{"x-api-key": key})
@@ -134,7 +141,7 @@ def post_json(key, route, body):
 
     req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=240) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.load(resp)
     except urllib.error.HTTPError as exc:
         return {"error": f"HTTP {exc.code}: {exc.read().decode()[:120]}"}
@@ -142,7 +149,8 @@ def post_json(key, route, body):
         return {"error": repr(exc)}
 
 
-def sample(key, model, route, effort, thinking=THINKING, prompt=PROMPT):
+def sample(key, model, route, effort, thinking=THINKING, prompt=PROMPT,
+           max_tokens=8192, timeout=240):
     """One non-streaming turn. Returns reasoning volume, or an error.
 
     Volume is measured in whatever the route exposes: thinking-text characters
@@ -160,7 +168,7 @@ def sample(key, model, route, effort, thinking=THINKING, prompt=PROMPT):
     else:
         body = {
             "model": model,
-            "max_tokens": 8192,
+            "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": prompt}],
         }
         if route == "messages":
@@ -170,7 +178,7 @@ def sample(key, model, route, effort, thinking=THINKING, prompt=PROMPT):
         elif effort is not None:
             body["reasoning_effort"] = effort
 
-    data = post_json(key, route, body)
+    data = post_json(key, route, body, timeout=timeout)
     # NB: a *successful* /v1/responses payload carries "error": null, so this
     # must be a value check, not a key-presence check.
     if data.get("error") is not None:
@@ -254,6 +262,11 @@ def main():
     ap.add_argument("-j", "--jobs", type=int, default=12, help="parallel requests")
     ap.add_argument("--prompt", choices=sorted(PROMPTS), default="hotel",
                     help="which built-in prompt to sample with")
+    ap.add_argument("--max-tokens", type=int, default=8192,
+                    help="output cap on messages/chat (default 8192; deepseek "
+                         "flash advertises 384000)")
+    ap.add_argument("--timeout", type=int, default=240,
+                    help="per-request HTTP timeout in seconds")
     args = ap.parse_args()
 
     levels = LEVELS if args.route == "messages" else CHAT_LEVELS
@@ -266,8 +279,10 @@ def main():
 
     key = api_key()
     prompt = PROMPTS[args.prompt]
+    sample_kw = {"prompt": prompt, "max_tokens": args.max_tokens,
+                 "timeout": args.timeout}
     print(f"{args.model} over {endpoint} — {args.samples} samples per level, "
-          f"prompt={args.prompt}\n")
+          f"prompt={args.prompt}, max_tokens={args.max_tokens}\n")
 
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         # Submit round-robin, not level-by-level: with n == jobs, submitting all
@@ -277,17 +292,17 @@ def main():
         for _ in range(args.samples):
             for lv in levels:
                 pending[lv].append(pool.submit(sample, key, args.model, args.route,
-                                               lv, prompt=prompt))
+                                               lv, **sample_kw))
         if args.route == "messages":
             control_futs = [pool.submit(sample, key, args.model, args.route, None,
-                                        {"type": "disabled"}, prompt)
+                                        {"type": "disabled"}, **sample_kw)
                             for _ in range(max(4, args.samples // 3))]
         else:
             control_futs = [pool.submit(sample, key, args.model, args.route, "none",
-                                        prompt=prompt)
+                                        **sample_kw)
                             for _ in range(max(4, args.samples // 3))]
         bogus = pool.submit(sample, key, args.model, args.route, "banana",
-                            prompt=prompt)
+                            **sample_kw)
         samples = {lv: summarise(f"effort={lv}", [f.result() for f in futs],
                                  vol_label, tok_label)
                    for lv, futs in pending.items()}

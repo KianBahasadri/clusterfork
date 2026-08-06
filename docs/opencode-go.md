@@ -213,14 +213,16 @@ stacking prompt, its strongest showing. `glm-5` is the same shape (~2.0k →
 ~5.5k) but only separated on `absproof` (p = 0.32 on the stacking prompt — one
 prompt sees the ladder, another cannot). `deepseek-v4-pro` climbs monotonically
 ~1750 → ~2780 chars, the upstream `reasoning_tokens` counter stepping 504 →
-804 in step. `deepseek-v4-flash` separates at the top rung (~1.8k low → ~4.2k
-max, tokens 516 → 1264) with a ragged middle. The stacking prompt is useless on
-the deepseek pair for the opposite reason the riddle is: it makes them reason so
-long that every level pins the 8192-token output cap (~29–34k chars at all six
-rungs, pro's middle rungs even dipping below its lower ones), so the ceiling
-censors the ladder — flash's borderline p = 0.05 there is censoring noise, not
-signal. A separating prompt has to land between the riddle's floor and this
-ceiling; `absproof` does.
+804 in step. `deepseek-v4-flash` separates at the top rung on `absproof`
+(~1.8k low → ~4.2k max, tokens 516 → 1264) with a ragged middle — and harder
+still on the stacking prompt once the probe's output cap is raised to the
+model's advertised 384000 (`--max-tokens 384000`): medians climb ~11k → ~25k
+reasoning tokens (~44k → ~100k thinking chars) from low to max, peaking at
+xhigh (~34k tokens / ~136k chars), p ≈ 0.00. The earlier flat stack result was
+the probe's default 8192 `max_tokens` pinning every rung at the ceiling, not
+an inert effort field — same failure mode as the riddle's floor, just the
+other end. Occasional HTTP 500s appear on the longest max samples; the
+control still zeroes cleanly.
 
 The genuine nulls: `kimi-k2.5`/`k2.6` sit flat at ~6k thinking chars at every
 level — the field reaches them (`none` still zeroes the thinking) and changes
