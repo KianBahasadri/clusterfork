@@ -415,8 +415,9 @@ that mattered were:
 
 Run all 25 models in parallel; a full sweep takes under a minute. The effort
 probe is a different matter on a metered account: `grok-4.5`, `kimi-k3`,
-`qwen3.8-max`, `qwen3.7-max`, `glm-5.2`, `glm-5.1`, `glm-5`, and `kimi-k2.6`
-are too expensive for testing — a full n = 12 ladder run is ~80 long-thinking
-requests, and one evening of these runs is enough to burn the monthly budget.
+`kimi-k2.6`, `kimi-k2.5`, `qwen3.8-max`, `qwen3.7-max`, `glm-5.2`, `glm-5.1`,
+and `glm-5` are too expensive for testing — a full n = 12 ladder run is ~80
+long-thinking requests, and one evening of these runs is enough to burn the
+monthly budget.
 Skip those ids, and screen anything new at n = 3 before committing to a full
 run.
