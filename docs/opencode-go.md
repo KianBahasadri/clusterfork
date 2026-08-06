@@ -214,7 +214,13 @@ stacking prompt, its strongest showing. `glm-5` is the same shape (~2.0k →
 prompt sees the ladder, another cannot). `deepseek-v4-pro` climbs monotonically
 ~1750 → ~2780 chars, the upstream `reasoning_tokens` counter stepping 504 →
 804 in step. `deepseek-v4-flash` separates at the top rung (~1.8k low → ~4.2k
-max, tokens 516 → 1264) with a ragged middle.
+max, tokens 516 → 1264) with a ragged middle. The stacking prompt is useless on
+the deepseek pair for the opposite reason the riddle is: it makes them reason so
+long that every level pins the 8192-token output cap (~29–34k chars at all six
+rungs, pro's middle rungs even dipping below its lower ones), so the ceiling
+censors the ladder — flash's borderline p = 0.05 there is censoring noise, not
+signal. A separating prompt has to land between the riddle's floor and this
+ceiling; `absproof` does.
 
 The genuine nulls: `kimi-k2.5`/`k2.6` sit flat at ~6k thinking chars at every
 level — the field reaches them (`none` still zeroes the thinking) and changes
