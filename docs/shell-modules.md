@@ -35,7 +35,7 @@ Defaults, all overridable: `OCC_MODEL=deepseek-v4-flash`, `OCC_SONNET_MODEL=deep
 
 Claude Code prints a one-time warning that claude.ai connectors are disabled because `ANTHROPIC_API_KEY` takes precedence over the claude.ai login. That is expected under `occ` and does not affect the session.
 
-`/effort` and `--effort` still appear under `occ`, but selecting a level does nothing — see [Reasoning effort](opencode-go.md#reasoning-effort-is-accepted-and-ignored--mostly). Adding `cl`'s `--effort xhigh` to the `occ` invocation would buy nothing.
+`/effort` and `--effort` still appear under `occ`, but selecting a level does nothing — see [Reasoning effort](opencode-go.md#reasoning-effort-works-on-some-models-some-clients). Adding `cl`'s `--effort xhigh` to the `occ` invocation would buy nothing.
 
 Only 9 of the 25 catalog models can drive the agent loop over this endpoint, and the defaults above are chosen from that set. Verify with `python scripts/opencode_go_probe.py` before changing `OCC_MODEL` — some models fail this endpoint while working fine under `oc`. See [OpenCode Go endpoint](opencode-go.md) for the matrix and the failure modes.
 

@@ -148,7 +148,7 @@ One real quirk survives: on this route the model returns a `thinking` block whos
 `signature` is just the message id echoed back, not a real signature. Claude Code
 does not validate it, and blanking it changes nothing.
 
-### Reasoning effort is accepted and ignored — mostly
+### Reasoning effort: works on some models, some clients
 
 Claude Code sends the effort level as `output_config: {"effort": "xhigh"}`, under
 the `effort-2025-11-24` beta header. Captured off a log-and-forward proxy, that
@@ -156,43 +156,89 @@ string is the **only** difference between `--effort low` and `--effort xhigh` �
 same `thinking: {"type": "adaptive", "display": "omitted"}`, same `max_tokens`,
 nothing else changes client-side.
 
+What OpenCode sends for `--variant` is **per-family**, driven by the models.dev
+registry cache (all captured off the same proxy):
+
+- `deepseek-*`, `gpt-5.6-luna`, and `hy3` go to `/v1/chat/completions` with
+  `reasoning_effort: "<level>"` — but only levels the registry advertises for
+  that model (`deepseek-v4-flash` `low/high/max`, `-pro` `high/max`, `hy3`
+  `none/low/high`). An unadvertised value is silently dropped: `--variant max`
+  on `hy3` sends no effort field at all, with no warning.
+- `qwen3.*` goes to `/v1/messages` in Anthropic shape: `--variant high` sends
+  `thinking: {"type": "enabled", "budget_tokens": 16000}`, `--variant low`
+  omits `thinking` entirely — a toggle plus budget, not the graded enum.
+- `minimax-m3` likewise goes to `/v1/messages`, with `thinking: {"type":
+  "adaptive"}`.
+- `glm-*`, `kimi-*`, `mimo-*`, and `minimax-m2.*` send **nothing** — the
+  registry lists no reasoning options for them, so the variant never leaves
+  the client.
+
 Enum validation is not evidence of implementation, and where it happens at all
 is per-upstream and unstable. A bogus value 400s against `deepseek-v4-flash` on
 both OpenAI routes (a serde "unknown variant" error listing
-`none/minimal/low/medium/high/xhigh/max`), but is silently accepted by
-`gpt-5.6-luna` on chat, and by everything tested on `/v1/messages` — which
-400ed a bogus value on the morning of 2026-08-06 and accepted it by evening.
-Since parsing says nothing about effect, this has to be settled by measurement:
-`scripts/opencode_go_effort_probe.py`, same prompt, n = 12 samples per level
-interleaved, rank test on `low` vs `max`, reasoning volume as the signal:
+`none/minimal/low/medium/high/xhigh/max`), 422s against `glm-5.1`, but is
+silently accepted by `gpt-5.6-luna` on chat, and by everything tested on
+`/v1/messages` — which 400ed a bogus value on the morning of 2026-08-06 and
+accepted it by evening. Since parsing says nothing about effect, this has to be
+settled by measurement: `scripts/opencode_go_effort_probe.py`, n = 12 samples
+per level interleaved, rank test on the extremes, reasoning volume as the
+signal.
+
+Measurement turns out to be **prompt-sensitive**. The original probe prompt —
+the missing-dollar riddle — is too famous: models recite it from cache with
+fixed-length reasoning at every level, so it flatlines even where a ladder
+exists. `deepseek-v4-flash` measured "ignored" (p = 0.84) with the riddle and
+"works" (p ≈ 0.00) with a proof prompt that punishes shortcuts
+(`--prompt absproof`: the proposition as stated is false at a = 0, so a careful
+model has to catch the edge case). The riddle-based verdicts are retired;
+results below use `absproof` unless noted.
 
 | Model | `/v1/messages` (Claude Code) | `/v1/chat/completions` (OpenCode) | `/v1/responses` (Codex) |
 | --- | --- | --- | --- |
-| `deepseek-v4-flash` | ignored, p = 0.61 | ignored, p = 0.84 | ignored, p = 0.42 |
+| `deepseek-v4-flash` | ignored, p = 0.61 | **works**, p ≈ 0.00 | ignored, p = 0.42 |
+| `deepseek-v4-pro` | — | **works**, p = 0.01 | — |
+| `glm-5.1` | — | **works**, p ≈ 0.00 | — |
+| `glm-5` | — | **works**, p ≈ 0.00 | — |
+| `qwen3.7-max` | — | ignored, p = 0.77 | — |
 | `qwen3.8-max` | ignored, p = 0.64 | **inverted**, p ≈ 0.00 | not served |
-| `minimax-m3` | ignored | — | not served |
+| `kimi-k2.6` | — | ignored, p = 0.82 | — |
+| `kimi-k2.5` | — | ignored, p = 0.16 | — |
+| `minimax-m3` | ignored | unmeasurable — no signal | not served |
 | `gpt-5.6-luna` | never emits `tool_use` | unmeasurable — no signal | **works**, p ≈ 0.00 |
 | `grok-4.5` | 401 | dead (503) | nearly flat; no control possible |
 
-**The one working ladder in the catalog is `gpt-5.6-luna` over
-`/v1/responses`**: median reasoning tokens step monotonically 82 → 94 → 116 →
-216 → 379 → 474 from `minimal` to `max`, with `none` pinned at zero. The token
-counter is the only signal on that route — reasoning text is never returned, so
-the upstream's own `output_tokens_details.reasoning_tokens` is the measurement.
+The working chat-route ladders: `glm-5.1` steps from ~1.6k thinking chars at
+minimal-through-high to ~5.0k at xhigh/max — and from ~8k to ~29k with the
+stacking prompt, its strongest showing. `glm-5` is the same shape (~2.0k →
+~5.5k) but only separated on `absproof` (p = 0.32 on the stacking prompt — one
+prompt sees the ladder, another cannot). `deepseek-v4-pro` climbs monotonically
+~1750 → ~2780 chars, the upstream `reasoning_tokens` counter stepping 504 →
+804 in step. `deepseek-v4-flash` separates at the top rung (~1.8k low → ~4.2k
+max, tokens 516 → 1264) with a ragged middle.
 
-Inverted means what it says: `qwen3.8-max` on chat reasons *less* at higher
-effort — medians step down from ~1300 thinking chars at minimal/low/medium to
-~650 at xhigh/max, with the upstream's own `reasoning_tokens` counter dropping
-in step (~430 → ~180). Reproduced across two runs, so the field does reach that
-upstream — it just does the opposite of what the ladder promises.
+The genuine nulls: `kimi-k2.5`/`k2.6` sit flat at ~6k thinking chars at every
+level — the field reaches them (`none` still zeroes the thinking) and changes
+nothing. `qwen3.7-max` is flat ~1.8k from `low` through `xhigh`, with `minimal`
+acting as an off-switch (zero thinking) and `max` 400ing; its sibling plus
+models show the same shape in screening. Inverted means what it says:
+`qwen3.8-max` on chat reasons *less* at higher effort — medians step down from
+~1300 thinking chars at minimal/low/medium to ~650 at xhigh/max, with the
+upstream's own `reasoning_tokens` counter dropping in step (~430 → ~180).
+Reproduced across two runs, so the field does reach that upstream — it just
+does the opposite of what the ladder promises.
 
-The two "unmeasurable" cells fail differently. `gpt-5.6-luna` on chat exposes
-no reasoning signal at all — no `reasoning_content`, no token count — so every
-level, control included, reads zero (the probe refuses to call that "ignored").
-`grok-4.5`'s upstream 400s `none` *and* `max`, accepting only the middle five
-rungs, so the off-switch control cannot run; the five that do run creep from
-262 to 305 reasoning tokens, which without a control is recorded as nearly
-flat, not certified.
+The "unmeasurable" cells fail differently from the nulls. `gpt-5.6-luna` on
+chat exposes no reasoning signal at all — no `reasoning_content`, no token
+count — so every level, control included, reads zero (the probe refuses to
+call that "ignored"); `hy3`, `mimo-v2.5*`, and the `minimax` family screen the
+same way. `grok-4.5`'s upstream 400s `none` *and* `max`, accepting only the
+middle five rungs, so the off-switch control cannot run; the five that do run
+creep from 262 to 305 reasoning tokens, which without a control is recorded as
+nearly flat, not certified. `kimi-k2.7-code` 400s the `none` control, so it
+cannot be certified either. **`gpt-5.6-luna` over `/v1/responses`** remains the
+cleanest ladder: median reasoning tokens step monotonically 82 → 94 → 116 →
+216 → 379 → 474 from `minimal` to `max`, with `none` pinned at zero, on the
+upstream's own token counter (reasoning text is never returned on that route).
 
 The controls are what make the null results mean anything: `thinking: {"type":
 "disabled"}` on `/v1/messages`, `reasoning_effort: "none"` on chat, and
@@ -207,9 +253,17 @@ level before the next turns any mid-run upstream drift into a spurious effort
 effect. The qwen inversion survives interleaving, so it is not drift; a first
 un-interleaved run of it looked identical, which is how the confound was found.
 
-So `/effort` and `--effort` are inert under `occ`. Nothing is malfunctioning —
-the request is well-formed and accepted — there is simply no implementation
-behind the graded budget on any model `occ` can reach. Claude Code offers the
+Putting client and server together: the strongest ladders measured are the glm
+pair's, and `oc` can never reach them — OpenCode drops the variant for exactly
+the models where the gateway would honour it. Through `oc`, graded effort is
+real on the deepseek models (`--variant low/high/max`); qwen users get a
+coarser but real control (variant toggles thinking, `high` sets a 16k budget);
+everyone else's variant is either inert upstream or never sent.
+
+So `/effort` and `--effort` remain inert under `occ`. Nothing is
+malfunctioning — the request is well-formed and accepted — there is simply no
+implementation behind the graded budget on any model `occ` can reach. Claude
+Code offers the
 full ladder anyway because its capability check falls through to "first-party
 ⇒ supported" for any model id it
 does not recognise; a custom `ANTHROPIC_BASE_URL` does not make it think
@@ -312,13 +366,14 @@ Codex is **not** the smoother experience.
 | --- | --- | --- |
 | Setup | env vars only, no flags | 8 config overrides, or a checked-in provider profile |
 | Usable models | 9 | 3 |
-| Reasoning effort | inert on every reachable model | **works on `gpt-5.6-luna`** — the only graded ladder on the gateway ([measured](#reasoning-effort-is-accepted-and-ignored--mostly)) |
+| Reasoning effort | inert on every reachable model | **works on `gpt-5.6-luna`** — one of several working ladders, the only one Codex can reach ([measured](#reasoning-effort-works-on-some-models-some-clients)) |
 | Startup noise | one cosmetic connectors warning | `failed to refresh available models` error every run (Codex expects `{"models":[…]}`, gateway returns OpenAI's `{"data":[…]}`), plus a `Model metadata … not found` warning per model |
 | Failure mode | loud | silent — sessions end with no output |
 
 Codex's advantages are reach and, it turns out, effort: it is the only way to
-get at `gpt-5.6-luna` and `grok-4.5`, and `gpt-5.6-luna` is the only model on
-the gateway with a working graded effort ladder — though Codex's own
+get at `gpt-5.6-luna` and `grok-4.5`, and luna's `/v1/responses` ladder is the
+only working one Codex can reach — the chat-route ladders on `glm-5.1`,
+`glm-5`, and the deepseeks belong to OpenCode's route. Codex's own
 `model_reasoning_effort` must stay at `high` or below on `grok-4.5`, whose
 upstream 400s `max`. The invocation above is known-good and would drop into
 `shell/` the same way `occ` did if either of those two models is ever
@@ -358,4 +413,10 @@ that mattered were:
    and delete fields one at a time. Guessing at what a CLI sends wastes more time
    than writing the twenty-line proxy.
 
-Run all 25 models in parallel; a full sweep takes under a minute.
+Run all 25 models in parallel; a full sweep takes under a minute. The effort
+probe is a different matter on a metered account: `grok-4.5`, `kimi-k3`,
+`qwen3.8-max`, `qwen3.7-max`, `glm-5.2`, `glm-5.1`, `glm-5`, and `kimi-k2.6`
+are too expensive for testing — a full n = 12 ladder run is ~80 long-thinking
+requests, and one evening of these runs is enough to burn the monthly budget.
+Skip those ids, and screen anything new at n = 3 before committing to a full
+run.

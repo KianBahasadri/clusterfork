@@ -23,9 +23,15 @@ effort level, N samples, comparing how much thinking the model emits. Reasoning
 volume is noisy, so if the control does not separate, the numbers mean nothing
 and the run fails.
 
+The measurement is prompt-sensitive: `hotel` (the missing-dollar riddle) is a
+memorised classic that models recite with fixed-length reasoning, flatlining
+even where a ladder exists — deepseek-v4-flash reads "ignored" with it and
+"works" (p ≈ 0.00) with `absproof`. Prefer `--prompt absproof` or `stack`.
+
     python scripts/opencode_go_effort_probe.py                       # Claude Code route
     python scripts/opencode_go_effort_probe.py --route chat          # OpenCode route
     python scripts/opencode_go_effort_probe.py --route responses gpt-5.6-luna  # Codex
+    python scripts/opencode_go_effort_probe.py --route chat --prompt absproof glm-5.1
     python scripts/opencode_go_effort_probe.py qwen3.8-max -n 20     # more samples
 
 Exits non-zero if the control fails. See docs/opencode-go.md for the results
@@ -77,13 +83,34 @@ THINKING = {"type": "adaptive", "display": "omitted"}
 
 # Needs enough rope for effort to show up as a difference: a prompt with a real
 # trap in it, where more deliberation would plausibly buy a better answer.
-PROMPT = (
-    "Three friends check into a hotel room costing $30 and pay $10 each. The "
-    "clerk realises the room is only $25 and sends a bellhop back with $5. The "
-    "bellhop keeps $2 and returns $1 to each friend. Each friend paid $9, "
-    "totalling $27, plus the bellhop's $2 is $29. Where is the missing dollar? "
-    "Reason carefully and completely before answering."
-)
+PROMPTS = {
+    # A classic riddle — but a memorised one, which is its weakness: a model
+    # can answer from cache with the same canned reasoning at every level.
+    "hotel": (
+        "Three friends check into a hotel room costing $30 and pay $10 each. The "
+        "clerk realises the room is only $25 and sends a bellhop back with $5. The "
+        "bellhop keeps $2 and returns $1 to each friend. Each friend paid $9, "
+        "totalling $27, plus the bellhop's $2 is $29. Where is the missing dollar? "
+        "Reason carefully and completely before answering."
+    ),
+    # The proposition is actually false as stated (a+|a|=0 holds at a=0), so a
+    # careful model has to notice the edge case — deliberation buys correctness.
+    "absproof": (
+        "If a+|a|=0, try to prove that a<0.\n\n"
+        "Step 1: List the conditions and questions in the original proposition.\n\n"
+        "Step 2: Merge the conditions listed in Step 1 into one. Define it as wj.\n\n"
+        "Step 3: Let us think it step by step. Please consider all possibilities. "
+        "If the intersection between wj (defined in Step 2) and the negation of "
+        "the question is not empty at least in one possibility, the original "
+        "proposition is false. Otherwise, the original proposition is true."
+    ),
+    # Open-ended physical reasoning; no memorised answer to fall back on.
+    "stack": (
+        "Here we have a book, 9 eggs, a laptop, a bottle and a nail. Please tell "
+        "me how to stack them onto each other in a stable manner."
+    ),
+}
+PROMPT = PROMPTS["hotel"]
 
 
 def api_key():
@@ -115,7 +142,7 @@ def post_json(key, route, body):
         return {"error": repr(exc)}
 
 
-def sample(key, model, route, effort, thinking=THINKING):
+def sample(key, model, route, effort, thinking=THINKING, prompt=PROMPT):
     """One non-streaming turn. Returns reasoning volume, or an error.
 
     Volume is measured in whatever the route exposes: thinking-text characters
@@ -126,7 +153,7 @@ def sample(key, model, route, effort, thinking=THINKING):
         body = {
             "model": model,
             "input": [{"type": "message", "role": "user",
-                       "content": [{"type": "input_text", "text": PROMPT}]}],
+                       "content": [{"type": "input_text", "text": prompt}]}],
         }
         if effort is not None:
             body["reasoning"] = {"effort": effort}
@@ -134,7 +161,7 @@ def sample(key, model, route, effort, thinking=THINKING):
         body = {
             "model": model,
             "max_tokens": 8192,
-            "messages": [{"role": "user", "content": PROMPT}],
+            "messages": [{"role": "user", "content": prompt}],
         }
         if route == "messages":
             body["thinking"] = thinking
@@ -225,6 +252,8 @@ def main():
                          "sends; responses = what Codex sends")
     ap.add_argument("-n", "--samples", type=int, default=12, help="samples per level")
     ap.add_argument("-j", "--jobs", type=int, default=12, help="parallel requests")
+    ap.add_argument("--prompt", choices=sorted(PROMPTS), default="hotel",
+                    help="which built-in prompt to sample with")
     args = ap.parse_args()
 
     levels = LEVELS if args.route == "messages" else CHAT_LEVELS
@@ -236,7 +265,9 @@ def main():
                 "responses": "/v1/responses"}[args.route]
 
     key = api_key()
-    print(f"{args.model} over {endpoint} — {args.samples} samples per level\n")
+    prompt = PROMPTS[args.prompt]
+    print(f"{args.model} over {endpoint} — {args.samples} samples per level, "
+          f"prompt={args.prompt}\n")
 
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         # Submit round-robin, not level-by-level: with n == jobs, submitting all
@@ -245,15 +276,18 @@ def main():
         pending = {lv: [] for lv in levels}
         for _ in range(args.samples):
             for lv in levels:
-                pending[lv].append(pool.submit(sample, key, args.model, args.route, lv))
+                pending[lv].append(pool.submit(sample, key, args.model, args.route,
+                                               lv, prompt=prompt))
         if args.route == "messages":
             control_futs = [pool.submit(sample, key, args.model, args.route, None,
-                                        {"type": "disabled"})
+                                        {"type": "disabled"}, prompt)
                             for _ in range(max(4, args.samples // 3))]
         else:
-            control_futs = [pool.submit(sample, key, args.model, args.route, "none")
+            control_futs = [pool.submit(sample, key, args.model, args.route, "none",
+                                        prompt=prompt)
                             for _ in range(max(4, args.samples // 3))]
-        bogus = pool.submit(sample, key, args.model, args.route, "banana")
+        bogus = pool.submit(sample, key, args.model, args.route, "banana",
+                            prompt=prompt)
         samples = {lv: summarise(f"effort={lv}", [f.result() for f in futs],
                                  vol_label, tok_label)
                    for lv, futs in pending.items()}
