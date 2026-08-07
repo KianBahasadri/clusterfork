@@ -13,6 +13,9 @@ permission_mode = "always-approve"
 [models]
 default = "grok-4.5"
 
+[features]
+telemetry = false
+
 [marketplace]
 default_skills_installs_purged = false
 official_marketplace_auto_installed = true
