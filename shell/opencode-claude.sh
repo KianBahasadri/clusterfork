@@ -20,6 +20,9 @@ OCC_SONNET_MODEL="${OCC_SONNET_MODEL:-deepseek-v4-flash}"
 # Kept on a separate cheap model: this slot drives the background classifier and
 # other trivial calls, where deepseek's 384k output ceiling buys nothing.
 OCC_SMALL_MODEL="${OCC_SMALL_MODEL:-minimax-m3}"
+# Graded effort on flash separates at the top rung — prefer max over xhigh.
+# Overridable; pass --effort <level> on the command line to override for one run.
+OCC_EFFORT="${OCC_EFFORT:-max}"
 
 # Everything /v1/messages can drive an agent loop with, in the order /model
 # should list them. Perishable — re-verify with scripts/opencode_go_probe.py.
@@ -47,6 +50,26 @@ _occ_context_tokens() {
   local cache="${OCC_MODELS_CACHE:-$HOME/.cache/opencode/models.json}"
   [[ -r "$cache" ]] || return 1
   jq -re --arg m "$1" '.["opencode-go"].models[$m].limit.context // empty' "$cache" 2>/dev/null
+}
+
+_occ_output_tokens() {
+  # Claude Code defaults CLAUDE_CODE_MAX_OUTPUT_TOKENS to 32000 for model ids it
+  # does not recognise — which is every opencode-go id. That ceiling was the
+  # main reason high effort on flash looked inert in live sessions; flash
+  # advertises 384000. Pull limit.output from the same models.dev cache.
+  local cache="${OCC_MODELS_CACHE:-$HOME/.cache/opencode/models.json}"
+  [[ -r "$cache" ]] || return 1
+  jq -re --arg m "$1" '.["opencode-go"].models[$m].limit.output // empty' "$cache" 2>/dev/null
+}
+
+_occ_has_effort_flag() {
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --effort|--effort=*) return 0 ;;
+    esac
+  done
+  return 1
 }
 
 _occ_sync_model_options() {
@@ -94,7 +117,7 @@ _occ_sync_model_options() {
 }
 
 occ() {
-  local key context
+  local key context output
   if ! key="$(_occ_api_key)" || [[ -z "$key" ]]; then
     echo "occ: no OpenCode Go API key found" >&2
     echo "  Set OPENCODE_API_KEY in the clusterfork .env, or authenticate with:" >&2
@@ -103,12 +126,16 @@ occ() {
   fi
 
   context="${OCC_MAX_CONTEXT_TOKENS:-$(_occ_context_tokens "$OCC_MODEL")}"
+  output="${OCC_MAX_OUTPUT_TOKENS:-$(_occ_output_tokens "$OCC_MODEL")}"
 
   (
     # A cached OAuth token would otherwise outrank the gateway key.
     unset ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN
 
     [[ -n "$context" ]] && export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$context"
+    # Without this, Claude Code pins gateway models at 32k max_tokens and
+    # high-effort thinking hits the ceiling (see docs/opencode-go.md).
+    [[ -n "$output" ]] && export CLAUDE_CODE_MAX_OUTPUT_TOKENS="$output"
 
     export ANTHROPIC_BASE_URL="$OPENCODE_GO_BASE_URL"
     export ANTHROPIC_API_KEY="$key"
@@ -137,6 +164,12 @@ occ() {
       export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
     fi
 
-    exec claude --dangerously-skip-permissions "$@"
+    # Prefer --effort over CLAUDE_CODE_EFFORT_LEVEL so /effort still works
+    # mid-session (the env var permanently outranks /effort).
+    if [[ -z "${CLAUDE_CODE_EFFORT_LEVEL:-}" ]] && ! _occ_has_effort_flag "$@"; then
+      exec claude --dangerously-skip-permissions --effort "${OCC_EFFORT:-max}" "$@"
+    else
+      exec claude --dangerously-skip-permissions "$@"
+    fi
   )
 }

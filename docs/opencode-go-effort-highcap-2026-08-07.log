@@ -1,0 +1,66 @@
+===== MESSAGES (Claude) absproof max_tokens=384000 n=12 2026-08-07T01:30:52-04:00 =====
+deepseek-v4-flash over /v1/messages — 12 samples per level, prompt=absproof, max_tokens=384000
+
+  effort=low             n=12  thinking chars med=  1780 min= 1128 max=  2645   out_tok med=  865
+  effort=medium          n=12  thinking chars med=  2506 min= 1273 max=  3441   out_tok med= 1008
+  effort=high            n=12  thinking chars med=  1884 min=  729 max=  2812   out_tok med=  933
+  effort=xhigh           n=12  thinking chars med=  1978 min= 1109 max=  3882   out_tok med=  959
+  effort=max             n=12  thinking chars med=  5872 min= 2708 max= 19675   out_tok med= 2015
+  thinking=off (control) n=4   thinking chars med=     0 min=    0 max=     0   out_tok med=  496
+
+  bogus effort value     HTTP 400: {"model":"deepseek-v4-flash"}
+
+control separated (4/4 at zero), so the measurement can see a real change.
+low vs max: p=0.00 — effort is now doing something — re-measure and update docs/opencode-go.md.
+exit=0
+
+===== RESPONSES (Codex) absproof max_output_tokens=384000 n=12 2026-08-07T01:33:20-04:00 =====
+deepseek-v4-flash over /v1/responses — 12 samples per level, prompt=absproof, max_tokens=384000
+
+  effort=minimal         n=12  reasoning tok med=   454 min=  220 max=  1033   out_tok med=  846
+  effort=low             n=12  reasoning tok med=   517 min=  237 max=  1064   out_tok med=  876
+  effort=medium          n=12  reasoning tok med=   642 min=  200 max=   925   out_tok med= 1018
+  effort=high            n=12  reasoning tok med=   572 min=  336 max=  1389   out_tok med=  962
+  effort=xhigh           n=12  reasoning tok med=   697 min=  423 max=  1411   out_tok med= 1031
+  effort=max             n=11  reasoning tok med=  1309 min=  686 max=  3363   out_tok med= 1621   (1 failed)
+  effort=none (control)  n=4   reasoning tok med=     0 min=    0 max=     0   out_tok med=  486
+
+  bogus effort value     HTTP 400: {"model":"deepseek-v4-flash","error":{"param":null,"code":"invalid_request_error","type":"invalid_request_error","messag
+
+control separated (4/4 at zero), so the measurement can see a real change.
+low vs max: p=0.00 — effort is now doing something — re-measure and update docs/opencode-go.md.
+exit=0
+
+===== MESSAGES (Claude) stack max_tokens=384000 n=12 2026-08-07T01:35:50-04:00 =====
+deepseek-v4-flash over /v1/messages — 12 samples per level, prompt=stack, max_tokens=384000
+
+  effort=low             n=12  thinking chars med= 46793 min= 9519 max= 59863   out_tok med=11518
+  effort=medium          n=12  thinking chars med= 79828 min=47123 max=126763   out_tok med=20122
+  effort=high            n=12  thinking chars med= 93016 min=65946 max=111337   out_tok med=23900
+  effort=xhigh           n=11  thinking chars med= 83730 min=48785 max=134215   out_tok med=21470   (1 failed)
+  effort=max             n=12  thinking chars med= 99104 min=80689 max=133349   out_tok med=24802
+  thinking=off (control) n=4   thinking chars med=     0 min=    0 max=     0   out_tok med=  491
+
+  bogus effort value     HTTP 400: {"model":"deepseek-v4-flash"}
+
+control separated (4/4 at zero), so the measurement can see a real change.
+low vs max: p=0.00 — effort is now doing something — re-measure and update docs/opencode-go.md.
+exit=0
+
+===== RESPONSES (Codex) stack max_output_tokens=384000 n=12 2026-08-07T02:08:59-04:00 =====
+deepseek-v4-flash over /v1/responses — 12 samples per level, prompt=stack, max_tokens=384000
+
+  effort=minimal         n=11  reasoning tok med=  6731 min= 3308 max= 16154   out_tok med= 7304   (1 failed)
+  effort=low             n=12  reasoning tok med= 10101 min= 3135 max= 18048   out_tok med=10296
+  effort=medium          n=9   reasoning tok med= 28658 min=12171 max= 39266   out_tok med=28841   (3 failed)
+  effort=high            n=8   reasoning tok med= 29478 min=16455 max= 36856   out_tok med=29674   (4 failed)
+  effort=xhigh           n=11  reasoning tok med= 22094 min=13099 max= 33995   out_tok med=22279   (1 failed)
+  effort=max             n=7   reasoning tok med= 24840 min=20535 max= 30763   out_tok med=25021   (5 failed)
+  effort=none (control)  n=4   reasoning tok med=     0 min=    0 max=     0   out_tok med=  550
+
+  bogus effort value     HTTP 400: {"model":"deepseek-v4-flash","error":{"param":null,"code":"invalid_request_error","type":"invalid_request_error","messag
+
+control separated (4/4 at zero), so the measurement can see a real change.
+low vs max: p=0.00 — effort is now doing something — re-measure and update docs/opencode-go.md.
+exit=0
+===== DONE 2026-08-07T02:41:42-04:00 =====

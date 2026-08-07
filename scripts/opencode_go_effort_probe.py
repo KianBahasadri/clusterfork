@@ -162,6 +162,9 @@ def sample(key, model, route, effort, thinking=THINKING, prompt=PROMPT,
             "model": model,
             "input": [{"type": "message", "role": "user",
                        "content": [{"type": "input_text", "text": prompt}]}],
+            # Codex itself never sends this, but the ceiling confound on chat
+            # was real — set it so a flat ladder is not a silent default cap.
+            "max_output_tokens": max_tokens,
         }
         if effort is not None:
             body["reasoning"] = {"effort": effort}
@@ -263,8 +266,9 @@ def main():
     ap.add_argument("--prompt", choices=sorted(PROMPTS), default="hotel",
                     help="which built-in prompt to sample with")
     ap.add_argument("--max-tokens", type=int, default=8192,
-                    help="output cap on messages/chat (default 8192; deepseek "
-                         "flash advertises 384000)")
+                    help="output cap: max_tokens on messages/chat, "
+                         "max_output_tokens on responses (default 8192; "
+                         "deepseek flash advertises 384000)")
     ap.add_argument("--timeout", type=int, default=240,
                     help="per-request HTTP timeout in seconds")
     args = ap.parse_args()
