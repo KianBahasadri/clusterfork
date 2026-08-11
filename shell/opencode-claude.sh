@@ -17,10 +17,10 @@
 OPENCODE_GO_BASE_URL="${OPENCODE_GO_BASE_URL:-https://opencode.ai/zen/go}"
 OCC_MODEL="${OCC_MODEL:-deepseek-v4-flash}"
 OCC_SONNET_MODEL="${OCC_SONNET_MODEL:-deepseek-v4-flash}"
-# Kept on a separate cheap model: this slot drives the background classifier and
-# other trivial calls, where deepseek's 384k output ceiling buys nothing.
-OCC_SMALL_MODEL="${OCC_SMALL_MODEL:-minimax-m3}"
-# Graded effort on flash separates at the top rung — prefer max over xhigh.
+# Same model as the main slots: small-fast and bg-classifier join everything else
+# on deepseek rather than a cheaper stand-in.
+OCC_SMALL_MODEL="${OCC_SMALL_MODEL:-deepseek-v4-flash}"
+# Graded effort on flash separates at the top rung — always max.
 # Overridable; pass --effort <level> on the command line to override for one run.
 OCC_EFFORT="${OCC_EFFORT:-max}"
 
@@ -146,7 +146,7 @@ occ() {
     export ANTHROPIC_DEFAULT_OPUS_MODEL="$OCC_MODEL"
     export ANTHROPIC_DEFAULT_FABLE_MODEL="$OCC_MODEL"
     export ANTHROPIC_DEFAULT_SONNET_MODEL="$OCC_SONNET_MODEL"
-    export ANTHROPIC_DEFAULT_HAIKU_MODEL="$OCC_SMALL_MODEL"
+    export ANTHROPIC_DEFAULT_HAIKU_MODEL="$OCC_MODEL"
     export ANTHROPIC_SMALL_FAST_MODEL="$OCC_SMALL_MODEL"
     export CLAUDE_CODE_SUBAGENT_MODEL="$OCC_MODEL"
     export CLAUDE_CODE_BG_CLASSIFIER_MODEL="$OCC_SMALL_MODEL"
@@ -154,7 +154,7 @@ occ() {
     # Show the real model in /model and the status line, not "Opus"/"Sonnet".
     export ANTHROPIC_DEFAULT_OPUS_MODEL_NAME="$OCC_MODEL"
     export ANTHROPIC_DEFAULT_SONNET_MODEL_NAME="$OCC_SONNET_MODEL"
-    export ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME="$OCC_SMALL_MODEL"
+    export ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME="$OCC_MODEL"
 
     # Keep everything except inference off a third-party gateway.
     export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
