@@ -47,7 +47,7 @@ Grok CLI settings:
 
 Claude Code settings:
 
-- **Model:** `opus`, effort `xhigh`
+- **Model:** `claude-opus-4-8` (Opus 4.8; not the `opus` alias, which resolves to Opus 5), effort `xhigh`
 - **Status line:** command `bash ~/.claude/statusline-command.sh`, refresh every 60s (see [Statusline](statusline.md))
 - **Plugins:** context7 enabled
 - **UI:** dark theme, fullscreen TUI, prompt suggestions off
