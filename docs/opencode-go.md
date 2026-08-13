@@ -83,14 +83,14 @@ agent CLIs — Anthropic and Responses — are almost perfectly **disjoint**.
 models plus `grok-4.5` fail. This is the route OpenCode itself uses, which is why
 `oc` reaches models the other launchers cannot.
 
-**`/v1/messages` — 9 of 25.** See the matrix below.
+**`/v1/messages` — 10 of 25.** See the matrix below.
 
 **`/v1/responses` — 3 of 25 usable by a real agent CLI.** See the Codex section.
 
 | Route | Models that can drive a full agent loop |
 | --- | --- |
 | Chat Completions | all 20 live models |
-| Anthropic Messages | `deepseek-v4-flash`, `qwen3.5-plus`, `qwen3.6-plus`, `qwen3.7-plus`, `qwen3.7-max`, `qwen3.8-max`, `minimax-m2.5`, `minimax-m2.7`, `minimax-m3` |
+| Anthropic Messages | `deepseek-v4-pro`, `deepseek-v4-flash`, `qwen3.5-plus`, `qwen3.6-plus`, `qwen3.7-plus`, `qwen3.7-max`, `qwen3.8-max`, `minimax-m2.5`, `minimax-m2.7`, `minimax-m3` |
 | Responses | `gpt-5.6-luna`, `grok-4.5`, `deepseek-v4-flash` |
 
 `deepseek-v4-flash` is the **only** model both agent routes serve. Otherwise the
@@ -98,17 +98,17 @@ two sets are disjoint: Claude Code gets Qwen and MiniMax, Codex gets GPT and Gro
 
 ## Claude Code over `/v1/messages`
 
-Most of the catalog cannot drive a Claude Code agent loop. Only these 9 both emit
+Most of the catalog cannot drive a Claude Code agent loop. Only these 10 both emit
 `tool_use` and answer a follow-up `tool_result`:
 
-`deepseek-v4-flash`, `qwen3.5-plus`, `qwen3.6-plus`, `qwen3.7-plus`,
-`qwen3.7-max`, `qwen3.8-max`, `minimax-m2.5`, `minimax-m2.7`, `minimax-m3`
+`deepseek-v4-pro`, `deepseek-v4-flash`, `qwen3.5-plus`, `qwen3.6-plus`,
+`qwen3.7-plus`, `qwen3.7-max`, `qwen3.8-max`, `minimax-m2.5`, `minimax-m2.7`,
+`minimax-m3`
 
 The rest fail, and every one of them fails **loudly**, at the first request:
 
 | Model(s) | Failure |
 | --- | --- |
-| `deepseek-v4-pro` | 400, upstream cannot deserialize the tool schema |
 | `glm-5`, `glm-5.1`, `glm-5.2` | 422 on the tool schema |
 | `kimi-k2.5`, `kimi-k2.6`, `kimi-k2.7-code`, `mimo-*`, `hy3` | 400, upstream rejects the request shape |
 | `kimi-k3`, `hy3-preview` | 503 / model unavailable |
@@ -123,7 +123,10 @@ retries was the bar used here.
 
 An earlier sweep on the same day recorded this model as emitting `tool_use` and
 then returning an **empty response** to the `tool_result`, stalling the agent
-loop silently. **That is no longer true, and it is now the `occ` default.**
+loop silently. **That is no longer true.** Flash remains on the working set.
+`occ` now defaults to `deepseek-v4-pro` (re-probed 2026-08-13: 1/1
+tool-result round trip; the 2026-08-06 sweep had recorded a 400 on the tool
+schema).
 
 Re-measured on 2026-08-06, after the original sweep:
 
@@ -375,12 +378,12 @@ when the output cap is the advertised 384000. So API-level:
 
 Live-CLI notes:
 
-- **`occ` now sets both knobs for flash** (see [Shell Modules](shell-modules.md)):
+- **`occ` now sets both knobs** (see [Shell Modules](shell-modules.md)):
   `--effort max` by default, and `CLAUDE_CODE_MAX_OUTPUT_TOKENS` from
-  `limit.output` in the models.dev cache (384000 for flash). Without the
-  output export, Claude Code defaults unrecognised gateway model ids to
-  **32000**, which re-imposes the ceiling confound in real sessions. Context
-  still comes from `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (1M for flash).
+  `limit.output` in the models.dev cache (384000 for both deepseek models).
+  Without the output export, Claude Code defaults unrecognised gateway model
+  ids to **32000**, which re-imposes the ceiling confound in real sessions.
+  Context still comes from `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (1M for both).
 - Claude Code still shows the full `/effort` ladder because its capability
   check falls through to "first-party ⇒ supported" for unrecognised model
   ids. Proxy capture: low vs xhigh only changes `output_config.effort` — the

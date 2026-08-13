@@ -50,10 +50,10 @@ Preconditions:
 Shared settings every call:
 
 ```text
--m opencode-go/deepseek-v4-flash --variant max
+-m opencode-go/deepseek-v4-pro --variant max
 ```
 
-The pinned default is **DeepSeek V4 Flash** at variant `max` (highest
+The pinned default is **DeepSeek V4 Pro** at variant `max` (highest
 reasoning effort). See **Models** below for how to list models/variants and
 switch when the user asks.
 
@@ -66,7 +66,7 @@ REPO="$(pwd)"
 PROMPT_FILE="$(mktemp /tmp/ask-opencode-prompt.XXXXXX)"
 trap 'rm -f "$PROMPT_FILE"' EXIT
 # write brief to $PROMPT_FILE
-opencode run --dir "$REPO" -m opencode-go/deepseek-v4-flash --variant max \
+opencode run --dir "$REPO" -m opencode-go/deepseek-v4-pro --variant max \
   < "$PROMPT_FILE"
 # add --auto, --agent, -c/-s from context (see below)
 ```
@@ -74,7 +74,7 @@ opencode run --dir "$REPO" -m opencode-go/deepseek-v4-flash --variant max \
 For small prompts, pass the message as positional args instead:
 
 ```bash
-opencode run --dir "$REPO" -m opencode-go/deepseek-v4-flash --variant max "$MSG"
+opencode run --dir "$REPO" -m opencode-go/deepseek-v4-pro --variant max "$MSG"
 ```
 
 Permissions (headless): without `--auto`, permission rules that resolve to
@@ -102,12 +102,12 @@ bare-call default — pick what the situation needs.
 
 ```bash
 # Continue the most recent session for this workspace
-opencode run --dir "$REPO" -m opencode-go/deepseek-v4-flash --variant max -c \
+opencode run --dir "$REPO" -m opencode-go/deepseek-v4-pro --variant max -c \
   < "$PROMPT_FILE"
 # add --auto and/or --agent from context
 
 # Resume a known session id (from a prior --format json run's sessionID)
-opencode run --dir "$REPO" -m opencode-go/deepseek-v4-flash --variant max \
+opencode run --dir "$REPO" -m opencode-go/deepseek-v4-pro --variant max \
   -s "$SESSION_ID" < "$PROMPT_FILE"
 ```
 
@@ -135,14 +135,14 @@ List available agents with `opencode agent list`; select one with
 
 ```bash
 # Judgment-oriented (plan agent; no auto-approve — asks fail closed)
-opencode run --dir "$REPO" -m opencode-go/deepseek-v4-flash --variant max \
+opencode run --dir "$REPO" -m opencode-go/deepseek-v4-pro --variant max \
   --agent plan \
   "Read the brief below and respond. Do not modify any files.
 
 $BRIEF"
 
 # Implementation handoff (tools auto-approved)
-opencode run --dir "$REPO" -m opencode-go/deepseek-v4-flash --variant max --auto \
+opencode run --dir "$REPO" -m opencode-go/deepseek-v4-pro --variant max --auto \
   < "$PROMPT_FILE"
 ```
 
@@ -162,7 +162,7 @@ judgment.
 
 ## Models
 
-Default: `-m opencode-go/deepseek-v4-flash --variant max` (DeepSeek V4 Flash,
+Default: `-m opencode-go/deepseek-v4-pro --variant max` (DeepSeek V4 Pro,
 `max` reasoning effort). Keep this unless the user asks for a different
 model/effort or context clearly calls for it.
 
@@ -185,8 +185,8 @@ Model and reasoning effort are separate flags:
 variant**; check the `variants` block in the `--verbose` output before
 switching. Examples available on this host's `opencode-go` provider:
 
-- `opencode-go/deepseek-v4-flash` — DeepSeek V4 Flash; variants: `low`, `medium`, `high`, `max`
-- `opencode-go/deepseek-v4-pro` — DeepSeek V4 Pro; variants: `low`, `medium`, `high`, `max`
+- `opencode-go/deepseek-v4-pro` — DeepSeek V4 Pro; variants: `high`, `max`
+- `opencode-go/deepseek-v4-flash` — DeepSeek V4 Flash; variants: `low`, `high`, `max`
 - `opencode-go/glm-5.2` — variants: `high`, `max`
 - `opencode-go/grok-4.5` — Grok 4.5
 - `opencode-go/kimi-k3` — Kimi K3
