@@ -16,6 +16,7 @@
 | `bash_profile.sh`                 | `~/.config/clusterfork/bash_profile.sh`  | Sourced on shell startup          |
 | `shell/*.sh`                      | `~/.config/clusterfork/shell/*.sh`       | One module per agent              |
 | `bin/*`                           | `~/.config/clusterfork/bin/*`            | Helper launchers (on `PATH`)      |
+| `scripts/rotate_auth.py`          | `~/.config/clusterfork/scripts/rotate_auth.py` | Shared `rotate-*` implementation |
 | `agents/opencode.json`            | `~/.config/opencode/opencode.json`       | OpenCode settings                 |
 | `agents/qwen.json`                | `~/.qwen/settings.json`                  | Qwen Code settings                |
 | `agents/antigravity.json`         | `~/.gemini/antigravity-cli/settings.json`| Antigravity settings              |
@@ -40,6 +41,7 @@ The installer also:
 ## Requirements
 
 - A `.env` file in the repo root containing your API keys. The installer aborts if it's missing.
+- `python3`, used by `rotate-*` (and the other utilities under `scripts/`). The installer aborts if it is missing.
 
 ## Re-running
 

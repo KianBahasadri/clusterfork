@@ -2,27 +2,73 @@
 
 Several agents support switching between multiple saved accounts without re-logging-in.
 
+The `rotate-*` shell functions call `scripts/rotate_auth.py`. One implementation,
+three backends: copy (Claude), shared-store symlink (Codex / Cursor / OpenCode),
+and GNOME Keyring (Antigravity). All five share the same flags:
+
+- `rotate-* --save NAME` — save the active account as a named profile
+- `rotate-* --list` — list saved profiles (`*` marks the current one)
+- `rotate-*` — rotate to the next account in sorted order
+- `rotate-* NAME` — switch to a specific account
+
+`--save` overwrites an existing profile of that name. Profile names may only
+contain letters, numbers, dots, underscores, and dashes.
+
+The shell modules are thin wrappers. They resolve
+`scripts/rotate_auth.py` from `BASH_SOURCE` so the same function works when
+sourced from the repo or from `~/.config/clusterfork/shell/` after install
+(the installer copies the script to `~/.config/clusterfork/scripts/`).
+
+## Why it is one Python script
+
+Until 2026-08-14 each `rotate-*` function was a self-contained bash copy in
+its `shell/*.sh` module. Codex, Cursor, and OpenCode were the same program
+after renaming (~256 lines × 3). Claude was the same control flow with
+copy-and-token-match instead of a symlink. Antigravity was the same flags
+against `secret-tool`. The next shared flag would have been a four-way paste.
+
+They were collapsed into `scripts/rotate_auth.py` with three backends (copy,
+shared-store symlink, keyring). Python was already how this repo does
+standalone tools, and JSON / atomic replace / tests are less painful there
+than in sourced bash.
+
+`--save` existed only on `rotate-antigravity`. Adding it to the other four
+started as bash, then was thrown away untested. The Python port was written
+from the last committed bash (no `--save` on the file backends), and `--save`
+was implemented only in Python. `configure_shared_auth` in the installer was
+left as migrate/repair — it is not a second rotator.
+
+`--save` on the shared-store backend is the user-facing fix for a login that
+replaced `auth.json` with a regular file. The installer still refuses to
+touch that case; the user names the new login and `--save` copies it into
+the store, points `current` at it, and puts the relative symlink back.
+
+The Antigravity bash wrapper used to `set +x` around the body so `set -x`
+would not echo secrets. That is gone: bash only sees `python3 … antigravity`,
+and the secret stays inside Python / `secret-tool`.
+
+Override directories (empty or unset uses the default, same as bash
+`${VAR:-default}`): `ROTATE_CLAUDE_DIR`, `ROTATE_CODEX_CODEX_DIR`,
+`ROTATE_CODEX_AUTH_STORE_DIR`, `ROTATE_CURSOR_DIR`,
+`ROTATE_CURSOR_AUTH_STORE_DIR`, `ROTATE_OPENCODE_DIR`,
+`ROTATE_OPENCODE_AUTH_STORE_DIR`, `ROTATE_ANTIGRAVITY_STATE_DIR`. Shared-store
+`--save` chmods only the store directory itself (700), never its parent.
+
 ## rotate-claude
 
 Switches Claude Code accounts stored as `~/.claude/.credentials.json.*` files.
-
-- `rotate-claude --list` — list saved profiles (`*` marks the current one)
-- `rotate-claude` — rotate to the next account in sorted order
-- `rotate-claude NAME` — switch to a specific account
+`--save NAME` copies the active `.credentials.json` onto `.credentials.json.NAME`.
 
 Claude Code rewrites `.credentials.json` on every token refresh, so rotation copies the selected file over `.credentials.json` rather than symlinking. The active account is identified by matching the `accessToken` field.
 
 ## rotate-codex
 
 Switches Codex accounts stored under
-`~/.local/share/clusterfork-auth/codex/`.
+`~/.local/share/clusterfork-auth/codex/`. `--save NAME` writes the active
+`auth.json` to `auth.json.NAME` and points `current` at it (and will rebuild
+the link chain if a login replaced `auth.json` with a regular file).
 
-- `rotate-codex --list` — list saved profiles (`*` marks the current one)
-- `rotate-codex` — rotate to the next account
-- `rotate-codex NAME` — switch to a specific account
-
-Profiles live under `~/.local/share/clusterfork-auth/codex/`. The link chain
-the installer established:
+The link chain the installer established:
 
 ```text
 ~/.codex/auth.json
@@ -34,7 +80,7 @@ Rotation changes only the shared `current` symlink.
 
 ## rotate-cursor-cli
 
-Same pattern as `rotate-codex`, with profiles stored under
+Same pattern as `rotate-codex`, including `--save`, with profiles stored under
 `~/.local/share/clusterfork-auth/cursor/` and this link chain:
 
 ```text
@@ -43,13 +89,9 @@ Same pattern as `rotate-codex`, with profiles stored under
   → auth.json.SUFFIX
 ```
 
-- `rotate-cursor-cli --list` — list saved profiles (`*` marks the current one)
-- `rotate-cursor-cli` — rotate to the next account
-- `rotate-cursor-cli NAME` — switch to a specific account
-
 ## rotate-opencode
 
-Same pattern as `rotate-codex`, with profiles stored under
+Same pattern as `rotate-codex`, including `--save`, with profiles stored under
 `~/.local/share/clusterfork-auth/opencode/` and this link chain:
 
 ```text
@@ -57,10 +99,6 @@ Same pattern as `rotate-codex`, with profiles stored under
   → ../clusterfork-auth/opencode/current
   → auth.json.SUFFIX
 ```
-
-- `rotate-opencode --list` — list saved profiles (`*` marks the current one)
-- `rotate-opencode` — rotate to the next account
-- `rotate-opencode NAME` — switch to a specific account
 
 ## Sharing with a container
 
@@ -77,12 +115,7 @@ read-only mount and can fail when the current access token expires.
 
 ## rotate-antigravity
 
-Switches Antigravity accounts using `secret-tool` (GNOME Keyring). State is kept in `~/.gemini/antigravity-cli/rotate-auth/`.
-
-- `rotate-antigravity --save NAME` — save the active keyring item as a named profile
-- `rotate-antigravity --list` — list saved profiles (`*` marks the current one)
-- `rotate-antigravity NAME` — switch to a specific profile
-- `rotate-antigravity` — rotate to the next profile
+Switches Antigravity accounts using `secret-tool` (GNOME Keyring). State is kept in `~/.gemini/antigravity-cli/rotate-auth/`. `--save NAME` copies the active keyring item to `service=rotate-antigravity username=NAME`.
 
 The active account lives at keyring entry `service=gemini username=antigravity`. Saved profiles live at `service=rotate-antigravity username=NAME`. Before switching, the current keyring item is backed up to the outgoing profile.
 
@@ -104,18 +137,22 @@ It is a no-op when no suffixed profiles exist (plain single-account
 valid `current` link.
 
 If the agent's `auth.json` is a regular file (for example after a login that
-replaced the symlink), repair refuses and you must move that file into the
-store as a named profile first:
+replaced the symlink), repair refuses. Save it as a named profile and restore
+the link chain with `rotate-codex --save NAME`, `rotate-cursor-cli --save NAME`,
+or `rotate-opencode --save NAME`. That copies the regular file into the store,
+points `current` at it, and replaces `auth.json` with the shared symlink.
+
+Manual equivalent:
 
 ```bash
 STORE=~/.local/share/clusterfork-auth/<agent>
 mkdir -p "$STORE"
 chmod 700 ~/.local/share/clusterfork-auth "$STORE"
-mv <agent-dir>/auth.json "$STORE/auth.json.NAME"
+cp <agent-dir>/auth.json "$STORE/auth.json.NAME"
 chmod 600 "$STORE/auth.json.NAME"
 ln -sfn auth.json.NAME "$STORE/current"
 ln -sfn "$(realpath -ms --relative-to=<agent-dir> "$STORE/current")" <agent-dir>/auth.json
 ```
 
-From-scratch setup on a new machine is the same pattern with `cp` instead of
-`mv` if you are importing an auth file from elsewhere.
+From-scratch setup on a new machine is the same pattern if you are importing an
+auth file from elsewhere; `rotate-* --save NAME` does that copy and relink.

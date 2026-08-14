@@ -2,6 +2,23 @@
 
 Standalone Python utilities under `scripts/`.
 
+## scripts/rotate_auth.py
+
+Implements the `rotate-*` commands. The shell functions in `shell/*.sh` call this
+script; do not add a second copy of the rotation logic. Behavior, flags, and
+storage layout: [Auth Rotation](auth-rotation.md).
+
+```bash
+python3 scripts/rotate_auth.py claude --list
+python3 scripts/rotate_auth.py codex --save NAME
+python3 scripts/rotate_auth.py cursor
+python3 scripts/rotate_auth.py opencode NAME
+python3 scripts/rotate_auth.py antigravity --save NAME
+```
+
+The installer copies this file to `~/.config/clusterfork/scripts/rotate_auth.py`
+so the sourced wrappers can find it after install.
+
 ## scripts/auth_convert.py
 
 Converts `auth.json` files between OpenCode and Codex formats.

@@ -3,8 +3,8 @@
 #
 # What this does:
 #   1. Overwrites ~/.config/clusterfork/.env from repo-local .env
-#   2. Overwrites ~/.config/clusterfork/bash_profile.sh, shell/*.sh, and bin/
-#      from repo
+#   2. Overwrites ~/.config/clusterfork/bash_profile.sh, shell/*.sh, bin/,
+#      and scripts/rotate_auth.py from repo
 #   3. Overwrites agent settings from repo-local agents/ (Grok keeps existing
 #      theme from ~/.grok/config.toml if set)
 #   4. Overwrites ~/.qwen/skills/, ~/.grok/skills/, ~/.claude/skills/, and
@@ -38,6 +38,8 @@ SHELL_SRC_DIR="$REPO_DIR/shell"
 SHELL_DEST_DIR="$CLUSTERFORK_CONFIG_DIR/shell"
 BIN_SRC_DIR="$REPO_DIR/bin"
 BIN_DEST_DIR="$CLUSTERFORK_CONFIG_DIR/bin"
+ROTATE_AUTH_SRC="$REPO_DIR/scripts/rotate_auth.py"
+ROTATE_AUTH_DEST="$CLUSTERFORK_CONFIG_DIR/scripts/rotate_auth.py"
 AGENTS_SRC_DIR="$REPO_DIR/agents"
 OPENCODE_CONFIG_SRC="$AGENTS_SRC_DIR/opencode.json"
 OPENCODE_CONFIG_DEST="$HOME/.config/opencode/opencode.json"
@@ -200,6 +202,7 @@ configure_shared_auth() {
   if [[ -e "$auth_path" && ! -L "$auth_path" ]]; then
     printf '%s auth: %s must be a symlink before profiles can be migrated\n' \
       "$label" "$auth_path" >&2
+    printf '  Save it with rotate-* --save NAME, then re-run the installer.\n' >&2
     return 1
   fi
 
@@ -320,6 +323,7 @@ done
 printf '  clusterfork  ›  installing config\n'
 printf '  from  %s\n\n' "$(tildify "$REPO_DIR")"
 
+command -v python3 >/dev/null || fail "python3 is required" "Needed by the rotate-* commands."
 [[ -f "$DOTENV_SRC" ]] || fail "missing $(tildify "$DOTENV_SRC")" "Create it in the repo root with your local environment values."
 mkdir -p "$CLUSTERFORK_CONFIG_DIR"
 cp "$DOTENV_SRC" "$DOTENV_DEST"
@@ -342,6 +346,12 @@ mkdir -p "$BIN_DEST_DIR"
 cp -r "$BIN_SRC_DIR"/. "$BIN_DEST_DIR"/
 chmod +x "$BIN_DEST_DIR"/*
 step "bin helpers" "$BIN_DEST_DIR"
+
+[[ -f "$ROTATE_AUTH_SRC" ]] || fail "missing $(tildify "$ROTATE_AUTH_SRC")"
+mkdir -p "$(dirname "$ROTATE_AUTH_DEST")"
+cp "$ROTATE_AUTH_SRC" "$ROTATE_AUTH_DEST"
+chmod +x "$ROTATE_AUTH_DEST"
+step "rotate-auth" "$ROTATE_AUTH_DEST"
 
 [[ -f "$OPENCODE_CONFIG_SRC" ]] || fail "missing $(tildify "$OPENCODE_CONFIG_SRC")"
 mkdir -p "$(dirname "$OPENCODE_CONFIG_DEST")"
