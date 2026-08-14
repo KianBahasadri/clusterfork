@@ -26,9 +26,13 @@ OCC_SMALL_MODEL="${OCC_SMALL_MODEL:-deepseek-v4-pro}"
 OCC_EFFORT="${OCC_EFFORT:-max}"
 
 # Everything /v1/messages can drive an agent loop with, in the order /model
-# should list them. Perishable — re-verify with scripts/opencode_go_probe.py.
+# should list them. Flash is in the picker only — defaults stay on pro.
+# Perishable — re-verify with scripts/opencode_go_probe.py.
 OCC_GATEWAY_MODELS="${OCC_GATEWAY_MODELS:-deepseek-v4-pro deepseek-v4-flash qwen3.8-max qwen3.7-max qwen3.7-plus qwen3.6-plus qwen3.5-plus minimax-m3 minimax-m2.7 minimax-m2.5}"
 OCC_MODEL_DISCOVERY="${OCC_MODEL_DISCOVERY:-1}"
+# Private Claude config so /model and settings writes cannot reach ~/.claude,
+# which `cl` reads. Skills/plugins are shared via symlink.
+OCC_CLAUDE_CONFIG_DIR="${OCC_CLAUDE_CONFIG_DIR:-$HOME/.config/clusterfork/occ-claude}"
 
 _occ_api_key() {
   # Prefer the clusterfork .env; otherwise read the live OpenCode auth store so
@@ -73,6 +77,43 @@ _occ_has_effort_flag() {
   return 1
 }
 
+_occ_prepare_config_dir() {
+  # Isolate settings/cache from ~/.claude so occ cannot change `cl`'s model.
+  local dest="${OCC_CLAUDE_CONFIG_DIR}"
+  local src="${HOME}/.claude"
+  mkdir -p "$dest/cache" 2>/dev/null || return 0
+
+  if [[ ! -e "$dest/skills" && -e "$src/skills" ]]; then
+    ln -s "$src/skills" "$dest/skills" 2>/dev/null || true
+  fi
+  if [[ ! -e "$dest/plugins" && -e "$src/plugins" ]]; then
+    ln -s "$src/plugins" "$dest/plugins" 2>/dev/null || true
+  fi
+
+  local src_settings="$src/settings.json"
+  local dest_settings="$dest/settings.json"
+  [[ -r "$src_settings" ]] || return 0
+
+  local tmp="$dest_settings.occ.$$"
+  if [[ -r "$dest_settings" ]] && jq -e 'type == "object"' "$dest_settings" >/dev/null 2>&1; then
+    # Take cl's current settings (theme, statusline, plugins). Keep occ's
+    # own model if /model already wrote one; otherwise pin the pro default.
+    if jq --arg model "$OCC_MODEL" --slurpfile dest "$dest_settings" '
+          . + (if $dest[0].model then {model: $dest[0].model} else {model: $model} end)
+        ' "$src_settings" >"$tmp" 2>/dev/null; then
+      mv -f "$tmp" "$dest_settings" 2>/dev/null || rm -f "$tmp"
+      return 0
+    fi
+    rm -f "$tmp"
+  fi
+  if jq --arg model "$OCC_MODEL" '.model = $model' "$src_settings" >"$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$dest_settings" 2>/dev/null || rm -f "$tmp"
+  else
+    rm -f "$tmp"
+    cp -- "$src_settings" "$dest_settings" 2>/dev/null || true
+  fi
+}
+
 _occ_sync_model_options() {
   # Make every usable model selectable from /model. The picker offers only the
   # four alias slots (opus/sonnet/haiku/fable) plus a default row — five rows for
@@ -93,7 +134,7 @@ _occ_sync_model_options() {
   # caches: Claude Code reuses display_name for the session header and the status
   # line, where "DeepSeek V4 Pro (New)" is both noisier and inconsistent with
   # the alias rows, which show ids.
-  local cache="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/cache/gateway-models.json"
+  local cache="${CLAUDE_CONFIG_DIR:-$OCC_CLAUDE_CONFIG_DIR}/cache/gateway-models.json"
   local doc
   doc="$(jq -n --arg base "$OPENCODE_GO_BASE_URL" --arg ids "$OCC_GATEWAY_MODELS" '
     {baseUrl: $base,
@@ -133,6 +174,10 @@ occ() {
     # A cached OAuth token would otherwise outrank the gateway key.
     unset ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN
 
+    # Private profile: /model persist and gateway cache stay off ~/.claude.
+    export CLAUDE_CONFIG_DIR="$OCC_CLAUDE_CONFIG_DIR"
+    _occ_prepare_config_dir
+
     [[ -n "$context" ]] && export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$context"
     # Without this, Claude Code pins gateway models at 32k max_tokens and
     # high-effort thinking hits the ceiling (see docs/opencode-go.md).
@@ -142,7 +187,8 @@ occ() {
     export ANTHROPIC_API_KEY="$key"
 
     # Every slot must resolve to a real opencode-go id, including the aliases
-    # ~/.claude/settings.json selects by name.
+    # settings.json selects by name. Defaults are always pro; flash is only
+    # reachable from the /model gateway rows.
     export ANTHROPIC_MODEL="$OCC_MODEL"
     export ANTHROPIC_DEFAULT_OPUS_MODEL="$OCC_MODEL"
     export ANTHROPIC_DEFAULT_FABLE_MODEL="$OCC_MODEL"
