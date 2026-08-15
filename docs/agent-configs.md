@@ -34,7 +34,7 @@ Antigravity CLI settings:
 
 Grok CLI settings:
 
-- **Model:** `grok-4.5` (high effort is that model’s default; fork secondary: `grok-4.5`)
+- **Model:** not pinned by clusterfork — Grok CLI uses its own default; fork secondary: `grok-4.5`
 - **UI:** default theme `tokyonight` (installer preserves an existing theme in `~/.grok/config.toml`), `permission_mode = always-approve`, `yolo = false`
 - **Telemetry:** disabled (`[features] telemetry = false`)
 - **Marketplace:** xAI Official plugin marketplace source; default skills installs are not purged (`default_skills_installs_purged = false`)

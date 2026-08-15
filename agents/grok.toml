@@ -10,9 +10,6 @@ yolo = false
 compact_mode = false
 permission_mode = "always-approve"
 
-[models]
-default = "grok-4.5"
-
 [features]
 telemetry = false
 
