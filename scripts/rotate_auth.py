@@ -164,6 +164,7 @@ def usage(command: str) -> list[str]:
         f"{command}: usage:",
         f"  {command} [name]",
         f"  {command} --save name",
+        f"  {command} --unhook",
         f"  {command} --list",
     ]
 
@@ -180,6 +181,10 @@ def parse_action(command: str, args: list[str]) -> tuple[str, str | None]:
         if len(args) != 1:
             fail(*usage(command))
         return "list", None
+    if first == "--unhook":
+        if len(args) != 1:
+            fail(*usage(command))
+        return "unhook", None
     if first == "--save":
         if len(args) != 2:
             fail(*usage(command))
@@ -270,6 +275,23 @@ class ClaudeBackend:
         print(f"  Claude: {dest} is now a copy of {self.active}")
         return 0
 
+    def unhook(self) -> int:
+        if not self.active.exists() and not self.active.is_symlink():
+            print(f"{self.command}: already unhooked (no active credentials)")
+            return 0
+        if self.active.is_dir() and not self.active.is_symlink():
+            fail(f"{self.command}: {self.active} exists and is a directory")
+        if not self.active.is_symlink() and not self.current_suffix():
+            fail(
+                f"{self.command}: active credentials are not saved as a profile",
+                f"  Save them first: {self.command} --save NAME",
+            )
+        self.active.unlink()
+        print(f"{self.command}: unhooked active credentials")
+        print(f"  Claude: removed {self.active}")
+        print(f"  Log in, then: {self.command} --save NAME")
+        return 0
+
     def _choose(self, names: list[str], requested: str | None) -> str:
         if requested is not None:
             if requested not in names:
@@ -325,10 +347,21 @@ class SharedStoreBackend:
         return print_profile_list(self.command, self.suffixes(), current)
 
     def select(self, requested: str | None) -> int:
-        self._require_link_chain()
+        if self.auth.exists() and not self.auth.is_symlink():
+            fail(
+                f"{self.command}: {self.auth} exists but is not a symlink",
+                f"  Save it as a named profile first: {self.command} --save NAME",
+            )
+        if not self.store_dir.is_dir():
+            fail(
+                f"{self.command}: missing shared auth directory: {self.store_dir}",
+                "  Run install-clusterfork.sh to migrate existing profiles.",
+            )
         names = self.suffixes()
         next_suffix = self._choose(names, requested)
         atomic_symlink(f"{PROFILE_PREFIX}{next_suffix}", self.current)
+        if not self._auth_links_to_current():
+            self._restore_auth_link()
         print(f"{self.command}: selected {PROFILE_PREFIX}{next_suffix}")
         print(
             f"  {self.label}: {self.auth} -> {readlink_text(self.auth)} -> "
@@ -354,18 +387,28 @@ class SharedStoreBackend:
 
         atomic_symlink(f"{PROFILE_PREFIX}{name}", self.current)
         if not self._auth_links_to_current():
-            relative = os.path.relpath(
-                str(realpath_ms(self.current)),
-                start=str(realpath_ms(self.agent_dir)),
-            )
-            self.agent_dir.mkdir(parents=True, exist_ok=True)
-            atomic_symlink(relative, self.auth)
+            self._restore_auth_link()
 
         print(f"{self.command}: saved active credentials as {name}")
         print(
             f"  {self.label}: {self.auth} -> {readlink_text(self.auth)} -> "
             f"{readlink_text(self.current)}"
         )
+        return 0
+
+    def unhook(self) -> int:
+        if self.auth.exists() and not self.auth.is_symlink():
+            fail(
+                f"{self.command}: {self.auth} exists but is not a symlink",
+                f"  Save it as a named profile first: {self.command} --save NAME",
+            )
+        if not self.auth.is_symlink():
+            print(f"{self.command}: already unhooked (no active credentials)")
+            return 0
+        self.auth.unlink()
+        print(f"{self.command}: unhooked active credentials")
+        print(f"  {self.label}: removed {self.auth}")
+        print(f"  Log in, then: {self.command} --save NAME")
         return 0
 
     def _choose(self, names: list[str], requested: str | None) -> str:
@@ -386,27 +429,13 @@ class SharedStoreBackend:
             fail(*lines)
         return next_in_order(names, self.current_suffix())
 
-    def _require_link_chain(self) -> None:
-        if self.auth.exists() and not self.auth.is_symlink():
-            fail(
-                f"{self.command}: {self.auth} exists but is not a symlink",
-                f"  Save it as a named profile first: {self.command} --save NAME",
-            )
-        if not self.auth.is_symlink():
-            fail(
-                f"{self.command}: missing shared auth link: {self.auth}",
-                "  Run install-clusterfork.sh to configure it.",
-            )
-        if not self.store_dir.is_dir():
-            fail(
-                f"{self.command}: missing shared auth directory: {self.store_dir}",
-                "  Run install-clusterfork.sh to migrate existing profiles.",
-            )
-        if not self._auth_links_to_current():
-            fail(
-                f"{self.command}: {self.auth} does not link directly to {self.current}",
-                "  Run install-clusterfork.sh to repair it.",
-            )
+    def _restore_auth_link(self) -> None:
+        relative = os.path.relpath(
+            str(realpath_ms(self.current)),
+            start=str(realpath_ms(self.agent_dir)),
+        )
+        self.agent_dir.mkdir(parents=True, exist_ok=True)
+        atomic_symlink(relative, self.auth)
 
     def _auth_links_to_current(self) -> bool:
         if not self.auth.is_symlink() or not self.current.is_symlink():
@@ -510,6 +539,26 @@ class AntigravityBackend:
         print(f"  Profile: service={self.profile_service} username={name}")
         return 0
 
+    def unhook(self) -> int:
+        self._require_secret_tool()
+        secret = self._lookup(self.active_service, self.active_user)
+        if secret is None:
+            print(f"{self.command}: already unhooked (no active keyring item)")
+            return 0
+        current = self.current_suffix()
+        if not current or current not in set(self.suffixes()):
+            fail(
+                f"{self.command}: active keyring item is not saved as a profile",
+                f"  Save it first: {self.command} --save NAME",
+            )
+        self._prepare_state()
+        self._save_active_to_profile(current, required=True)
+        self._clear(self.active_service, self.active_user)
+        print(f"{self.command}: unhooked active credentials")
+        print(f"  Cleared: service={self.active_service} username={self.active_user}")
+        print(f"  Log in, then: {self.command} --save NAME")
+        return 0
+
     def _require_secret_tool(self) -> None:
         if shutil.which("secret-tool") is None:
             fail(f"{self.command}: secret-tool is required")
@@ -565,6 +614,16 @@ class AntigravityBackend:
         if result.returncode != 0:
             err = result.stderr.decode("utf-8", errors="replace").strip()
             fail(f"{self.command}: secret-tool store failed" + (f": {err}" if err else ""))
+
+    def _clear(self, service: str, username: str) -> None:
+        result = subprocess.run(
+            ["secret-tool", "clear", "service", service, "username", username],
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            err = result.stderr.decode("utf-8", errors="replace").strip()
+            fail(f"{self.command}: secret-tool clear failed" + (f": {err}" if err else ""))
 
     def _save_active_to_profile(self, name: str, *, required: bool) -> None:
         secret = self._lookup(self.active_service, self.active_user)
@@ -640,7 +699,7 @@ def run(argv: list[str]) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         print(
             "usage: rotate_auth.py <claude|codex|cursor|opencode|antigravity> "
-            "[name | --save name | --list]",
+            "[name | --save name | --unhook | --list]",
             file=sys.stderr,
         )
         return 0 if argv else 1
@@ -652,6 +711,8 @@ def run(argv: list[str]) -> int:
         return 0
     if action == "list":
         return backend.list_profiles()
+    if action == "unhook":
+        return backend.unhook()
     if action == "save":
         assert name is not None
         return backend.save(name)

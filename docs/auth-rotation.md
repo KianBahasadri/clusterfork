@@ -7,12 +7,23 @@ three backends: copy (Claude), shared-store symlink (Codex / Cursor / OpenCode),
 and GNOME Keyring (Antigravity). All five share the same flags:
 
 - `rotate-* --save NAME` — save the active account as a named profile
+- `rotate-* --unhook` — detach the active credentials so a new login does not
+  overwrite the current profile
 - `rotate-* --list` — list saved profiles (`*` marks the current one)
 - `rotate-*` — rotate to the next account in sorted order
 - `rotate-* NAME` — switch to a specific account
 
 `--save` overwrites an existing profile of that name. Profile names may only
 contain letters, numbers, dots, underscores, and dashes.
+
+To add an account: `rotate-* --unhook`, log in as the new account, then
+`rotate-* --save NAME`. `--unhook` refuses if the active credentials are not
+already saved as a profile (a regular-file `auth.json` on the shared-store
+backends, a Claude active file whose token matches no profile, or an
+Antigravity keyring item with no current profile marker). Saved profiles stay
+put. A later `rotate-* NAME` reattaches a saved profile if you abort before
+logging in. Do not re-run the installer in between: it repairs a missing
+agent-side `auth.json` symlink and would hook the previous profile again.
 
 The shell modules are thin wrappers. They resolve
 `scripts/rotate_auth.py` from `BASH_SOURCE` so the same function works when
@@ -58,6 +69,8 @@ Override directories (empty or unset uses the default, same as bash
 
 Switches Claude Code accounts stored as `~/.claude/.credentials.json.*` files.
 `--save NAME` copies the active `.credentials.json` onto `.credentials.json.NAME`.
+`--unhook` deletes `.credentials.json` when its `accessToken` matches a saved
+profile.
 
 Claude Code rewrites `.credentials.json` on every token refresh, so rotation copies the selected file over `.credentials.json` rather than symlinking. The active account is identified by matching the `accessToken` field.
 
@@ -67,6 +80,8 @@ Switches Codex accounts stored under
 `~/.local/share/clusterfork-auth/codex/`. `--save NAME` writes the active
 `auth.json` to `auth.json.NAME` and points `current` at it (and will rebuild
 the link chain if a login replaced `auth.json` with a regular file).
+`--unhook` removes the agent-side `auth.json` symlink and leaves the store
+and `current` intact.
 
 The link chain the installer established:
 
@@ -80,7 +95,7 @@ Rotation changes only the shared `current` symlink.
 
 ## rotate-cursor-cli
 
-Same pattern as `rotate-codex`, including `--save`, with profiles stored under
+Same pattern as `rotate-codex`, including `--save` and `--unhook`, with profiles stored under
 `~/.local/share/clusterfork-auth/cursor/` and this link chain:
 
 ```text
@@ -91,7 +106,7 @@ Same pattern as `rotate-codex`, including `--save`, with profiles stored under
 
 ## rotate-opencode
 
-Same pattern as `rotate-codex`, including `--save`, with profiles stored under
+Same pattern as `rotate-codex`, including `--save` and `--unhook`, with profiles stored under
 `~/.local/share/clusterfork-auth/opencode/` and this link chain:
 
 ```text
@@ -115,7 +130,7 @@ read-only mount and can fail when the current access token expires.
 
 ## rotate-antigravity
 
-Switches Antigravity accounts using `secret-tool` (GNOME Keyring). State is kept in `~/.gemini/antigravity-cli/rotate-auth/`. `--save NAME` copies the active keyring item to `service=rotate-antigravity username=NAME`.
+Switches Antigravity accounts using `secret-tool` (GNOME Keyring). State is kept in `~/.gemini/antigravity-cli/rotate-auth/`. `--save NAME` copies the active keyring item to `service=rotate-antigravity username=NAME`. `--unhook` backs the active item up to the current profile, then `secret-tool clear`s `service=gemini username=antigravity`.
 
 The active account lives at keyring entry `service=gemini username=antigravity`. Saved profiles live at `service=rotate-antigravity username=NAME`. Before switching, the current keyring item is backed up to the outgoing profile.
 
