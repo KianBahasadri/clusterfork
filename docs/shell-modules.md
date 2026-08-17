@@ -8,7 +8,7 @@
 
 ## codex.sh
 
-`cc` is an alias for `codex resume -c approval_policy=never`. `rotate-codex` switches between saved Codex accounts via symlinks.
+`cc` is an alias for `codex resume --yolo`. `rotate-codex` switches between saved Codex accounts via symlinks.
 
 ## cursor.sh
 
