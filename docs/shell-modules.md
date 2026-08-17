@@ -4,7 +4,7 @@
 
 ## claude.sh
 
-`cl` is an alias for `claude --dangerously-skip-permissions --effort xhigh`. `rotate-claude` switches between multiple saved Claude account credentials.
+`cl` launches `claude --dangerously-skip-permissions --effort xhigh` and sets `ANTHROPIC_CUSTOM_MODEL_OPTION=claude-opus-4-8` (label `Opus 4.8`) so `/model` keeps a 4.8 row after the `opus` alias moved to Opus 5. The env vars are scoped to that launch. `rotate-claude` switches between multiple saved Claude account credentials.
 
 ## codex.sh
 
