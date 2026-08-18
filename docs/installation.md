@@ -23,11 +23,13 @@
 | `agents/grok.toml`                | `~/.grok/config.toml`                    | Grok CLI settings                 |
 | `agents/claude.json`              | `~/.claude/settings.json`                | Claude Code settings              |
 | `agents/cursor-mcp.json`          | `~/.cursor/mcp.json`                     | Cursor MCP servers (`${ENV}` expanded from `.env`) |
+| `agents/command-code-mcp.json`    | `~/.commandcode/mcp.json`                | Command Code MCP servers (`${ENV}` expanded from `.env`) |
 | `statusline/claude/statusline.sh` | `~/.claude/statusline-command.sh`        | Claude status line script         |
 | `statusline/claude/usage-fetch.py`| `~/.claude/claude-usage-fetch.py`        | Claude usage cache helper         |
 | `statusline/cursor/statusline.sh` | `~/.cursor/statusline.sh`                | Cursor status line script         |
 | `statusline/cursor/usage-fetch.py`| `~/.cursor/cursor-usage-fetch.py`        | Cursor usage cache helper         |
 | `skills/`                         | `~/.qwen/skills/`, `~/.grok/skills/`, `~/.claude/skills/`, and `~/.codex/skills/` | Shared skills (Codex keeps `.system`) |
+| `skills/`                         | `~/.commandcode/skills/`                 | Shared skills, normalized to Command Code's hyphenated IDs |
 | `skills/`                         | `~/.gemini/antigravity-cli/skills/` | Antigravity CLI skills (normalized for its global skill directory) |
 | `skills/`                         | `~/.config/opencode/skills/`     | OpenCode compatibility aliases; other shared skills are discovered through `~/.claude/skills/` |
 
@@ -36,6 +38,7 @@ The installer also:
 - Appends a `source` line to `~/.bashrc` so `bash_profile.sh` is loaded in every new shell
 - Ensures the `statusLine` key in `~/.cursor/cli-config.json` (without replacing that whole file). See [Statusline](statusline.md)
 - Ensures the ElevenLabs entry in `~/.claude.json` `mcpServers` (without replacing that whole file)
+- Overwrites `~/.commandcode/mcp.json` from `agents/command-code-mcp.json`, expanding `${ENV}` placeholders from `.env` (full replace)
 - Best-effort repair of Codex/Cursor/OpenCode shared auth links under `~/.local/share/clusterfork-auth/`. See [Auth Rotation](auth-rotation.md)
 
 ## Requirements

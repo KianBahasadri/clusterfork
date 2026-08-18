@@ -36,7 +36,9 @@ Grok CLI settings:
 
 - **Model:** not pinned by clusterfork — Grok CLI uses its own default; fork secondary: `grok-4.5`
 - **UI:** default theme `tokyonight` (installer preserves an existing theme in `~/.grok/config.toml`), `permission_mode = always-approve`, `yolo = false`
-- **Telemetry:** disabled (`[features] telemetry = false`)
+- **Privacy:** telemetry disabled (`[features] telemetry = false`); the initial
+  "Help improve Grok" banner is acknowledged (`[privacy].privacy_banner_acked`)
+  so it is not shown on fresh installations
 - **Marketplace:** xAI Official plugin marketplace source; default skills installs are not purged (`default_skills_installs_purged = false`)
 - **MCP servers:** context7 (remote, requires `CONTEXT7_API_KEY`), linear (remote, disabled), chrome-devtools (local, disabled — uses Chromium on port 9222), ElevenLabs (local via clusterfork launcher)
 - **Plugins:** chrome-devtools-mcp disabled
@@ -63,13 +65,22 @@ Cursor IDE MCP servers. The installer expands `${ENV}` placeholders from the clu
 - **context7:** `pnpx @upstash/context7-mcp` with `CONTEXT7_API_KEY`
 - **ElevenLabs:** clusterfork `bin/elevenlabs-mcp` launcher (`ELEVENLABS_API_KEY` from `.env`)
 
+## agents/command-code-mcp.json → ~/.commandcode/mcp.json
+
+Command Code MCP servers. The installer expands `${ENV}` placeholders from the clusterfork `.env` when writing the destination (full replace):
+
+- **context7:** remote `https://mcp.context7.com/mcp` with `CONTEXT7_API_KEY`
+- **ElevenLabs:** clusterfork `bin/elevenlabs-mcp` launcher (`ELEVENLABS_API_KEY` from `.env`)
+- **linear:** remote `https://mcp.linear.app/mcp`, disabled
+- **chrome-devtools:** local `pnpm dlx chrome-devtools-mcp@latest`, disabled — uses Chromium on port 9222
+
 ## ElevenLabs MCP launcher
 
 `bin/elevenlabs-mcp` → `~/.config/clusterfork/bin/elevenlabs-mcp`. Loads `ELEVENLABS_API_KEY` from the clusterfork `.env` and runs `uvx elevenlabs-mcp`. Agent MCP configs invoke it via `bash -c` so GUI clients do not need clusterfork on `PATH`.
 
 ## Disabled-by-default MCP servers
 
-linear and chrome-devtools ship disabled in OpenCode (`"enabled": false`), Grok (`enabled = false`), and Qwen (`mcp.excluded: ["linear", "chrome-devtools"]`) — present but inactive; flip the flag (or remove the name from Qwen's exclude list) in the live config to use one, and a reinstall resets it to disabled.
+linear and chrome-devtools ship disabled in OpenCode (`"enabled": false`), Grok (`enabled = false`), Qwen (`mcp.excluded: ["linear", "chrome-devtools"]`), and Command Code (`"enabled": false` on each `mcpServers` entry) — present but inactive; flip the flag (or remove the name from Qwen's exclude list) in the live config to use one, and a reinstall resets it to disabled.
 
 They are deliberately omitted from Cursor and Claude Code. Cursor's `mcp.json` has no per-server disabled field — on/off is IDE state toggled in Customize → MCPs, tracked per project (the CLI has `cursor-agent mcp enable/disable`, also local state). Claude Code ignores a user-scope `disabled` field in `~/.claude.json` — verified empirically on v2.1.220 (2026-07): a probe server with `"disabled": true` was still spawned (upstream issues anthropics/claude-code#33958 and #13311 were stale-closed, not fixed). Its per-project `/mcp` toggle (`disabledMcpServers`) is per-project state, not shippable config. Shipping the servers to either agent would enable them by default, the opposite of the intent.
 

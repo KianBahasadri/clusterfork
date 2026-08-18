@@ -9,18 +9,20 @@
 #      theme from ~/.grok/config.toml if set)
 #   4. Overwrites ~/.qwen/skills/, ~/.grok/skills/, ~/.claude/skills/, and
 #      ~/.codex/skills/ (user skills only; preserves ~/.codex/skills/.system)
-#      from repo-local skills/. Also installs normalized skills for
-#      Antigravity and OpenCode compatibility.
+#      from repo-local skills/. Also installs normalized skills for Command
+#      Code and Antigravity, plus OpenCode compatibility aliases.
 #   5. Overwrites Claude/Cursor statusline scripts + usage fetchers from
 #      repo-local statusline/
 #   6. Overwrites ~/.cursor/mcp.json from agents/cursor-mcp.json (expands
 #      ${ENV} placeholders from the clusterfork .env)
-#   7. Ensures ElevenLabs in ~/.claude.json mcpServers (key only; does not
+#   7. Overwrites ~/.commandcode/mcp.json from agents/command-code-mcp.json
+#      (expands ${ENV} placeholders from the clusterfork .env)
+#   8. Ensures ElevenLabs in ~/.claude.json mcpServers (key only; does not
 #      replace the whole file)
-#   8. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
+#   9. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
 #      replace the whole file)
-#   9. Appends a source line to ~/.bashrc if it is not already present
-#  10. Best-effort: ensures Codex/Cursor/OpenCode auth.json links through
+#  10. Appends a source line to ~/.bashrc if it is not already present
+#  11. Best-effort: ensures Codex/Cursor/OpenCode auth.json links through
 #      ~/.local/share/clusterfork-auth/<agent>/current when profiles exist
 #
 # Usage:
@@ -52,6 +54,7 @@ QWEN_SKILLS_DEST_DIR="$HOME/.qwen/skills"
 GROK_SKILLS_DEST_DIR="$HOME/.grok/skills"
 CLAUDE_SKILLS_DEST_DIR="$HOME/.claude/skills"
 CODEX_SKILLS_DEST_DIR="$HOME/.codex/skills"
+COMMAND_CODE_SKILLS_DEST_DIR="$HOME/.commandcode/skills"
 OPENCODE_SKILLS_DEST_DIR="$HOME/.config/opencode/skills"
 ANTIGRAVITY_SKILLS_DEST_DIR="$HOME/.gemini/antigravity-cli/skills"
 GROK_CONFIG_SRC="$AGENTS_SRC_DIR/grok.toml"
@@ -71,6 +74,8 @@ CURSOR_USAGE_FETCH_DEST="$HOME/.cursor/cursor-usage-fetch.py"
 CURSOR_MCP_SRC="$AGENTS_SRC_DIR/cursor-mcp.json"
 CURSOR_MCP_DEST="$HOME/.cursor/mcp.json"
 CURSOR_CLI_CONFIG="$HOME/.cursor/cli-config.json"
+COMMAND_CODE_MCP_SRC="$AGENTS_SRC_DIR/command-code-mcp.json"
+COMMAND_CODE_MCP_DEST="$HOME/.commandcode/mcp.json"
 SHARED_AUTH_ROOT="$HOME/.local/share/clusterfork-auth"
 CODEX_AUTH_DIR="$HOME/.codex"
 CODEX_AUTH_STORE_DIR="$SHARED_AUTH_ROOT/codex"
@@ -259,7 +264,7 @@ configure_shared_auth() {
 # keeps its existing names for the agents that already use them as slash
 # commands (for example, /commit_and_push). OpenCode discovers the valid names
 # through ~/.claude/skills, so its native directory only needs incompatible
-# aliases; Antigravity gets the complete normalized tree.
+# aliases; Command Code and Antigravity get complete normalized trees.
 copy_normalized_skills() {
   local dest_dir="$1"
   local only_incompatible="$2"
@@ -396,6 +401,10 @@ if [[ -d "$SKILLS_SRC_DIR" ]]; then
   done
   step "codex skills" "$CODEX_SKILLS_DEST_DIR"
 
+  # Command Code uses ~/.commandcode/skills and requires hyphenated skill IDs.
+  copy_normalized_skills "$COMMAND_CODE_SKILLS_DEST_DIR" 0
+  step "command code skills" "$COMMAND_CODE_SKILLS_DEST_DIR"
+
   # Antigravity CLI uses ~/.gemini/antigravity-cli/skills and expects
   # hyphenated skill IDs.
   copy_normalized_skills "$ANTIGRAVITY_SKILLS_DEST_DIR" 0
@@ -481,6 +490,45 @@ data = walk(json.loads(src.read_text(encoding="utf-8")))
 dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY
 step "cursor mcp" "$CURSOR_MCP_DEST"
+
+# Command Code MCP: same ${VAR} expansion as Cursor so secrets stay out of the repo.
+[[ -f "$COMMAND_CODE_MCP_SRC" ]] || fail "missing $(tildify "$COMMAND_CODE_MCP_SRC")"
+mkdir -p "$(dirname "$COMMAND_CODE_MCP_DEST")"
+python3 - "$COMMAND_CODE_MCP_SRC" "$COMMAND_CODE_MCP_DEST" "$DOTENV_DEST" <<'PY'
+import json, re, sys
+from pathlib import Path
+
+src, dest, dotenv = map(Path, sys.argv[1:])
+env = {}
+if dotenv.is_file():
+    for line in dotenv.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        env[k.strip()] = v.strip().strip('"').strip("'")
+
+def expand(value: str) -> str:
+    def repl(m: re.Match[str]) -> str:
+        key = m.group(1)
+        if key not in env:
+            raise SystemExit(f"command code mcp: ${{{key}}} not set in {dotenv}")
+        return env[key]
+    return re.sub(r"\$\{([A-Z_][A-Z0-9_]*)\}", repl, value)
+
+def walk(obj):
+    if isinstance(obj, dict):
+        return {k: walk(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [walk(v) for v in obj]
+    if isinstance(obj, str):
+        return expand(obj)
+    return obj
+
+data = walk(json.loads(src.read_text(encoding="utf-8")))
+dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+PY
+step "command code mcp" "$COMMAND_CODE_MCP_DEST"
 
 # Ensure Claude Code user-scope MCP includes ElevenLabs. ~/.claude.json holds a lot
 # of unrelated state, so only upsert this one server entry.

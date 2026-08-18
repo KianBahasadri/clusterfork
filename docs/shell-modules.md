@@ -6,6 +6,10 @@
 
 `cl` launches `claude --dangerously-skip-permissions --effort xhigh` and sets `ANTHROPIC_CUSTOM_MODEL_OPTION=claude-opus-4-8` (label `Opus 4.8`) so `/model` keeps a 4.8 row after the `opus` alias moved to Opus 5. The env vars are scoped to that launch. `rotate-claude` switches between multiple saved Claude account credentials.
 
+## cmd.sh
+
+`cmd` is a function that launches `command cmd --yolo` (bypass all permission prompts) unless a `--yolo`/`--dangerously-skip-permissions` flag is already present, in which case it forwards the arguments unchanged.
+
 ## codex.sh
 
 `cc` is an alias for `codex resume --yolo`. `rotate-codex` switches between saved Codex accounts via symlinks.

@@ -13,6 +13,9 @@ permission_mode = "always-approve"
 [features]
 telemetry = false
 
+[privacy]
+privacy_banner_acked = "2026-08-18T05:13:39Z"
+
 [marketplace]
 default_skills_installs_purged = false
 official_marketplace_auto_installed = true

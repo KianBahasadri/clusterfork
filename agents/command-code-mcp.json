@@ -1,0 +1,38 @@
+{
+  "mcpServers": {
+    "context7": {
+      "transport": "http",
+      "enabled": true,
+      "url": "https://mcp.context7.com/mcp",
+      "headers": {
+        "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}"
+      }
+    },
+    "ElevenLabs": {
+      "transport": "stdio",
+      "enabled": true,
+      "command": "bash",
+      "args": [
+        "-c",
+        "exec \"$HOME/.config/clusterfork/bin/elevenlabs-mcp\""
+      ]
+    },
+    "linear": {
+      "transport": "http",
+      "enabled": false,
+      "url": "https://mcp.linear.app/mcp"
+    },
+    "chrome-devtools": {
+      "transport": "stdio",
+      "enabled": false,
+      "command": "pnpm",
+      "args": [
+        "dlx",
+        "chrome-devtools-mcp@latest",
+        "--no-usage-statistics",
+        "--browserUrl",
+        "http://127.0.0.1:9222"
+      ]
+    }
+  }
+}

@@ -1,6 +1,8 @@
 # Skills
 
-The `skills/` directory contains skills in the shared `SKILL.md` format. The installer copies them to `~/.qwen/skills/` (Qwen Code), `~/.grok/skills/` (Grok CLI), `~/.claude/skills/` (Claude Code), and `~/.codex/skills/` (Codex). It also installs a normalized copy to `~/.gemini/antigravity-cli/skills/` for Antigravity CLI and compatibility aliases to `~/.config/opencode/skills/` for OpenCode.
+The `skills/` directory contains skills in the shared `SKILL.md` format. The installer copies them to `~/.qwen/skills/` (Qwen Code), `~/.grok/skills/` (Grok CLI), `~/.claude/skills/` (Claude Code), and `~/.codex/skills/` (Codex). It also installs normalized copies to `~/.commandcode/skills/` for Command Code and `~/.gemini/antigravity-cli/skills/` for Antigravity CLI, plus compatibility aliases to `~/.config/opencode/skills/` for OpenCode.
+
+Command Code requires lowercase hyphenated skill IDs, so `commit_and_push` and `generate_docs` are installed there as `commit-and-push` and `generate-docs`.
 
 For Codex, only non-dot skill directories under `~/.codex/skills/` are replaced. `~/.codex/skills/.system` is left alone (Codex-managed system skills).
 
