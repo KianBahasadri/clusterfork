@@ -17,12 +17,16 @@
 #      ${ENV} placeholders from the clusterfork .env)
 #   7. Overwrites ~/.commandcode/mcp.json from agents/command-code-mcp.json
 #      (expands ${ENV} placeholders from the clusterfork .env)
-#   8. Ensures ElevenLabs in ~/.claude.json mcpServers (key only; does not
+#   8. Replaces the mcp_servers table in ~/.codex/config.toml from
+#      agents/codex-mcp.toml (table only; Codex owns the rest of that file)
+#   9. Installs agents/claude-plugins/* into ~/.claude/skills/ as skills-dir
+#      plugins; agents/claude.json ships each one disabled
+#  10. Ensures ElevenLabs in ~/.claude.json mcpServers (key only; does not
 #      replace the whole file)
-#   9. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
+#  11. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
 #      replace the whole file)
-#  10. Appends a source line to ~/.bashrc if it is not already present
-#  11. Best-effort: ensures Codex/Cursor/OpenCode auth.json links through
+#  12. Appends a source line to ~/.bashrc if it is not already present
+#  13. Best-effort: ensures Codex/Cursor/OpenCode auth.json links through
 #      ~/.local/share/clusterfork-auth/<agent>/current when profiles exist
 #
 # Usage:
@@ -53,6 +57,7 @@ SKILLS_SRC_DIR="$REPO_DIR/skills"
 QWEN_SKILLS_DEST_DIR="$HOME/.qwen/skills"
 GROK_SKILLS_DEST_DIR="$HOME/.grok/skills"
 CLAUDE_SKILLS_DEST_DIR="$HOME/.claude/skills"
+CLAUDE_PLUGINS_SRC_DIR="$AGENTS_SRC_DIR/claude-plugins"
 CODEX_SKILLS_DEST_DIR="$HOME/.codex/skills"
 COMMAND_CODE_SKILLS_DEST_DIR="$HOME/.commandcode/skills"
 OPENCODE_SKILLS_DEST_DIR="$HOME/.config/opencode/skills"
@@ -76,6 +81,8 @@ CURSOR_MCP_DEST="$HOME/.cursor/mcp.json"
 CURSOR_CLI_CONFIG="$HOME/.cursor/cli-config.json"
 COMMAND_CODE_MCP_SRC="$AGENTS_SRC_DIR/command-code-mcp.json"
 COMMAND_CODE_MCP_DEST="$HOME/.commandcode/mcp.json"
+CODEX_MCP_SRC="$AGENTS_SRC_DIR/codex-mcp.toml"
+CODEX_CONFIG_DEST="$HOME/.codex/config.toml"
 SHARED_AUTH_ROOT="$HOME/.local/share/clusterfork-auth"
 CODEX_AUTH_DIR="$HOME/.codex"
 CODEX_AUTH_STORE_DIR="$SHARED_AUTH_ROOT/codex"
@@ -416,6 +423,39 @@ if [[ -d "$SKILLS_SRC_DIR" ]]; then
   step "opencode skills" "$OPENCODE_SKILLS_DEST_DIR"
 fi
 
+# Claude Code has no global off switch for ~/.claude.json mcpServers entries —
+# /mcp's toggle only writes a per-project opt-out — so servers that must default
+# to off ship as plugins instead. A directory under ~/.claude/skills/ holding
+# .claude-plugin/plugin.json auto-loads as the plugin <name>@skills-dir, and
+# agents/claude.json turns each one off in enabledPlugins. This runs after the
+# skills copy above, which wipes that directory.
+if [[ -d "$CLAUDE_PLUGINS_SRC_DIR" ]]; then
+  python3 - "$CLAUDE_CONFIG_SRC" "$CLAUDE_PLUGINS_SRC_DIR" <<'CLAUDE_PLUGINS_PY'
+import json, pathlib, sys
+
+settings_path, plugins_dir = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+enabled = json.loads(settings_path.read_text()).get("enabledPlugins", {})
+
+for plugin in sorted(p for p in plugins_dir.iterdir() if p.is_dir()):
+    for required in (".claude-plugin/plugin.json", ".mcp.json"):
+        if not (plugin / required).is_file():
+            sys.exit(f"claude mcp plugins: {plugin.name} is missing {required}")
+    key = f"{plugin.name}@skills-dir"
+    if enabled.get(key) is not False:
+        sys.exit(f"claude mcp plugins: {settings_path.name} must set "
+                 f'"{key}": false — plugins are on unless told otherwise')
+CLAUDE_PLUGINS_PY
+
+  mkdir -p "$CLAUDE_SKILLS_DEST_DIR"
+  for d in "$CLAUDE_PLUGINS_SRC_DIR"/*/; do
+    [[ -d "$d" ]] || continue
+    plugin_name="$(basename "$d")"
+    rm -rf -- "${CLAUDE_SKILLS_DEST_DIR:?}/$plugin_name"
+    cp -r "$d" "$CLAUDE_SKILLS_DEST_DIR/$plugin_name"
+  done
+  step "claude mcp plugins" "$CLAUDE_SKILLS_DEST_DIR"
+fi
+
 [[ -f "$GROK_CONFIG_SRC" ]] || fail "missing $(tildify "$GROK_CONFIG_SRC")"
 mkdir -p "$(dirname "$GROK_CONFIG_DEST")"
 # Keep the user's current theme; everything else comes from the repo.
@@ -529,6 +569,92 @@ data = walk(json.loads(src.read_text(encoding="utf-8")))
 dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY
 step "command code mcp" "$COMMAND_CODE_MCP_DEST"
+
+# Codex MCP: ~/.codex/config.toml also holds the model, approval settings, and
+# the per-project trust levels Codex writes itself, so replace only the
+# mcp_servers table. No ${ENV} expansion here — the server entries name the env
+# vars instead, and Codex resolves them at launch from the exported .env.
+[[ -f "$CODEX_MCP_SRC" ]] || fail "missing $(tildify "$CODEX_MCP_SRC")"
+mkdir -p "$(dirname "$CODEX_CONFIG_DEST")"
+python3 - "$CODEX_MCP_SRC" "$CODEX_CONFIG_DEST" <<'PY'
+import sys, tomllib
+from pathlib import Path
+
+src, dest = map(Path, sys.argv[1:])
+block = src.read_text(encoding="utf-8").strip("\n")
+wanted = tomllib.loads(block)
+current = dest.read_text(encoding="utf-8") if dest.is_file() else ""
+if current.strip():
+    try:
+        before = tomllib.loads(current)
+    except tomllib.TOMLDecodeError as exc:
+        raise SystemExit(f"codex mcp: {dest} is not valid TOML: {exc}")
+else:
+    before = {}
+
+
+def table_root(line: str) -> str | None:
+    """First path segment of a TOML table header, e.g. [a.b] -> a. Else None."""
+    text = line.strip()
+    if not text.startswith("["):
+        return None
+    text = text.lstrip("[").strip()
+    if text[:1] in ('"', "'"):
+        quote = text[0]
+        end = text.find(quote, 1)
+        return text[1:end] if end != -1 else None
+    for index, char in enumerate(text):
+        if char in ".]":
+            return text[:index].strip()
+    return None
+
+
+# Drop every [mcp_servers...] table. Comments and blank lines are buffered so a
+# comment block introducing a dropped table goes with it, while one introducing
+# the next kept table stays.
+kept: list[str] = []
+pending: list[str] = []
+dropping = False
+for line in current.splitlines():
+    root = table_root(line)
+    if root is not None:
+        dropping = root == "mcp_servers"
+        if dropping:
+            pending = []
+        else:
+            kept.extend(pending)
+            pending = []
+            kept.append(line)
+        continue
+    if not line.strip() or line.lstrip().startswith("#"):
+        pending.append(line)
+        continue
+    if dropping:
+        pending = []
+        continue
+    kept.extend(pending)
+    pending = []
+    kept.append(line)
+kept.extend(pending)
+
+body = "\n".join(kept).strip("\n")
+result = f"{body}\n\n{block}\n" if body else f"{block}\n"
+
+# The rewrite is textual, so check it against the parsed result: our table must
+# land intact and nothing else in the file may move.
+parsed = tomllib.loads(result)
+if parsed.get("mcp_servers") != wanted["mcp_servers"]:
+    raise SystemExit(f"codex mcp: mcp_servers was not installed cleanly into {dest}")
+before.pop("mcp_servers", None)
+after = dict(parsed)
+after.pop("mcp_servers", None)
+if before != after:
+    raise SystemExit(f"codex mcp: refusing to write, unrelated config in {dest} would change")
+
+if result != current:
+    dest.write_text(result, encoding="utf-8")
+PY
+step "codex mcp" "$CODEX_CONFIG_DEST"
 
 # Ensure Claude Code user-scope MCP includes ElevenLabs. ~/.claude.json holds a lot
 # of unrelated state, so only upsert this one server entry.

@@ -51,12 +51,44 @@ Claude Code settings:
 
 - **Model:** `claude-opus-4-8` (Opus 4.8; not the `opus` alias, which resolves to Opus 5), effort `xhigh`
 - **Status line:** command `bash ~/.claude/statusline-command.sh`, refresh every 60s (see [Statusline](statusline.md))
-- **Plugins:** context7 enabled
+- **Plugins:** context7 enabled; linear, chrome-devtools, and pixellab shipped disabled — see [agents/claude-plugins/](#agentsclaude-plugins--claudeskills)
 - **UI:** dark theme, fullscreen TUI, prompt suggestions off
 - **Voice:** enabled, hold mode
 - **Other:** auto-memory off, skip dangerous-mode permission prompt, agent push notifications on
 
 Claude user-scope MCP (ElevenLabs) is upserted into `~/.claude.json` by the installer — see [Installation](installation.md).
+
+## agents/claude-plugins/ → ~/.claude/skills/
+
+Claude Code MCP servers that have to default to off. Each directory is a plugin
+(`.claude-plugin/plugin.json` + `.mcp.json`) and auto-loads as
+`<name>@skills-dir` once it sits under `~/.claude/skills/` — no marketplace
+registration involved. This is the only route that survives into projects
+clusterfork has never seen; see [the disable mechanism](#claude-code-disable-mechanism-verified-on-21235-2026-08) below for why a
+plain `mcpServers` entry cannot do it.
+
+- **linear:** remote `https://mcp.linear.app/mcp`, disabled
+- **chrome-devtools:** local `pnpm dlx chrome-devtools-mcp@latest`, disabled — uses Chromium on port 9222
+- **pixellab:** remote `https://api.pixellab.ai/mcp`, disabled
+
+`agents/claude.json` ships each one `false` in `enabledPlugins`; the installer
+refuses to install a plugin directory missing either file, or one that
+`agents/claude.json` does not explicitly turn off, since plugins are on unless
+told otherwise.
+
+As with Codex, no `${ENV}` expansion happens at install time — Claude Code
+expands `${PIXELLAB_API_KEY}` in the plugin's `.mcp.json` from its own
+environment and `bash_profile.sh` exports all of `.env`, so no key is written to
+disk. Verified against a header-logging server: expansion works in `args`, `env`,
+and `headers`.
+
+To enable one, flip its `enabledPlugins` value in `~/.claude/settings.json` to
+`true` (or use `/plugin`); `claude plugin list` reports the current state under
+"Skills-directory plugins". A reinstall resets it to disabled, matching the
+other CLIs. Two consequences of the plugin route: the tools arrive named
+`mcp__plugin_<plugin>_<server>__<tool>` rather than `mcp__<server>__<tool>`, and
+`/mcp` lists an enabled one under "Built-in MCPs (always available)" instead of
+"User MCPs", so it is toggled through `/plugin`, not `/mcp`.
 
 ## agents/cursor-mcp.json → ~/.cursor/mcp.json
 
@@ -75,17 +107,103 @@ Command Code MCP servers. The installer expands `${ENV}` placeholders from the c
 - **chrome-devtools:** local `pnpm dlx chrome-devtools-mcp@latest`, disabled — uses Chromium on port 9222
 - **pixellab:** remote `https://api.pixellab.ai/mcp`, disabled, with its bearer token from `PIXELLAB_API_KEY` in `.env`
 
+## agents/codex-mcp.toml → ~/.codex/config.toml (`mcp_servers` table only)
+
+Codex MCP servers. Codex owns the rest of `~/.codex/config.toml` — `model`,
+`model_reasoning_effort`, `approvals_reviewer`, `service_tier`, and the
+`[projects]` trust levels it writes as you accept directories — so this is a
+table-only exception to the overwrite rule: the installer drops every
+`[mcp_servers…]` table, appends the repo's block, then re-parses the result and
+refuses to write if anything outside `mcp_servers` would change.
+
+- **context7:** remote `https://mcp.context7.com/mcp`
+- **ElevenLabs:** clusterfork `bin/elevenlabs-mcp` launcher
+- **linear:** remote `https://mcp.linear.app/mcp`, disabled
+- **chrome-devtools:** local `pnpm dlx chrome-devtools-mcp@latest`, disabled — uses Chromium on port 9222
+- **pixellab:** remote `https://api.pixellab.ai/mcp`, disabled
+
+No `${ENV}` expansion happens here, unlike Cursor and Command Code. Codex
+resolves `env_http_headers` (context7's `CONTEXT7_API_KEY` header) and
+`bearer_token_env_var` (pixellab's `PIXELLAB_API_KEY`) from its own environment
+at launch, and `bash_profile.sh` exports all of `.env` with `set -a`, so no key
+is written to disk. Verified against a header-logging server: both arrive on the
+wire, and an unset variable drops the header instead of failing the server.
+
 ## ElevenLabs MCP launcher
 
 `bin/elevenlabs-mcp` → `~/.config/clusterfork/bin/elevenlabs-mcp`. Loads `ELEVENLABS_API_KEY` from the clusterfork `.env` and runs `uvx elevenlabs-mcp`. Agent MCP configs invoke it via `bash -c` so GUI clients do not need clusterfork on `PATH`.
 
 ## Disabled-by-default MCP servers
 
-linear, chrome-devtools, and pixellab ship disabled in OpenCode (`"enabled": false`), Grok (`enabled = false`), Qwen (`mcp.excluded`), and Command Code (`"enabled": false` on each `mcpServers` entry) — present but inactive; flip the flag (or remove the name from Qwen's exclude list) in the live config to use one, and a reinstall resets it to disabled.
+linear, chrome-devtools, and pixellab ship disabled in OpenCode (`"enabled": false`), Grok (`enabled = false`), Qwen (`mcp.excluded`), Codex (`enabled = false`), Command Code (`"enabled": false` on each `mcpServers` entry), and Claude Code (`enabledPlugins` set to `false`, one plugin per server) — present but inactive; flip the flag (or remove the name from Qwen's exclude list) in the live config to use one, and a reinstall resets it to disabled.
 
-They are deliberately omitted from Cursor and Claude Code. Cursor's `mcp.json` has no per-server disabled field — on/off is IDE state toggled in Customize → MCPs, tracked per project (the CLI has `cursor-agent mcp enable/disable`, also local state).
+They are deliberately omitted from Cursor, which has no shippable off switch at all: `mcp.json` has no per-server disabled field, and on/off is IDE state toggled in Customize → MCPs, tracked per project (the CLI has `cursor-agent mcp enable/disable`, also local state).
 
-Claude Code 2.1.235 has a native per-project off switch: toggling a server in `/mcp` adds its name to `disabledMcpServers` in that project's entry in `~/.claude.json`. Claude then skips the listed user-configured server, plugin server, claude.ai connector, or default-on built-in server. This is not a global disabled user-scope configuration: every project in which the server should stay off needs its own disable entry. `disabledMcpjsonServers` is a distinct settings key that rejects servers defined in a project `.mcp.json` file. The installer therefore still omits disabled-by-default servers from Claude Code; its per-project disable state is live project state, not an installer-owned cross-project default.
+### Claude Code disable mechanism (verified on 2.1.235, 2026-08)
+
+Probe method: an isolated `CLAUDE_CONFIG_DIR` holding a minimal stdio MCP server
+that touches a marker file the moment it is spawned and answers
+`initialize`/`tools/list` with one tool, so "was it started" and "was its tool
+offered to the model" are both directly observable.
+
+There is no **global** off switch for an `mcpServers` entry in `~/.claude.json`.
+Each of these was ignored — the server spawned and its tool was offered:
+
+- `"disabled": true` (or `"enabled": false`) on the `mcpServers` entry
+- `disabledMcpServers` in `~/.claude/settings.json`
+- `enabledMcpServers` in `~/.claude/settings.json` used as an allowlist that omits the name
+- top-level `disabledMcpServers` in `~/.claude.json`
+
+`mcpServers` in `~/.claude/settings.json` is not read at all — a server defined
+only there never spawns, so that file cannot host the roster either.
+`disabledMcpjsonServers` is a separate settings key that rejects only servers
+defined in a project `.mcp.json`.
+
+What does work — and what `/mcp`'s toggle writes — is `disabledMcpServers` in
+the **project entry** of `~/.claude.json`. With
+`projects["<cwd>"].disabledMcpServers = ["probe"]` the server did not spawn;
+without it, it did. But it is per-project state keyed by absolute path: a
+directory with no project entry yet gets every user-scope server **enabled**, so
+it cannot express a shipped default.
+
+The route that does survive into unseen projects: **ship the server inside a
+plugin.** A directory under `~/.claude/skills/<name>/` containing
+`.claude-plugin/plugin.json` and `.mcp.json` auto-loads as the plugin
+`<name>@skills-dir` (the layout `claude plugin init` scaffolds; no marketplace
+registration needed). Plugins are on by default, so the off switch has to be
+written explicitly in `~/.claude/settings.json`:
+
+```json
+{ "enabledPlugins": { "chrome-devtools@skills-dir": false } }
+```
+
+Verified: with `false` the server never spawned and no tool was exposed; with
+`true` — and with the key absent — it spawned and its tool appeared. This is
+what the installer ships — see
+[agents/claude-plugins/](#agentsclaude-plugins--claudeskills) above, which also
+covers the tool-naming and `/plugin`-vs-`/mcp` consequences.
+
+### Codex disable mechanism (verified on `codex-cli` 0.147.0, 2026-08)
+
+Codex honors a per-server `enabled` flag at user scope in `~/.codex/config.toml`
+— a real global default-off:
+
+```toml
+[mcp_servers.linear]
+url = "https://mcp.linear.app/mcp"
+enabled = false
+```
+
+Verified with the marker-file probe under an isolated `CODEX_HOME`: on a headless
+`codex exec` run the `enabled = false` server was never spawned while a sibling
+entry without the flag was. `codex mcp list` reports a `Status` column of
+`disabled`/`enabled` (`--json` adds `"enabled"` and `"disabled_reason"`) and,
+unlike `qwen mcp list`, connection-tests nothing — no spawn there either.
+
+This is what the installer ships — see
+[agents/codex-mcp.toml](#agentscodex-mcptoml--codexconfigtoml-mcp_servers-table-only)
+above. Re-running it resets a locally flipped `enabled` back to the repo value,
+same as the other CLIs.
 
 ### Qwen disable mechanism (verified on `@qwen-code/qwen-code` 0.19.2, 2026-07)
 

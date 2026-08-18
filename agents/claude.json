@@ -6,7 +6,10 @@
     "refreshInterval": 60
   },
   "enabledPlugins": {
-    "context7@claude-plugins-official": true
+    "context7@claude-plugins-official": true,
+    "linear@skills-dir": false,
+    "chrome-devtools@skills-dir": false,
+    "pixellab@skills-dir": false
   },
   "effortLevel": "xhigh",
   "promptSuggestionEnabled": false,

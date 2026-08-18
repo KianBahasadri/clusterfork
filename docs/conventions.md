@@ -28,4 +28,5 @@ Exceptions (key/line only — not full-file replace):
 - `~/.cursor/cli-config.json`: sets/updates only the `statusLine` key so the installed Cursor statusline script is wired up; session/auth caches in that file stay untouched
 - `~/.claude.json`: upserts only the `mcpServers.ElevenLabs` entry; the rest of Claude's local state stays untouched
 - `~/.cursor/mcp.json`: full overwrite from `agents/cursor-mcp.json`, but `${ENV}` placeholders are expanded from the clusterfork `.env` at install time so secrets are not committed
+- `~/.codex/config.toml`: replaces only the `mcp_servers` tables from `agents/codex-mcp.toml`; the model, approval settings, and the `[projects]` trust levels Codex writes itself stay untouched, and the installer aborts rather than write if anything outside `mcp_servers` would change
 - Codex/Cursor multi-account auth: shared auth stores managed via `rotate-*` scripts. See [Auth Rotation](auth-rotation.md).
