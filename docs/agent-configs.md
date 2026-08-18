@@ -7,7 +7,7 @@ JSON/TOML files under `agents/` configure individual agents. The installer copie
 Qwen Code settings:
 
 - **Model / auth:** not pinned by clusterfork — use Qwen Code's built-in login or add providers locally
-- **MCP servers:** context7 (remote, requires `CONTEXT7_API_KEY`), ElevenLabs (local via `~/.config/clusterfork/bin/elevenlabs-mcp`, requires `ELEVENLABS_API_KEY`), linear (remote, disabled), chrome-devtools (local, disabled — uses Chromium on port 9222)
+- **MCP servers:** context7 (remote, requires `CONTEXT7_API_KEY`), ElevenLabs (local via `~/.config/clusterfork/bin/elevenlabs-mcp`, requires `ELEVENLABS_API_KEY`), linear (remote, disabled), chrome-devtools (local, disabled — uses Chromium on port 9222), pixellab (remote, disabled — requires `PIXELLAB_API_KEY`)
 - **Privacy:** usage statistics disabled
 - **Memory:** managed auto-memory, auto-dream, and auto-skill all disabled
 
@@ -19,7 +19,7 @@ OpenCode settings:
   denies shell commands and file edits, and OpenCode itself cannot load the
   self-delegating `ask-opencode` skill
 - **Default agent:** `build`
-- **MCP servers:** context7 (remote), linear (remote, disabled), chrome-devtools (local, disabled — uses Chromium on port 9222), ElevenLabs (local via clusterfork launcher, disabled)
+- **MCP servers:** context7 (remote), linear (remote, disabled), chrome-devtools (local, disabled — uses Chromium on port 9222), pixellab (remote, disabled — requires `PIXELLAB_API_KEY`), ElevenLabs (local via clusterfork launcher, disabled)
 
 ## agents/antigravity.json → ~/.gemini/antigravity-cli/settings.json
 
@@ -40,7 +40,7 @@ Grok CLI settings:
   "Help improve Grok" banner is acknowledged (`[privacy].privacy_banner_acked`)
   so it is not shown on fresh installations
 - **Marketplace:** xAI Official plugin marketplace source; default skills installs are not purged (`default_skills_installs_purged = false`)
-- **MCP servers:** context7 (remote, requires `CONTEXT7_API_KEY`), linear (remote, disabled), chrome-devtools (local, disabled — uses Chromium on port 9222), ElevenLabs (local via clusterfork launcher)
+- **MCP servers:** context7 (remote, requires `CONTEXT7_API_KEY`), linear (remote, disabled), chrome-devtools (local, disabled — uses Chromium on port 9222), pixellab (remote, disabled — requires `PIXELLAB_API_KEY`), ElevenLabs (local via clusterfork launcher)
 - **Plugins:** chrome-devtools-mcp disabled
 - **Updates:** auto-update enabled; `installer = internal`
 
@@ -73,6 +73,7 @@ Command Code MCP servers. The installer expands `${ENV}` placeholders from the c
 - **ElevenLabs:** clusterfork `bin/elevenlabs-mcp` launcher (`ELEVENLABS_API_KEY` from `.env`)
 - **linear:** remote `https://mcp.linear.app/mcp`, disabled
 - **chrome-devtools:** local `pnpm dlx chrome-devtools-mcp@latest`, disabled — uses Chromium on port 9222
+- **pixellab:** remote `https://api.pixellab.ai/mcp`, disabled, with its bearer token from `PIXELLAB_API_KEY` in `.env`
 
 ## ElevenLabs MCP launcher
 
@@ -80,7 +81,7 @@ Command Code MCP servers. The installer expands `${ENV}` placeholders from the c
 
 ## Disabled-by-default MCP servers
 
-linear and chrome-devtools ship disabled in OpenCode (`"enabled": false`), Grok (`enabled = false`), Qwen (`mcp.excluded: ["linear", "chrome-devtools"]`), and Command Code (`"enabled": false` on each `mcpServers` entry) — present but inactive; flip the flag (or remove the name from Qwen's exclude list) in the live config to use one, and a reinstall resets it to disabled.
+linear, chrome-devtools, and pixellab ship disabled in OpenCode (`"enabled": false`), Grok (`enabled = false`), Qwen (`mcp.excluded`), and Command Code (`"enabled": false` on each `mcpServers` entry) — present but inactive; flip the flag (or remove the name from Qwen's exclude list) in the live config to use one, and a reinstall resets it to disabled.
 
 They are deliberately omitted from Cursor and Claude Code. Cursor's `mcp.json` has no per-server disabled field — on/off is IDE state toggled in Customize → MCPs, tracked per project (the CLI has `cursor-agent mcp enable/disable`, also local state). Claude Code ignores a user-scope `disabled` field in `~/.claude.json` — verified empirically on v2.1.220 (2026-07): a probe server with `"disabled": true` was still spawned (upstream issues anthropics/claude-code#33958 and #13311 were stale-closed, not fixed). Its per-project `/mcp` toggle (`disabledMcpServers`) is per-project state, not shippable config. Shipping the servers to either agent would enable them by default, the opposite of the intent.
 

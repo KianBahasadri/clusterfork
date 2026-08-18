@@ -43,6 +43,13 @@ enabled = false
 url = "https://mcp.linear.app/mcp"
 enabled = false
 
+[mcp_servers.pixellab]
+url = "https://api.pixellab.ai/mcp"
+enabled = false
+
+[mcp_servers.pixellab.headers]
+Authorization = "Bearer ${PIXELLAB_API_KEY}"
+
 [mcp_servers.context7]
 url = "https://mcp.context7.com/mcp"
 enabled = true

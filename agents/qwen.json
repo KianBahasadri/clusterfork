@@ -14,7 +14,7 @@
     }
   },
   "mcp": {
-    "excluded": ["linear", "chrome-devtools"]
+    "excluded": ["linear", "chrome-devtools", "pixellab"]
   },
   "mcpServers": {
     "context7": {
@@ -40,6 +40,12 @@
         "--browserUrl",
         "http://127.0.0.1:9222"
       ]
+    },
+    "pixellab": {
+      "httpUrl": "https://api.pixellab.ai/mcp",
+      "headers": {
+        "Authorization": "Bearer ${PIXELLAB_API_KEY}"
+      }
     }
   }
 }

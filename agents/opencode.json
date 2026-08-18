@@ -41,6 +41,14 @@
       ],
       "enabled": false
     },
+    "pixellab": {
+      "type": "remote",
+      "url": "https://api.pixellab.ai/mcp",
+      "headers": {
+        "Authorization": "Bearer {env:PIXELLAB_API_KEY}"
+      },
+      "enabled": false
+    },
     "ElevenLabs": {
       "type": "local",
       "command": [
