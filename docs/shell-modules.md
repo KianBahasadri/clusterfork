@@ -8,7 +8,7 @@
 
 ## cmd.sh
 
-`cmd` is a function that launches `command cmd --yolo` (bypass all permission prompts) unless a `--yolo`/`--dangerously-skip-permissions` flag is already present, in which case it forwards the arguments unchanged.
+`cmd` is a function that launches `command cmd --resume --yolo` (resume the last conversation, bypassing all permission prompts) unless a `--yolo`/`--dangerously-skip-permissions` flag is already present, in which case it forwards the arguments unchanged.
 
 ## codex.sh
 

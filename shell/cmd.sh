@@ -8,5 +8,5 @@ cmd() {
         ;;
     esac
   done
-  command cmd --yolo "$@"
+  command cmd --resume --yolo "$@"
 }
