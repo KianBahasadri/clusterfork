@@ -60,9 +60,11 @@ accurate to the implementation.
    - **After behavior changes:** Update the **one** topic file under `docs/`
      that owns that fact. Do not copy the same detail into AGENTS.md,
      README.md, or multiple docs.
-   - **Regenerate vs patch:** Prefer the `generate_docs` skill when docs are
-     broadly stale or many topics shifted; for small, targeted edits, patch
-     the single topic file (and `docs/README.md` if you add/remove a topic).
+   - **Regenerate vs patch:** `docs/README.md` records the commit it was
+     generated from; `git diff <sha>..HEAD --stat` shows what changed since.
+     Prefer the `generate_docs` skill when docs are broadly stale or many
+     topics shifted; for small, targeted edits, patch the single topic file
+     (and `docs/README.md` if you add/remove a topic).
    - `CLAUDE.md` is a symlink to this file.
 
    Do not put implementation detail in this file — it lives under `docs/`.
@@ -83,9 +85,22 @@ accurate to the implementation.
    its own doc file too.
 
 6. **Write docs/README.md.** Create an index listing every doc file with a
-   short em-dash description, followed by a Notes section. If the existing
-   docs/README.md already has a Notes section, include it verbatim — do not
-   rewrite it. Otherwise write one explaining:
+   short em-dash description.
+
+   Below the index, write a generation stamp on its own line:
+
+   ```markdown
+   _Generated from commit `<short-sha>` on <YYYY-MM-DD>._
+   ```
+
+   Use `git rev-parse --short HEAD` for the SHA. Always rewrite this line on a
+   regeneration — it is the staleness signal, and a stale stamp is worse than
+   no stamp. It is what lets `git diff <sha>..HEAD --stat` answer "have these
+   docs drifted?"
+
+   Then a Notes section. If the existing docs/README.md already has a Notes
+   section, include it verbatim — do not rewrite it. Otherwise write one
+   explaining:
    - Docs are AI-generated, after-the-fact, implementation-accurate not
      design-accurate.
    - Information should not be repeated anywhere else; each topic lives in
@@ -96,8 +111,10 @@ accurate to the implementation.
    Information must not be repeated across files. If a detail belongs to two
    topics, pick the better fit and reference it from the other file.
 
-8. **Do not create files for things that don't exist.** Only document what's
-   actually in the repo. If a file or feature isn't present, don't invent it.
+   Keep each file under ~400 lines. Agents are told to open only the topic
+   files they need, so a file too large to open cheaply gets skipped or eats
+   the context budget. Past that size, split by sub-topic and list each part
+   in `docs/README.md`.
 
 ## Notes
 
