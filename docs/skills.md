@@ -14,6 +14,10 @@ Antigravity CLI discovers global skills from `~/.gemini/antigravity-cli/skills/`
 
 Commits and pushes staged changes to the current branch. Invoked via the `/commit_and_push` slash command in Qwen Code, Grok, Claude Code, or Codex. OpenCode and Antigravity receive the compatible `commit-and-push` skill name.
 
+## create-github-action-tests
+
+Backfills characterization tests and a hardened GitHub Actions workflow on a public repo using standard hosted runners (Actions minutes are free there). Auto-rejects billed or unknown CI until the user explicitly approves. Invoked via `/create-github-action-tests`.
+
 ## generate_docs
 
 Regenerates `AGENTS.md` and the `docs/` directory from the current state of the repo. Reads all source files, creates one doc per topic with no repeated information, and writes a slim `AGENTS.md` with process rules for reading and maintaining `docs/` (not topic detail). Invoked via the `/generate_docs` slash command in Qwen Code, Grok, Claude Code, or Codex. OpenCode and Antigravity receive the compatible `generate-docs` skill name.
