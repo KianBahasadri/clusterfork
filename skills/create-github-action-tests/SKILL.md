@@ -4,10 +4,11 @@ description: >
   Backfill characterization tests and wire them into free GitHub Actions CI
   on a public repo. Confirms Actions would be free (public repo, standard
   hosted runners), auto-rejects billed or unknown CI until the user explicitly
-  approves, adds new test files only, proves each new test is deterministic,
-  then adds a dedicated hardened workflow. Use when asked to "create github
-  action tests", "backfill characterization tests", "add tests and GitHub
-  Actions CI", "wire tests into CI", or "/create-github-action-tests".
+  approves, adds new test files only, proves each new test is deterministic
+  and cannot silently skip, then wires them into a hardened workflow. Use when
+  asked to "create github action tests", "backfill characterization tests",
+  "add tests and GitHub Actions CI", "wire tests into CI", or
+  "/create-github-action-tests".
 ---
 
 # Create GitHub Action Tests
@@ -80,8 +81,13 @@ to make a test pass.
      delete the evidence. Leave it out of CI (uncommitted snippet is fine) and
      surface it in step 8 so the user can choose lock-in vs fix.
    - Never delete a green characterization test to hide a bug.
+   - Each test must actually exercise the path its name claims. Re-read every
+     setup line and confirm nothing later in the test undoes it — a fixture
+     that recreates the file you just deleted turns a "missing input" test into
+     something else while still passing. A green test whose label overstates
+     what it covers is worse than no test: it is a false coverage claim.
 
-5. **Prove each test is deterministic before it can stay.** If an existing
+5. **Prove each test is deterministic and cannot silently skip.** If an existing
    suite is already red *before* any new files, report that and do not add a
    workflow. New characterization tests may still be written if they themselves
    pass; they must not become a CI job that pretends the repo is green.
@@ -90,28 +96,53 @@ to make a test pass.
      on every run.
    - Drop or fix any test that is flaky or order-dependent. A flaky test trains
      everyone to ignore the CI badge, which destroys the whole point.
-   - A red or flaky test committed as if it were green is a failure of this
-     skill, not a finding.
+   - **A test that can skip itself is not covered.** A skipped test suite exits
+     0 and reads as green while asserting nothing. If a test needs an external
+     interpreter, binary, or optional dependency, CI must install it (step 6)
+     *and* the test must **fail rather than skip** when the tool is absent and
+     an environment variable such as `CI` is set. A convenience skip for local
+     developers is acceptable only with that CI-side hard failure in place.
+   - Verify that, do not assume it: rerun the new tests once with the tool
+     removed from `PATH`. That run must report skips only outside CI, and must
+     fail with `CI` set. Treat "everything skipped, exit 0" as a red flag.
+   - A red, flaky, or silently-skipped test committed as if it were green is a
+     failure of this skill, not a finding.
 
-6. **Add a minimal, hardened CI workflow.** Default to a new dedicated file
-   `.github/workflows/test.yml`. Only add a job to an existing file when that
-   file is already a test/CI workflow whose triggers are `push` / `pull_request`
-   (or a subset). Never edit deploy, release, pages, or bot workflows. Never
-   change another job's permissions as a side effect (if you must extend, set
-   `permissions: contents: read` on the *new job* only).
-   - Split **clean-runner setup** from **test invocation**. Setup: checkout,
-     `runs-on: ubuntu-latest` (or another standard GitHub-hosted `ubuntu-*` /
-     `windows-*` / `macos-*` label only if the tests truly need that OS),
-     setup-python/node/go/rust at the repo's declared version, and install the
-     same test runner and deps used locally. Inline in the job; do not require
-     editing lockfiles or source. Forbidden `runs-on` without a separate
-     explicit approval: larger runners (core-count, GPU, or "large" labels),
-     custom images, runner groups, and self-hosted. The job's test command is
-     the full-suite invocation that passed *once* in step 5 — never the repeat
-     loop, never a command that assumes packages already installed on your
-     machine.
-   - Set `permissions: contents: read` at the top level of a *new* workflow
-     file; the default token is broader than a test run needs.
+6. **Wire the tests into CI with the least invasive change.** Pick the first
+   option that fits:
+   1. **Extend an existing test job** when that job already runs a command that
+      now picks the new tests up on its own (the suite lives in a directory the
+      job already runs whole). Add only the setup steps the new tests need.
+      Prefer this: it avoids a duplicate checkout and toolchain setup, and keeps
+      a single green/red signal.
+   2. **Add a job to an existing test/CI workflow** when the new tests need a
+      different runner, toolchain, or command than any existing job.
+   3. **Create `.github/workflows/test.yml`** when the repo has no suitable test
+      workflow.
+
+   Only touch a file that is already a test/CI workflow whose triggers are
+   `push` / `pull_request` (or a subset). Never edit deploy, release, pages, or
+   bot workflows.
+   - **Permissions.** On a new workflow file, set `permissions: contents: read`
+     at the top level. On a new job in an existing file, set it on that job
+     only. Never change an existing job's permissions as a side effect.
+   - If the workflow you extend has no `permissions:` key anywhere and every job
+     in it is a test job, top-level `permissions: contents: read` is the right
+     hardening — but *propose* it in step 8 and let the user decide. Do not add
+     it silently; it changes the token for jobs this skill did not write.
+   - **Clean-runner setup.** Keep setup separate from test invocation. Setup is
+     checkout, `runs-on: ubuntu-latest` (or another standard GitHub-hosted
+     `ubuntu-*` / `windows-*` / `macos-*` label only if the tests truly need that
+     OS), setup-python/node/go/rust at the repo's declared version, and every
+     runner, dependency, and external tool the tests need — including the tools
+     behind step 5's no-skip rule. Inline it in the job; do not require editing
+     lockfiles or source. Forbidden `runs-on` without separate explicit
+     approval: larger runners (core-count, GPU, or "large" labels), custom
+     images, runner groups, and self-hosted.
+   - **Test invocation.** When you add one, it is the full-suite command that
+     passed *once* in step 5 — never the repeat loop, and never a command that
+     assumes packages already installed on your machine. Under option 1 there is
+     no new command; confirm the existing one really does collect the new tests.
    - Pin any third-party action to a full commit SHA, not a moving tag. First-
      party `actions/*` (checkout, setup-*) pinned to a major tag is acceptable.
    - Triggers are `push` and `pull_request` only. Never use `pull_request_target`
@@ -119,20 +150,32 @@ to make a test pass.
    - Never write a secret into the workflow, and do not make the test job depend
      on one — fork PRs run without secrets by design.
 
-7. **Verify the workflow before handing it back.** Re-read the finished YAML
-   and confirm it has a clean-runner setup plus the step-5 full-suite command,
-   not the local repeat loop. Check the YAML parses:
-   `python3 -c 'import yaml,sys; yaml.safe_load(open(sys.argv[1]))' .github/workflows/test.yml`
-   if PyYAML is available (pass the real path as `sys.argv[1]`; do not redirect
-   the file on stdin), otherwise a careful read. If `act` is installed and the
-   user wants it, offer a local dry run; do not require it.
+7. **Verify the workflow before handing it back.** Re-read the finished YAML and
+   confirm it has a clean-runner setup plus the step-5 full-suite command, not
+   the local repeat loop, and that every tool the tests need is installed there.
+   Parse the file with whichever of these is available — do not assume PyYAML is
+   installed, it frequently is not:
+   - `python3 -c 'import yaml,sys; yaml.safe_load(open(sys.argv[1]))' <path>`
+   - `ruby -ryaml -e 'YAML.load_file(ARGV[0])' <path>`
+   - `yq '.' <path> >/dev/null`
+
+   Pass the real path as an argument; do not redirect the file on stdin. If none
+   of them are installed, say so — a careful read is the fallback of last
+   resort, not the plan. If `act` is installed and the user wants it, offer a
+   local dry run; do not require it.
 
 8. **Summarize and hand off.** Report, concisely:
    - What you tested and, just as important, what you deliberately did not test
      and why (network, secrets, display, nondeterminism).
    - Any intent-mismatch / genuine bug from step 4 (not in CI).
-   - The workflow added (or the job added to an existing test workflow), and the
-     exact command it runs.
+   - The workflow file and job you added or extended, and the exact command it
+     runs.
+   - Any hardening you deliberately did not apply and why — in particular a
+     top-level `permissions: contents: read` proposed under step 6.
+   - Any new local prerequisite the tests introduce (an interpreter, a tool). If
+     the repo documents how to run its tests, say that doc needs the new
+     prerequisite added: a contributor who sees green without the tool installed
+     is being misled.
    - That CI only starts running once the change is pushed. Present the diff for
      review; commit via the `commit_and_push` skill when the user is ready. Do
      not commit or push on your own unless asked.
