@@ -47,3 +47,19 @@ Invokes OpenCode headlessly (`opencode run`; default `-m opencode-go/deepseek-v4
 ## ask-antigravity
 
 Invokes Antigravity CLI headlessly (`agy --print`; default model `gemini-3.6-flash-high` with `--effort high` — see the skill file for the pin) so the agent can get help from Antigravity on difficult work, including image generation via the built-in `generate_image` tool (Nano Banana 2; args `Prompt`, `ImageName`, optional `ImagePaths` for edits). The agent chooses new vs continue/resume (`--continue` / `--conversation`), mode (`--mode plan` for judgment, `--mode accept-edits` for auto-applied file edits), permissions (`--dangerously-skip-permissions` for unattended tools/images; always detach stdin with `< /dev/null` in print mode), and model from task context; the user only runs `/ask-antigravity`. Workspace is the process cwd (no `--cwd` flag); use `--add-dir` for extras. Models are listed via `agy models`. Scope is general — not code-only.
+
+## improve-codebase-architecture
+
+Scans the codebase for deepening opportunities (shallow modules, leaky seams, poor locality/leverage), presents candidates as a self-contained HTML report (Tailwind + Mermaid) in the OS temp dir, then grills the user on the chosen candidate. Sourced from [mattpocock/skills](https://github.com/mattpocock/skills) (MIT). Invoked via `/improve-codebase-architecture`. Depends on `codebase-design` (vocabulary), `grilling` (interview loop), and `domain-modeling` (CONTEXT.md/ADR updates).
+
+## codebase-design
+
+Shared vocabulary and principles for designing deep modules (module, interface, depth, seam, adapter, leverage, locality) including the deletion test and seam discipline. Model-invoked; also used directly when designing interfaces or deepening modules. Sourced from [mattpocock/skills](https://github.com/mattpocock/skills). Companion docs: `DEEPENING.md` and `DESIGN-IT-TWICE.md`.
+
+## domain-modeling
+
+Actively builds and sharpens the project's domain model during design — challenging terms against `CONTEXT.md`, stress-testing with edge-case scenarios, and updating `CONTEXT.md`/`docs/adr/` inline. Model-invoked when terminology or decisions are being shaped, not just read. Sourced from [mattpocock/skills](https://github.com/mattpocock/skills). Companion docs: `CONTEXT-FORMAT.md` and `ADR-FORMAT.md`.
+
+## grilling
+
+Reusable interview primitive: maps decisions as a design tree, asks the whole frontier each round with a recommended answer, and recomputes after each answer until the frontier is empty. Model-invoked by `improve-codebase-architecture` and other skills. Sourced from [mattpocock/skills](https://github.com/mattpocock/skills) (`skills/productivity/grilling`).
