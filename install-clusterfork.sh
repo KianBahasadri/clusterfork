@@ -5,30 +5,31 @@
 #   1. Overwrites ~/.config/clusterfork/.env from repo-local .env
 #   2. Overwrites ~/.config/clusterfork/bash_profile.sh, shell/*.sh, bin/,
 #      and scripts/rotate_auth.py from repo
-#   3. Overwrites agent settings from repo-local agents/ (Grok keeps existing
+#   3. Overwrites ~/.tmux.conf from repo-local tmux.conf
+#   4. Overwrites agent settings from repo-local agents/ (Grok keeps existing
 #      theme from ~/.grok/config.toml if set)
-#   4. Overwrites ~/.qwen/skills/, ~/.grok/skills/, ~/.claude/skills/, and
+#   5. Overwrites ~/.qwen/skills/, ~/.grok/skills/, ~/.claude/skills/, and
 #      ~/.codex/skills/ (user skills only; preserves ~/.codex/skills/.system)
 #      from repo-local skills/. Also installs normalized skills for Command
 #      Code and Antigravity, plus OpenCode compatibility aliases.
-#   5. Overwrites Claude/Cursor statusline scripts + usage fetchers from
+#   6. Overwrites Claude/Cursor statusline scripts + usage fetchers from
 #      repo-local statusline/
-#   6. Overwrites ~/.cursor/mcp.json from agents/cursor-mcp.json (expands
+#   7. Overwrites ~/.cursor/mcp.json from agents/cursor-mcp.json (expands
 #      ${ENV} placeholders from the clusterfork .env)
-#   7. Overwrites ~/.commandcode/mcp.json from agents/command-code-mcp.json
+#   8. Overwrites ~/.commandcode/mcp.json from agents/command-code-mcp.json
 #      (expands ${ENV} placeholders from the clusterfork .env)
-#   8. Ensures telemetry is disabled in ~/.commandcode/config.json from
+#   9. Ensures telemetry is disabled in ~/.commandcode/config.json from
 #      agents/command-code.json (key only; does not replace the whole file)
-#   9. Replaces the mcp_servers table in ~/.codex/config.toml from
+#  10. Replaces the mcp_servers table in ~/.codex/config.toml from
 #      agents/codex-mcp.toml (table only; Codex owns the rest of that file)
-#  10. Installs agents/claude-plugins/* into ~/.claude/skills/ as skills-dir
+#  11. Installs agents/claude-plugins/* into ~/.claude/skills/ as skills-dir
 #      plugins; agents/claude.json ships each one disabled
-#  11. Ensures ElevenLabs in ~/.claude.json mcpServers (key only; does not
+#  12. Ensures ElevenLabs in ~/.claude.json mcpServers (key only; does not
 #      replace the whole file)
-#  12. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
+#  13. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
 #      replace the whole file)
-#  13. Appends a source line to ~/.bashrc if it is not already present
-#  14. Best-effort: ensures Codex/Cursor/OpenCode auth.json links through
+#  14. Appends a source line to ~/.bashrc if it is not already present
+#  15. Best-effort: ensures Codex/Cursor/OpenCode auth.json links through
 #      ~/.local/share/clusterfork-auth/<agent>/current when profiles exist
 #
 # Usage:
@@ -46,6 +47,8 @@ SHELL_SRC_DIR="$REPO_DIR/shell"
 SHELL_DEST_DIR="$CLUSTERFORK_CONFIG_DIR/shell"
 BIN_SRC_DIR="$REPO_DIR/bin"
 BIN_DEST_DIR="$CLUSTERFORK_CONFIG_DIR/bin"
+TMUX_CONFIG_SRC="$REPO_DIR/tmux.conf"
+TMUX_CONFIG_DEST="$HOME/.tmux.conf"
 ROTATE_AUTH_SRC="$REPO_DIR/scripts/rotate_auth.py"
 ROTATE_AUTH_DEST="$CLUSTERFORK_CONFIG_DIR/scripts/rotate_auth.py"
 AGENTS_SRC_DIR="$REPO_DIR/agents"
@@ -355,6 +358,10 @@ rm -rf -- "$SHELL_DEST_DIR"
 mkdir -p "$SHELL_DEST_DIR"
 cp -r "$SHELL_SRC_DIR"/. "$SHELL_DEST_DIR"/
 step "shell modules" "$SHELL_DEST_DIR"
+
+[[ -f "$TMUX_CONFIG_SRC" ]] || fail "missing $(tildify "$TMUX_CONFIG_SRC")"
+cp "$TMUX_CONFIG_SRC" "$TMUX_CONFIG_DEST"
+step "tmux" "$TMUX_CONFIG_DEST"
 
 [[ -d "$BIN_SRC_DIR" ]] || fail "missing $(tildify "$BIN_SRC_DIR")"
 rm -rf -- "$BIN_DEST_DIR"

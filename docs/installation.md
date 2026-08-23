@@ -17,6 +17,7 @@
 | `shell/*.sh`                      | `~/.config/clusterfork/shell/*.sh`       | One module per agent              |
 | `bin/*`                           | `~/.config/clusterfork/bin/*`            | Helper launchers (on `PATH`)      |
 | `scripts/rotate_auth.py`          | `~/.config/clusterfork/scripts/rotate_auth.py` | Shared `rotate-*` implementation |
+| `tmux.conf`                       | `~/.tmux.conf`                           | tmux settings (`mouse on`)        |
 | `agents/opencode.json`            | `~/.config/opencode/opencode.json`       | OpenCode settings                 |
 | `agents/qwen.json`                | `~/.qwen/settings.json`                  | Qwen Code settings                |
 | `agents/antigravity.json`         | `~/.gemini/antigravity-cli/settings.json`| Antigravity settings              |
