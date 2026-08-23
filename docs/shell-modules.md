@@ -1,30 +1,34 @@
 # Shell Modules
 
-`bash_profile.sh` sources every `shell/*.sh` on shell startup. Each module defines launch wrappers, aliases, or credential rotation functions for one agent.
+`bash_profile.sh` sources every `shell/*.sh` on shell startup. Each module defines launch wrappers or credential rotation functions for one agent. Launch wrappers auto-wrap in tmux — see `_tmux.sh`.
+
+## _tmux.sh
+
+`_cf_tmux` is the shared tmux wrapper used by every launcher. It runs `tmux new-session -A -s <basename> -c "$PWD"` so each working directory gets its own session named after `basename "$PWD"` (sanitized: `.` and `:` → `-`, `-` prefix guarded, `default` fallback). It bypasses tmux when `CF_NO_TMUX=1`, when already inside tmux (`$TMUX`), when stdin is not a tty, or when `tmux` is not installed — falling back to running the command directly.
 
 ## claude.sh
 
-`cl` launches `claude --dangerously-skip-permissions --effort xhigh` and sets `ANTHROPIC_CUSTOM_MODEL_OPTION=claude-opus-4-8` (label `Opus 4.8`) so `/model` keeps a 4.8 row after the `opus` alias moved to Opus 5. The env vars are scoped to that launch. `rotate-claude` switches between multiple saved Claude account credentials.
+`cl` launches `claude --dangerously-skip-permissions --effort xhigh` via `_cf_tmux` and sets `ANTHROPIC_CUSTOM_MODEL_OPTION=claude-opus-4-8` (label `Opus 4.8`) so `/model` keeps a 4.8 row after the `opus` alias moved to Opus 5. The env vars are scoped to that launch. `rotate-claude` switches between multiple saved Claude account credentials.
 
 ## cmd.sh
 
-`cmd` is a function that launches `command cmd --resume --yolo` (resume the last conversation, bypassing all permission prompts) unless a `--yolo`/`--dangerously-skip-permissions` flag is already present, in which case it forwards the arguments unchanged.
+`cmd` is a function that launches `command cmd --resume --yolo` via `_cf_tmux` (resume the last conversation, bypassing all permission prompts) unless a `--yolo`/`--dangerously-skip-permissions` flag is already present, in which case it forwards the arguments unchanged (also via `_cf_tmux`).
 
 ## codex.sh
 
-`cc` is an alias for `codex resume --yolo`. `rotate-codex` switches between saved Codex accounts via symlinks.
+`cc` launches `codex resume --yolo` via `_cf_tmux`. `rotate-codex` switches between saved Codex accounts via symlinks.
 
 ## cursor.sh
 
-`ca` is an alias for `cursor-agent --yolo` (Run Everything / force-allow). `rotate-cursor-cli` switches between saved Cursor accounts via symlinks.
+`ca` launches `cursor-agent --yolo` via `_cf_tmux` (Run Everything / force-allow). `rotate-cursor-cli` switches between saved Cursor accounts via symlinks.
 
 ## opencode.sh
 
-`oc` is an alias for `opencode --continue`. `o` is an alias for `opencode`. `rotate-opencode` switches between saved OpenCode accounts via symlinks.
+`oc` launches `opencode --continue` via `_cf_tmux`. `o` launches `opencode` via `_cf_tmux`. `rotate-opencode` switches between saved OpenCode accounts via symlinks.
 
 ## opencode-claude.sh
 
-`occ` launches Claude Code (`--dangerously-skip-permissions`) against the **OpenCode Go** subscription instead of an Anthropic account. OpenCode Go serves an Anthropic-compatible `/v1/messages` endpoint at `https://opencode.ai/zen/go`, so no proxy is involved — `ANTHROPIC_BASE_URL` points straight at it.
+`occ` launches Claude Code (`--dangerously-skip-permissions`) via `_cf_tmux` against the **OpenCode Go** subscription instead of an Anthropic account. OpenCode Go serves an Anthropic-compatible `/v1/messages` endpoint at `https://opencode.ai/zen/go`, so no proxy is involved — `ANTHROPIC_BASE_URL` points straight at it.
 
 The key is read from `OPENCODE_API_KEY` (clusterfork `.env`) if set, otherwise from `opencode-go.key` in `~/.local/share/opencode/auth.json`, so `occ` follows whichever account `rotate-opencode` selected. It runs in a subshell that unsets `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` first, since a cached OAuth token would otherwise outrank the gateway key.
 
@@ -70,8 +74,8 @@ The Claude statusline detects `occ` from `ANTHROPIC_BASE_URL` and swaps in the O
 
 ## antigravity.sh
 
-`ag` is an alias for `agy --dangerously-skip-permissions`. `rotate-antigravity` switches between saved Antigravity accounts using `secret-tool` (GNOME Keyring).
+`ag` launches `agy --dangerously-skip-permissions` via `_cf_tmux`. `rotate-antigravity` switches between saved Antigravity accounts using `secret-tool` (GNOME Keyring).
 
 ## chrome.sh
 
-`chrome` launches Chromium with remote debugging on port 9222 for use with browser-automation MCP servers.
+`chrome` launches Chromium with remote debugging on port 9222 for use with browser-automation MCP servers. Not wrapped in tmux (background `nohup ... &`).

@@ -171,52 +171,54 @@ occ() {
   output="${OCC_MAX_OUTPUT_TOKENS:-$(_occ_output_tokens "$OCC_MODEL")}"
 
   (
-    # A cached OAuth token would otherwise outrank the gateway key.
     unset ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN
-
-    # Private profile: /model persist and gateway cache stay off ~/.claude.
     export CLAUDE_CONFIG_DIR="$OCC_CLAUDE_CONFIG_DIR"
     _occ_prepare_config_dir
 
-    [[ -n "$context" ]] && export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$context"
-    # Without this, Claude Code pins gateway models at 32k max_tokens and
-    # high-effort thinking hits the ceiling (see docs/opencode-go.md).
-    [[ -n "$output" ]] && export CLAUDE_CODE_MAX_OUTPUT_TOKENS="$output"
-
-    export ANTHROPIC_BASE_URL="$OPENCODE_GO_BASE_URL"
-    export ANTHROPIC_API_KEY="$key"
-
-    # Every slot must resolve to a real opencode-go id, including the aliases
-    # settings.json selects by name. Defaults are always pro; flash is only
-    # reachable from the /model gateway rows.
-    export ANTHROPIC_MODEL="$OCC_MODEL"
-    export ANTHROPIC_DEFAULT_OPUS_MODEL="$OCC_MODEL"
-    export ANTHROPIC_DEFAULT_FABLE_MODEL="$OCC_MODEL"
-    export ANTHROPIC_DEFAULT_SONNET_MODEL="$OCC_SONNET_MODEL"
-    export ANTHROPIC_DEFAULT_HAIKU_MODEL="$OCC_MODEL"
-    export ANTHROPIC_SMALL_FAST_MODEL="$OCC_SMALL_MODEL"
-    export CLAUDE_CODE_SUBAGENT_MODEL="$OCC_MODEL"
-    export CLAUDE_CODE_BG_CLASSIFIER_MODEL="$OCC_SMALL_MODEL"
-
-    # Show the real model in /model and the status line, not "Opus"/"Sonnet".
-    export ANTHROPIC_DEFAULT_OPUS_MODEL_NAME="$OCC_MODEL"
-    export ANTHROPIC_DEFAULT_SONNET_MODEL_NAME="$OCC_SONNET_MODEL"
-    export ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME="$OCC_MODEL"
-
-    # Keep everything except inference off a third-party gateway.
-    export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-
+    local -a _occ_env=()
+    [[ -n "$context" ]] && _occ_env+=("CLAUDE_CODE_MAX_CONTEXT_TOKENS=$context")
+    [[ -n "$output" ]] && _occ_env+=("CLAUDE_CODE_MAX_OUTPUT_TOKENS=$output")
+    _occ_env+=(
+      "ANTHROPIC_BASE_URL=$OPENCODE_GO_BASE_URL"
+      "ANTHROPIC_API_KEY=$key"
+      "ANTHROPIC_MODEL=$OCC_MODEL"
+      "ANTHROPIC_DEFAULT_OPUS_MODEL=$OCC_MODEL"
+      "ANTHROPIC_DEFAULT_FABLE_MODEL=$OCC_MODEL"
+      "ANTHROPIC_DEFAULT_SONNET_MODEL=$OCC_SONNET_MODEL"
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL=$OCC_MODEL"
+      "ANTHROPIC_SMALL_FAST_MODEL=$OCC_SMALL_MODEL"
+      "CLAUDE_CODE_SUBAGENT_MODEL=$OCC_MODEL"
+      "CLAUDE_CODE_BG_CLASSIFIER_MODEL=$OCC_SMALL_MODEL"
+      "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME=$OCC_MODEL"
+      "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME=$OCC_SONNET_MODEL"
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME=$OCC_MODEL"
+      "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
+    )
     if [[ "$OCC_MODEL_DISCOVERY" != 0 ]]; then
       _occ_sync_model_options
-      export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
+      _occ_env+=("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1")
     fi
 
-    # Prefer --effort over CLAUDE_CODE_EFFORT_LEVEL so /effort still works
-    # mid-session (the env var permanently outranks /effort).
+    local -a _occ_cmd=(claude --dangerously-skip-permissions)
     if [[ -z "${CLAUDE_CODE_EFFORT_LEVEL:-}" ]] && ! _occ_has_effort_flag "$@"; then
-      exec claude --dangerously-skip-permissions --effort "${OCC_EFFORT:-max}" "$@"
-    else
-      exec claude --dangerously-skip-permissions "$@"
+      _occ_cmd+=(--effort "${OCC_EFFORT:-max}")
     fi
+    _occ_cmd+=("$@")
+
+    if [[ -n "${CF_NO_TMUX:-}" ]] || [[ -n "${TMUX:-}" ]] || ! [[ -t 0 ]] || ! command -v tmux >/dev/null 2>&1; then
+      for kv in "${_occ_env[@]}"; do export "$kv"; done
+      exec "${_occ_cmd[@]}"
+    fi
+
+    local base name
+    base="$(basename "$PWD")"
+    [[ "$base" == "/" || -z "$base" ]] && base="root"
+    name="${base//./-}"
+    name="${name//:/-}"
+    [[ "$name" == -* ]] && name="_$name"
+    [[ -z "$name" ]] && name="default"
+    local -a _occ_tmux_env=()
+    for kv in "${_occ_env[@]}"; do _occ_tmux_env+=(-e "$kv"); done
+    exec tmux new-session -A -s "$name" -c "$PWD" "${_occ_tmux_env[@]}" -- "${_occ_cmd[@]}"
   )
 }

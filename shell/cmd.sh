@@ -3,10 +3,10 @@ cmd() {
   for arg in "$@"; do
     case "$arg" in
       --yolo|--dangerously-skip-permissions)
-        command cmd "$@"
+        _cf_tmux command cmd "$@"
         return
         ;;
     esac
   done
-  command cmd --resume --yolo "$@"
+  _cf_tmux command cmd --resume --yolo "$@"
 }
