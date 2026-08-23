@@ -97,6 +97,14 @@ Cursor IDE MCP servers. The installer expands `${ENV}` placeholders from the clu
 - **context7:** `pnpx @upstash/context7-mcp` with `CONTEXT7_API_KEY`
 - **ElevenLabs:** clusterfork `bin/elevenlabs-mcp` launcher (`ELEVENLABS_API_KEY` from `.env`)
 
+## agents/command-code.json → ~/.commandcode/config.json
+
+Command Code settings. The installer merges keys from the repo template into the existing config so user settings (provider, model, etc.) are preserved:
+
+- **Privacy:** telemetry disabled (`"telemetry": false`)
+
+If `~/.commandcode/config.json` does not exist, it is created with `{"telemetry": false}`.
+
 ## agents/command-code-mcp.json → ~/.commandcode/mcp.json
 
 Command Code MCP servers. The installer expands `${ENV}` placeholders from the clusterfork `.env` when writing the destination (full replace):

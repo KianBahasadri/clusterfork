@@ -17,16 +17,18 @@
 #      ${ENV} placeholders from the clusterfork .env)
 #   7. Overwrites ~/.commandcode/mcp.json from agents/command-code-mcp.json
 #      (expands ${ENV} placeholders from the clusterfork .env)
-#   8. Replaces the mcp_servers table in ~/.codex/config.toml from
+#   8. Ensures telemetry is disabled in ~/.commandcode/config.json from
+#      agents/command-code.json (key only; does not replace the whole file)
+#   9. Replaces the mcp_servers table in ~/.codex/config.toml from
 #      agents/codex-mcp.toml (table only; Codex owns the rest of that file)
-#   9. Installs agents/claude-plugins/* into ~/.claude/skills/ as skills-dir
+#  10. Installs agents/claude-plugins/* into ~/.claude/skills/ as skills-dir
 #      plugins; agents/claude.json ships each one disabled
-#  10. Ensures ElevenLabs in ~/.claude.json mcpServers (key only; does not
+#  11. Ensures ElevenLabs in ~/.claude.json mcpServers (key only; does not
 #      replace the whole file)
-#  11. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
+#  12. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
 #      replace the whole file)
-#  12. Appends a source line to ~/.bashrc if it is not already present
-#  13. Best-effort: ensures Codex/Cursor/OpenCode auth.json links through
+#  13. Appends a source line to ~/.bashrc if it is not already present
+#  14. Best-effort: ensures Codex/Cursor/OpenCode auth.json links through
 #      ~/.local/share/clusterfork-auth/<agent>/current when profiles exist
 #
 # Usage:
@@ -81,6 +83,8 @@ CURSOR_MCP_DEST="$HOME/.cursor/mcp.json"
 CURSOR_CLI_CONFIG="$HOME/.cursor/cli-config.json"
 COMMAND_CODE_MCP_SRC="$AGENTS_SRC_DIR/command-code-mcp.json"
 COMMAND_CODE_MCP_DEST="$HOME/.commandcode/mcp.json"
+COMMAND_CODE_CONFIG_SRC="$AGENTS_SRC_DIR/command-code.json"
+COMMAND_CODE_CONFIG_DEST="$HOME/.commandcode/config.json"
 CODEX_MCP_SRC="$AGENTS_SRC_DIR/codex-mcp.toml"
 CODEX_CONFIG_DEST="$HOME/.codex/config.toml"
 SHARED_AUTH_ROOT="$HOME/.local/share/clusterfork-auth"
@@ -569,6 +573,35 @@ data = walk(json.loads(src.read_text(encoding="utf-8")))
 dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY
 step "command code mcp" "$COMMAND_CODE_MCP_DEST"
+
+# Command Code config: ensure telemetry is disabled. Merge keys from the repo
+# template into ~/.commandcode/config.json so existing user settings (provider,
+# model, etc.) are preserved. If the file does not exist, create it.
+[[ -f "$COMMAND_CODE_CONFIG_SRC" ]] || fail "missing $(tildify "$COMMAND_CODE_CONFIG_SRC")"
+mkdir -p "$(dirname "$COMMAND_CODE_CONFIG_DEST")"
+python3 - "$COMMAND_CODE_CONFIG_SRC" "$COMMAND_CODE_CONFIG_DEST" <<'PY'
+import json, sys
+from pathlib import Path
+
+src, dest = map(Path, sys.argv[1:])
+wanted = json.loads(src.read_text(encoding="utf-8"))
+if dest.is_file():
+    try:
+        current = json.loads(dest.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"command code config: {dest} is not valid JSON: {exc}")
+    if not isinstance(current, dict):
+        raise SystemExit(f"command code config: {dest} must be a JSON object")
+else:
+    current = {}
+
+# Merge wanted keys into current (repo is source of truth for those keys).
+merged = {**current, **wanted}
+# Only write if changed to keep timestamps stable.
+if merged != current:
+    dest.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+PY
+step "command code config" "$COMMAND_CODE_CONFIG_DEST"
 
 # Codex MCP: ~/.codex/config.toml also holds the model, approval settings, and
 # the per-project trust levels Codex writes itself, so replace only the
