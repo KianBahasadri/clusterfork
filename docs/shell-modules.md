@@ -4,7 +4,7 @@
 
 ## _tmux.sh
 
-`_cf_tmux` is the shared tmux wrapper used by every launcher. It runs `tmux new-session -A -s <basename> -c "$PWD"` so each working directory gets its own session named after `basename "$PWD"` (sanitized: `.` and `:` → `-`, `-` prefix guarded, `default` fallback). It bypasses tmux when `CF_NO_TMUX=1`, when already inside tmux (`$TMUX`), when stdin is not a tty, or when `tmux` is not installed — falling back to running the command directly.
+`_cf_tmux` is the shared tmux wrapper used by every launcher. It runs `tmux new-session -s <basename> -c "$PWD"` so each invocation creates a fresh session named after `basename "$PWD"` (sanitized: `.` and `:` → `-`, `-` prefix guarded, `default` fallback); if that name is already taken it suffixes `-1`, `-2`, … via `has-session` so a second agent in the same directory never attaches to the first. It bypasses tmux when `CF_NO_TMUX=1`, when already inside tmux (`$TMUX`), when stdin is not a tty, or when `tmux` is not installed — falling back to running the command directly.
 
 ## claude.sh
 

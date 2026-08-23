@@ -17,16 +17,22 @@ cl() {
       exec "${_cl_cmd[@]}"
     fi
 
-    local base name
+    local base name orig i
     base="$(basename "$PWD")"
     [[ "$base" == "/" || -z "$base" ]] && base="root"
     name="${base//./-}"
     name="${name//:/-}"
     [[ "$name" == -* ]] && name="_$name"
     [[ -z "$name" ]] && name="default"
+    orig="$name"
+    i=1
+    while tmux has-session -t "$name" 2>/dev/null; do
+      name="${orig}-${i}"
+      ((i++))
+    done
     local -a _cl_tmux_env=()
     for kv in "${_cl_env[@]}"; do _cl_tmux_env+=(-e "$kv"); done
-    exec tmux new-session -A -s "$name" -c "$PWD" "${_cl_tmux_env[@]}" -- "${_cl_cmd[@]}"
+    exec tmux new-session -s "$name" -c "$PWD" "${_cl_tmux_env[@]}" -- "${_cl_cmd[@]}"
   )
 }
 

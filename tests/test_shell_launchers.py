@@ -114,6 +114,19 @@ class MockTmuxTests(unittest.TestCase):
             '#!/bin/bash\n'
             f'LOG="${{MOCK_TMUX_LOG:-{self.log}}}"\n'
             'printf "TMUX_CALL: %s\\n" "$*" >> "$LOG"\n'
+            'if [[ "$1" == "has-session" ]]; then\n'
+            '  target=""\n'
+            '  args=("$@")\n'
+            '  for i in "${!args[@]}"; do\n'
+            '    if [[ "${args[i]}" == "-t" ]]; then target="${args[i+1]:-}"; break; fi\n'
+            '  done\n'
+            '  if [[ -n "${MOCK_TMUX_EXISTING_SESSIONS:-}" ]]; then\n'
+            '    for s in $MOCK_TMUX_EXISTING_SESSIONS; do\n'
+            '      if [[ "$s" == "$target" ]]; then exit 0; fi\n'
+            '    done\n'
+            '  fi\n'
+            '  exit 1\n'
+            'fi\n'
             'if [[ -n "${MOCK_TMUX_FAIL:-}" ]]; then\n'
             '  printf "MOCK_TMUX_ERROR: forced failure\\n" >> "$LOG"\n'
             '  exit "${MOCK_TMUX_EXIT_CODE:-1}"\n'
@@ -150,8 +163,9 @@ class MockTmuxTests(unittest.TestCase):
             )
             (self.fake_bin / name).chmod(0o755)
 
+        env_no_tmux = {k: v for k, v in os.environ.items() if k != "TMUX"}
         self.base_env = {
-            **os.environ,
+            **env_no_tmux,
             "PATH": f"{self.mock_bin}:{self.fake_bin}:{os.environ.get('PATH','')}",
             "MOCK_TMUX_LOG": str(self.log),
         }
@@ -341,6 +355,46 @@ class MockTmuxTests(unittest.TestCase):
         proc = run_bash("source bash_profile.sh; CF_NO_TMUX=1 cmd --help 2>&1 | head -n 1", env=self.base_env)
         self.assertEqual(proc.returncode, 0)
         self.assertIn("FAKE:cmd", proc.stdout)
+
+    def test_always_new_session_not_attach(self):
+        for p in sorted((REPO_ROOT / "shell").glob("*.sh")):
+            if p.name == "chrome.sh":
+                continue
+            text = p.read_text()
+            if "new-session" in text:
+                self.assertNotIn("new-session -A", text, f"{p.name} must not use -A (attach) — always create a new session")
+
+    def test_second_launch_gets_suffixed_name(self):
+        self.log.unlink(missing_ok=True)
+        env = {**self.base_env, "MOCK_TMUX_EXISTING_SESSIONS": "my-project"}
+        self._script_run("'source bash_profile.sh; PWD=/tmp/my.project o --help'", env=env)
+        log = self._log()
+        self.assertIn("-s my-project-1", log)
+        self.assertNotIn("-A", log)
+
+    def test_third_launch_suffix_increments(self):
+        self.log.unlink(missing_ok=True)
+        env = {**self.base_env, "MOCK_TMUX_EXISTING_SESSIONS": "my-project my-project-1"}
+        self._script_run("'source bash_profile.sh; PWD=/tmp/my.project o --help'", env=env)
+        log = self._log()
+        self.assertIn("-s my-project-2", log)
+        self.assertNotIn("-A", log)
+
+    def test_cl_second_launch_suffixed(self):
+        self.log.unlink(missing_ok=True)
+        env = {**self.base_env, "MOCK_TMUX_EXISTING_SESSIONS": "proj"}
+        self._script_run("'source bash_profile.sh; PWD=/tmp/proj cl hello'", env=env)
+        log = self._log()
+        self.assertIn("-s proj-1", log)
+        self.assertNotIn("-A", log)
+
+    def test_occ_second_launch_suffixed(self):
+        self.log.unlink(missing_ok=True)
+        env = {**self.base_env, "OPENCODE_API_KEY": "test-key-123", "MOCK_TMUX_EXISTING_SESSIONS": "proj"}
+        self._script_run("'source bash_profile.sh; PWD=/tmp/proj occ --help'", env=env)
+        log = self._log()
+        self.assertIn("-s proj-1", log)
+        self.assertNotIn("-A", log)
 
 
 if __name__ == "__main__":
