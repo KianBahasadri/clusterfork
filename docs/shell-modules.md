@@ -24,7 +24,7 @@
 
 ## opencode.sh
 
-`oc` launches `opencode --continue` via `_cf_tmux`. `o` launches `opencode` via `_cf_tmux`. `rotate-opencode` switches between saved OpenCode accounts via symlinks.
+`oc` launches `opencode` via `_cf_tmux` — it does not resume (no `--continue`). The old `o` shortcut was removed; use `oc`. `rotate-opencode` switches between saved OpenCode accounts via symlinks.
 
 ## opencode-claude.sh
 

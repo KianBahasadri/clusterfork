@@ -56,7 +56,7 @@ class SourcingTests(unittest.TestCase):
         script = (
             "source bash_profile.sh; "
             "type _cf_tmux >/dev/null; "
-            'for fn in cl cc ca o oc occ cmd ag; do type "$fn" >/dev/null; done; '
+            'for fn in cl cc ca oc occ cmd ag; do type "$fn" >/dev/null; done; '
             'echo ok'
         )
         proc = run_bash(script)
@@ -214,21 +214,15 @@ class MockTmuxTests(unittest.TestCase):
                 proc = run_bash(script)
                 self.assertEqual(proc.stdout.strip(), want)
 
-    def test_simple_o_forwards_via_mock(self):
+    def test_oc_forwards_via_mock(self):
         self.log.unlink(missing_ok=True)
-        self._script_run("'source bash_profile.sh; PWD=/tmp/my.project o --help'")
+        self._script_run("'source bash_profile.sh; PWD=/tmp/my.project oc --help'")
         log = self._log()
         self.assertIn("TMUX_CALL:", log)
         self.assertIn("-s my-project", log)
         self.assertIn("-c /tmp/my.project", log)
         self.assertIn("opencode --help", log)
-        self.assertNotIn("MOCK_TMUX_ERROR", log)
-
-    def test_oc_continue_forwards(self):
-        self.log.unlink(missing_ok=True)
-        self._script_run("'source bash_profile.sh; PWD=/tmp/foo oc foo bar'")
-        log = self._log()
-        self.assertIn("opencode --continue foo bar", log)
+        self.assertNotIn("--continue", log)
         self.assertNotIn("MOCK_TMUX_ERROR", log)
 
     def test_cc_forwarding(self):
@@ -295,7 +289,6 @@ class MockTmuxTests(unittest.TestCase):
 
     def test_all_launchers_binary_resolvable(self):
         cases = [
-            ("o --help", "opencode"),
             ("oc --help", "opencode"),
             ("cc --help", "codex"),
             ("ca --help", "cursor-agent"),
@@ -320,7 +313,7 @@ class MockTmuxTests(unittest.TestCase):
     def test_bypass_cf_no_tmux(self):
         self.log.unlink(missing_ok=True)
         env = {**self.base_env, "CF_NO_TMUX": "1"}
-        proc = run_bash("source bash_profile.sh; o --help", env=env)
+        proc = run_bash("source bash_profile.sh; oc --help", env=env)
         self.assertEqual(proc.returncode, 0)
         self.assertIn("FAKE:opencode", proc.stdout)
         self.assertEqual(self._log(), "")
@@ -328,14 +321,14 @@ class MockTmuxTests(unittest.TestCase):
     def test_bypass_tmux_env(self):
         self.log.unlink(missing_ok=True)
         env = {**self.base_env, "TMUX": "1"}
-        proc = run_bash("source bash_profile.sh; o --help", env=env)
+        proc = run_bash("source bash_profile.sh; oc --help", env=env)
         self.assertEqual(proc.returncode, 0)
         self.assertIn("FAKE:opencode", proc.stdout)
         self.assertEqual(self._log(), "")
 
     def test_bypass_non_tty(self):
         self.log.unlink(missing_ok=True)
-        proc = run_bash("source bash_profile.sh; echo piped | o --help", env=self.base_env)
+        proc = run_bash("source bash_profile.sh; echo piped | oc --help", env=self.base_env)
         self.assertEqual(self._log(), "")
 
     def test_bypass_cl_occ_without_pty(self):
@@ -367,7 +360,7 @@ class MockTmuxTests(unittest.TestCase):
     def test_second_launch_gets_suffixed_name(self):
         self.log.unlink(missing_ok=True)
         env = {**self.base_env, "MOCK_TMUX_EXISTING_SESSIONS": "my-project"}
-        self._script_run("'source bash_profile.sh; PWD=/tmp/my.project o --help'", env=env)
+        self._script_run("'source bash_profile.sh; PWD=/tmp/my.project oc --help'", env=env)
         log = self._log()
         self.assertIn("-s my-project-1", log)
         self.assertNotIn("-A", log)
@@ -375,7 +368,7 @@ class MockTmuxTests(unittest.TestCase):
     def test_third_launch_suffix_increments(self):
         self.log.unlink(missing_ok=True)
         env = {**self.base_env, "MOCK_TMUX_EXISTING_SESSIONS": "my-project my-project-1"}
-        self._script_run("'source bash_profile.sh; PWD=/tmp/my.project o --help'", env=env)
+        self._script_run("'source bash_profile.sh; PWD=/tmp/my.project oc --help'", env=env)
         log = self._log()
         self.assertIn("-s my-project-2", log)
         self.assertNotIn("-A", log)
