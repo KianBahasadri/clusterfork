@@ -20,5 +20,7 @@ jobs:
           bash -n bash_profile.sh
           bash -n shell/*.sh
           bash -c 'source bash_profile.sh; type _cf_tmux >/dev/null; for fn in cl cc ca o oc occ cmd ag; do type "$fn" >/dev/null; done; echo "all launchers sourceable"'
+      - name: Compile cf-dash python
+        run: python3 -m py_compile bin/cf-dash scripts/cf_dash/*.py
       - name: Run tests
         run: python3 -m unittest discover -s tests -v

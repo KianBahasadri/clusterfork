@@ -4,7 +4,7 @@
 # What this does:
 #   1. Overwrites ~/.config/clusterfork/.env from repo-local .env
 #   2. Overwrites ~/.config/clusterfork/bash_profile.sh, shell/*.sh, bin/,
-#      and scripts/rotate_auth.py from repo
+#      scripts/rotate_auth.py, and scripts/cf_dash/ from repo
 #   3. Overwrites ~/.tmux.conf from repo-local tmux.conf
 #   4. Overwrites agent settings from repo-local agents/ (Grok keeps existing
 #      theme from ~/.grok/config.toml if set)
@@ -51,6 +51,8 @@ TMUX_CONFIG_SRC="$REPO_DIR/tmux.conf"
 TMUX_CONFIG_DEST="$HOME/.tmux.conf"
 ROTATE_AUTH_SRC="$REPO_DIR/scripts/rotate_auth.py"
 ROTATE_AUTH_DEST="$CLUSTERFORK_CONFIG_DIR/scripts/rotate_auth.py"
+CF_DASH_SRC_DIR="$REPO_DIR/scripts/cf_dash"
+CF_DASH_DEST_DIR="$CLUSTERFORK_CONFIG_DIR/scripts/cf_dash"
 AGENTS_SRC_DIR="$REPO_DIR/agents"
 OPENCODE_CONFIG_SRC="$AGENTS_SRC_DIR/opencode.json"
 OPENCODE_CONFIG_DEST="$HOME/.config/opencode/opencode.json"
@@ -375,6 +377,12 @@ mkdir -p "$(dirname "$ROTATE_AUTH_DEST")"
 cp "$ROTATE_AUTH_SRC" "$ROTATE_AUTH_DEST"
 chmod +x "$ROTATE_AUTH_DEST"
 step "rotate-auth" "$ROTATE_AUTH_DEST"
+
+[[ -d "$CF_DASH_SRC_DIR" ]] || fail "missing $(tildify "$CF_DASH_SRC_DIR")"
+rm -rf -- "$CF_DASH_DEST_DIR"
+mkdir -p "$(dirname "$CF_DASH_DEST_DIR")"
+cp -r "$CF_DASH_SRC_DIR"/. "$CF_DASH_DEST_DIR"/
+step "cf-dash server" "$CF_DASH_DEST_DIR"
 
 [[ -f "$OPENCODE_CONFIG_SRC" ]] || fail "missing $(tildify "$OPENCODE_CONFIG_SRC")"
 mkdir -p "$(dirname "$OPENCODE_CONFIG_DEST")"

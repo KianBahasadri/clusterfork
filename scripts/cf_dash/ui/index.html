@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cf-dash</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<header id="topbar">
+  <span id="repo-name">…</span>
+  <span id="head-info"></span>
+  <span id="stale-banner" hidden>cache stale</span>
+</header>
+<nav id="tabs" role="tablist"></nav>
+<main id="panels">
+  <section class="panel" data-panel="overview"><div class="loading">loading…</div></section>
+  <section class="panel" data-panel="history" hidden><div class="loading">loading…</div></section>
+  <section class="panel" data-panel="files" hidden><div class="loading">loading…</div></section>
+  <section class="panel" data-panel="deps" hidden><div class="loading">loading…</div></section>
+</main>
+<script src="/assets/app.js"></script>
+</body>
+</html>

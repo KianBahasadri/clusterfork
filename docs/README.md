@@ -4,6 +4,7 @@
 - [Shell Modules](shell-modules.md) — launch wrappers and aliases per agent
 - [Agent Configs](agent-configs.md) — per-agent settings files
 - [Statusline](statusline.md) — Claude Code and Cursor Agent status lines
+- [Dashboard](dashboard.md) — cf-dash repo introspection dashboard and drop-in modules
 - [Auth Rotation](auth-rotation.md) — switching between saved accounts
 - [Scripts](scripts.md) — standalone Python utilities
 - [Skills](skills.md) — shared skills and per-CLI discovery behavior
