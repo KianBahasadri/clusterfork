@@ -10,7 +10,7 @@ cl() {
       "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME=Opus 4.8"
       "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION=Previous-generation Opus"
     )
-    local -a _cl_cmd=(claude --dangerously-skip-permissions --effort xhigh "$@")
+    local -a _cl_cmd=(claude --dangerously-skip-permissions --effort max "$@")
 
     if [[ -n "${CF_NO_TMUX:-}" ]] || [[ -n "${TMUX:-}" ]] || ! [[ -t 0 ]] || ! command -v tmux >/dev/null 2>&1; then
       for kv in "${_cl_env[@]}"; do export "$kv"; done
