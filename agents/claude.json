@@ -22,5 +22,6 @@
   "theme": "dark",
   "switchModelsOnFlag": false,
   "agentPushNotifEnabled": true,
-  "voiceEnabled": true
+  "voiceEnabled": true,
+  "feedbackDrafts": "off"
 }

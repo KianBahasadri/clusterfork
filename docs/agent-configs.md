@@ -54,7 +54,7 @@ Claude Code settings:
 - **Plugins:** context7 enabled; linear, chrome-devtools, and pixellab shipped disabled — see [agents/claude-plugins/](#agentsclaude-plugins--claudeskills)
 - **UI:** dark theme, fullscreen TUI, prompt suggestions off
 - **Voice:** enabled, hold mode
-- **Other:** auto-memory off, skip dangerous-mode permission prompt, agent push notifications on
+- **Other:** auto-memory off, skip dangerous-mode permission prompt, agent push notifications on, drafted feedback off (`"feedbackDrafts": "off"`)
 
 Claude user-scope MCP (ElevenLabs) is upserted into `~/.claude.json` by the installer — see [Installation](installation.md).
 
