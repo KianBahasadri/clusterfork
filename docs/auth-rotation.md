@@ -12,6 +12,10 @@ and GNOME Keyring (Antigravity). All five share the same flags:
 - `rotate-* --list` — list saved profiles (`*` marks the current one)
 - `rotate-*` — rotate to the next account in sorted order
 - `rotate-* NAME` — switch to a specific account
+- `rotate-* --start` (alias `--kickoff`) — for every saved profile of that
+  provider, temporarily install it and send one tiny one-shot message ("hi")
+  via the agent CLI's non-interactive mode. Intent is only to kick off each
+  account's usage ticker; the active credentials are restored afterwards.
 
 `--save` overwrites an existing profile of that name. Profile names may only
 contain letters, numbers, dots, underscores, and dashes.
@@ -29,6 +33,64 @@ The shell modules are thin wrappers. They resolve
 `scripts/rotate_auth.py` from `BASH_SOURCE` so the same function works when
 sourced from the repo or from `~/.config/clusterfork/shell/` after install
 (the installer copies the script to `~/.config/clusterfork/scripts/`).
+
+## --start (alias --kickoff)
+
+Pings every saved profile once with a one-shot non-interactive message (`hi`)
+so the provider starts counting usage for each account. Per-agent ping
+commands: `claude -p`, `codex exec --skip-git-repo-check`, `cursor-agent -p`,
+`opencode run`, `agy --print`. Each invocation gets a 120s timeout; stdin is
+detached so nothing blocks.
+
+The sweep is strictly sequential: install a profile, run its ping to
+completion, then move to the next profile.
+
+State handling per backend:
+
+- Claude: the active `.credentials.json` bytes are backed up and restored
+  byte-identical after the sweep.
+- Codex / Cursor / OpenCode: only the shared `current` symlink is repointed
+  per profile; it is restored to its previous target afterwards. If the agent
+  side was unhooked, the temporary `auth.json` link is removed again.
+- Antigravity: each profile is installed into the active keyring slot in turn;
+  the original profile is reinstalled at the end, and a fully unhooked state is
+  restored by clearing the active item.
+
+Exit code is 1 if any account's ping failed; failures are reported per line
+and do not stop the sweep. The command refuses to run when the active
+credentials are not recoverable through rotation machinery (a regular-file
+`auth.json`, or an Antigravity active keyring item that matches no profile).
+
+### Why not parallel
+
+Parallel kicks were tried and reverted to serial. All backends have exactly
+one active credential slot (the `current` symlink chain, `.credentials.json`,
+or the keyring item), so concurrent pings cannot each get their own account:
+
+- **Credential misattribution.** An agent process reads credentials only after
+  CLI startup, not at spawn time. Spawning all pings against one slot means
+  whichever profile happens to be installed when each process reads wins —
+  some accounts never got kicked, others counted twice. A staggered variant
+  (install → spawn → wait N seconds → next) needs a guess at each CLI's
+  time-to-read and still misattributes on slow startups or cold caches.
+- **Token-refresh races.** A long-running ping can refresh an OAuth token and
+  write it back mid-sweep, clobbering or being clobbered by the next install.
+  With one blocking ping at a time there is no other writer.
+- **Env-var isolation is not portable.** The clean fix — give each process its
+  own config dir via `CLAUDE_CONFIG_DIR` / `CODEX_HOME`-style relocations so
+  all pings start truly simultaneously — works for Claude/Codex/OpenCode but
+  not Cursor, which honors no such variable, so the sweep would need two
+  different mechanisms with different failure modes for one best-effort job.
+
+Serial costs wall time (sum of full pings instead of overlap) but every ping
+provably runs against its own account with no concurrent writers. Since the
+goal is a low-frequency ticker kick, that trade was taken deliberately.
+
+Known limitation: the ping always uses whatever model the agent CLI defaults
+to — it does not pick the cheapest/smallest model for the provider. Picking
+per-provider smallest models would mean keeping a pinned model ID per provider
+(and OpenCode additionally needs a `provider/model` pair), which has not been
+built yet.
 
 ## Why it is one Python script
 

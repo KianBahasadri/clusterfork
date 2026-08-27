@@ -23,6 +23,18 @@ PROFILE_PREFIX = "auth.json."
 CLAUDE_ACTIVE = ".credentials.json"
 CLAUDE_PREFIX = ".credentials.json."
 
+START_MESSAGE = "hi"
+PING_TIMEOUT_SECONDS = 120
+START_PINGS = {
+    # One-shot mode per agent: send one tiny message so the provider starts
+    # its usage ticker for that account. Keyed by backend `command`.
+    "rotate-claude": ["claude", "-p", START_MESSAGE],
+    "rotate-codex": ["codex", "exec", "--skip-git-repo-check", START_MESSAGE],
+    "rotate-cursor-cli": ["cursor-agent", "-p", START_MESSAGE],
+    "rotate-opencode": ["opencode", "run", START_MESSAGE],
+    "rotate-antigravity": ["agy", "--print", START_MESSAGE],
+}
+
 
 class RotateError(Exception):
     def __init__(self, lines: list[str]) -> None:
@@ -109,6 +121,18 @@ def atomic_write_text(dest: Path, text: str, mode: int = 0o600) -> None:
     atomic_replace(tmp, dest)
 
 
+def atomic_write_bytes(dest: Path, data: bytes, mode: int = 0o600) -> None:
+    tmp = dest.with_name(f".{dest.name}.tmp.{os.getpid()}")
+    tmp.unlink(missing_ok=True)
+    try:
+        tmp.write_bytes(data)
+        os.chmod(tmp, mode)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+    atomic_replace(tmp, dest)
+
+
 def prefixed_paths(directory: Path, prefix: str) -> list[Path]:
     if not directory.is_dir():
         return []
@@ -140,6 +164,31 @@ def next_in_order(suffixes: list[str], current: str | None) -> str:
     return suffixes[0]
 
 
+def ping_agent(command_key: str) -> tuple[bool, str]:
+    """Run the one-shot ping for an agent backend. Returns (ok, detail)."""
+    argv = START_PINGS.get(command_key)
+    if argv is None:
+        return False, f"no ping command registered for {command_key}"
+    try:
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=PING_TIMEOUT_SECONDS,
+            stdin=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        return False, f"{argv[0]} not found on PATH"
+    except subprocess.TimeoutExpired:
+        return False, f"timed out after {PING_TIMEOUT_SECONDS}s"
+    if proc.returncode == 0:
+        return True, "ok"
+    output = (proc.stderr or "").strip() or (proc.stdout or "").strip()
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    detail = lines[-1] if lines else ""
+    return False, (f"exit {proc.returncode}: {detail}"[:160] if detail else f"exit {proc.returncode}")
+
+
 def validate_suffix(command: str, suffix: str) -> None:
     if not SUFFIX_RE.fullmatch(suffix):
         fail(
@@ -166,6 +215,7 @@ def usage(command: str) -> list[str]:
         f"  {command} --save name",
         f"  {command} --unhook",
         f"  {command} --list",
+        f"  {command} --start (alias --kickoff)",
     ]
 
 
@@ -185,6 +235,10 @@ def parse_action(command: str, args: list[str]) -> tuple[str, str | None]:
         if len(args) != 1:
             fail(*usage(command))
         return "unhook", None
+    if first in ("--start", "--kickoff"):
+        if len(args) != 1:
+            fail(*usage(command))
+        return "start", None
     if first == "--save":
         if len(args) != 2:
             fail(*usage(command))
@@ -292,6 +346,32 @@ class ClaudeBackend:
         print(f"  Log in, then: {self.command} --save NAME")
         return 0
 
+    def start(self) -> int:
+        names = self.suffixes()
+        if not names:
+            fail(
+                f"{self.command}: no saved profiles",
+                f"  Save the active account first: {self.command} --save NAME",
+            )
+
+        active_bytes: bytes | None = None
+        if self.active.is_file():
+            active_bytes = self.active.read_bytes()
+
+        print(f"{self.command}: start — pinging each saved profile with {START_MESSAGE!r}")
+        failures = 0
+        for name in names:
+            atomic_copy(self.claude_dir / f"{CLAUDE_PREFIX}{name}", self.active)
+            ok, detail = ping_agent(self.command)
+            mark = "ok" if ok else "FAIL"
+            print(f"  {name}: {mark}" + (f" ({detail})" if not ok else ""))
+            if not ok:
+                failures += 1
+
+        if active_bytes is not None:
+            atomic_write_bytes(self.active, active_bytes)
+        return 1 if failures else 0
+
     def _choose(self, names: list[str], requested: str | None) -> str:
         if requested is not None:
             if requested not in names:
@@ -395,6 +475,51 @@ class SharedStoreBackend:
             f"{readlink_text(self.current)}"
         )
         return 0
+
+    def start(self) -> int:
+        if self.auth.exists() and not self.auth.is_symlink():
+            fail(
+                f"{self.command}: {self.auth} exists but is not a symlink",
+                f"  Save it as a named profile first: {self.command} --save NAME",
+            )
+        if not self.store_dir.is_dir():
+            fail(
+                f"{self.command}: missing shared auth directory: {self.store_dir}",
+                "  Run install-clusterfork.sh to migrate existing profiles.",
+            )
+        names = self.suffixes()
+        if not names:
+            fail(
+                f"{self.command}: no saved profiles",
+                f"  Save the active account first: {self.command} --save NAME",
+            )
+
+        orig_current = readlink_text(self.current) if self.current.is_symlink() else None
+        orig_auth_hooked = self.auth.is_symlink()
+
+        print(f"{self.command}: start — pinging each saved profile with {START_MESSAGE!r}")
+        failures = 0
+        for name in names:
+            atomic_symlink(f"{PROFILE_PREFIX}{name}", self.current)
+            if not self._auth_links_to_current():
+                self._restore_auth_link()
+            ok, detail = ping_agent(self.command)
+            mark = "ok" if ok else "FAIL"
+            print(f"  {name}: {mark}" + (f" ({detail})" if not ok else ""))
+            if not ok:
+                failures += 1
+
+        if orig_current is not None:
+            atomic_symlink(orig_current, self.current)
+        else:
+            print(
+                f"{self.command}: warning: store had no previous current link; "
+                f"left it at {readlink_text(self.current)}",
+                file=sys.stderr,
+            )
+        if not orig_auth_hooked and self.auth.is_symlink():
+            self.auth.unlink()
+        return 1 if failures else 0
 
     def unhook(self) -> int:
         if self.auth.exists() and not self.auth.is_symlink():
@@ -526,6 +651,50 @@ class AntigravityBackend:
         print(f"{self.command}: selected profile {next_suffix}")
         print(f"  Active: service={self.active_service} username={self.active_user}")
         return 0
+
+    def start(self) -> int:
+        self._require_secret_tool()
+        self._prepare_state()
+        names = self.suffixes()
+        if not names:
+            fail(
+                f"{self.command}: no saved profiles",
+                f"  Save the active account first: {self.command} --save NAME",
+            )
+        current = self.current_suffix()
+        if current and current not in set(names):
+            print(
+                f"{self.command}: warning: current profile marker is unknown; "
+                "active keyring item will not be restored afterwards",
+                file=sys.stderr,
+            )
+            current = None
+
+        was_unhooked = False
+        if current is None:
+            if self._lookup(self.active_service, self.active_user) is not None:
+                fail(
+                    f"{self.command}: active keyring item is not saved as a profile",
+                    f"  Save it first: {self.command} --save NAME",
+                )
+            was_unhooked = True
+
+        print(f"{self.command}: start — pinging each saved profile with {START_MESSAGE!r}")
+        failures = 0
+        for name in names:
+            self._install_profile(name)
+            ok, detail = ping_agent(self.command)
+            mark = "ok" if ok else "FAIL"
+            print(f"  {name}: {mark}" + (f" ({detail})" if not ok else ""))
+            if not ok:
+                failures += 1
+
+        if current is not None:
+            self._install_profile(current)
+            self._write_current(current)
+        elif was_unhooked:
+            self._clear(self.active_service, self.active_user)
+        return 1 if failures else 0
 
     def save(self, name: str) -> int:
         validate_suffix(self.command, name)
@@ -699,7 +868,7 @@ def run(argv: list[str]) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         print(
             "usage: rotate_auth.py <claude|codex|cursor|opencode|antigravity> "
-            "[name | --save name | --unhook | --list]",
+            "[name | --save name | --unhook | --list | --start]",
             file=sys.stderr,
         )
         return 0 if argv else 1
@@ -713,6 +882,8 @@ def run(argv: list[str]) -> int:
         return backend.list_profiles()
     if action == "unhook":
         return backend.unhook()
+    if action == "start":
+        return backend.start()
     if action == "save":
         assert name is not None
         return backend.save(name)
