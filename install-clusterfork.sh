@@ -809,18 +809,19 @@ else
     "Fix the reported auth state, then re-run the installer."
 fi
 
-# Shell modules: the basename (sans .sh) of each module under shell/.
-modules=()
-for f in "$SHELL_SRC_DIR"/*.sh; do
-  [[ -e "$f" ]] || continue
-  modules+=("$(basename "$f" .sh)")
-done
-if (( ${#modules[@]} > 0 )); then
-  mid=$(( (${#modules[@]} + 1) / 2 ))
-  printf '\n  Shell modules\n'
-  printf '    %s\n' "${modules[*]:0:$mid}"
-  (( ${#modules[@]} > mid )) && printf '    %s\n' "${modules[*]:$mid}"
-fi
+# Shell commands: one line per launcher, its target, and fixed flags.
+printf '\n  Shell commands\n'
+printf '    %-5s %-18s %s\n' cl "claude" "--dangerously-skip-permissions --effort max"
+printf '    %-5s %-18s %s\n' cmd "cmd" "--resume --yolo (unless --yolo/--dangerously-skip-permissions given)"
+printf '    %-5s %-18s %s\n' cc "codex resume" "--yolo"
+printf '    %-5s %-18s %s\n' ca "cursor-agent" "--yolo"
+printf '    %-5s %-18s %s\n' oc "opencode" ""
+printf '    %-5s %-18s %s\n' occ "claude (Go)" "--dangerously-skip-permissions --effort \$OCC_EFFORT (max)"
+printf '    %-5s %-18s %s\n' ag "agy" "--dangerously-skip-permissions"
+printf '    %-5s %-18s %s\n' gk "grok" ""
+printf '    %-5s %-18s %s\n' chrome "chromium" "--remote-debugging-port=9222 (background)"
+printf '    %-5s %-18s %s\n' cf-dash "bin/cf-dash" "--port N --max-commits N --reindex --no-watch"
+printf '    %-5s %-18s %s\n' "rotate-*" "rotate_auth.py" "[name] --save name --unhook --list --start"
 
 # Skills: list each subdirectory name under skills/.
 skills=()

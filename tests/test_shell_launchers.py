@@ -56,7 +56,7 @@ class SourcingTests(unittest.TestCase):
         script = (
             "source bash_profile.sh; "
             "type _cf_tmux >/dev/null; "
-            'for fn in cl cc ca oc occ cmd ag; do type "$fn" >/dev/null; done; '
+            'for fn in cl cc ca oc occ cmd ag gk; do type "$fn" >/dev/null; done; '
             'echo ok'
         )
         proc = run_bash(script)
@@ -157,7 +157,7 @@ class MockTmuxTests(unittest.TestCase):
         )
         (self.mock_bin / "tmux").chmod(0o755)
 
-        for name in ("claude", "codex", "cursor-agent", "opencode", "agy", "cmd"):
+        for name in ("claude", "codex", "cursor-agent", "opencode", "agy", "cmd", "grok"):
             (self.fake_bin / name).write_text(
                 f'#!/bin/bash\necho "FAKE:{name} $*"\n'
             )
@@ -250,6 +250,15 @@ class MockTmuxTests(unittest.TestCase):
         self.assertIn("-- claude --dangerously-skip-permissions", log)
         self.assertNotIn("MOCK_TMUX_ERROR", log)
 
+    def test_gk_forwards_via_mock(self):
+        self.log.unlink(missing_ok=True)
+        self._script_run("'source bash_profile.sh; PWD=/tmp/my.project gk --help'")
+        log = self._log()
+        self.assertIn("TMUX_CALL:", log)
+        self.assertIn("-s my-project", log)
+        self.assertIn("grok --help", log)
+        self.assertNotIn("MOCK_TMUX_ERROR", log)
+
     def test_cmd_default_resume_via_mock(self):
         self.log.unlink(missing_ok=True)
         self._script_run("'source bash_profile.sh; PWD=/tmp/proj cmd'")
@@ -295,6 +304,7 @@ class MockTmuxTests(unittest.TestCase):
             ("ag --help", "agy"),
             ("cl --help", "claude"),
             ("cmd --help", "cmd"),
+            ("gk --help", "grok"),
         ]
         for invocation, _ in cases:
             with self.subTest(invocation=invocation):

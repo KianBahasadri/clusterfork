@@ -76,6 +76,10 @@ The Claude statusline detects `occ` from `ANTHROPIC_BASE_URL` and swaps in the O
 
 `ag` launches `agy --dangerously-skip-permissions` via `_cf_tmux`. `rotate-antigravity` switches between saved Antigravity accounts using `secret-tool` (GNOME Keyring).
 
+## grok.sh
+
+`gk` launches `grok` via `_cf_tmux` — no flags; `agents/grok.toml` ships `permission_mode = "always-approve"` so the CLI already auto-approves.
+
 ## chrome.sh
 
 `chrome` launches Chromium with remote debugging on port 9222 for use with browser-automation MCP servers. Not wrapped in tmux (background `nohup ... &`).
