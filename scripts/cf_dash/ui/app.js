@@ -153,6 +153,7 @@ async function refresh() {
     ciEl.hidden = true;
   }
   if (state.active === "overview" || !state.active) await renderOverview(summary);
+  else if (state.active === "logs") await renderLogs();
 }
 
 async function renderOverview(s) {
@@ -241,7 +242,8 @@ async function renderFiles() {
       <th class="num">bytes</th>
     </tr></thead><tbody>
       ${byLines.map(f => `
-        <tr><td>${esc(f.path)}</td><td>${esc(f.lang)}</td>
+        <tr class="file-row" data-path="${esc(f.path)}">
+          <td>${esc(f.path)}</td><td>${esc(f.lang)}</td>
           <td class="num">${f.lines == null ? "—" : fmt(f.lines)}</td>
           <td class="num">${fmt(f.bytes)}</td></tr>`).join("")}
     </tbody></table>`;
@@ -254,6 +256,82 @@ async function renderFiles() {
         .includes(q) ? "none" : "";
     }
   });
+  panel.querySelectorAll("tr.file-row").forEach(tr => {
+    tr.addEventListener("click", () =>
+      openFile(tr.dataset.path).catch(console.error));
+  });
+}
+
+// ------------------------------------------------------------ file view --
+
+async function openFile(path) {
+  const panel = $('.panel[data-panel="files"]');
+  panel.innerHTML = `<div class="loading">loading ${esc(path)}…</div>`;
+  const d = await api(`/api/file?path=${encodeURIComponent(path)}`);
+  panel.innerHTML = fileView(d);
+  $("#file-back").addEventListener("click", () =>
+    renderFiles().catch(console.error));
+}
+
+function fileView(d) {
+  const s = d.stats || {};
+  const lc = s.last_commit;
+  let code;
+  if (d.binary) {
+    code = `<p style="color:var(--dim)">binary file — content not shown</p>`;
+  } else {
+    const lines = (d.content ?? "").split("\n");
+    code = `<pre>${lines.map((l, i) =>
+      `<span class="ln">${i + 1}</span>${esc(l)}`).join("\n")}</pre>`;
+  }
+  return `
+    <div class="file-head">
+      <button id="file-back">← files</button>
+      <span class="file-path">${esc(d.path)}</span>
+      ${d.truncated ? `<span class="file-trunc">truncated</span>` : ""}
+    </div>
+    <div class="file-grid">
+      <div class="file-code">${code}</div>
+      <aside class="file-stats">
+        <div class="metrics">
+          ${metric("lang", esc(d.lang || "—"))}
+          ${metric("lines", fmt(d.total_lines))}
+          ${metric("bytes", fmt(d.bytes))}
+          ${metric("commits", fmt(s.commits))}
+        </div>
+        <div class="metrics">
+          ${metric("added", fmt(s.added), "all history")}
+          ${metric("deleted", fmt(s.deleted), "all history")}
+        </div>
+        <h2>last commit</h2>
+        ${lc ? `<div class="last-commit">
+            <div class="commit-subject">${esc(lc.subject)}</div>
+            <div class="commit-sha">${esc(lc.sha)} · ${esc(lc.author)}
+              · ${esc(fmtDate(lc.date))}</div>
+          </div>` : "<p>—</p>"}
+        <h2>first commit</h2>
+        <p>${s.first_commit_date ? esc(fmtDate(s.first_commit_date)) : "—"}</p>
+        ${s.authors && s.authors.length ? `
+          <h2>top authors (commits)</h2>
+          ${barRows(s.authors)}` : ""}
+        ${s.blame && s.blame.length ? `
+          <h2>lines by author (blame)</h2>
+          ${barRows(s.blame)}` : ""}
+      </aside>
+    </div>`;
+}
+
+// ------------------------------------------------------------- logs tab --
+
+async function renderLogs() {
+  const data = await api("/api/logs");
+  const panel = $('.panel[data-panel="logs"]');
+  const lines = data.logs || [];
+  panel.innerHTML = `
+    <h2>server logs — ${fmt(lines.length)} lines (newest last)</h2>
+    <pre class="log-view">${lines.length ? lines.map(esc).join("\n") : "—"}</pre>`;
+  const view = panel.querySelector(".log-view");
+  view.scrollTop = view.scrollHeight;
 }
 
 async function renderDeps() {
@@ -329,5 +407,6 @@ async function pollGeneration() {
     if (key === "history") renderHistory().catch(console.error);
     else if (key === "files") renderFiles().catch(console.error);
     else if (key === "deps") renderDeps().catch(console.error);
+    else if (key === "logs") renderLogs().catch(console.error);
   });
 })();

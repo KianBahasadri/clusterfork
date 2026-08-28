@@ -64,6 +64,7 @@ class ServerBootTestCase(unittest.TestCase):
             "state": cls.state,
             "modules": mods,
             "module_routes": srv.build_module_table(mods),
+            "repo": repo,
             "verbose": False,
         }
         httpd._section_re = __import__("re").compile(
@@ -130,6 +131,39 @@ class ServerBootTestCase(unittest.TestCase):
         self.assertIn(("overview", "core"), names_kinds)
         self.assertIn(("hello", "module"), names_kinds)
         self.assertIn(("broken", "broken"), names_kinds)
+        self.assertIn(("logs", "core"), names_kinds)
+        # Server logs is a core tab and sits after all module tabs.
+        self.assertEqual(tabs[-1]["name"], "logs")
+
+    def test_logs_endpoint(self):
+        status, body = get(self.url("/api/logs"))
+        self.assertEqual(status, 200)
+        self.assertIsInstance(json.loads(body)["logs"], list)
+
+    def test_file_endpoint_serves_content_and_stats(self):
+        status, body = get(self.url("/api/file?path=app.py"))
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertIn("print('hi')", data["content"])
+        self.assertEqual(data["lang"], "Python")
+        self.assertEqual(data["stats"]["commits"], 1)
+        self.assertEqual(data["stats"]["last_commit"]["subject"], "c1")
+        self.assertFalse(data["binary"])
+
+    def test_file_endpoint_404s_untracked(self):
+        import urllib.error
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            get(self.url("/api/file?path=missing.py"))
+        self.assertEqual(ctx.exception.code, 404)
+
+    def test_file_endpoint_rejects_traversal(self):
+        import urllib.error
+        for evil in ("../../etc/passwd", "%2e%2e%2f%2e%2e%2fetc%2fpasswd",
+                     "app.py%00extra"):
+            with self.assertRaises(urllib.error.HTTPError,
+                                   msg=evil) as ctx:
+                get(self.url(f"/api/file?path={evil}"))
+            self.assertEqual(ctx.exception.code, 404)
 
     def test_module_route_dispatches(self):
         status, body = get(self.url("/m/hello/"))
@@ -164,6 +198,30 @@ class ServerBootTestCase(unittest.TestCase):
         state2.fingerprints.update(fps)
         for section in ("meta", "history", "files", "deps"):
             self.assertIsNotNone(state2.get(section))
+
+    def test_scan_all_rescans_section_with_stale_fingerprint(self):
+        # Regression: the old guard skipped any section that had *any*
+        # stored fingerprint, freezing non-meta sections forever.
+        state2 = srv.AppState()
+        state2.sections["files"] = {"files": [], "total_files": 0,
+                                    "total_lines": 0}
+        state2.fingerprints["files"] = "definitely-stale"
+        srv.scan_all(self.repo, self.shape, self.cf_dir, state2,
+                     force=False)
+        self.assertGreater(state2.get("files")["total_files"], 0)
+        self.assertEqual(state2.fingerprints["files"],
+                         srv.current_data_fingerprint(self.repo, self.shape))
+
+    def test_scan_all_skips_section_with_current_fingerprint(self):
+        state2 = srv.AppState()
+        state2.sections["files"] = {"sentinel": True}
+        state2.fingerprints["files"] = srv.current_data_fingerprint(
+            self.repo, self.shape)
+        srv.scan_all(self.repo, self.shape, self.cf_dir, state2,
+                     force=False)
+        self.assertTrue(state2.get("files").get("sentinel"))
+        # meta is always refreshed regardless.
+        self.assertIsNotNone(state2.get("meta"))
 
 
 if __name__ == "__main__":

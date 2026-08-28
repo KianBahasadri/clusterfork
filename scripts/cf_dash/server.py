@@ -24,11 +24,12 @@ import sys
 import threading
 import time
 import traceback
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from cf_dash import cachestore, ci, modules_rt, scan  # noqa: E402
+from cf_dash import cachestore, ci, fileview, modules_rt, scan  # noqa: E402
 
 SERVER_PY = Path(__file__).resolve()
 UI_DIR = Path(__file__).resolve().parent / "ui"
@@ -38,6 +39,7 @@ WATCH_INTERVAL = 3.0          # s between fingerprint checks
 RESTART_QUIET = 5.0           # s the module fingerprint must stay stable
 RESTART_MIN_INTERVAL = 30.0   # s minimum gap between self-restarts
 CI_REFRESH_INTERVAL = 60.0    # s between GitHub CI state refreshes
+LOG_BUFFER_LINES = 5000       # in-memory server log ring size
 
 
 class AppState:
@@ -50,6 +52,7 @@ class AppState:
         self.generation = 1
         self.last_rescan_ts: float | None = None
         self.ci_state: str | None = None
+        self.logs: deque = deque(maxlen=LOG_BUFFER_LINES)
 
     def bump(self) -> None:
         with self.lock:
@@ -58,6 +61,13 @@ class AppState:
     def get(self, name: str) -> dict | None:
         with self.lock:
             return self.sections.get(name)
+
+
+def log_line(state: AppState, msg: str) -> None:
+    """Append a timestamped lifecycle event to the in-memory log ring."""
+    ts = time.strftime("%H:%M:%S")
+    with state.lock:
+        state.logs.append(f"[{ts}] {msg}")
 
 
 # ------------------------------------------------------------------ setup --
@@ -184,33 +194,36 @@ def read_cached_sections(cf_dir: Path) -> tuple[dict[str, dict],
 
 def scan_all(repo: Path, shape: scan.RepoShape, cf_dir: Path,
              state: AppState, force: bool) -> None:
-    """Rescan stale sections into memory + disk; keeps old data on failure."""
-    wanted = current_data_fingerprint(repo, shape)
-    loaded_fp = None
-    try:
-        loaded_fp = current_module_fingerprint_load()
-    except NameError:
-        loaded_fp = ""
+    """Rescan stale sections into memory + disk; keeps old data on failure.
 
+    Staleness = the section's stored data fingerprint (HEAD sha + dirty
+    hash + scan options) differing from the current one. meta is cheap and
+    always refreshed.
+    """
+    wanted = current_data_fingerprint(repo, shape)
     fresh: dict[str, tuple[dict, str]] = {}
     errors: list[str] = []
     for section in SCAN_SECTIONS:
-        # meta is cheap and always refreshed; others guarded by fingerprint.
         if (not force and section != "meta"
-                and state.fingerprints.get(section)):
-            cached_ok = section in state.sections
-            if cached_ok:
-                continue
+                and state.fingerprints.get(section) == wanted
+                and section in state.sections):
+            log_line(state, f"scan[{section}]: fresh (fingerprint match), "
+                            "skipped")
+            continue
+        t0 = time.time()
         try:
-            fresh[section] = run_section_now(section, repo, shape)
+            data = run_section_now(section, repo, shape)
+            fresh[section] = (data, wanted)
+            log_line(state, f"scan[{section}]: {_scan_summary(section, data)}"
+                     f" ({time.time() - t0:.2f}s)")
         except Exception as exc:  # noqa: BLE001 — keep stale data on failure
             errors.append(f"{section}: {exc.__class__.__name__}: {exc}")
+            log_line(state, f"scan[{section}]: FAILED "
+                     f"{exc.__class__.__name__}: {exc}")
     with state.lock:
         for section, (data, fp) in fresh.items():
             state.sections[section] = data
             state.fingerprints[section] = fp
-            if section == "meta":
-                pass
         if errors:
             state.sections.setdefault("meta", {})["scan_errors"] = errors
         state.last_rescan_ts = time.time()
@@ -223,10 +236,7 @@ def run_section_now(section: str, repo: Path, shape: scan.RepoShape):
         "files": scan.scan_files,
         "deps": scan.scan_deps,
     }
-    data = scanners[section](repo, shape)
-    fp = cachestore.fingerprint(
-        [json.dumps(data, sort_keys=True, default=str)])
-    return data, fp
+    return scanners[section](repo, shape)
 
 
 def persist_state(cf_dir: Path, state: AppState) -> None:
@@ -276,9 +286,27 @@ def refresh_ci_state(repo: Path, state: AppState) -> None:
     """Best-effort GitHub Actions state for HEAD; None means 'no CI'."""
     head = (scan.try_git(["rev-parse", "HEAD"], repo) or "").strip()
     try:
-        state.ci_state = ci.github_ci_state(repo, head) if head else None
+        new = ci.github_ci_state(repo, head) if head else None
     except Exception:
-        state.ci_state = None
+        new = None
+    changed = new != state.ci_state
+    log_line(state, f"ci: {new or 'none'}"
+             + (" (changed)" if changed else ""))
+    state.ci_state = new
+
+
+def _scan_summary(section: str, data: dict) -> str:
+    if section == "meta":
+        return (f"head {data.get('short_head')} branch "
+                f"{data.get('branch')} dirty={data.get('dirty')}")
+    if section == "history":
+        return f"{len(data.get('commits', []))} commits"
+    if section == "files":
+        return (f"{data.get('total_files')} files, "
+                f"{data.get('total_lines')} lines")
+    if section == "deps":
+        return f"{len(data.get('ecosystems', []))} ecosystems"
+    return ""
 
 
 def watch_loop(ctx) -> None:
@@ -294,10 +322,14 @@ def watch_loop(ctx) -> None:
             refresh_ci_state(repo, state)
         mod_fp = current_module_fingerprint(cf_dir)
         if mod_fp != ctx["module_fp"]:
+            if ctx["mod_seen_at"] is None:
+                log_line(state, "watch: module set changed, arming restart "
+                                f"({RESTART_QUIET:.0f}s quiet)")
             ctx["mod_seen_at"] = ctx["mod_seen_at"] or time.time()
             if time.time() - ctx["mod_seen_at"] >= RESTART_QUIET:
                 now = time.time()
                 if now - ctx["last_restart"] >= RESTART_MIN_INTERVAL:
+                    log_line(state, "watch: module set stable → self-restart")
                     persist_state(cf_dir, state)
                     spawn_reloader(repo, ctx["port"],
                                    shape.max_commits,
@@ -305,10 +337,6 @@ def watch_loop(ctx) -> None:
                     return  # unreachable under execve, kept for clarity
         else:
             ctx["mod_seen_at"] = None
-        try:
-            want = current_data_fingerprint(repo, shape)
-        except Exception:
-            continue
         with state.lock:
             known_meta = state.sections.get("meta")
         dirty_changed = known_meta is not None and (
@@ -317,6 +345,10 @@ def watch_loop(ctx) -> None:
         head_changed = known_meta is not None and (
             known_meta.get("head") != _meta_head(repo))
         if head_changed or dirty_changed:
+            what = ", ".join(w for w, yes in
+                             (("head", head_changed),
+                              ("dirty", dirty_changed)) if yes)
+            log_line(state, f"watch: data change detected ({what}) → rescan")
             try:
                 scan_all(repo, shape, cf_dir, state, force=False)
                 persist_state(cf_dir, state)
@@ -357,9 +389,13 @@ class DashHandler(BaseHTTPRequestHandler):
     def app(self):
         return self.server.app  # type: ignore[attr-defined]
 
-    def log_message(self, fmt: str, *args) -> None:  # quiet by default
+    def log_message(self, fmt: str, *args) -> None:
+        line = "%s - %s" % (self.address_string(), fmt % args)
+        state = self.app.get("state")
+        if state is not None:
+            log_line(state, line)
         if self.app.get("verbose"):
-            sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
+            sys.stderr.write(line + "\n")
 
     # -- responses ----------------------------------------------------------
 
@@ -402,6 +438,8 @@ class DashHandler(BaseHTTPRequestHandler):
                 self.h_tabs,
                 self.h_section_list,
                 self.h_section_detail,
+                self.h_file,
+                self.h_logs,
                 self.h_modules_http,
                 self.h_ui_fallback,
             ]
@@ -481,6 +519,7 @@ class DashHandler(BaseHTTPRequestHandler):
                 "description": m["description"],
                 "href": f"/m/{m['name']}/",
             })
+        tabs.append({"kind": "core", "name": "logs"})
         self.send_json({"tabs": tabs})
         return True
 
@@ -534,6 +573,31 @@ class DashHandler(BaseHTTPRequestHandler):
     def _SECTION_RE(self):  # noqa: N802 — stdlib handler namespace
         compiled = self.server._section_re  # type: ignore[attr-defined]
         return compiled
+
+    def h_file(self, verb: str, route: str):
+        if route != "/api/file":
+            return None
+        from urllib.parse import parse_qs, urlsplit
+        rel = (parse_qs(urlsplit(self.path).query).get("path") or [""])[0]
+        # Exact match against the tracked-files cache: traversal-proof by
+        # construction — anything not in `git ls-files` has no entry.
+        entry = next((f for f in (self.app["state"].get("files")
+                                  or {}).get("files", [])
+                      if f.get("path") == rel), None)
+        if entry is None:
+            self.send_error_page(404, "not a tracked file")
+            return True
+        self.send_json(fileview.file_payload(self.app["repo"], entry))
+        return True
+
+    def h_logs(self, verb: str, route: str):
+        if route != "/api/logs":
+            return None
+        state: AppState = self.app["state"]
+        with state.lock:
+            logs = list(state.logs)
+        self.send_json({"logs": logs})
+        return True
 
     # -- module routes --------------------------------------------------------
 
@@ -670,12 +734,17 @@ def main(argv=None) -> int:
     state.sections.update({k: v for k, v in sections.items()})
     state.fingerprints.update(fps)
     _init_rescan_ts(state)
+    log_line(state, f"boot: loaded cached sections "
+             f"{sorted(sections) or '[]'} from {cf_dir.name}/cache")
     missing = [s for s in SCAN_SECTIONS if s not in state.sections]
     if missing:
+        log_line(state, f"boot: cache miss for {missing} → scanning")
         scan_all(repo, shape, cf_dir, state, force=args.reindex)
     persist_state(cf_dir, state)
 
     mods = modules_rt.load_modules(cf_dir / "modules")
+    log_line(state, f"boot: modules {sum(1 for m in mods if m['ok'])}/"
+             f"{len(mods)} ok")
     httpd = bind_with_retry(port)
 
     watchdog_ctx = {
@@ -690,6 +759,7 @@ def main(argv=None) -> int:
     httpd.app = {  # type: ignore[attr-defined]
         "state": state, "modules": mods,
         "module_routes": build_module_table(mods),
+        "repo": repo,
         "verbose": bool(os.environ.get("CF_DASH_VERBOSE")),
         "_ctx": watchdog_ctx,
     }
@@ -701,6 +771,8 @@ def main(argv=None) -> int:
     if not args.no_watch:
         threading.Thread(target=watch_loop, args=(watchdog_ctx,),
                          daemon=True, name="cf-dash-watch").start()
+        log_line(state, f"boot: watch loop armed "
+                        f"({WATCH_INTERVAL:.0f}s interval)")
     # CI indicator: one eager fetch so the header is populated fast, then
     # the watch loop keeps it fresh (or not, with --no-watch).
     threading.Thread(target=refresh_ci_state, args=(repo, state),
@@ -709,6 +781,7 @@ def main(argv=None) -> int:
     print(f"cf-dash: serving {repo.name} at http://127.0.0.1:{port}/ "
           f"(modules: {sum(1 for m in mods if m['ok'])}/{len(mods)} ok)",
           flush=True)
+    log_line(state, f"serving {repo.name} at http://127.0.0.1:{port}/")
     try:
         httpd.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
