@@ -113,6 +113,8 @@ class ServerBootTestCase(unittest.TestCase):
         data = json.loads(body)
         self.assertEqual(data["meta"]["repo_name"], self.repo.name)
         self.assertGreater(data["total_lines"], 0)
+        self.assertIn("metric_totals", data)
+        self.assertGreaterEqual(data["metric_totals"]["code_lines"], 1)
         self.assertEqual(data["commits_count"], 1)
         # Temp repo has no GitHub origin + no CI fetch ran: no CI to report.
         self.assertIsNone(data["ci"])
@@ -149,6 +151,9 @@ class ServerBootTestCase(unittest.TestCase):
         self.assertEqual(data["stats"]["commits"], 1)
         self.assertEqual(data["stats"]["last_commit"]["subject"], "c1")
         self.assertFalse(data["binary"])
+        self.assertTrue(data["metrics"]["analyzed"])
+        self.assertEqual(data["metrics"]["total_lines"], 1)
+        self.assertEqual(data["metrics"]["comment_lines"], 0)
 
     def test_file_endpoint_404s_untracked(self):
         import urllib.error

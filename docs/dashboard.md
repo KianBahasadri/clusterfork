@@ -38,13 +38,17 @@ dependencies anywhere in the tool):
 - **Overview** — file/line/commit counts, lines by top-level dir, lines by language
 - **History** — cumulative LOC over commit history (`git log --numstat`
   aggregates, capped at `--max-commits`, default 1000), most-changed dirs, recent commits
-- **Files** — tracked-file index with line counts, filterable; excludes
-  vendor dirs, minified/lockfile/map suffixes by default. Clicking a row
-  opens the file: content pane on the left (line numbers, capped at 5k
-  lines / 1 MB, binary files show a notice), stats sidebar on the right
-  (lang/lines/bytes/commit count, lifetime added/deleted, last + first
-  commit, top authors by commits, lines-by-author blame share). Backed by
-  `GET /api/file?path=…` — the path must exact-match an entry in the
+- **Files** — tracked-file index with physical/source/blank/comment lines,
+  functions, imports, and estimated cyclomatic complexity in every row;
+  filterable and excludes vendor dirs, minified/lockfile/map suffixes by
+  default. Clicking a row opens the file: content pane on the left (line
+  numbers, capped at 5k lines / 1 MB, binary files show a notice), and a
+  verbose, grouped stats pane on the right with source composition, symbols,
+  formatting, calls/returns/exceptions, complexity and Halstead estimates,
+  maintainability index, attention markers, and git ownership/history. Python
+  uses the standard-library AST when it parses; other languages use a
+  comment/string-aware lexical heuristic and identify that in the pane. Backed
+  by `GET /api/file?path=…` — the path must exact-match an entry in the
   tracked-files cache, so path traversal is impossible by construction
 - **Deps** — declared dependencies from `Cargo.toml`, `package.json`,
   `pyproject.toml`, `go.mod`, each with lockfile name/entry counts where a

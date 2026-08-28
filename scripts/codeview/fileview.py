@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
-from codeview import scan
+from codeview import metrics, scan
 
 MAX_CONTENT_BYTES = 1_000_000   # cap what we read into the browser
 MAX_DISPLAY_LINES = 5000        # cap rendered lines (truncated flag set)
@@ -76,6 +76,7 @@ def file_payload(repo: Path, entry: dict) -> dict:
         "content": None,
         "truncated": False,
         "total_lines": entry.get("lines"),
+        "metrics": entry.get("metrics") or metrics.empty_metrics(),
         "stats": _stats(repo, rel, entry.get("lines")),
     }
     if payload["binary"]:
@@ -84,11 +85,14 @@ def file_payload(repo: Path, entry: dict) -> dict:
         data = (repo / rel).read_bytes()
     except OSError:
         return payload
+    if len(data) <= scan.MAX_LINE_COUNT_BYTES:
+        payload["metrics"] = metrics.analyze_source(
+            data.decode("utf-8", errors="replace"), payload["lang"] or "Other")
+        payload["total_lines"] = payload["metrics"]["total_lines"]
     if len(data) > MAX_CONTENT_BYTES:
         data = data[:MAX_CONTENT_BYTES]
         payload["truncated"] = True
     lines = data.decode("utf-8", errors="replace").split("\n")
-    payload["total_lines"] = len(lines)
     if len(lines) > MAX_DISPLAY_LINES:
         lines = lines[:MAX_DISPLAY_LINES]
         payload["truncated"] = True

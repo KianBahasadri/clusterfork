@@ -11,6 +11,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from codeview import metrics
+
 CODEVIEW_DIR_NAME = ".codeview"
 
 # Excluded from the LOC snapshot by suffix or directory component.
@@ -166,19 +168,27 @@ def _excluded(path: str) -> bool:
 
 def _count_lines(path: Path) -> tuple[int | None, bool]:
     """Return (lines|None, is_binary). None means skipped (too large/binary)."""
+    text, binary, _ = _read_source(path)
+    if text is None:
+        return None, binary
+    return len(text.splitlines()), False
+
+
+def _read_source(path: Path) -> tuple[str | None, bool, int | None]:
+    """Read an analyzable UTF-8-ish file once, returning text/binary/bytes."""
     try:
         size = path.stat().st_size
     except OSError:
-        return None, False
+        return None, False, None
     if size > MAX_LINE_COUNT_BYTES:
-        return None, False
+        return None, False, size
     try:
         data = path.read_bytes()
     except OSError:
-        return None, False
+        return None, False, size
     if b"\0" in data[:8000]:
-        return None, True
-    return data.count(b"\n"), False
+        return None, True, size
+    return data.decode("utf-8", errors="replace"), False, size
 
 
 def scan_files(repo: Path, shape: RepoShape) -> dict:  # noqa: ARG001 (uniform signature)
@@ -186,6 +196,7 @@ def scan_files(repo: Path, shape: RepoShape) -> dict:  # noqa: ARG001 (uniform s
     files: list[dict] = []
     langs: dict[str, dict] = {}
     tops: dict[str, dict] = {}
+    analyzed_metrics: list[dict] = []
     if listing:
         for relpath in listing.split("\0"):
             if not relpath or _excluded(relpath):
@@ -194,17 +205,23 @@ def scan_files(repo: Path, shape: RepoShape) -> dict:  # noqa: ARG001 (uniform s
             ext = abs_path.suffix.lower()
             lang = LANG_BY_EXT.get(ext, "Other")
             top = relpath.split("/", 1)[0]
-            try:
-                size = abs_path.stat().st_size
-            except OSError:
-                continue
             if not abs_path.is_file() or abs_path.is_symlink():
                 continue
-            lines, binary = _count_lines(abs_path)
+            source, binary, size = _read_source(abs_path)
+            if size is None:
+                continue
+            if source is None:
+                lines = None
+                source_metrics = metrics.empty_metrics(
+                    "binary" if binary else "too large or unreadable")
+            else:
+                source_metrics = metrics.analyze_source(source, lang)
+                lines = source_metrics["total_lines"]
+                analyzed_metrics.append(source_metrics)
             entry = {
                 "path": relpath, "top": top, "ext": ext.lstrip("."),
                 "lang": lang, "lines": lines, "bytes": size,
-                "binary": binary,
+                "binary": binary, "metrics": source_metrics,
             }
             files.append(entry)
             if lines is not None:
@@ -214,12 +231,17 @@ def scan_files(repo: Path, shape: RepoShape) -> dict:  # noqa: ARG001 (uniform s
                     b["files"] += 1
                     b["lines"] += lines
     total_lines = sum(b["lines"] for b in langs.values())
+    metric_totals = metrics.aggregate(analyzed_metrics)
     return {
         "files": files,
         "langs": langs,
         "tops": tops,
         "total_files": len(files),
         "total_lines": total_lines,
+        "metric_totals": metric_totals,
+        "total_code_lines": metric_totals["code_lines"],
+        "total_blank_lines": metric_totals["blank_lines"],
+        "total_comment_lines": metric_totals["comment_lines"],
     }
 
 

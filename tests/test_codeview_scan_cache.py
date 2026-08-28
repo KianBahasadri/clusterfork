@@ -11,7 +11,7 @@ sys_path = str(REPO_ROOT / "scripts")
 import sys  # noqa: E402
 sys.path.insert(0, sys_path)
 
-from codeview import scan  # noqa: E402
+from codeview import metrics, scan  # noqa: E402
 
 
 def run(cmd, cwd):
@@ -90,6 +90,77 @@ class FilesScanTests(TempRepoTestCase):
         self.assertEqual(appy["lines"], 1)
         self.assertEqual(data["total_lines"], sum(
             f["lines"] for f in data["files"] if f["lines"] is not None))
+
+
+class MetricsTests(unittest.TestCase):
+    def test_python_source_metrics_ignore_strings_and_count_structure(self):
+        source = (
+            "import os\n"
+            "# TODO: review\n"
+            "class Thing:\n"
+            "    def run(self, x):\n"
+            "        text = \"# not a comment\"\n"
+            "        if x and x > 1:  # inline NOTE\n"
+            "            return True\n"
+            "        else:\n"
+            "            return False\n"
+            "\n"
+        )
+        result = metrics.analyze_source(source, "Python")
+        self.assertTrue(result["analyzed"])
+        self.assertEqual(result["analysis"], "Python AST + lexical metrics")
+        self.assertEqual(result["total_lines"], 10)
+        self.assertEqual(result["code_lines"], 8)
+        self.assertEqual(result["blank_lines"], 1)
+        self.assertEqual(result["comment_lines"], 2)
+        self.assertEqual(result["comment_only_lines"], 1)
+        self.assertEqual(result["inline_comment_lines"], 1)
+        self.assertEqual(result["functions"], 1)
+        self.assertEqual(result["classes"], 1)
+        self.assertEqual(result["imports"], 1)
+        self.assertEqual(result["function_names"], ["run"])
+        self.assertEqual(result["class_names"], ["Thing"])
+        self.assertEqual(result["import_names"], ["os"])
+        self.assertEqual(result["decision_points"], 2)
+        self.assertEqual(result["cyclomatic_complexity"], 3)
+        self.assertEqual(result["returns"], 2)
+        self.assertEqual(result["todo_markers"], {"NOTE": 1, "TODO": 1})
+        self.assertGreater(result["halstead"]["volume"], 0)
+        self.assertIsNotNone(result["maintainability_index"])
+
+    def test_javascript_metrics_include_arrow_functions_and_import_names(self):
+        source = (
+            "import tool from \"tool\";\n"
+            "const run = (value) => {\n"
+            "  // TODO: handle zero\n"
+            "  if (value && value > 0) return tool(value);\n"
+            "  return 0;\n"
+            "};\n"
+        )
+        result = metrics.analyze_source(source, "JavaScript")
+        self.assertEqual(result["functions"], 1)
+        self.assertEqual(result["imports"], 1)
+        self.assertEqual(result["import_names"], ["tool"])
+        self.assertEqual(result["comment_only_lines"], 1)
+        self.assertEqual(result["decision_points"], 2)
+        self.assertEqual(result["cyclomatic_complexity"], 3)
+        self.assertEqual(result["todo_markers"], {"TODO": 1})
+
+    def test_files_scan_attaches_metrics_and_aggregate_totals(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        repo = Path(self.tmp.name).resolve()
+        run(["git", "init", "-q"], repo)
+        run(["git", "config", "user.email", "t@t"], repo)
+        run(["git", "config", "user.name", "t"], repo)
+        (repo / "app.py").write_text("def f():\n    return 1\n")
+        run(["git", "add", "-A"], repo)
+        run(["git", "commit", "-qm", "metrics"], repo)
+        data = scan.scan_files(repo, scan.RepoShape())
+        entry = data["files"][0]
+        self.assertEqual(entry["metrics"]["functions"], 1)
+        self.assertEqual(data["metric_totals"]["functions"], 1)
+        self.assertEqual(data["total_code_lines"], 2)
 
 
 class DepsScanTests(TempRepoTestCase):

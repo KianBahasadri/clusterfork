@@ -64,16 +64,71 @@ function barRows(entries, colorFn = () => "") {
   const max = Math.max(1, ...entries.map(e => Math.abs(e[1])));
   return entries.map(([label, value]) => `
     <div class="bar-row">
-      <span class="bar-label" title="${label}">${label}</span>
+      <span class="bar-label" title="${esc(label)}">${esc(label)}</span>
       <div class="bar-track"><div class="bar-fill ${colorFn(label)}"
         style="width:${Math.max(1, (Math.abs(value) / max) * 100)}%"></div></div>
       <span class="bar-value">${fmt(value)}</span>
     </div>`).join("");
 }
 
-function metric(label, value, sub = "") {
-  return `<div class="metric"><div class="label">${label}</div>
+function metric(label, value, sub = "", className = "") {
+  return `<div class="metric ${className}"><div class="label">${label}</div>
     <div class="value">${value}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+}
+
+function metricCluster(title, note, cards, className = "") {
+  return `<section class="metric-cluster ${className}">
+    <div class="cluster-head"><div>
+      <h2>${esc(title)}</h2>
+      <p>${esc(note)}</p>
+    </div></div>
+    <div class="metric-grid">${cards.join("")}</div>
+  </section>`;
+}
+
+function pct(n) {
+  return n == null ? "—" : `${Number(n).toFixed(1)}%`;
+}
+
+function decimal(n, digits = 1) {
+  return n == null ? "—" : Number(n).toFixed(digits);
+}
+
+function yesNo(value) {
+  return value ? "yes" : "no";
+}
+
+function statRows(rows) {
+  return `<dl class="stat-list">${rows.map(([label, value, note]) => {
+    const display = value == null || value === "" ? "—" : String(value);
+    return `<div class="stat-row"><dt>${esc(label)}</dt><dd>${esc(display)}
+      ${note ? `<small>${esc(note)}</small>` : ""}</dd></div>`;
+  }).join("")}</dl>`;
+}
+
+function statGroup(title, body, note = "") {
+  return `<details class="stats-group" open>
+    <summary><span>${esc(title)}</span>${note ? `<small>${esc(note)}</small>` : ""}</summary>
+    <div class="stats-group-body">${body}</div>
+  </details>`;
+}
+
+function symbolList(items, empty = "none detected") {
+  const values = (items || []).map(String);
+  if (!values.length) return `<span class="stats-empty">${empty}</span>`;
+  return `<div class="symbol-list">${values.map(item =>
+    `<code>${esc(item)}</code>`).join("")}</div>`;
+}
+
+function complexityRating(metrics) {
+  if (metrics.complexity_rating) return metrics.complexity_rating;
+  const value = Number(metrics.cyclomatic_complexity || 1);
+  return value <= 10 ? "low" : value <= 20 ? "moderate" :
+    value <= 40 ? "high" : "very high";
+}
+
+function complexityClass(metrics) {
+  return `complexity-${complexityRating(metrics).replace(/\s+/g, "-")}`;
 }
 
 // ----------------------------------------------------------------- state --
@@ -165,24 +220,77 @@ async function renderOverview(s) {
         dashboard will pick it up automatically.</p>`;
     return;
   }
-  const langs = Object.entries(s.langs || {})
-    .sort((a, b) => b[1].lines - a[1].lines).slice(0, 12);
-  const tops = Object.entries(s.tops || {})
-    .sort((a, b) => b[1].lines - a[1].lines)
-    .map(([k, v]) => [k === "." ? "(root)" : k, v.lines]);
+  const mt = s.metric_totals || {};
+  const langEntries = Object.entries(s.langs || {})
+    .sort((a, b) => b[1].lines - a[1].lines);
+  const topEntries = Object.entries(s.tops || {})
+    .sort((a, b) => b[1].lines - a[1].lines);
+  const langs = langEntries.slice(0, 8);
+  const tops = topEntries.slice(0, 8).map(([k, v]) => [k === "." ? "(root)" : k, v.lines]);
+  const langCount = langEntries.length;
+  const dirCount = topEntries.length;
+  const ecoCount = (s.ecosystems || []).length;
+  const totalLangsLabel = langCount ? `${fmt(langCount)} language${langCount === 1 ? "" : "s"}` : "no languages detected";
+  const totalDirsLabel = dirCount ? `${fmt(dirCount)} top-level dir${dirCount === 1 ? "" : "s"}` : "no top-level dirs";
+  const hasTops = tops.length > 0;
+  const hasLangs = langs.length > 0;
+  const maintainability = mt.maintainability_index == null
+    ? "—" : `${decimal(mt.maintainability_index)} / 100`;
+  const codePct = mt.code_lines != null && s.total_lines
+    ? pct((mt.code_lines / s.total_lines) * 100) : "—";
   panel.innerHTML = `
-    <div class="metrics">
-      ${metric("files", fmt(s.total_files))}
-      ${metric("lines of code", fmt(s.total_lines))}
-      ${metric("commits scanned", fmt(s.commits_count))}
-      ${metric("top-level dirs", fmt((s.dirs || []).length))}
-      ${metric("modules", s.modules.length)}
-      ${metric("scanned at", fmtDate(s.meta.scanned_at_iso))}
+    <div class="metric-layout">
+      ${metricCluster("at a glance",
+        "Primary scale of the tracked codebase.", [
+          metric("source lines", fmt(mt.code_lines ?? s.total_lines),
+                 `${codePct} of physical · nonblank, noncomment`, "metric-featured"),
+          metric("tracked files", fmt(s.total_files),
+                 totalLangsLabel),
+          metric("languages", fmt(langCount),
+                 hasLangs ? esc(langs[0][0]) + " · most lines" : "—"),
+          metric("functions", fmt(mt.functions),
+                 fmt(mt.classes) + " classes"),
+        ], "cluster-footprint")}
     </div>
-    <h2>lines by top-level dir</h2>
-    <div id="ov-tops">${barRows(tops)}</div>
-    <h2>lines by language</h2>
-    <div id="ov-langs">${barRows(langs.map(([k, v]) => [k, v.lines]))}</div>`;
+    <div class="overview-breakdown">
+      ${metricCluster("composition",
+        "How physical lines break down.", [
+          metric("blank lines", fmt(mt.blank_lines), pct(mt.blank_ratio)),
+          metric("comment lines", fmt(mt.comment_lines), pct(mt.comment_ratio)),
+          metric("characters", fmt(mt.characters),
+                 fmt(mt.words) + " words"),
+          metric("attention markers", fmt(mt.todo_count),
+                 mt.todo_count ? "TODO / FIXME / HACK" : "no markers"),
+        ])}
+      ${metricCluster("health & activity",
+        "Quality signals and scan scope.", [
+          metric("maintainability", maintainability,
+                 mt.maintainability_index == null ? "not enough data" : "0–100 · higher is better"),
+          metric("complexity", fmt(mt.cyclomatic_complexity),
+                 fmt(mt.decision_points) + " decision points"),
+          metric("commits scanned", fmt(s.commits_count),
+                 fmt((s.dirs || []).length) + " dirs in history"),
+          metric("deps · modules", `${fmt(ecoCount)} · ${fmt(s.modules.length)}`,
+                 ecoCount ? esc(s.ecosystems.map(e => e.name).join(" · ")) : "no manifests"),
+        ])}
+    </div>
+    <div class="overview-breakdown">
+      <section class="breakdown-panel">
+        <h2>lines by top-level dir</h2>
+        ${hasTops
+          ? `<div id="ov-tops">${barRows(tops)}</div>
+             <p class="stats-note">${esc(totalDirsLabel)} · top ${tops.length} shown</p>`
+          : `<p class="stats-empty">No top-level directories to show.</p>`}
+      </section>
+      <section class="breakdown-panel">
+        <h2>lines by language</h2>
+        ${hasLangs
+          ? `<div id="ov-langs">${barRows(langs.map(([k, v]) => [k, v.lines]))}</div>
+             <p class="stats-note">${esc(totalLangsLabel)} · top ${langs.length} shown</p>`
+          : `<p class="stats-empty">No languages detected.</p>`}
+      </section>
+    </div>
+    <p class="scan-stamp">last scanned ${esc(fmtDate(s.meta.scanned_at_iso))} · ${fmt(s.total_lines)} physical lines</p>`;
 }
 
 async function renderHistory() {
@@ -229,25 +337,61 @@ async function renderFiles() {
   const filesData = await api("/api/section/files");
   const panel = $('.panel[data-panel="files"]');
   const files = filesData.files || [];
-  const byLines = files.filter(f => f.lines != null)
-    .sort((a, b) => b.lines - a.lines).slice(0, 30);
+  const byLines = files.slice().sort((a, b) =>
+    (b.lines ?? -1) - (a.lines ?? -1));
+  const mt = filesData.metric_totals || {};
   panel.innerHTML = `
-    <div class="metrics">
-      ${metric("tracked files", fmt(filesData.total_files),
-               "after exclusions")}
-      ${metric("total lines", fmt(filesData.total_lines))}
+    <div class="metric-layout files-summary">
+      ${metricCluster("file index",
+        "Every tracked file currently included in the index.", [
+          metric("tracked files", fmt(filesData.total_files),
+                 "after exclusions", "metric-featured"),
+          metric("physical lines", fmt(filesData.total_lines)),
+          metric("source lines", fmt(mt.code_lines)),
+          metric("files analyzed", fmt(mt.files_analyzed)),
+        ])}
+      ${metricCluster("source makeup",
+        "Line composition across analyzable files.", [
+          metric("blank lines", fmt(mt.blank_lines), pct(mt.blank_ratio)),
+          metric("comment lines", fmt(mt.comment_lines), pct(mt.comment_ratio)),
+          metric("characters", fmt(mt.characters)),
+          metric("attention markers", fmt(mt.todo_count)),
+        ])}
+      ${metricCluster("structure and quality",
+        "Counts and static complexity signals across the index.", [
+          metric("functions", fmt(mt.functions)),
+          metric("classes", fmt(mt.classes)),
+          metric("imports", fmt(mt.imports)),
+          metric("decision points", fmt(mt.decision_points)),
+        ])}
     </div>
-    <input type="search" placeholder="filter paths…" id="file-filter">
-    <table id="file-table"><thead><tr>
+    <div class="file-list-head">
+      <input type="search" placeholder="filter paths, languages, metrics…" id="file-filter">
+      <span class="file-list-count">${fmt(byLines.length)} files shown</span>
+    </div>
+    <div class="table-scroll"><table id="file-table"><thead><tr>
       <th>path</th><th>lang</th><th class="num">lines</th>
+      <th class="num">code</th><th class="num">blank</th>
+      <th class="num">comments</th><th class="num">funcs</th>
+      <th class="num">imports</th><th class="num">complexity</th>
       <th class="num">bytes</th>
     </tr></thead><tbody>
-      ${byLines.map(f => `
-        <tr class="file-row" data-path="${esc(f.path)}">
-          <td>${esc(f.path)}</td><td>${esc(f.lang)}</td>
-          <td class="num">${f.lines == null ? "—" : fmt(f.lines)}</td>
-          <td class="num">${fmt(f.bytes)}</td></tr>`).join("")}
-    </tbody></table>`;
+      ${byLines.map(f => {
+        const m = f.metrics || {};
+        return `
+          <tr class="file-row" data-path="${esc(f.path)}">
+            <td>${esc(f.path)}</td><td>${esc(f.lang)}</td>
+            <td class="num">${f.lines == null ? "—" : fmt(f.lines)}</td>
+            <td class="num">${fmt(m.code_lines)}</td>
+            <td class="num">${fmt(m.blank_lines)}</td>
+            <td class="num">${fmt(m.comment_lines)}</td>
+            <td class="num">${fmt(m.functions)}</td>
+            <td class="num">${fmt(m.imports)}</td>
+            <td class="num ${complexityClass(m)}">
+              ${fmt(m.cyclomatic_complexity)}</td>
+            <td class="num">${fmt(f.bytes)}</td></tr>`;
+      }).join("")}
+    </tbody></table></div>`;
   const input = $("#file-filter");
   input.addEventListener("input", () => {
     const q = input.value.toLowerCase();
@@ -276,7 +420,13 @@ async function openFile(path) {
 
 function fileView(d) {
   const s = d.stats || {};
+  const m = d.metrics || {};
+  const h = m.halstead || {};
   const lc = s.last_commit;
+  const rating = complexityRating(m);
+  const fileName = String(d.path || "").split("/").pop();
+  const markerSummary = Object.entries(m.todo_markers || {})
+    .map(([name, count]) => `${name} ${fmt(count)}`).join(" · ") || "none";
   let code;
   if (d.binary) {
     code = `<p style="color:var(--dim)">binary file — content not shown</p>`;
@@ -294,30 +444,112 @@ function fileView(d) {
     <div class="file-grid">
       <div class="file-code">${code}</div>
       <aside class="file-stats">
-        <div class="metrics">
-          ${metric("lang", esc(d.lang || "—"))}
-          ${metric("lines", fmt(d.total_lines))}
-          ${metric("bytes", fmt(d.bytes))}
-          ${metric("commits", fmt(s.commits))}
+        <div class="stats-hero">
+          <div class="stats-kicker">file profile</div>
+          <div class="stats-title">${esc(fileName || "file")}</div>
+          <div class="stats-sub">${esc(d.lang || "unknown")} · ${fmt(d.bytes)} bytes</div>
+          <div class="stats-analysis">${esc(m.analysis || "metrics unavailable")}</div>
         </div>
-        <div class="metrics">
-          ${metric("added", fmt(s.added), "all history")}
-          ${metric("deleted", fmt(s.deleted), "all history")}
-        </div>
-        <h2>last commit</h2>
-        ${lc ? `<div class="last-commit">
-            <div class="commit-subject">${esc(lc.subject)}</div>
-            <div class="commit-sha">${esc(lc.sha)} · ${esc(lc.author)}
-              · ${esc(fmtDate(lc.date))}</div>
-          </div>` : "<p>—</p>"}
-        <h2>first commit</h2>
-        <p>${s.first_commit_date ? esc(fmtDate(s.first_commit_date)) : "—"}</p>
-        ${s.authors && s.authors.length ? `
-          <h2>top authors (commits)</h2>
-          ${barRows(s.authors)}` : ""}
-        ${s.blame && s.blame.length ? `
-          <h2>lines by author (blame)</h2>
-          ${barRows(s.blame)}` : ""}
+        ${statGroup("source composition", statRows([
+          ["physical lines", fmt(m.total_lines ?? d.total_lines)],
+          ["source lines", fmt(m.code_lines)],
+          ["blank lines", fmt(m.blank_lines), pct(m.blank_ratio)],
+          ["comment lines", fmt(m.comment_lines), pct(m.comment_ratio)],
+          ["comment-only", fmt(m.comment_only_lines)],
+          ["inline comments", fmt(m.inline_comment_lines)],
+          ["comment blocks", fmt(m.comment_blocks)],
+          ["string lines", fmt(m.string_lines)],
+        ]), "physical layout")}
+        ${statGroup("structure", statRows([
+          ["functions", fmt(m.functions)],
+          ["classes", fmt(m.classes)],
+          ["types", fmt(m.types)],
+          ["imports", fmt(m.imports)],
+          ["exports", fmt(m.exports)],
+          ["declarations", fmt(m.declarations)],
+          ["call sites", fmt(m.call_sites)],
+          ["parameters", fmt(m.parameters)],
+          ["lambdas", fmt(m.lambdas)],
+          ["returns", fmt(m.returns)],
+          ["raises / throws", fmt(m.raises)],
+          ["async / await", `${fmt(m.async_keywords)} / ${fmt(m.await_keywords)}`],
+        ]), "symbols and control flow")}
+        ${statGroup("complexity", `
+          <div class="complexity-summary">
+            <span class="complexity-number">${fmt(m.cyclomatic_complexity)}</span>
+            <span class="complexity-label">cyclomatic complexity</span>
+            <span class="complexity-badge ${complexityClass(m)}">${esc(rating)}</span>
+          </div>
+          ${statRows([
+            ["decision points", fmt(m.decision_points)],
+            ["conditionals", fmt(m.conditionals)],
+            ["loops", fmt(m.loops)],
+            ["exception handlers", fmt(m.exception_handlers)],
+            ["max nesting depth", fmt(m.max_nesting_depth)],
+            ["max brace depth", fmt(m.max_brace_depth)],
+            ["maintainability index", m.maintainability_index == null
+              ? "—" : `${decimal(m.maintainability_index)} / 100`],
+            ["Halstead vocabulary", fmt(h.vocabulary)],
+            ["Halstead length", fmt(h.length)],
+            ["Halstead volume", decimal(h.volume, 2)],
+            ["Halstead difficulty", decimal(h.difficulty, 2)],
+            ["Halstead effort", decimal(h.effort, 2)],
+            ["estimated defects", decimal(h.estimated_bugs, 4)],
+          ])}
+          <p class="stats-note">Cyclomatic and Halstead values are static estimates; maintainability is a 0–100 heuristic.</p>`,
+          "static quality signals")}
+        ${statGroup("text and formatting", statRows([
+          ["bytes", fmt(d.bytes)],
+          ["characters", fmt(m.characters)],
+          ["unicode characters", fmt(m.unicode_characters)],
+          ["words", fmt(m.words)],
+          ["tokens", fmt(m.tokens)],
+          ["operators", `${fmt(m.operators)} (${fmt(m.unique_operators)} unique)`],
+          ["operands", `${fmt(m.operands)} (${fmt(m.unique_operands)} unique)`],
+          ["average line length", decimal(m.avg_line_length)],
+          ["maximum line length", fmt(m.max_line_length)],
+          ["trailing whitespace", fmt(m.trailing_whitespace_lines)],
+          ["tab-indented lines", fmt(m.tab_indented_lines)],
+          ["space-indented lines", fmt(m.space_indented_lines)],
+          ["newline style", m.newline_style],
+          ["final newline", yesNo(m.final_newline)],
+        ]), "lexical footprint")}
+        ${statGroup("attention signals", `
+          ${statRows([
+            ["TODO / FIXME / HACK", fmt(m.todo_count), markerSummary],
+            ["parse status", m.parse_error ? "fallback heuristic" : "ok"],
+          ])}
+          ${m.parse_error ? `<p class="stats-warning">${esc(m.parse_error)}</p>` : ""}
+          <div class="stats-subhead">markers</div>
+          <div class="marker-list">${esc(markerSummary)}</div>`, "review prompts")}
+        ${statGroup("symbol inventory", `
+          <div class="stats-subhead">functions</div>
+          ${symbolList(m.function_names)}
+          <div class="stats-subhead">classes and types</div>
+          ${symbolList(m.class_names)}
+          <div class="stats-subhead">imports</div>
+          ${symbolList(m.import_names)}
+          <div class="stats-subhead">exports</div>
+          ${symbolList(m.export_names)}`, "detected names, capped at 100")}
+        ${statGroup("git history", `
+          ${statRows([
+            ["commits", fmt(s.commits)],
+            ["lines added", fmt(s.added), "all history"],
+            ["lines deleted", fmt(s.deleted), "all history"],
+            ["first commit", s.first_commit_date ? fmtDate(s.first_commit_date) : "—"],
+          ])}
+          <div class="stats-subhead">last commit</div>
+          ${lc ? `<div class="last-commit">
+              <div class="commit-subject">${esc(lc.subject)}</div>
+              <div class="commit-sha">${esc(lc.sha)} · ${esc(lc.author)}
+                · ${esc(fmtDate(lc.date))}</div>
+            </div>` : "<p class=\"stats-empty\">—</p>"}
+          ${s.authors && s.authors.length ? `
+            <div class="stats-subhead">top authors by commits</div>
+            ${barRows(s.authors)}` : ""}
+          ${s.blame && s.blame.length ? `
+            <div class="stats-subhead">lines by author (blame)</div>
+            ${barRows(s.blame)}` : ""}`, "history and ownership")}
       </aside>
     </div>`;
 }
