@@ -60,6 +60,10 @@ Shared vocabulary and principles for designing deep modules (module, interface, 
 
 Actively builds and sharpens the project's domain model during design — challenging terms against `CONTEXT.md`, stress-testing with edge-case scenarios, and updating `CONTEXT.md`/`docs/adr/` inline. Model-invoked when terminology or decisions are being shaped, not just read. Sourced from [mattpocock/skills](https://github.com/mattpocock/skills). Companion docs: `CONTEXT-FORMAT.md` and `ADR-FORMAT.md`.
 
+## decide
+
+Behavioral skill for decision requests: form an independent conclusion before considering the user's implied preference, trust its own capabilities as a genius state-of-the-art model, and own the call with honest reasoning. Model-invoked via "decide", "what should I do", or expressions of trust in the model's judgment.
+
 ## grilling
 
 Reusable interview primitive: maps decisions as a design tree, asks the whole frontier each round with a recommended answer, and recomputes after each answer until the frontier is empty. Model-invoked by `improve-codebase-architecture` and other skills. Sourced from [mattpocock/skills](https://github.com/mattpocock/skills) (`skills/productivity/grilling`).
