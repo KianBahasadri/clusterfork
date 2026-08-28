@@ -820,7 +820,7 @@ printf '    %-5s %-18s %s\n' occ "claude (Go)" "--dangerously-skip-permissions -
 printf '    %-5s %-18s %s\n' ag "agy" "--dangerously-skip-permissions"
 printf '    %-5s %-18s %s\n' gk "grok" ""
 printf '    %-5s %-18s %s\n' chrome "chromium" "--remote-debugging-port=9222 (background)"
-printf '    %-5s %-18s %s\n' codeview "bin/codeview" "--port N --max-commits N --reindex --no-watch"
+printf '    %-5s %-18s %s\n' codeview "bin/codeview" "start|stop|restart|reload|status|open (no args = status)"
 printf '    %-5s %-18s %s\n' "rotate-*" "rotate_auth.py" "[name] --save name --unhook --list --start"
 
 # Skills: list each subdirectory name under skills/.

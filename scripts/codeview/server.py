@@ -79,10 +79,14 @@ def default_port(repo_path: Path) -> int:
 
 
 def pick_port(preferred: int) -> int:
-    """First free port at or above preferred."""
+    """First free port at or above preferred.
+
+    The probe sets SO_REUSEADDR so TIME_WAIT leftovers from a just-stopped
+    server don't cause a drift to preferred+1 (which strands bookmarks)."""
     for candidate in range(preferred, preferred + 64):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 s.bind(("127.0.0.1", candidate))
             return candidate
         except OSError:
@@ -90,13 +94,21 @@ def pick_port(preferred: int) -> int:
     raise SystemExit(f"codeview: no free port near {preferred}")
 
 
+GITIGNORE_CONTENT = ".gitignore\ncache/\ndaemon.json\ndaemon.log\n"
+
+
 def ensure_codeview_dir(repo: Path) -> Path:
-    """Create <repo>/.codeview{,/cache} and the cache-only .gitignore once."""
+    """Create <repo>/.codeview{,/cache} and the cache-only .gitignore once.
+
+    The .gitignore is tool-managed; rewrite it if an older install only
+    ignores cache/ so daemon bookkeeping files stay out of git status too."""
     codeview_dir = repo / scan.CODEVIEW_DIR_NAME
     (codeview_dir / "cache").mkdir(parents=True, exist_ok=True)
     gitignore = codeview_dir / ".gitignore"
-    if not gitignore.exists():
-        gitignore.write_text("cache/\n", encoding="utf-8")
+    current = gitignore.read_text(encoding="utf-8") if gitignore.exists() \
+        else None
+    if current != GITIGNORE_CONTENT:
+        gitignore.write_text(GITIGNORE_CONTENT, encoding="utf-8")
     return codeview_dir
 
 
@@ -265,6 +277,38 @@ def purge_stale_cache_files(codeview_dir: Path) -> None:
             p.unlink(missing_ok=True)
         elif p.suffix == ".json" and p.name not in keep:
             p.unlink(missing_ok=True)
+
+
+# ------------------------------------------------------------ daemon file --
+
+def daemon_file(repo: Path) -> Path:
+    return repo / scan.CODEVIEW_DIR_NAME / "daemon.json"
+
+
+def write_daemon_file(repo: Path, port: int, max_commits: int,
+                      watch: bool) -> None:
+    """Publish live-server bookkeeping for the bin/codeview control CLI."""
+    cachestore.write_json_atomic(daemon_file(repo), {
+        "pid": os.getpid(),
+        "port": port,
+        "repo": str(repo),
+        "started_at": time.time(),
+        "max_commits": max_commits,
+        "watch": watch,
+        "session": os.environ.get("CODEVIEW_SESSION"),
+    })
+
+
+def remove_daemon_file(repo: Path) -> None:
+    """Remove bookkeeping only if it still describes *this* process, so a
+    successor server started in the meantime keeps its entry."""
+    path = daemon_file(repo)
+    try:
+        data = cachestore.read_json(path) or {}
+    except OSError:
+        return
+    if data.get("pid") in (None, os.getpid()):
+        path.unlink(missing_ok=True)
 
 
 # ------------------------------------------------------------------ watch --
@@ -442,6 +486,7 @@ class DashHandler(BaseHTTPRequestHandler):
                 self.h_section_detail,
                 self.h_file,
                 self.h_logs,
+                self.h_reload,
                 self.h_modules_http,
                 self.h_ui_fallback,
             ]
@@ -605,6 +650,36 @@ class DashHandler(BaseHTTPRequestHandler):
         self.send_json({"logs": logs})
         return True
 
+    def h_reload(self, verb: str, route: str):
+        """POST (or GET) /api/reload — forced full rescan in place.
+
+        Runs synchronously in the request thread; ThreadingHTTPServer keeps
+        serving other requests meanwhile. Returns the new generation."""
+        if route != "/api/reload":
+            return None
+        state: AppState = self.app["state"]
+        repo = self.app["repo"]
+        shape = self.app["shape"]
+        codeview_dir = self.app["codeview_dir"]
+        log_line(state, "reload: forced full rescan requested via API")
+        t0 = time.time()
+        try:
+            scan_all(repo, shape, codeview_dir, state, force=True)
+            persist_state(codeview_dir, state)
+        except Exception as exc:  # noqa: BLE001 — report, don't kill server
+            log_line(state, f"reload: FAILED {exc.__class__.__name__}: {exc}")
+            self.send_error_page(500, f"reload failed: {exc}")
+            return True
+        state.bump()
+        secs = time.time() - t0
+        with state.lock:
+            gen = state.generation
+        log_line(state, f"reload: rescan complete ({secs:.2f}s, "
+                        f"generation {gen})")
+        self.send_json({"ok": True, "generation": gen,
+                        "seconds": round(secs, 2)})
+        return True
+
     # -- module routes --------------------------------------------------------
 
     def h_modules_http(self, verb: str, route: str):
@@ -723,7 +798,9 @@ def main(argv=None) -> int:
     # the wrapper, browser polls, and bookmarks all point at it. TIME_WAIT
     # sockets are ridden out by bind_with_retry + SO_REUSEADDR instead of
     # drifting to preferred+1 (which silently strands every client).
-    strict_port = bool(os.environ.get("CODEVIEW_RESTARTS"))
+    # The control CLI demands the same for `codeview start --port N`.
+    strict_port = bool(os.environ.get("CODEVIEW_RESTARTS")
+                       or os.environ.get("CODEVIEW_STRICT_PORT"))
     port = preferred if strict_port else pick_port(preferred)
     repo = resolve_repo(args.repo or os.environ.get("CODEVIEW_REPO"))
     if repo is None:
@@ -767,6 +844,7 @@ def main(argv=None) -> int:
         "state": state, "modules": mods,
         "module_routes": build_module_table(mods),
         "repo": repo,
+        "shape": shape, "codeview_dir": codeview_dir,
         "verbose": bool(os.environ.get("CODEVIEW_VERBOSE")),
         "_ctx": watchdog_ctx,
     }
@@ -789,12 +867,14 @@ def main(argv=None) -> int:
           f"(modules: {sum(1 for m in mods if m['ok'])}/{len(mods)} ok)",
           flush=True)
     log_line(state, f"serving {repo.name} at http://127.0.0.1:{port}/")
+    write_daemon_file(repo, port, args.max_commits, watch=not args.no_watch)
     try:
         httpd.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
         pass
     finally:
         persist_state(codeview_dir, state)
+        remove_daemon_file(repo)
     return 0
 
 

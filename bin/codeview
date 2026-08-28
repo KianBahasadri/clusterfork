@@ -1,27 +1,43 @@
 #!/usr/bin/env python3
-"""codeview — repo introspection dashboard launcher.
+"""codeview — repo introspection dashboard control CLI.
 
-Resolves the current git repository, applies the house tmux-wrapping rules
-(fresh session named after basename(PWD), collision suffixes, CF_NO_TMUX /
-in-tmux / non-TTY bypasses), and serves the dashboard UI at a stable
-per-repo localhost port. Data caches under <repo>/.codeview/; drop-in
-modules live in <repo>/.codeview/modules/*.py. See docs/dashboard.md.
+Manages one localhost dashboard daemon per git repository. With no
+arguments prints `codeview status`. Data caches under <repo>/.codeview/;
+drop-in modules live in <repo>/.codeview/modules/*.py. See docs/dashboard.md.
 
-Usage: codeview [--port N] [--max-commits N] [--reindex] [--no-watch] [-h]
+Usage:
+  codeview                     same as: codeview status
+  codeview start [--port N] [--max-commits N] [--reindex] [--no-watch] [--no-open]
+  codeview stop
+  codeview restart [start flags]
+  codeview reload              force a full rescan on the running daemon
+  codeview status
+  codeview open
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
-import re
 import shutil
 import socket
 import subprocess
 import sys
-import threading
 import time
+import urllib.request
 import webbrowser
 from pathlib import Path
+
+START_FLAGS_HELP = {
+    "port": "port to serve on (default: stable per-repo hash in the 46000s)",
+    "max_commits": "history scan depth (default 1000)",
+    "reindex": "force full rescan on boot, ignoring cache",
+    "no_watch": "disable background rescan/restart watcher",
+    "no_open": "do not open the browser after starting",
+}
+
+BOOT_TIMEOUT = 30.0        # s to wait for the port to answer after start
+STOP_TIMEOUT = 5.0         # s to wait for the pid to die after SIGTERM
 
 
 def fail(msg: str, hint: str | None = None) -> None:
@@ -31,21 +47,57 @@ def fail(msg: str, hint: str | None = None) -> None:
     raise SystemExit(1)
 
 
-def parse_args(argv=None) -> argparse.Namespace:
+def ok(msg: str) -> None:
+    print(f"  ✓  {msg}")
+
+
+def field(label: str, value: str) -> None:
+    print(f"       {label:<9} {value}")
+
+
+# --------------------------------------------------------------- argparse --
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="codeview",
-        description="Repo introspection dashboard for the current git repo.")
-    parser.add_argument("--port", type=int,
-                        help="port to serve on (default: stable per-repo "
-                             "hash in the 46000s)")
-    parser.add_argument("--max-commits", type=int, default=1000,
-                        help="history scan depth (default 1000)")
-    parser.add_argument("--reindex", action="store_true",
-                        help="force full rescan on boot, ignoring cache")
-    parser.add_argument("--no-watch", action="store_true",
-                        help="disable background rescan/restart watcher")
-    return parser.parse_args(argv)
+        description="Repo introspection dashboard for the current git repo. "
+                    "With no command, prints status.",
+        epilog="run 'codeview <command> -h' for command-specific flags")
+    sub = parser.add_subparsers(dest="command")
 
+    sub.add_parser("status", help="show daemon status (default command)")
+
+    p_start = sub.add_parser("start", help="start the dashboard daemon")
+    p_start.add_argument("--port", type=int, help=START_FLAGS_HELP["port"])
+    p_start.add_argument("--max-commits", type=int, dest="max_commits",
+                         default=1000, help=START_FLAGS_HELP["max_commits"])
+    p_start.add_argument("--reindex", action="store_true",
+                         help=START_FLAGS_HELP["reindex"])
+    p_start.add_argument("--no-watch", action="store_true", dest="no_watch",
+                         help=START_FLAGS_HELP["no_watch"])
+    p_start.add_argument("--no-open", action="store_true", dest="no_open",
+                         help=START_FLAGS_HELP["no_open"])
+
+    sub.add_parser("stop", help="stop the running daemon")
+
+    p_restart = sub.add_parser("restart", help="stop, then start again")
+    p_restart.add_argument("--port", type=int, help=START_FLAGS_HELP["port"])
+    p_restart.add_argument("--max-commits", type=int, dest="max_commits",
+                           default=1000, help=START_FLAGS_HELP["max_commits"])
+    p_restart.add_argument("--reindex", action="store_true",
+                           help=START_FLAGS_HELP["reindex"])
+    p_restart.add_argument("--no-watch", action="store_true", dest="no_watch",
+                           help=START_FLAGS_HELP["no_watch"])
+    p_restart.add_argument("--no-open", action="store_true", dest="no_open",
+                           help=START_FLAGS_HELP["no_open"])
+
+    sub.add_parser("reload", help="force a full rescan (does not restart)")
+
+    sub.add_parser("open", help="open the dashboard in a browser")
+    return parser
+
+
+# ---------------------------------------------------------------- helpers --
 
 def clusterfork_dir() -> Path:
     override = os.environ.get("CLUSTERFORK_DIR")
@@ -55,6 +107,100 @@ def clusterfork_dir() -> Path:
         fail(f"codeview server not found at {server_py}",
              "Re-run install-clusterfork.sh.")
     return base
+
+
+def load_server_modules(cf_dir: Path):
+    """Import scan/default_port from the installed copy; fail with a hint."""
+    scripts_dir = cf_dir / "scripts"
+    sys.path.insert(0, str(scripts_dir))
+    try:
+        from codeview import scan  # noqa: E402
+        from codeview.server import default_port  # noqa: E402
+    except ImportError as exc:
+        fail(f"cannot load codeview modules from {scripts_dir}: {exc}",
+             "Re-run install-clusterfork.sh.")
+    return scan, default_port
+
+
+# ------------------------------------------------------------- daemon file --
+
+def daemon_path(repo: Path) -> Path:
+    return repo / ".codeview" / "daemon.json"
+
+
+def read_daemon(repo: Path) -> dict | None:
+    try:
+        data = json.loads(daemon_path(repo).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) and data.get("pid") else None
+    except (OSError, ValueError):
+        return None
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, owned by someone else
+    except OSError:
+        return False
+
+
+def proc_cmdline(pid: int) -> str | None:
+    """Space-joined cmdline, or None where /proc is unavailable."""
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+        return raw.replace(b"\x00", b" ").decode("utf-8", "replace")
+    except OSError:
+        return None
+
+
+def looks_like_codeview(info: dict) -> bool:
+    """Best-effort identity check: pid's cmdline should mention server.py.
+    Skipped on systems without /proc."""
+    cmdline = proc_cmdline(info["pid"])
+    if cmdline is None:
+        return True
+    return "server.py" in cmdline
+
+
+def daemon_running(repo: Path) -> dict | None:
+    """daemon.json entry only if the process is actually alive."""
+    info = read_daemon(repo)
+    if info and pid_alive(info["pid"]):
+        return info
+    return None
+
+
+# ------------------------------------------------------------ port / http --
+
+def port_alive(port: int, timeout: float = 0.4) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def http_get_json(port: int, path: str, timeout: float = 2.0) -> dict | None:
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}{path}", timeout=timeout) as res:
+            return json.loads(res.read().decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def http_post_json(port: int, path: str, timeout: float = 300.0) -> dict | None:
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}", data=b"", method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as res:
+            return json.loads(res.read().decode("utf-8"))
+    except (OSError, ValueError):
+        return None
 
 
 # ------------------------------------------------------------- tmux rules --
@@ -93,69 +239,138 @@ def tmux_available() -> bool:
     return shutil.which("tmux") is not None
 
 
-# ------------------------------------------------------------- port/open --
+# ------------------------------------------------------------ formatting --
 
-def port_alive(port: int, timeout: float = 0.4) -> bool:
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
-            return True
-    except OSError:
-        return False
+def fmt_ts(ts: float | None) -> str:
+    if not ts:
+        return "unknown"
+    return time.strftime("%b %d %Y %H:%M", time.localtime(ts))
 
 
-def open_when_ready(port: int, url: str) -> None:
-    """Poll until the server answers, then open the browser. Runs in a
-    daemon thread so it cannot block or crash the launch."""
-    for _ in range(60):
-        if port_alive(port):
-            print(f"codeview running at {url}")
-            try:
-                webbrowser.open(url)
-            except Exception:  # noqa: BLE001 — opening is best-effort
-                pass
-            return
-        time.sleep(0.5)
-    print("codeview: server did not answer within 30s", file=sys.stderr)
+def fmt_age(ts: float | None) -> str:
+    if not ts:
+        return ""
+    secs = max(0, int(time.time() - ts))
+    if secs < 60:
+        return f"{secs}s ago"
+    if secs < 3600:
+        return f"{secs // 60}m ago"
+    if secs < 86400:
+        return f"{secs // 3600}h {(secs % 3600) // 60}m ago"
+    return f"{secs // 86400}d ago"
 
 
-# ------------------------------------------------------------------ main --
+# -------------------------------------------------------------- commands --
 
-def main(argv=None) -> int:
-    args = parse_args(argv)
-    if shutil.which("git") is None:
-        fail("git is required", "codeview introspects git repositories.")
-    cf_dir = clusterfork_dir()
-    scripts_dir = cf_dir / "scripts"
-    server_py = scripts_dir / "codeview" / "server.py"
+def cmd_status(repo: Path, scan, default_port) -> int:
+    info = read_daemon(repo)
+    port = (info or {}).get("port") or default_port(repo)
 
-    # Import the server package directly: no duplicated port/root helpers.
-    sys.path.insert(0, str(scripts_dir))
-    try:
-        from codeview import scan  # noqa: E402
-        from codeview.server import default_port  # noqa: E402
-    except ImportError as exc:
-        fail(f"cannot load codeview modules from {scripts_dir}: {exc}",
-             "Re-run install-clusterfork.sh.")
+    if info and not pid_alive(info["pid"]):
+        # Stale bookkeeping: server died without cleanup (kill -9, reboot).
+        print(f"  ✗  codeview is not running (stale daemon file, "
+              f"pid {info['pid']} is gone)")
+        daemon_path(repo).unlink(missing_ok=True)
+        return 1
 
-    root = scan.repo_root(Path.cwd())
-    if root is None:
-        fail("not inside a git repository", "cd into a repo and retry.")
+    if info and pid_alive(info["pid"]) and not port_alive(port):
+        field_line = (f"pid {info['pid']} alive but port {port} is not "
+                      f"answering (still booting, or hung)")
+        print("  ✗  codeview is not serving")
+        field("repo", str(repo))
+        field("pid", str(info["pid"]))
+        field("note", field_line)
+        return 1
 
-    port = args.port or default_port(root)
-
-    # Already serving this repo? Just open it again instead of failing bind.
-    if port_alive(port):
-        url = f"http://127.0.0.1:{port}/"
-        print(f"codeview already running at {url}")
-        try:
-            webbrowser.open(url)
-        except Exception:  # noqa: BLE001
-            pass
+    if info and pid_alive(info["pid"]):
+        _print_running(repo, info)
         return 0
 
-    url = f"http://127.0.0.1:{port}/"
+    if port_alive(port):
+        print(f"  ✓  codeview appears to be running "
+              f"(untracked: no daemon file for this repo)")
+        field("repo", str(repo))
+        field("url", f"http://127.0.0.1:{port}/")
+        field("note", "started by an older version or another tool")
+        return 0
+
+    sections = _cached_section_count(repo)
+    print("  ✗  codeview is not running")
+    field("repo", str(repo))
+    field("port", f"{port} (free)")
+    if sections:
+        field("cache", f"{sections} sections cached (.codeview/cache)")
+    field("start", "codeview start")
+    return 1
+
+
+def _print_running(repo: Path, info: dict) -> None:
+    port = info["port"]
+    ok("codeview is running")
+    field("repo", str(repo))
+    field("url", f"http://127.0.0.1:{port}/")
+    session = info.get("session")
+    pid_txt = str(info["pid"])
+    if session:
+        pid_txt += f"  (tmux session: {session})"
+    field("pid", pid_txt)
+    started = info.get("started_at")
+    field("started", fmt_ts(started))
+    if started:
+        field("uptime", fmt_age(started).replace(" ago", "") or "<1s")
+    summary = http_get_json(port, "/api/summary")
+    if summary:
+        meta = summary.get("meta") or {}
+        branch = meta.get("branch") or "?"
+        if meta.get("detached"):
+            branch = f"(detached at {meta.get('short_head', '?')})"
+        state_word = "dirty" if meta.get("dirty") else "clean"
+        field("branch", f"{branch} · {state_word}")
+        watch = info.get("watch")
+        field("watch", "on (auto-rescan on HEAD/dirty/module changes)"
+              if watch else "off (--no-watch)")
+        mods = summary.get("modules") or []
+        names = ", ".join(m["name"] for m in mods if m.get("ok")) or "none"
+        field("modules", f"{sum(1 for m in mods if m.get('ok'))}  ({names})")
+        gen = http_get_json(port, "/api/gen")
+        rescanned = (gen or {}).get("rescanned_at")
+        if rescanned:
+            field("cache", f"last scan {fmt_ts(rescanned)} "
+                           f"({fmt_age(rescanned)})")
+    else:
+        field("note", "API not answering yet — still booting?")
+
+
+def _cached_section_count(repo: Path) -> int:
+    cache = repo / ".codeview" / "cache"
+    if not cache.is_dir():
+        return 0
+    return sum(1 for name in ("meta", "history", "files", "deps")
+               if (cache / f"{name}.json").is_file())
+
+
+def cmd_start(repo: Path, scan, default_port, args, server_py: Path) -> int:
+    info = daemon_running(repo)
+    if info:
+        ok(f"already running at http://127.0.0.1:{info['port']}/ "
+           f"(pid {info['pid']})")
+        _maybe_open(info["port"], args.no_open)
+        return 0
+
+    port = args.port or default_port(repo)
+    if port_alive(port):
+        print(f"  ✓  already running at http://127.0.0.1:{port}/ "
+              f"(untracked server on this port)")
+        _maybe_open(port, args.no_open)
+        return 0
+
+    # Stale bookkeeping from a killed server: clean before relaunching.
+    if read_daemon(repo):
+        daemon_path(repo).unlink(missing_ok=True)
+
+    daemon_path(repo).parent.mkdir(parents=True, exist_ok=True)
     server_args = [
-        "--repo", str(root),
+        "--repo", str(repo),
         "--port", str(port),
         "--max-commits", str(args.max_commits),
     ]
@@ -167,20 +382,177 @@ def main(argv=None) -> int:
     wrap = should_wrap_in_tmux(os.environ) and tmux_available()
     if wrap:
         name = pick_session_name(
-            os.path.basename(str(root)),
+            os.path.basename(str(repo)),
             runner=lambda cmd: subprocess.run(
                 cmd, capture_output=True).returncode,
         )
-        threading.Thread(target=open_when_ready, args=(port, url),
-                         daemon=True).start()
-        result = subprocess.run(
-            ["tmux", "new-session", "-s", name, "-c", str(root), "--",
-             sys.executable, str(server_py), *server_args])
-        return result.returncode
+        env = os.environ.copy()
+        env["CODEVIEW_SESSION"] = name
+        env["CODEVIEW_STRICT_PORT"] = "1"
+        subprocess.run(
+            ["tmux", "new-session", "-d", "-s", name, "-c", str(repo), "--",
+             sys.executable, str(server_py), *server_args],
+            env=env, check=True)
+        spawned = f"tmux session: {name}"
+        gone = _tmux_session_gone(name)
+    else:
+        log = open(daemon_path(repo).with_name("daemon.log"), "ab")
+        env = os.environ.copy()
+        env["CODEVIEW_STRICT_PORT"] = "1"
+        subprocess.Popen(
+            [sys.executable, str(server_py), *server_args],
+            stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env,
+            start_new_session=True)
+        spawned = "background"
+        gone = lambda: False
 
-    # Bypass mode (headless/CI/in-tmux): serve in-process so Ctrl-C stops it.
-    from codeview.server import main as server_main  # noqa: E402
-    return server_main(server_args)
+    if not _wait_until(lambda: port_alive(port), BOOT_TIMEOUT, gone):
+        if wrap:
+            fail(f"server did not answer within {BOOT_TIMEOUT:.0f}s",
+                 f"inspect it: tmux attach -t {name}  ||  "
+                 f"tmux kill-session -t {name}")
+        fail(f"server did not answer within {BOOT_TIMEOUT:.0f}s",
+             f"check {daemon_path(repo).with_name('daemon.log')}")
+
+    # The server writes daemon.json once it is fully booted; give it a beat.
+    info = read_daemon(repo)
+    if info is None:
+        _wait_until(lambda: read_daemon(repo) is not None, 3.0)
+        info = read_daemon(repo)
+    pid = (info or {}).get("pid", "?")
+
+    ok(f"started codeview for {repo}")
+    field("url", f"http://127.0.0.1:{port}/")
+    field("pid", f"{pid}  ({spawned})")
+    _maybe_open(port, args.no_open)
+    return 0
+
+
+def _tmux_session_gone(name: str):
+    def gone() -> bool:
+        return subprocess.run(["tmux", "has-session", "-t", name],
+                              capture_output=True).returncode != 0
+    return gone
+
+
+def _wait_until(pred, timeout: float, abort=None) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if abort and abort():
+            return False
+        if pred():
+            return True
+        time.sleep(0.25)
+    return bool(pred())
+
+
+def _maybe_open(port: int, no_open: bool) -> None:
+    if no_open:
+        return
+    try:
+        webbrowser.open(f"http://127.0.0.1:{port}/")
+    except Exception:  # noqa: BLE001 — opening is best-effort
+        pass
+
+
+def cmd_stop(repo: Path, default_port) -> int:
+    info = read_daemon(repo)
+    if info is None:
+        port = default_port(repo)
+        if port_alive(port):
+            fail(f"port {port} is answering but no tracked daemon exists",
+                 "not killing an unknown process; stop it manually")
+        print("  ·  codeview is not running")
+        return 0
+
+    pid, port = info["pid"], info.get("port")
+    if not pid_alive(pid):
+        print(f"  ·  codeview is not running (stale daemon file, "
+              f"pid {pid} was gone)")
+        daemon_path(repo).unlink(missing_ok=True)
+        return 0
+    if not looks_like_codeview(info):
+        fail(f"pid {pid} does not look like a codeview server",
+             "refusing to kill it; remove "
+             f"{daemon_path(repo)} if you are sure")
+
+    try:
+        os.kill(pid, 15)  # SIGTERM: server persists state, then exits
+    except OSError as exc:
+        fail(f"could not signal pid {pid}: {exc}")
+
+    if not _wait_until(lambda: not pid_alive(pid), STOP_TIMEOUT):
+        fail(f"pid {pid} did not exit within {STOP_TIMEOUT:.0f}s",
+             "kill it manually, then re-run codeview stop")
+    daemon_path(repo).unlink(missing_ok=True)
+    freed = "port freed" if port and not port_alive(port) else None
+    detail = f"pid {pid}" + (f", {freed}" if freed else "")
+    ok(f"stopped ({detail})")
+    return 0
+
+
+def cmd_reload(repo: Path) -> int:
+    info = daemon_running(repo)
+    if info is None:
+        fail("not running", "start it with: codeview start")
+    result = http_post_json(info["port"], "/api/reload")
+    if result is None:
+        fail("reload request failed",
+             "server too old for /api/reload, or it hung during rescan")
+    ok(f"rescan complete in {result.get('seconds', '?')}s "
+       f"(generation {result.get('generation', '?')})")
+    return 0
+
+
+def cmd_open(repo: Path, default_port) -> int:
+    info = daemon_running(repo)
+    port = (info or {}).get("port") or default_port(repo)
+    if not (info or port_alive(port)):
+        fail("not running", "start it with: codeview start")
+    url = f"http://127.0.0.1:{port}/"
+    try:
+        webbrowser.open(url)
+    except Exception:  # noqa: BLE001
+        pass
+    ok(f"opened {url} in your browser")
+    return 0
+
+
+# ------------------------------------------------------------------ main --
+
+def main(argv=None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command is None:
+        args = parser.parse_args(["status"])
+
+    if shutil.which("git") is None:
+        fail("git is required", "codeview introspects git repositories.")
+    cf_dir = clusterfork_dir()
+    scan, default_port = load_server_modules(cf_dir)
+
+    root = scan.repo_root(Path.cwd())
+    if root is None:
+        fail("not inside a git repository", "cd into a repo and retry.")
+
+    if args.command == "status":
+        return cmd_status(root, scan, default_port)
+    if args.command == "start":
+        return cmd_start(root, scan, default_port, args, cf_dir
+                         / "scripts" / "codeview" / "server.py")
+    if args.command == "stop":
+        return cmd_stop(root, default_port)
+    if args.command == "restart":
+        stop_rc = cmd_stop(root, default_port)
+        if stop_rc != 0:
+            return stop_rc
+        return cmd_start(root, scan, default_port, args, cf_dir
+                         / "scripts" / "codeview" / "server.py")
+    if args.command == "reload":
+        return cmd_reload(root)
+    if args.command == "open":
+        return cmd_open(root, default_port)
+    parser.error(f"unknown command {args.command!r}")
 
 
 if __name__ == "__main__":

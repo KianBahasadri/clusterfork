@@ -1,27 +1,54 @@
 # Dashboard (codeview)
 
-`codeview` serves a localhost web dashboard for the git repository you run it
-in. One command, no install-in-repo step; data caches inside the repo and
-rescans in the background. Project-specific views are added by dropping
-Python "modules" into the repo, which appear as extra tabs.
+`codeview` runs a localhost web dashboard for the git repository you run it
+in, as a background daemon you control with a small CLI (start/stop/reload/
+status/open — no arguments prints status). No install-in-repo step; data
+caches inside the repo and rescans in the background. Project-specific views
+are added by dropping Python "modules" into the repo, which appear as extra
+tabs.
 
 ## Running
 
+`codeview` is a control CLI for a per-repo dashboard daemon. With no
+arguments it prints `codeview status`.
+
 ```
-codeview [--port N] [--max-commits N] [--reindex] [--no-watch]
+codeview                     # same as: codeview status
+codeview start [--port N] [--max-commits N] [--reindex] [--no-watch] [--no-open]
+codeview stop
+codeview restart [start flags]
+codeview reload              # forced full rescan on the running daemon
+codeview status
+codeview open
 ```
 
 - Must be run inside a git repository (nested subdirs and worktrees resolve
-  via `git rev-parse --show-toplevel`).
+  via `git rev-parse --show-toplevel`); all commands act on the daemon for
+  that repo, found via `<repo>/.codeview/daemon.json`.
+- `status` exits 1 when nothing is running, so it is script-friendly.
+  It also reports port, uptime, branch/dirty, watch mode, module list, and
+  last scan time (fetched live from the daemon's API when it answers).
 - Default port is a stable hash of the repo path in the 46000–49999 range, so
-  bookmarks survive; `--port` overrides. If the computed port is already
-  answering, the wrapper just opens a browser on it instead of failing to bind.
-- tmux behavior follows the house launchers: wrapped in a new
-  `dash-<basename-pwd>` session (collision suffixes included) with the same
-  bypasses (`CF_NO_TMUX`, already inside tmux, non-TTY stdin); the browser
-  opens once the server answers. See [Shell Modules](shell-modules.md) for
-  `_cf_tmux` semantics — `bin/codeview` reimplements them in Python rather
-  than sourcing the bash helper, because the wrapper is a Python script.
+  bookmarks survive; `--port` overrides and is held strictly (a just-stopped
+  server's TIME_WAIT sockets do not push the port to +1).
+- `start` never blocks: when stdin is a TTY it launches the server detached
+  in a new `tmux` session named after basename(repo) (collision suffixes,
+  house bypasses: `CF_NO_TMUX`, already inside tmux, non-TTY stdin); in
+  headless/CI it spawns a detached background process logging to
+  `.codeview/daemon.log`. It waits until the port answers (30 s), then opens
+  the browser unless `--no-open`. Starting an already-running daemon is
+  idempotent and just re-opens the dashboard.
+- `stop` SIGTERMs the tracked pid (server persists state, port frees,
+  bookkeeping is removed) and is idempotent. It refuses to kill a process
+  that does not look like a codeview server, and refuses to act when a port
+  answers with no daemon file (untracked foreign server).
+- `reload` POSTs `/api/reload`: the daemon rescans every section in place
+  (same data as a `--reindex` boot), persists the cache, bumps the
+  generation so open browsers reload themselves, and reports the elapsed
+  time. No restart, no downtime.
+- tmux launch semantics mirror the house launchers; `bin/codeview`
+  reimplements them in Python rather than sourcing the bash helper. See
+  [Shell Modules](shell-modules.md) for `_cf_tmux` semantics.
 
 ## What it shows
 
@@ -66,13 +93,17 @@ Everything lands in `<repo>/.codeview/`:
 
 ```
 .codeview/
-├── .gitignore      # written by the tool: ignores cache/
+├── .gitignore      # written by the tool: ignores itself, cache/, daemon bookkeeping
 ├── cache/          # meta.json history.json files.json deps.json fingerprints.json
+├── daemon.json     # live-daemon bookkeeping (pid, port, started_at, flags)
+├── daemon.log      # stdout/stderr of background-spawned daemons
 └── modules/        # your drop-in modules (not ignored)
 ```
 
 - Cache files are written atomically (tmp + rename) and reloaded on boot, so
-  startup is fast on the second run.
+  startup is fast on the second run. `daemon.json` is written on boot and
+  removed on clean shutdown; a stale file (pid gone) is detected and cleaned
+  up by the control CLI.
 - A watch thread (3 s cycle) compares a data fingerprint (HEAD sha + dirty
   status hash + scan options). A real change triggers a background rescan of
   stale sections in place — the generation counter bumps and the browser
@@ -118,7 +149,7 @@ level as running the repo's own build scripts.
 
 | Repo path | Installed to | Role |
 |---|---|---|
-| `bin/codeview` | `~/.config/clusterfork/bin/codeview` | launcher (on `PATH`) |
+| `bin/codeview` | `~/.config/clusterfork/bin/codeview` | control CLI (status/start/stop/restart/reload/open) |
 | `scripts/codeview/` | `~/.config/clusterfork/scripts/codeview/` | server, scanners, module runtime, UI assets |
 
 The launcher imports the server package from the installed copy — re-run
@@ -129,5 +160,7 @@ is not what runs). See [Installation](installation.md).
 
 `tests/test_codeview_scan_cache.py`, `test_codeview_modules.py`,
 `test_codeview_router.py` (boots the real HTTP server against a throwaway
-repo), and `test_codeview_wrapper.py` (mock-tmux on PATH, house pattern).
+repo; covers `/api/reload` and the daemon bookkeeping file), and
+`test_codeview_wrapper.py` (full daemon lifecycle in bypass mode plus
+mock-tmux on PATH for the tmux-detached start, house pattern).
 CI additionally runs `python3 -m py_compile` over the package.

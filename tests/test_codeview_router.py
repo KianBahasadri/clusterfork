@@ -1,6 +1,7 @@
 """End-to-end tests for codeview.server: boot on a temp repo, hit routes over
 real HTTP, verify sections/tabs/module dispatch/staleness handling."""
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -65,6 +66,8 @@ class ServerBootTestCase(unittest.TestCase):
             "modules": mods,
             "module_routes": srv.build_module_table(mods),
             "repo": repo,
+            "shape": cls.shape,
+            "codeview_dir": cls.codeview_dir,
             "verbose": False,
         }
         httpd._section_re = __import__("re").compile(
@@ -194,6 +197,38 @@ class ServerBootTestCase(unittest.TestCase):
         data = json.loads(body)
         self.assertIsInstance(data["generation"], int)
         self.assertIn("rescanned_at", data)
+
+    def test_reload_endpoint_forces_rescan_and_bumps_generation(self):
+        _, before = get(self.url("/api/gen"))
+        gen0 = json.loads(before)["generation"]
+        req = urllib.request.Request(self.url("/api/reload"),
+                                     data=b"", method="POST")
+        with urllib.request.urlopen(req, timeout=60) as res:
+            data = json.loads(res.read())
+        self.assertTrue(data["ok"])
+        self.assertGreater(data["generation"], gen0)
+        self.assertIsInstance(data["seconds"], (int, float))
+        _, after = get(self.url("/api/gen"))
+        self.assertEqual(json.loads(after)["generation"], data["generation"])
+
+    def test_daemon_file_write_and_gated_remove(self):
+        daemon = srv.daemon_file(self.repo)
+        self.assertFalse(daemon.exists())
+        srv.write_daemon_file(self.repo, port=47123, max_commits=50,
+                              watch=True)
+        data = json.loads(daemon.read_text())
+        self.assertEqual(data["port"], 47123)
+        self.assertEqual(data["pid"], os.getpid())
+        self.assertTrue(data["watch"])
+        # A successor pid's entry must survive our cleanup.
+        data["pid"] = data["pid"] + 1
+        daemon.write_text(json.dumps(data))
+        srv.remove_daemon_file(self.repo)
+        self.assertTrue(daemon.exists())
+        data["pid"] = os.getpid()
+        daemon.write_text(json.dumps(data))
+        srv.remove_daemon_file(self.repo)
+        self.assertFalse(daemon.exists())
 
     def test_persist_then_reload_roundtrip(self):
         # Cache files exist and reload into a fresh state identically.
