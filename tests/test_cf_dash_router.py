@@ -97,6 +97,16 @@ class ServerBootTestCase(unittest.TestCase):
             get(self.url("/assets/../scan.py"))
         self.assertEqual(ctx.exception.code, 403)
 
+    def test_assets_served_with_correct_mime(self):
+        # Regression: suffix lookup used dotless keys ("css") against
+        # dotted ones (".css"), so every asset fell through to
+        # application/octet-stream and browsers refused the stylesheet.
+        with urllib.request.urlopen(self.url("/assets/app.css"),
+                                    timeout=5) as res:
+            self.assertEqual(res.status, 200)
+            self.assertEqual(res.headers["Content-Type"],
+                             "text/css; charset=utf-8")
+
     def test_summary_endpoint(self):
         status, body = get(self.url("/api/summary"))
         data = json.loads(body)

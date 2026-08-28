@@ -434,7 +434,8 @@ class DashHandler(BaseHTTPRequestHandler):
         if not target.is_file():
             self.send_error_page(404, "missing asset")
         else:
-            mime = MIME_BY_SUFFIX.get(suffix, "application/octet-stream")
+            mime = MIME_BY_SUFFIX.get("." + suffix,
+                                      "application/octet-stream")
             self.send_body(200, target.read_bytes(), mime)
         return True
 
