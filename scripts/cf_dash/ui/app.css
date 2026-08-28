@@ -22,6 +22,11 @@ body {
 }
 #repo-name { font-weight: bold; font-size: 15px; }
 #head-info { color: var(--dim); font-size: 12px; }
+#ci-info { font-size: 12px; }
+#ci-info:not([hidden])::before { content: " · "; color: var(--dim); }
+#ci-info.passing { color: var(--accent2); }
+#ci-info.failing { color: var(--bad); }
+#ci-info.running { color: var(--warn); }
 #stale-banner {
   margin-left: auto; color: var(--warn); font-size: 12px;
   border: 1px solid var(--warn); border-radius: 4px; padding: 1px 8px;

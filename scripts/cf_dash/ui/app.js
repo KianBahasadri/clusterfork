@@ -5,6 +5,18 @@
 const $ = (sel, root) => (root || document).querySelector(sel);
 const fmt = n => n == null ? "—" : Number(n).toLocaleString("en-US");
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// "2026-08-28T15:24:…" → "Aug 28 2026 15:24" (3-letter months everywhere)
+function fmtDate(iso) {
+  const m = String(iso || "").match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/);
+  if (!m) return String(iso || "—");
+  return `${MONTHS[+m[2] - 1]} ${+m[3]} ${m[1]}`
+    + (m[4] ? ` ${m[4]}:${m[5]}` : "");
+}
+
 // ---------------------------------------------------------------- charts --
 
 function svgLineChart(series, labels, opts = {}) {
@@ -38,8 +50,11 @@ function svgLineChart(series, labels, opts = {}) {
   const tickEvery = Math.max(1, Math.ceil(n / 6));
   labels.forEach((lab, i) => {
     if (i % tickEvery !== 0) return;
+    const s = String(lab);
+    const short = MONTHS[+s.slice(5, 7) - 1]
+      ? `${MONTHS[+s.slice(5, 7) - 1]} ${+s.slice(8, 10)}` : s;
     out += `<text x="${x(i)}" y="${h - 4}" fill="#8b949e" font-size="10"
-      text-anchor="middle">${String(lab).slice(5, 10)}</text>`;
+      text-anchor="middle">${short}</text>`;
   });
   return out + "</svg>";
 }
@@ -126,8 +141,17 @@ async function refresh() {
   const m = summary.meta || {};
   $("#repo-name").textContent = m.repo_name || "?";
   $("#head-info").textContent =
-    `${m.branch || "(detached)"} · ${m.short_head || ""}`
-    + (m.dirty ? " · dirty" : "");
+    (m.branch || "(detached)") + (m.dirty ? " · dirty" : "");
+  const ciEl = $("#ci-info");
+  if (summary.ci) {
+    ciEl.hidden = false;
+    ciEl.className = summary.ci;
+    ciEl.textContent =
+      { passing: "ci ✓", failing: "ci ✗", running: "ci …" }[summary.ci]
+      || "ci ?";
+  } else {
+    ciEl.hidden = true;
+  }
   if (state.active === "overview" || !state.active) await renderOverview(summary);
 }
 
@@ -151,7 +175,7 @@ async function renderOverview(s) {
       ${metric("commits scanned", fmt(s.commits_count))}
       ${metric("top-level dirs", fmt((s.dirs || []).length))}
       ${metric("modules", s.modules.length)}
-      ${metric("scanned at", String(s.meta.scanned_at_iso || "").replace("T", " ").slice(0, 16))}
+      ${metric("scanned at", fmtDate(s.meta.scanned_at_iso))}
     </div>
     <h2>lines by top-level dir</h2>
     <div id="ov-tops">${barRows(tops)}</div>
@@ -189,7 +213,7 @@ async function renderHistory() {
     </tr></thead><tbody>
       ${commits.slice().reverse().slice(0, 100).map(c => `
         <tr>
-          <td>${esc(String(c.date).replace("T", " "))}</td>
+          <td>${esc(fmtDate(c.date))}</td>
           <td class="commit-sha">${esc(c.sha)}</td>
           <td class="commit-subject">${esc(c.subject)}</td>
           <td class="num ${c.delta >= 0 ? "delta-pos" : "delta-neg"}">

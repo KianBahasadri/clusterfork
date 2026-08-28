@@ -25,6 +25,13 @@ cf-dash [--port N] [--max-commits N] [--reindex] [--no-watch]
 
 ## What it shows
 
+Header: `repo · branch · dirty · ci ✓|✗|…` — the CI state is the GitHub
+Actions check-run verdict for HEAD, fetched via the `gh` CLI (logged-in
+auth) in the background (eager on boot, refreshed ~60 s and on HEAD
+changes). It is hidden when `gh` is missing, origin isn't GitHub, or HEAD
+has no check runs. The commit hash is not shown. All dates render with
+three-letter months ("Aug 28 2026 15:24").
+
 Four core tabs, built from git + manifest scanning only (stdlib; no pip
 dependencies anywhere in the tool):
 

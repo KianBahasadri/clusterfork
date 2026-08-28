@@ -28,7 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from cf_dash import cachestore, modules_rt, scan  # noqa: E402
+from cf_dash import cachestore, ci, modules_rt, scan  # noqa: E402
 
 SERVER_PY = Path(__file__).resolve()
 UI_DIR = Path(__file__).resolve().parent / "ui"
@@ -37,6 +37,7 @@ SCAN_SECTIONS = ("meta", "history", "files", "deps")
 WATCH_INTERVAL = 3.0          # s between fingerprint checks
 RESTART_QUIET = 5.0           # s the module fingerprint must stay stable
 RESTART_MIN_INTERVAL = 30.0   # s minimum gap between self-restarts
+CI_REFRESH_INTERVAL = 60.0    # s between GitHub CI state refreshes
 
 
 class AppState:
@@ -48,6 +49,7 @@ class AppState:
         self.fingerprints: dict[str, str] = {}
         self.generation = 1
         self.last_rescan_ts: float | None = None
+        self.ci_state: str | None = None
 
     def bump(self) -> None:
         with self.lock:
@@ -270,6 +272,15 @@ def spawn_reloader(repo: Path, port: int, max_commits: int,
     os.execve(sys.executable, argv, env)
 
 
+def refresh_ci_state(repo: Path, state: AppState) -> None:
+    """Best-effort GitHub Actions state for HEAD; None means 'no CI'."""
+    head = (scan.try_git(["rev-parse", "HEAD"], repo) or "").strip()
+    try:
+        state.ci_state = ci.github_ci_state(repo, head) if head else None
+    except Exception:
+        state.ci_state = None
+
+
 def watch_loop(ctx) -> None:
     """Background fingerprint watcher: rescan data in place, restart on
     module-set changes after a quiet period."""
@@ -277,6 +288,10 @@ def watch_loop(ctx) -> None:
         time.sleep(WATCH_INTERVAL)
         repo, shape, cf_dir, state = ctx["repo"], ctx["shape"], \
             ctx["cf_dir"], ctx["state"]
+        now = time.time()
+        if now - ctx["ci_ts"] >= CI_REFRESH_INTERVAL:
+            ctx["ci_ts"] = now
+            refresh_ci_state(repo, state)
         mod_fp = current_module_fingerprint(cf_dir)
         if mod_fp != ctx["module_fp"]:
             ctx["mod_seen_at"] = ctx["mod_seen_at"] or time.time()
@@ -308,6 +323,8 @@ def watch_loop(ctx) -> None:
                 state.bump()
             except Exception:
                 traceback.print_exc()
+            if head_changed:
+                refresh_ci_state(repo, state)
 
 
 def _meta_head(repo: Path) -> str:
@@ -494,6 +511,7 @@ class DashHandler(BaseHTTPRequestHandler):
             "modules": [
                 {"name": m["name"], "ok": m["ok"]}
                 for m in self.app["modules"]],
+            "ci": state.ci_state,
         })
         return True
 
@@ -667,6 +685,7 @@ def main(argv=None) -> int:
         "mod_seen_at": None,
         "last_restart": 0.0,
         "restart_count": int(os.environ.get("CF_DASH_RESTARTS") or 0),
+        "ci_ts": time.time(),
     }
     httpd.app = {  # type: ignore[attr-defined]
         "state": state, "modules": mods,
@@ -682,6 +701,10 @@ def main(argv=None) -> int:
     if not args.no_watch:
         threading.Thread(target=watch_loop, args=(watchdog_ctx,),
                          daemon=True, name="cf-dash-watch").start()
+    # CI indicator: one eager fetch so the header is populated fast, then
+    # the watch loop keeps it fresh (or not, with --no-watch).
+    threading.Thread(target=refresh_ci_state, args=(repo, state),
+                     daemon=True, name="cf-dash-ci").start()
 
     print(f"cf-dash: serving {repo.name} at http://127.0.0.1:{port}/ "
           f"(modules: {sum(1 for m in mods if m['ok'])}/{len(mods)} ok)",

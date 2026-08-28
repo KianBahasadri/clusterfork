@@ -113,6 +113,8 @@ class ServerBootTestCase(unittest.TestCase):
         self.assertEqual(data["meta"]["repo_name"], self.repo.name)
         self.assertGreater(data["total_lines"], 0)
         self.assertEqual(data["commits_count"], 1)
+        # Temp repo has no GitHub origin + no CI fetch ran: no CI to report.
+        self.assertIsNone(data["ci"])
 
     def test_section_endpoints(self):
         for section in ("meta", "history", "files", "deps"):
