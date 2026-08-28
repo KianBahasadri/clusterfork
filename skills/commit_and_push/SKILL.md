@@ -14,7 +14,7 @@ description: Commit and push staged changes to the current branch
 5. Commit with the proposed message.
 6. Run `git status` to confirm the commit succeeded and nothing is left behind.
 7. Push to the current branch on `origin`.
-8. If the repo has CI that runs on push (and it will actually trigger on this push — the branch is watched and the repo has CI configured), make sure CI passes before reporting done. Diagnose failures and fix the root cause rather than working around them; do not skip this for pushes where CI won't run.
+8. If the repo has CI that runs on push (and it will actually trigger on this push — the branch is watched and the repo has CI configured), make sure CI passes before reporting done. Diagnose failures and fix the root cause rather than working around them.
 
 ## Notes
 
