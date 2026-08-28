@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""cf-dash — repo introspection dashboard launcher.
+"""codeview — repo introspection dashboard launcher.
 
 Resolves the current git repository, applies the house tmux-wrapping rules
 (fresh session named after basename(PWD), collision suffixes, CF_NO_TMUX /
 in-tmux / non-TTY bypasses), and serves the dashboard UI at a stable
-per-repo localhost port. Data caches under <repo>/.cf-dash/; drop-in
-modules live in <repo>/.cf-dash/modules/*.py. See docs/dashboard.md.
+per-repo localhost port. Data caches under <repo>/.codeview/; drop-in
+modules live in <repo>/.codeview/modules/*.py. See docs/dashboard.md.
 
-Usage: cf-dash [--port N] [--max-commits N] [--reindex] [--no-watch] [-h]
+Usage: codeview [--port N] [--max-commits N] [--reindex] [--no-watch] [-h]
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ def fail(msg: str, hint: str | None = None) -> None:
 
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="cf-dash",
+        prog="codeview",
         description="Repo introspection dashboard for the current git repo.")
     parser.add_argument("--port", type=int,
                         help="port to serve on (default: stable per-repo "
@@ -50,9 +50,9 @@ def parse_args(argv=None) -> argparse.Namespace:
 def clusterfork_dir() -> Path:
     override = os.environ.get("CLUSTERFORK_DIR")
     base = Path(override) if override else Path.home() / ".config/clusterfork"
-    server_py = base / "scripts" / "cf_dash" / "server.py"
+    server_py = base / "scripts" / "codeview" / "server.py"
     if not server_py.is_file():
-        fail(f"cf-dash server not found at {server_py}",
+        fail(f"codeview server not found at {server_py}",
              "Re-run install-clusterfork.sh.")
     return base
 
@@ -108,14 +108,14 @@ def open_when_ready(port: int, url: str) -> None:
     daemon thread so it cannot block or crash the launch."""
     for _ in range(60):
         if port_alive(port):
-            print(f"cf-dash running at {url}")
+            print(f"codeview running at {url}")
             try:
                 webbrowser.open(url)
             except Exception:  # noqa: BLE001 — opening is best-effort
                 pass
             return
         time.sleep(0.5)
-    print("cf-dash: server did not answer within 30s", file=sys.stderr)
+    print("codeview: server did not answer within 30s", file=sys.stderr)
 
 
 # ------------------------------------------------------------------ main --
@@ -123,18 +123,18 @@ def open_when_ready(port: int, url: str) -> None:
 def main(argv=None) -> int:
     args = parse_args(argv)
     if shutil.which("git") is None:
-        fail("git is required", "cf-dash introspects git repositories.")
+        fail("git is required", "codeview introspects git repositories.")
     cf_dir = clusterfork_dir()
     scripts_dir = cf_dir / "scripts"
-    server_py = scripts_dir / "cf_dash" / "server.py"
+    server_py = scripts_dir / "codeview" / "server.py"
 
     # Import the server package directly: no duplicated port/root helpers.
     sys.path.insert(0, str(scripts_dir))
     try:
-        from cf_dash import scan  # noqa: E402
-        from cf_dash.server import default_port  # noqa: E402
+        from codeview import scan  # noqa: E402
+        from codeview.server import default_port  # noqa: E402
     except ImportError as exc:
-        fail(f"cannot load cf-dash modules from {scripts_dir}: {exc}",
+        fail(f"cannot load codeview modules from {scripts_dir}: {exc}",
              "Re-run install-clusterfork.sh.")
 
     root = scan.repo_root(Path.cwd())
@@ -146,7 +146,7 @@ def main(argv=None) -> int:
     # Already serving this repo? Just open it again instead of failing bind.
     if port_alive(port):
         url = f"http://127.0.0.1:{port}/"
-        print(f"cf-dash already running at {url}")
+        print(f"codeview already running at {url}")
         try:
             webbrowser.open(url)
         except Exception:  # noqa: BLE001
@@ -179,7 +179,7 @@ def main(argv=None) -> int:
         return result.returncode
 
     # Bypass mode (headless/CI/in-tmux): serve in-process so Ctrl-C stops it.
-    from cf_dash.server import main as server_main  # noqa: E402
+    from codeview.server import main as server_main  # noqa: E402
     return server_main(server_args)
 
 

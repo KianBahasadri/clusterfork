@@ -1,6 +1,6 @@
-"""Cache storage for cf-dash: per-section JSON files, fingerprints, atomic IO.
+"""Cache storage for codeview: per-section JSON files, fingerprints, atomic IO.
 
-Layout under <repo>/.cf-dash/:
+Layout under <repo>/.codeview/:
   cache/meta.json        scan config + freshness banner data
   cache/history.json     cumulative LOC history aggregates
   cache/files.json       HEAD snapshot file index
@@ -23,8 +23,8 @@ def fingerprint(inputs: list[str]) -> str:
     return h.hexdigest()[:16]
 
 
-def section_path(cf_dir: Path, section: str) -> Path:
-    return cf_dir / "cache" / f"{section}.json"
+def section_path(codeview_dir: Path, section: str) -> Path:
+    return codeview_dir / "cache" / f"{section}.json"
 
 
 def read_json(path: Path) -> dict | None:

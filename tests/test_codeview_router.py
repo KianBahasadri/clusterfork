@@ -1,4 +1,4 @@
-"""End-to-end tests for cf_dash.server: boot on a temp repo, hit routes over
+"""End-to-end tests for codeview.server: boot on a temp repo, hit routes over
 real HTTP, verify sections/tabs/module dispatch/staleness handling."""
 import json
 import sys
@@ -12,8 +12,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from cf_dash import server as srv  # noqa: E402
-from cf_dash import cachestore  # noqa: E402
+from codeview import server as srv  # noqa: E402
+from codeview import cachestore  # noqa: E402
 
 
 def git(cmd, cwd):
@@ -40,7 +40,7 @@ class ServerBootTestCase(unittest.TestCase):
         git(["-c", "user.email=t@t", "-c", "user.name=t",
              "commit", "-qm", "c1"], repo)
         # One good module + one broken module.
-        mods_dir = repo / ".cf-dash" / "modules"
+        mods_dir = repo / ".codeview" / "modules"
         mods_dir.mkdir(parents=True)
         (mods_dir / "hello.py").write_text(
             'NAME = "hello"\n'
@@ -52,10 +52,10 @@ class ServerBootTestCase(unittest.TestCase):
 
         cls.shape = srv.scan.RepoShape(max_commits=50)
         cls.repo = repo
-        cls.cf_dir = srv.ensure_cf_dir(repo)
+        cls.codeview_dir = srv.ensure_codeview_dir(repo)
         cls.state = srv.AppState()
-        srv.scan_all(repo, cls.shape, cls.cf_dir, cls.state, force=True)
-        srv.persist_state(cls.cf_dir, cls.state)
+        srv.scan_all(repo, cls.shape, cls.codeview_dir, cls.state, force=True)
+        srv.persist_state(cls.codeview_dir, cls.state)
         mods = srv.modules_rt.load_modules(mods_dir)
 
         httpd = srv.bind_with_retry(0)  # ephemeral port
@@ -90,7 +90,7 @@ class ServerBootTestCase(unittest.TestCase):
     def test_index_served(self):
         status, body = get(self.url("/"))
         self.assertEqual(status, 200)
-        self.assertIn(b"cf-dash", body)
+        self.assertIn(b"codeview", body)
 
     def test_assets_traversal_guard(self):
         import urllib.error
@@ -193,7 +193,7 @@ class ServerBootTestCase(unittest.TestCase):
     def test_persist_then_reload_roundtrip(self):
         # Cache files exist and reload into a fresh state identically.
         state2 = srv.AppState()
-        sections, fps = srv.read_cached_sections(self.cf_dir)
+        sections, fps = srv.read_cached_sections(self.codeview_dir)
         state2.sections.update(sections)
         state2.fingerprints.update(fps)
         for section in ("meta", "history", "files", "deps"):
@@ -206,7 +206,7 @@ class ServerBootTestCase(unittest.TestCase):
         state2.sections["files"] = {"files": [], "total_files": 0,
                                     "total_lines": 0}
         state2.fingerprints["files"] = "definitely-stale"
-        srv.scan_all(self.repo, self.shape, self.cf_dir, state2,
+        srv.scan_all(self.repo, self.shape, self.codeview_dir, state2,
                      force=False)
         self.assertGreater(state2.get("files")["total_files"], 0)
         self.assertEqual(state2.fingerprints["files"],
@@ -217,7 +217,7 @@ class ServerBootTestCase(unittest.TestCase):
         state2.sections["files"] = {"sentinel": True}
         state2.fingerprints["files"] = srv.current_data_fingerprint(
             self.repo, self.shape)
-        srv.scan_all(self.repo, self.shape, self.cf_dir, state2,
+        srv.scan_all(self.repo, self.shape, self.codeview_dir, state2,
                      force=False)
         self.assertTrue(state2.get("files").get("sentinel"))
         # meta is always refreshed regardless.

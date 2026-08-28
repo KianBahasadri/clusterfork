@@ -1,4 +1,4 @@
-"""Tests for bin/cf-dash launcher: tmux decision, session naming, arg
+"""Tests for bin/codeview launcher: tmux decision, session naming, arg
 forwarding via mock tmux on PATH (house mock pattern), bypass modes."""
 import importlib.util
 from importlib.machinery import SourceFileLoader
@@ -16,8 +16,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 def load_wrapper():
     # Extensionless script: spec_from_file_location needs an explicit loader.
-    loader = SourceFileLoader("cf_dash_wrapper", str(REPO_ROOT / "bin" / "cf-dash"))
-    spec = importlib.util.spec_from_loader("cf_dash_wrapper", loader)
+    loader = SourceFileLoader("codeview_wrapper", str(REPO_ROOT / "bin" / "codeview"))
+    spec = importlib.util.spec_from_loader("codeview_wrapper", loader)
     mod = importlib.util.module_from_spec(spec)
     loader.exec_module(mod)
     return mod
@@ -80,13 +80,13 @@ class MockTmuxTests(unittest.TestCase):
         env["PATH"] = f"{self.mock_bin}:{os.environ.get('PATH', '')}"
         env["CF_NO_TMUX"] = ""  # unset semantics: presence check only
         del env["CF_NO_TMUX"]
-        env["CLUSTERFORK_DIR"] = str(REPO_ROOT / ".tmp-cf-dash-fixture")
+        env["CLUSTERFORK_DIR"] = str(REPO_ROOT / ".tmp-codeview-fixture")
         self.env = env
 
     def _fixture_dir(self) -> Path:
-        """Minimal fake CLUSTERFORK_DIR: scripts/cf_dash/server.py present."""
+        """Minimal fake CLUSTERFORK_DIR: scripts/codeview/server.py present."""
         fixture = Path(self.env["CLUSTERFORK_DIR"])
-        server_py = fixture / "scripts" / "cf_dash" / "server.py"
+        server_py = fixture / "scripts" / "codeview" / "server.py"
         server_py.parent.mkdir(parents=True, exist_ok=True)
         if not server_py.exists():
             server_py.write_text(
@@ -107,7 +107,7 @@ class MockTmuxTests(unittest.TestCase):
         env["CLUSTERFORK_DIR"] = str(REPO_ROOT)
         env["TERM"] = "xterm"
         cmd = ["script", "-q", "-c",
-               f"{sys.executable} {REPO_ROOT / 'bin' / 'cf-dash'}",
+               f"{sys.executable} {REPO_ROOT / 'bin' / 'codeview'}",
                "/dev/null"]
         proc = subprocess.run(cmd, cwd=self.repo, capture_output=True,
                               text=True, env=env, timeout=30)
@@ -124,7 +124,7 @@ class MockTmuxTests(unittest.TestCase):
         env["CLUSTERFORK_DIR"] = str(REPO_ROOT)
         env["CF_NO_TMUX"] = "1"
         proc = subprocess.Popen(
-            [sys.executable, str(REPO_ROOT / "bin" / "cf-dash"),
+            [sys.executable, str(REPO_ROOT / "bin" / "codeview"),
              "--port", "46555"],
             cwd=self.repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, env=env)

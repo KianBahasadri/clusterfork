@@ -1,6 +1,6 @@
-# Dashboard (cf-dash)
+# Dashboard (codeview)
 
-`cf-dash` serves a localhost web dashboard for the git repository you run it
+`codeview` serves a localhost web dashboard for the git repository you run it
 in. One command, no install-in-repo step; data caches inside the repo and
 rescans in the background. Project-specific views are added by dropping
 Python "modules" into the repo, which appear as extra tabs.
@@ -8,7 +8,7 @@ Python "modules" into the repo, which appear as extra tabs.
 ## Running
 
 ```
-cf-dash [--port N] [--max-commits N] [--reindex] [--no-watch]
+codeview [--port N] [--max-commits N] [--reindex] [--no-watch]
 ```
 
 - Must be run inside a git repository (nested subdirs and worktrees resolve
@@ -20,7 +20,7 @@ cf-dash [--port N] [--max-commits N] [--reindex] [--no-watch]
   `dash-<basename-pwd>` session (collision suffixes included) with the same
   bypasses (`CF_NO_TMUX`, already inside tmux, non-TTY stdin); the browser
   opens once the server answers. See [Shell Modules](shell-modules.md) for
-  `_cf_tmux` semantics — `bin/cf-dash` reimplements them in Python rather
+  `_cf_tmux` semantics — `bin/codeview` reimplements them in Python rather
   than sourcing the bash helper, because the wrapper is a Python script.
 
 ## What it shows
@@ -58,10 +58,10 @@ dependencies anywhere in the tool):
 
 ## Caching
 
-Everything lands in `<repo>/.cf-dash/`:
+Everything lands in `<repo>/.codeview/`:
 
 ```
-.cf-dash/
+.codeview/
 ├── .gitignore      # written by the tool: ignores cache/
 ├── cache/          # meta.json history.json files.json deps.json fingerprints.json
 └── modules/        # your drop-in modules (not ignored)
@@ -78,7 +78,7 @@ Everything lands in `<repo>/.cf-dash/`:
 
 ## Modules (drop-in tabs)
 
-Any `*.py` in `<repo>/.cf-dash/modules/` becomes a tab. Contract:
+Any `*.py` in `<repo>/.codeview/modules/` becomes a tab. Contract:
 
 ```python
 NAME = "my-tab"          # optional; defaults to filename stem; ^[a-z0-9][a-z0-9-]*$
@@ -114,16 +114,16 @@ level as running the repo's own build scripts.
 
 | Repo path | Installed to | Role |
 |---|---|---|
-| `bin/cf-dash` | `~/.config/clusterfork/bin/cf-dash` | launcher (on `PATH`) |
-| `scripts/cf_dash/` | `~/.config/clusterfork/scripts/cf_dash/` | server, scanners, module runtime, UI assets |
+| `bin/codeview` | `~/.config/clusterfork/bin/codeview` | launcher (on `PATH`) |
+| `scripts/codeview/` | `~/.config/clusterfork/scripts/codeview/` | server, scanners, module runtime, UI assets |
 
 The launcher imports the server package from the installed copy — re-run
-`./install-clusterfork.sh` after editing `scripts/cf_dash/` (the repo copy
+`./install-clusterfork.sh` after editing `scripts/codeview/` (the repo copy
 is not what runs). See [Installation](installation.md).
 
 ## Tests
 
-`tests/test_cf_dash_scan_cache.py`, `test_cf_dash_modules.py`,
-`test_cf_dash_router.py` (boots the real HTTP server against a throwaway
-repo), and `test_cf_dash_wrapper.py` (mock-tmux on PATH, house pattern).
+`tests/test_codeview_scan_cache.py`, `test_codeview_modules.py`,
+`test_codeview_router.py` (boots the real HTTP server against a throwaway
+repo), and `test_codeview_wrapper.py` (mock-tmux on PATH, house pattern).
 CI additionally runs `python3 -m py_compile` over the package.

@@ -1,5 +1,5 @@
-"""Tests for cf_dash.ci: origin slug parsing and check-run state mapping,
-via a mock gh on PATH (house mock pattern, as in test_cf_dash_wrapper)."""
+"""Tests for codeview.ci: origin slug parsing and check-run state mapping,
+via a mock gh on PATH (house mock pattern, as in test_codeview_wrapper)."""
 import json
 import os
 import subprocess
@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 import sys  # noqa: E402
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from cf_dash import ci  # noqa: E402
+from codeview import ci  # noqa: E402
 
 
 def git(cmd, cwd):

@@ -1,4 +1,4 @@
-"""Tests for cf_dash.scan: git history/files/deps scanners against a real
+"""Tests for codeview.scan: git history/files/deps scanners against a real
 throwaway repo, plus exclusion rules."""
 import subprocess
 import tempfile
@@ -11,7 +11,7 @@ sys_path = str(REPO_ROOT / "scripts")
 import sys  # noqa: E402
 sys.path.insert(0, sys_path)
 
-from cf_dash import scan  # noqa: E402
+from codeview import scan  # noqa: E402
 
 
 def run(cmd, cwd):
@@ -76,14 +76,14 @@ class FilesScanTests(TempRepoTestCase):
             "node_modules/pkg/index.js": "x\n",
             "README.md": "# t\n",
             "logo.svg": "<svg/>",
-            ".cf-dash/cache/junk.json": "{}",
+            ".codeview/cache/junk.json": "{}",
         }, "mix")
         data = scan.scan_files(self.repo, scan.RepoShape())
         paths = {f["path"] for f in data["files"]}
         self.assertIn("src/app.py", paths)
         self.assertNotIn("src/lib.min.js", paths)
         self.assertNotIn("node_modules/pkg/index.js", paths)
-        self.assertNotIn(".cf-dash/cache/junk.json", paths)
+        self.assertNotIn(".codeview/cache/junk.json", paths)
         langs = {k: v["lines"] for k, v in data["langs"].items()}
         self.assertEqual(langs.get("Python"), 1)
         appy = next(f for f in data["files"] if f["path"] == "src/app.py")

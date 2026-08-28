@@ -1,4 +1,4 @@
-"""Repository scanners for cf-dash: git history, file snapshot, dep manifests.
+"""Repository scanners for codeview: git history, file snapshot, dep manifests.
 
 All functions take the resolved repo root and return plain JSON-ready dicts.
 Stdlib + git plumbing only.
@@ -11,7 +11,7 @@ import re
 import subprocess
 from pathlib import Path
 
-CF_DIR_NAME = ".cf-dash"
+CODEVIEW_DIR_NAME = ".codeview"
 
 # Excluded from the LOC snapshot by suffix or directory component.
 EXCLUDE_SUFFIXES = (
@@ -159,7 +159,7 @@ def _excluded(path: str) -> bool:
     if any(p in EXCLUDE_DIR_NAMES for p in parts[:-1]):
         return True
     name = parts[-1]
-    if CF_DIR_NAME in parts[:-1]:
+    if CODEVIEW_DIR_NAME in parts[:-1]:
         return True
     return name.endswith(EXCLUDE_SUFFIXES)
 

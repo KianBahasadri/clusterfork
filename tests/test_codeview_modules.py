@@ -1,4 +1,4 @@
-"""Tests for cf_dash.modules_rt: discovery, namespacing, broken modules."""
+"""Tests for codeview.modules_rt: discovery, namespacing, broken modules."""
 import sys
 import tempfile
 import unittest
@@ -7,7 +7,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from cf_dash import modules_rt  # noqa: E402
+from codeview import modules_rt  # noqa: E402
 
 
 class ModuleLoadingTests(unittest.TestCase):

@@ -1,4 +1,4 @@
-/* cf-dash frontend: fetches /api/summary + /api/section/*, renders core tabs.
+/* codeview frontend: fetches /api/summary + /api/section/*, renders core tabs.
    Module tabs are served at /m/<name>/ and framed on demand. */
 "use strict";
 
@@ -140,6 +140,7 @@ async function refresh() {
   }
   const m = summary.meta || {};
   $("#repo-name").textContent = m.repo_name || "?";
+  document.title = m.repo_name ? `${m.repo_name} · codeview` : "codeview";
   $("#head-info").textContent =
     (m.branch || "(detached)") + (m.dirty ? " · dirty" : "");
   const ciEl = $("#ci-info");

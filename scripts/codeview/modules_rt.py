@@ -1,6 +1,6 @@
-"""Drop-in module discovery and registry for cf-dash.
+"""Drop-in module discovery and registry for codeview.
 
-Contract for <repo>/.cf-dash/modules/<slug>.py:
+Contract for <repo>/.codeview/modules/<slug>.py:
   NAME        optional; defaults to filename stem; ^[a-z0-9][a-z0-9-]*$
   DESCRIPTION optional tab tooltip
   register(reg)  required; reg.add_route(method, path, handler). Paths are
@@ -72,7 +72,7 @@ def load_modules(modules_dir: Path) -> list[dict]:
         }
         try:
             spec = importlib.util.spec_from_file_location(
-                f"cfdash_mod_{file_path.stem}", file_path)
+                f"codeview_mod_{file_path.stem}", file_path)
             if spec is None or spec.loader is None:
                 raise ModuleError("could not create import spec")
             mod = importlib.util.module_from_spec(spec)

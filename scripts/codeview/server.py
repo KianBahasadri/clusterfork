@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""cf-dash server: stdlib threaded HTTP server for the dashboard UI, JSON
+"""codeview server: stdlib threaded HTTP server for the dashboard UI, JSON
 sections, and drop-in module routes.
 
-Usage (normally launched via bin/cf-dash):
+Usage (normally launched via bin/codeview):
   python3 .../server.py [--repo DIR] [--port N] [--max-commits N]
                         [--reindex] [--no-watch]
 
 Environment honored:
-  CF_DASH_PORT   preferred port (CLI --port wins)
-  CF_DASH_REPO   repo root override (--repo wins; else cwd's git root)
+  CODEVIEW_PORT   preferred port (CLI --port wins)
+  CODEVIEW_REPO   repo root override (--repo wins; else cwd's git root)
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from cf_dash import cachestore, ci, fileview, modules_rt, scan  # noqa: E402
+from codeview import cachestore, ci, fileview, modules_rt, scan  # noqa: E402
 
 SERVER_PY = Path(__file__).resolve()
 UI_DIR = Path(__file__).resolve().parent / "ui"
@@ -87,17 +87,17 @@ def pick_port(preferred: int) -> int:
             return candidate
         except OSError:
             continue
-    raise SystemExit(f"cf-dash: no free port near {preferred}")
+    raise SystemExit(f"codeview: no free port near {preferred}")
 
 
-def ensure_cf_dir(repo: Path) -> Path:
-    """Create <repo>/.cf-dash{,/cache} and the cache-only .gitignore once."""
-    cf_dir = repo / scan.CF_DIR_NAME
-    (cf_dir / "cache").mkdir(parents=True, exist_ok=True)
-    gitignore = cf_dir / ".gitignore"
+def ensure_codeview_dir(repo: Path) -> Path:
+    """Create <repo>/.codeview{,/cache} and the cache-only .gitignore once."""
+    codeview_dir = repo / scan.CODEVIEW_DIR_NAME
+    (codeview_dir / "cache").mkdir(parents=True, exist_ok=True)
+    gitignore = codeview_dir / ".gitignore"
     if not gitignore.exists():
         gitignore.write_text("cache/\n", encoding="utf-8")
-    return cf_dir
+    return codeview_dir
 
 
 def resolve_repo(explicit: str | None) -> Path | None:
@@ -125,7 +125,7 @@ def run_section(section: str, repo: Path,
     payload = {"section": section, "scanned_at": data.get("scanned_at_iso"),
                "data": data}
     cachestore.write_json_atomic(
-        cachestore.section_path(Path(".cf-dash"), section), {})
+        cachestore.section_path(Path(".codeview"), section), {})
     fp = cachestore.fingerprint([json.dumps(data, sort_keys=True)[:4096]])
     return data, fp
 
@@ -140,9 +140,9 @@ def current_data_fingerprint(repo: Path, shape: scan.RepoShape) -> str:
     ])
 
 
-def current_module_fingerprint(cf_dir: Path) -> str:
+def current_module_fingerprint(codeview_dir: Path) -> str:
     entries: list[str] = []
-    modules_dir = cf_dir / "modules"
+    modules_dir = codeview_dir / "modules"
     if modules_dir.is_dir():
         for p in sorted(modules_dir.glob("*.py")):
             try:
@@ -150,7 +150,7 @@ def current_module_fingerprint(cf_dir: Path) -> str:
                 entries.append(f"{p.name}:{stat.st_mtime_ns}")
             except OSError:
                 continue
-    config = cf_dir / "config.json"
+    config = codeview_dir / "config.json"
     if config.exists():
         try:
             entries.append(f"config:{config.stat().st_mtime_ns}")
@@ -176,13 +176,15 @@ def _init_rescan_ts(state: AppState) -> None:
         pass
 
 
-def read_cached_sections(cf_dir: Path) -> tuple[dict[str, dict],
-                                                dict[str, str]]:
+def read_cached_sections(codeview_dir: Path) -> tuple[dict[str, dict],
+                                                 dict[str, str]]:
     sections: dict[str, dict] = {}
     fps: dict[str, str] = {}
-    stored = cachestore.read_json(cf_dir / "cache" / "fingerprints.json") or {}
+    stored = cachestore.read_json(
+        codeview_dir / "cache" / "fingerprints.json") or {}
     for section in SCAN_SECTIONS:
-        data = cachestore.read_json(cachestore.section_path(cf_dir, section))
+        data = cachestore.read_json(
+            cachestore.section_path(codeview_dir, section))
         if data is None:
             continue
         sections[section] = data.get("data") or {}
@@ -192,7 +194,7 @@ def read_cached_sections(cf_dir: Path) -> tuple[dict[str, dict],
     return sections, fps
 
 
-def scan_all(repo: Path, shape: scan.RepoShape, cf_dir: Path,
+def scan_all(repo: Path, shape: scan.RepoShape, codeview_dir: Path,
              state: AppState, force: bool) -> None:
     """Rescan stale sections into memory + disk; keeps old data on failure.
 
@@ -239,7 +241,7 @@ def run_section_now(section: str, repo: Path, shape: scan.RepoShape):
     return scanners[section](repo, shape)
 
 
-def persist_state(cf_dir: Path, state: AppState) -> None:
+def persist_state(codeview_dir: Path, state: AppState) -> None:
     with state.lock:
         sections = dict(state.sections)
         fps = dict(state.fingerprints)
@@ -247,14 +249,14 @@ def persist_state(cf_dir: Path, state: AppState) -> None:
         if section not in sections:
             continue
         cachestore.write_json_atomic(
-            cachestore.section_path(cf_dir, section),
+            cachestore.section_path(codeview_dir, section),
             {"section": section, "data": sections[section]})
     cachestore.write_json_atomic(
-        cf_dir / "cache" / "fingerprints.json", fps)
+        codeview_dir / "cache" / "fingerprints.json", fps)
 
 
-def purge_stale_cache_files(cf_dir: Path) -> None:
-    cache_dir = cf_dir / "cache"
+def purge_stale_cache_files(codeview_dir: Path) -> None:
+    cache_dir = codeview_dir / "cache"
     if not cache_dir.is_dir():
         return
     keep = {f"{s}.json" for s in SCAN_SECTIONS} | {"fingerprints.json"}
@@ -271,13 +273,13 @@ def spawn_reloader(repo: Path, port: int, max_commits: int,
                    restart_count: int) -> None:
     """Self-restart via execve(sys.executable) so bash/uv chains survive."""
     env = os.environ.copy()
-    env["CF_DASH_PORT"] = str(port)
-    env["CF_DASH_REPO"] = str(repo)
-    env["CF_DASH_RESTARTS"] = str(restart_count)
+    env["CODEVIEW_PORT"] = str(port)
+    env["CODEVIEW_REPO"] = str(repo)
+    env["CODEVIEW_RESTARTS"] = str(restart_count)
     argv = [sys.executable, str(SERVER_PY),
             "--repo", str(repo), "--port", str(port),
             "--max-commits", str(max_commits)]
-    sys.stderr.write(f"cf-dash: restarting (generation {restart_count})\n")
+    sys.stderr.write(f"codeview: restarting (generation {restart_count})\n")
     sys.stderr.flush()
     os.execve(sys.executable, argv, env)
 
@@ -314,13 +316,13 @@ def watch_loop(ctx) -> None:
     module-set changes after a quiet period."""
     while True:
         time.sleep(WATCH_INTERVAL)
-        repo, shape, cf_dir, state = ctx["repo"], ctx["shape"], \
-            ctx["cf_dir"], ctx["state"]
+        repo, shape, codeview_dir, state = ctx["repo"], ctx["shape"], \
+            ctx["codeview_dir"], ctx["state"]
         now = time.time()
         if now - ctx["ci_ts"] >= CI_REFRESH_INTERVAL:
             ctx["ci_ts"] = now
             refresh_ci_state(repo, state)
-        mod_fp = current_module_fingerprint(cf_dir)
+        mod_fp = current_module_fingerprint(codeview_dir)
         if mod_fp != ctx["module_fp"]:
             if ctx["mod_seen_at"] is None:
                 log_line(state, "watch: module set changed, arming restart "
@@ -330,7 +332,7 @@ def watch_loop(ctx) -> None:
                 now = time.time()
                 if now - ctx["last_restart"] >= RESTART_MIN_INTERVAL:
                     log_line(state, "watch: module set stable → self-restart")
-                    persist_state(cf_dir, state)
+                    persist_state(codeview_dir, state)
                     spawn_reloader(repo, ctx["port"],
                                    shape.max_commits,
                                    ctx["restart_count"] + 1)
@@ -350,8 +352,8 @@ def watch_loop(ctx) -> None:
                               ("dirty", dirty_changed)) if yes)
             log_line(state, f"watch: data change detected ({what}) → rescan")
             try:
-                scan_all(repo, shape, cf_dir, state, force=False)
-                persist_state(cf_dir, state)
+                scan_all(repo, shape, codeview_dir, state, force=False)
+                persist_state(codeview_dir, state)
                 state.bump()
             except Exception:
                 traceback.print_exc()
@@ -383,7 +385,7 @@ MIME_BY_SUFFIX = {".html": CONTENT_TYPES["html"],
 
 
 class DashHandler(BaseHTTPRequestHandler):
-    server_version = "cf-dash/1.0"
+    server_version = "codeview/1.0"
 
     @property
     def app(self):
@@ -685,7 +687,7 @@ def build_module_table(mods: list[dict]) -> dict:
 # ------------------------------------------------------------------ main ---
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(prog="cf-dash server")
+    parser = argparse.ArgumentParser(prog="codeview server")
     parser.add_argument("--repo", help="repo root (default: cwd's git root)")
     parser.add_argument("--port", type=int,
                         help="port to bind (default: stable per-repo hash)")
@@ -706,61 +708,62 @@ def bind_with_retry(port: int, attempts: int = 10, delay: float = 0.5):
         except OSError as exc:
             last_exc = exc
             time.sleep(delay)
-    raise SystemExit(f"cf-dash: could not bind port {port}: {last_exc}")
+    raise SystemExit(f"codeview: could not bind port {port}: {last_exc}")
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    preferred = args.port or int(os.environ.get("CF_DASH_PORT")
+    preferred = args.port or int(os.environ.get("CODEVIEW_PORT")
                                  or default_port(Path.cwd()))
-    # On self-restart (CF_DASH_RESTARTS set) the preferred port MUST hold:
+    # On self-restart (CODEVIEW_RESTARTS set) the preferred port MUST hold:
     # the wrapper, browser polls, and bookmarks all point at it. TIME_WAIT
     # sockets are ridden out by bind_with_retry + SO_REUSEADDR instead of
     # drifting to preferred+1 (which silently strands every client).
-    strict_port = bool(os.environ.get("CF_DASH_RESTARTS"))
+    strict_port = bool(os.environ.get("CODEVIEW_RESTARTS"))
     port = preferred if strict_port else pick_port(preferred)
-    repo = resolve_repo(args.repo or os.environ.get("CF_DASH_REPO"))
+    repo = resolve_repo(args.repo or os.environ.get("CODEVIEW_REPO"))
     if repo is None:
-        print("cf-dash: not inside a git repository", file=sys.stderr)
+        print("codeview: not inside a git repository", file=sys.stderr)
         return 1
     shape = scan.RepoShape(max_commits=args.max_commits)
-    cf_dir = ensure_cf_dir(repo)
-    purge_stale_cache_files(cf_dir)
+    codeview_dir = ensure_codeview_dir(repo)
+    purge_stale_cache_files(codeview_dir)
 
     state = AppState()
     sections, fps = {}, {}
     if not args.reindex:
-        sections, fps = read_cached_sections(cf_dir)
+        sections, fps = read_cached_sections(codeview_dir)
     state.sections.update({k: v for k, v in sections.items()})
     state.fingerprints.update(fps)
     _init_rescan_ts(state)
     log_line(state, f"boot: loaded cached sections "
-             f"{sorted(sections) or '[]'} from {cf_dir.name}/cache")
+             f"{sorted(sections) or '[]'} from {codeview_dir.name}/cache")
     missing = [s for s in SCAN_SECTIONS if s not in state.sections]
     if missing:
         log_line(state, f"boot: cache miss for {missing} → scanning")
-        scan_all(repo, shape, cf_dir, state, force=args.reindex)
-    persist_state(cf_dir, state)
+        scan_all(repo, shape, codeview_dir, state, force=args.reindex)
+    persist_state(codeview_dir, state)
 
-    mods = modules_rt.load_modules(cf_dir / "modules")
+    mods = modules_rt.load_modules(codeview_dir / "modules")
     log_line(state, f"boot: modules {sum(1 for m in mods if m['ok'])}/"
              f"{len(mods)} ok")
     httpd = bind_with_retry(port)
 
     watchdog_ctx = {
-        "repo": repo, "shape": shape, "cf_dir": cf_dir, "state": state,
+        "repo": repo, "shape": shape, "codeview_dir": codeview_dir,
+        "state": state,
         "port": port,
-        "module_fp": current_module_fingerprint(cf_dir),
+        "module_fp": current_module_fingerprint(codeview_dir),
         "mod_seen_at": None,
         "last_restart": 0.0,
-        "restart_count": int(os.environ.get("CF_DASH_RESTARTS") or 0),
+        "restart_count": int(os.environ.get("CODEVIEW_RESTARTS") or 0),
         "ci_ts": time.time(),
     }
     httpd.app = {  # type: ignore[attr-defined]
         "state": state, "modules": mods,
         "module_routes": build_module_table(mods),
         "repo": repo,
-        "verbose": bool(os.environ.get("CF_DASH_VERBOSE")),
+        "verbose": bool(os.environ.get("CODEVIEW_VERBOSE")),
         "_ctx": watchdog_ctx,
     }
     httpd._section_re = __import__("re").compile(  # type: ignore[attr-defined]
@@ -770,15 +773,15 @@ def main(argv=None) -> int:
 
     if not args.no_watch:
         threading.Thread(target=watch_loop, args=(watchdog_ctx,),
-                         daemon=True, name="cf-dash-watch").start()
+                         daemon=True, name="codeview-watch").start()
         log_line(state, f"boot: watch loop armed "
                         f"({WATCH_INTERVAL:.0f}s interval)")
     # CI indicator: one eager fetch so the header is populated fast, then
     # the watch loop keeps it fresh (or not, with --no-watch).
     threading.Thread(target=refresh_ci_state, args=(repo, state),
-                     daemon=True, name="cf-dash-ci").start()
+                     daemon=True, name="codeview-ci").start()
 
-    print(f"cf-dash: serving {repo.name} at http://127.0.0.1:{port}/ "
+    print(f"codeview: serving {repo.name} at http://127.0.0.1:{port}/ "
           f"(modules: {sum(1 for m in mods if m['ok'])}/{len(mods)} ok)",
           flush=True)
     log_line(state, f"serving {repo.name} at http://127.0.0.1:{port}/")
@@ -787,7 +790,7 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         pass
     finally:
-        persist_state(cf_dir, state)
+        persist_state(codeview_dir, state)
     return 0
 
 

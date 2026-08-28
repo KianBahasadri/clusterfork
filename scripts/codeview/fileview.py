@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
-from cf_dash import scan
+from codeview import scan
 
 MAX_CONTENT_BYTES = 1_000_000   # cap what we read into the browser
 MAX_DISPLAY_LINES = 5000        # cap rendered lines (truncated flag set)
