@@ -2,6 +2,8 @@
 
 Clusterfork is a dotfile-style config installer for multiple AI coding agents.
 
+**Skill scope:** When asked to modify a skill, always mean the skills in this repo (`skills/`) — never the installed/global skills under `~/.claude/skills/`, `~/.config/opencode/skills/`, or similar.
+
 ## Documentation (read/write)
 
 - **Read first:** For how this repo works, start at `docs/README.md`, then open only the topic files you need. Do not re-derive behavior from filenames alone when a doc covers it.
