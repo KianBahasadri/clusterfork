@@ -34,8 +34,8 @@ function svgLineChart(series, labels, opts = {}) {
     const gy = pad.t + (ih * g) / 4;
     const val = Math.round(vmax - (ih * g) / 4 * (vmax - vmin) / ih);
     out += `<line x1="${pad.l}" y1="${gy}" x2="${w - pad.r}" y2="${gy}"
-      stroke="rgba(148,163,184,.14)" stroke-width="1"></line>`;
-    out += `<text x="${pad.l - 6}" y="${gy + 4}" fill="#8b949e"
+      stroke="rgba(163,156,147,.14)" stroke-width="1"></line>`;
+    out += `<text x="${pad.l - 6}" y="${gy + 4}" fill="#a39c93"
       font-size="10" text-anchor="end">${fmt(val)}</text>`;
   }
   for (const s of series) {
@@ -53,7 +53,7 @@ function svgLineChart(series, labels, opts = {}) {
     const s = String(lab);
     const short = MONTHS[+s.slice(5, 7) - 1]
       ? `${MONTHS[+s.slice(5, 7) - 1]} ${+s.slice(8, 10)}` : s;
-    out += `<text x="${x(i)}" y="${h - 4}" fill="#8b949e" font-size="10"
+    out += `<text x="${x(i)}" y="${h - 4}" fill="#a39c93" font-size="10"
       text-anchor="middle">${short}</text>`;
   });
   return out + "</svg>";
@@ -203,7 +203,7 @@ async function renderHistory() {
     .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 6);
   panel.innerHTML = `
     <h2>cumulative lines over history</h2>
-    ${svgLineChart([{ values: totalSeries, color: "#58a6ff" }],
+    ${svgLineChart([{ values: totalSeries, color: "#0f4c98" }],
                    commits.map(c => c.date))}
     <h2>most-changed dirs (recent commits)</h2>
     ${barRows(hotDirs)}
@@ -358,7 +358,7 @@ async function renderDeps() {
           <tr><td>${esc(d.name)}</td><td>${esc(d.kind)}</td>
             <td>${esc(d.req)}</td>
             <td>${lockedByRoot[d.name] ? esc(lockedByRoot[d.name])
-                  : '<span style="color:#e3b341">not in lock</span>'}</td>
+                  : '<span style="color:#c19a56">not in lock</span>'}</td>
           </tr>`).join("") || "<tr><td colspan=4>—</td></tr>"}
       </tbody></table>
       ${locked.length > declared.length

@@ -1,14 +1,14 @@
 /* cf-dash dashboard styles. Dark terminal-adjacent theme matching house tools. */
 :root {
-  --bg: #0b0e13;
-  --fg: #c9d1d9;
-  --dim: #8b949e;
-  --accent: #4493f8;
-  --accent2: #56d364;
-  --warn: #e3b341;
-  --bad: #ff7b72;
-  --card: #131922;
-  --border: #2c333e;
+  --bg: #080b10;
+  --fg: #c9c4bd;
+  --dim: #a39c93;
+  --accent: #0f4c98;
+  --accent2: #5b9078;
+  --warn: #c19a56;
+  --bad: #c26d64;
+  --card: #10151c;
+  --border: #81786b;
 }
 * { box-sizing: border-box; }
 body {
@@ -70,7 +70,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .bar-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
 .bar-label { width: 140px; overflow: hidden; text-overflow: ellipsis;
              white-space: nowrap; }
-.bar-track { flex: 1; height: 14px; background: rgba(148,163,184,.08);
+.bar-track { flex: 1; height: 14px; background: #0e1218;
              border-radius: 3px; overflow: hidden; }
 .bar-fill { height: 100%; background: var(--accent); opacity: .85; }
 .bar-fill.alt { background: var(--accent2); }
@@ -96,7 +96,7 @@ iframe.module-frame {
 
 .commit-subject { color: var(--fg); }
 .commit-sha { color: var(--dim); }
-tr:hover td { background: rgba(88,166,255,.04); }
+tr:hover td { background: rgba(163,156,147,.04); }
 
 /* file viewer (files tab click-through) */
 tr.file-row { cursor: pointer; }
