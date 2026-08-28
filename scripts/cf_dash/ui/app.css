@@ -1,14 +1,14 @@
 /* cf-dash dashboard styles. Dark terminal-adjacent theme matching house tools. */
 :root {
-  --bg: #0d1117;
+  --bg: #0b0e13;
   --fg: #c9d1d9;
   --dim: #8b949e;
-  --accent: #58a6ff;
+  --accent: #4493f8;
   --accent2: #56d364;
   --warn: #e3b341;
   --bad: #ff7b72;
-  --card: #161b22;
-  --border: #21262d;
+  --card: #131922;
+  --border: #2c333e;
 }
 * { box-sizing: border-box; }
 body {
@@ -31,15 +31,15 @@ body {
   border-bottom: 1px solid var(--border); overflow-x: auto;
 }
 #tabs button {
-  appearance: none; border: 1px solid transparent; border-bottom: none;
-  background: transparent; color: var(--dim);
+  appearance: none; border: 1px solid transparent; background: transparent;
+  color: var(--dim);
   font: inherit; padding: 5px 14px; cursor: pointer;
-  border-radius: 6px 6px 0 0; white-space: nowrap;
+  border-radius: 6px; white-space: nowrap;
 }
 #tabs button:hover { color: var(--fg); }
 #tabs button.active {
-  background: var(--bg); color: var(--fg);
-  border-color: var(--border); position: relative; top: 1px;
+  background: var(--card); color: var(--fg);
+  border-color: var(--border);
 }
 #tabs button.broken { color: var(--bad); }
 main { padding: 16px; max-width: 1200px; margin: 0 auto; }
