@@ -13,9 +13,9 @@ cf-dash [--port N] [--max-commits N] [--reindex] [--no-watch]
 
 - Must be run inside a git repository (nested subdirs and worktrees resolve
   via `git rev-parse --show-toplevel`).
-- Default port is a stable hash of the repo path in the 46000s, so bookmarks
-  survive; `--port` overrides. If the computed port is already answering,
-  the wrapper just opens a browser on it instead of failing to bind.
+- Default port is a stable hash of the repo path in the 46000–49999 range, so
+  bookmarks survive; `--port` overrides. If the computed port is already
+  answering, the wrapper just opens a browser on it instead of failing to bind.
 - tmux behavior follows the house launchers: wrapped in a new
   `dash-<basename-pwd>` session (collision suffixes included) with the same
   bypasses (`CF_NO_TMUX`, already inside tmux, non-TTY stdin); the browser
