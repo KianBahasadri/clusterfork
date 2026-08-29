@@ -203,42 +203,6 @@ def http_post_json(port: int, path: str, timeout: float = 300.0) -> dict | None:
         return None
 
 
-# ------------------------------------------------------------- tmux rules --
-
-def sanitize_session_name(raw: str) -> str:
-    """Mirror shell/_tmux.sh exactly so both produce identical names."""
-    base = raw if raw and raw != "/" else "root"
-    name = base.replace(".", "-").replace(":", "-")
-    if name.startswith("-"):
-        name = f"_{name}"
-    return name or "default"
-
-
-def should_wrap_in_tmux(env: dict[str, str]) -> bool:
-    """House bypasses: CF_NO_TMUX, already inside tmux, non-TTY stdin."""
-    if env.get("CF_NO_TMUX") or env.get("TMUX"):
-        return False
-    try:
-        return sys.stdin.isatty()
-    except (OSError, ValueError):
-        return False
-
-
-def pick_session_name(candidate: str, *, runner=lambda args: 0) -> str:
-    """First non-colliding name following the house -1/-2 suffix rule."""
-    base = sanitize_session_name(candidate)
-    name = base
-    i = 1
-    while runner(["tmux", "has-session", "-t", name]) == 0:
-        name = f"{base}-{i}"
-        i += 1
-    return name
-
-
-def tmux_available() -> bool:
-    return shutil.which("tmux") is not None
-
-
 # ------------------------------------------------------------ formatting --
 
 def fmt_ts(ts: float | None) -> str:
@@ -309,11 +273,7 @@ def _print_running(repo: Path, info: dict) -> None:
     ok("codeview is running")
     field("repo", str(repo))
     field("url", f"http://127.0.0.1:{port}/")
-    session = info.get("session")
-    pid_txt = str(info["pid"])
-    if session:
-        pid_txt += f"  (tmux session: {session})"
-    field("pid", pid_txt)
+    field("pid", str(info["pid"]))
     started = info.get("started_at")
     field("started", fmt_ts(started))
     if started:
@@ -379,38 +339,15 @@ def cmd_start(repo: Path, scan, default_port, args, server_py: Path) -> int:
     if args.no_watch:
         server_args.append("--no-watch")
 
-    wrap = should_wrap_in_tmux(os.environ) and tmux_available()
-    if wrap:
-        name = pick_session_name(
-            os.path.basename(str(repo)),
-            runner=lambda cmd: subprocess.run(
-                cmd, capture_output=True).returncode,
-        )
-        env = os.environ.copy()
-        env["CODEVIEW_SESSION"] = name
-        env["CODEVIEW_STRICT_PORT"] = "1"
-        subprocess.run(
-            ["tmux", "new-session", "-d", "-s", name, "-c", str(repo), "--",
-             sys.executable, str(server_py), *server_args],
-            env=env, check=True)
-        spawned = f"tmux session: {name}"
-        gone = _tmux_session_gone(name)
-    else:
-        log = open(daemon_path(repo).with_name("daemon.log"), "ab")
-        env = os.environ.copy()
-        env["CODEVIEW_STRICT_PORT"] = "1"
-        subprocess.Popen(
-            [sys.executable, str(server_py), *server_args],
-            stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env,
-            start_new_session=True)
-        spawned = "background"
-        gone = lambda: False
+    log = open(daemon_path(repo).with_name("daemon.log"), "ab")
+    env = os.environ.copy()
+    env["CODEVIEW_STRICT_PORT"] = "1"
+    subprocess.Popen(
+        [sys.executable, str(server_py), *server_args],
+        stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env,
+        start_new_session=True)
 
-    if not _wait_until(lambda: port_alive(port), BOOT_TIMEOUT, gone):
-        if wrap:
-            fail(f"server did not answer within {BOOT_TIMEOUT:.0f}s",
-                 f"inspect it: tmux attach -t {name}  ||  "
-                 f"tmux kill-session -t {name}")
+    if not _wait_until(lambda: port_alive(port), BOOT_TIMEOUT):
         fail(f"server did not answer within {BOOT_TIMEOUT:.0f}s",
              f"check {daemon_path(repo).with_name('daemon.log')}")
 
@@ -423,16 +360,9 @@ def cmd_start(repo: Path, scan, default_port, args, server_py: Path) -> int:
 
     ok(f"started codeview for {repo}")
     field("url", f"http://127.0.0.1:{port}/")
-    field("pid", f"{pid}  ({spawned})")
+    field("pid", f"{pid}  (background)")
     _maybe_open(port, args.no_open)
     return 0
-
-
-def _tmux_session_gone(name: str):
-    def gone() -> bool:
-        return subprocess.run(["tmux", "has-session", "-t", name],
-                              capture_output=True).returncode != 0
-    return gone
 
 
 def _wait_until(pred, timeout: float, abort=None) -> bool:

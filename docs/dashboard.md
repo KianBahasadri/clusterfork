@@ -31,10 +31,7 @@ codeview open
 - Default port is a stable hash of the repo path in the 46000–49999 range, so
   bookmarks survive; `--port` overrides and is held strictly (a just-stopped
   server's TIME_WAIT sockets do not push the port to +1).
-- `start` never blocks: when stdin is a TTY it launches the server detached
-  in a new `tmux` session named after basename(repo) (collision suffixes,
-  house bypasses: `CF_NO_TMUX`, already inside tmux, non-TTY stdin); in
-  headless/CI it spawns a detached background process logging to
+- `start` never blocks: it spawns a detached background process logging to
   `.codeview/daemon.log`. It waits until the port answers (30 s), then opens
   the browser unless `--no-open`. Starting an already-running daemon is
   idempotent and just re-opens the dashboard.
@@ -46,9 +43,6 @@ codeview open
   (same data as a `--reindex` boot), persists the cache, bumps the
   generation so open browsers reload themselves, and reports the elapsed
   time. No restart, no downtime.
-- tmux launch semantics mirror the house launchers; `bin/codeview`
-  reimplements them in Python rather than sourcing the bash helper. See
-  [Shell Modules](shell-modules.md) for `_cf_tmux` semantics.
 
 ## What it shows
 
@@ -161,6 +155,5 @@ is not what runs). See [Installation](installation.md).
 `tests/test_codeview_scan_cache.py`, `test_codeview_modules.py`,
 `test_codeview_router.py` (boots the real HTTP server against a throwaway
 repo; covers `/api/reload` and the daemon bookkeeping file), and
-`test_codeview_wrapper.py` (full daemon lifecycle in bypass mode plus
-mock-tmux on PATH for the tmux-detached start, house pattern).
+`test_codeview_wrapper.py` (full daemon lifecycle).
 CI additionally runs `python3 -m py_compile` over the package.
