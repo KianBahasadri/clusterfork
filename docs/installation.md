@@ -8,7 +8,7 @@
 
 ## What the installer writes
 
-`install-clusterfork.sh` copies config from the repo into your home directory:
+`install-clusterfork.sh` copies config from the repo into your home directory (copied trees have `__pycache__` build residue stripped):
 
 | Source (repo)                     | Destination                              | Contents                          |
 |-----------------------------------|------------------------------------------|-----------------------------------|
@@ -52,6 +52,10 @@ The installer also:
 - Overwrites `~/.gemini/config/mcp_config.json` from `agents/antigravity-mcp.json`, expanding `${ENV}` placeholders from `.env` (full replace)
 - Ensures `telemetry: false` in `~/.commandcode/config.json` from `agents/command-code.json` (key only; other keys preserved)
 - Best-effort repair of Codex/Cursor/OpenCode shared auth links under `~/.local/share/clusterfork-auth/`. See [Auth Rotation](auth-rotation.md)
+
+## Installer output
+
+Each `✓` step line prints the label and destination; a parenthesized detail names what the step installs inside that destination — bell hooks (`Stop → bell.mp3`), MCP server names (read live from the source files), merged keys, shipped-disabled plugin names, helper script names, or skill-tree notes. A `+` line under a step is an extra destination installed by it (the statusline usage fetchers). Details are derived from the repo sources at run time, so they track the configs without edits to the installer.
 
 ## Requirements
 

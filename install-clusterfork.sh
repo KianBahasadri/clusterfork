@@ -119,8 +119,24 @@ tildify() {
   fi
 }
 
-# A completed step: check, padded label, arrow, shortened dest.
-step() { printf '  ✓  %-13s  →  %s\n' "$1" "$(tildify "$2")"; }
+# A completed step: check, padded label, arrow, shortened dest, optional detail
+# naming what the step installs inside that dest (hooks, servers, keys, ...).
+step() {
+  local detail="${3:-}"
+  if [[ -n "$detail" ]]; then
+    printf '  ✓  %-19s  →  %s  (%s)\n' "$1" "$(tildify "$2")" "$detail"
+  else
+    printf '  ✓  %-19s  →  %s\n' "$1" "$(tildify "$2")"
+  fi
+}
+
+# An extra destination installed by the previous step, aligned under it.
+substep() { printf '%-29s+  %s\n' '' "$(tildify "$1")"; }
+
+# Comma-joined MCP server names from a repo MCP JSON file.
+mcp_server_names() {
+  python3 -c 'import json, sys; print(", ".join(json.load(open(sys.argv[1], encoding="utf-8"))["mcpServers"]))' "$1"
+}
 
 # A fatal error with an optional hint line, then exit.
 fail() {
@@ -383,8 +399,15 @@ step "tmux" "$TMUX_CONFIG_DEST"
 rm -rf -- "$BIN_DEST_DIR"
 mkdir -p "$BIN_DEST_DIR"
 cp -r "$BIN_SRC_DIR"/. "$BIN_DEST_DIR"/
+rm -rf -- "$BIN_DEST_DIR/__pycache__"
 chmod +x "$BIN_DEST_DIR"/*
-step "bin helpers" "$BIN_DEST_DIR"
+bin_detail=""
+for f in "$BIN_SRC_DIR"/*; do
+  if [[ -f "$f" ]]; then
+    bin_detail+=", $(basename "$f")"
+  fi
+done
+step "bin helpers" "$BIN_DEST_DIR" "${bin_detail#, }"
 
 [[ -f "$ROTATE_AUTH_SRC" ]] || fail "missing $(tildify "$ROTATE_AUTH_SRC")"
 mkdir -p "$(dirname "$ROTATE_AUTH_DEST")"
@@ -396,6 +419,7 @@ step "rotate-auth" "$ROTATE_AUTH_DEST"
 rm -rf -- "$CODEVIEW_DEST_DIR"
 mkdir -p "$(dirname "$CODEVIEW_DEST_DIR")"
 cp -r "$CODEVIEW_SRC_DIR"/. "$CODEVIEW_DEST_DIR"/
+find "$CODEVIEW_DEST_DIR" -type d -name __pycache__ -exec rm -rf -- {} +
 step "codeview server" "$CODEVIEW_DEST_DIR"
 
 [[ -f "$OPENCODE_CONFIG_SRC" ]] || fail "missing $(tildify "$OPENCODE_CONFIG_SRC")"
@@ -416,7 +440,7 @@ step "antigravity" "$ANTIGRAVITY_CONFIG_DEST"
 [[ -f "$ANTIGRAVITY_HOOKS_SRC" ]] || fail "missing $(tildify "$ANTIGRAVITY_HOOKS_SRC")"
 mkdir -p "$(dirname "$ANTIGRAVITY_HOOKS_DEST")"
 cp "$ANTIGRAVITY_HOOKS_SRC" "$ANTIGRAVITY_HOOKS_DEST"
-step "antigravity hooks" "$ANTIGRAVITY_HOOKS_DEST"
+step "antigravity hooks" "$ANTIGRAVITY_HOOKS_DEST" "Stop → bell.mp3"
 
 if [[ -d "$SKILLS_SRC_DIR" ]]; then
   rm -rf -- "$QWEN_SKILLS_DEST_DIR"
@@ -444,21 +468,21 @@ if [[ -d "$SKILLS_SRC_DIR" ]]; then
     [[ -d "$d" ]] || continue
     cp -r "$d" "$CODEX_SKILLS_DEST_DIR/$(basename "$d")"
   done
-  step "codex skills" "$CODEX_SKILLS_DEST_DIR"
+  step "codex skills" "$CODEX_SKILLS_DEST_DIR" "preserves .system"
 
   # Command Code uses ~/.commandcode/skills and requires hyphenated skill IDs.
   copy_normalized_skills "$COMMAND_CODE_SKILLS_DEST_DIR" 0
-  step "command code skills" "$COMMAND_CODE_SKILLS_DEST_DIR"
+  step "command code skills" "$COMMAND_CODE_SKILLS_DEST_DIR" "hyphenated ids"
 
   # Antigravity CLI uses ~/.gemini/antigravity-cli/skills and expects
   # hyphenated skill IDs.
   copy_normalized_skills "$ANTIGRAVITY_SKILLS_DEST_DIR" 0
-  step "antigravity skills" "$ANTIGRAVITY_SKILLS_DEST_DIR"
+  step "antigravity skills" "$ANTIGRAVITY_SKILLS_DEST_DIR" "hyphenated ids"
 
   # OpenCode also searches ~/.claude/skills. Keep its native directory for
   # aliases of the source skills whose underscore names OpenCode rejects.
   copy_normalized_skills "$OPENCODE_SKILLS_DEST_DIR" 1
-  step "opencode skills" "$OPENCODE_SKILLS_DEST_DIR"
+  step "opencode skills" "$OPENCODE_SKILLS_DEST_DIR" "incompatible-name aliases"
 fi
 
 # Claude Code has no global off switch for ~/.claude.json mcpServers entries —
@@ -485,13 +509,19 @@ for plugin in sorted(p for p in plugins_dir.iterdir() if p.is_dir()):
 CLAUDE_PLUGINS_PY
 
   mkdir -p "$CLAUDE_SKILLS_DEST_DIR"
+  plugin_names=""
   for d in "$CLAUDE_PLUGINS_SRC_DIR"/*/; do
     [[ -d "$d" ]] || continue
     plugin_name="$(basename "$d")"
     rm -rf -- "${CLAUDE_SKILLS_DEST_DIR:?}/$plugin_name"
     cp -r "$d" "$CLAUDE_SKILLS_DEST_DIR/$plugin_name"
+    plugin_names+=", $plugin_name"
   done
-  step "claude mcp plugins" "$CLAUDE_SKILLS_DEST_DIR"
+  plugin_detail="${plugin_names#, }"
+  if [[ -n "$plugin_detail" ]]; then
+    plugin_detail="disabled: $plugin_detail"
+  fi
+  step "claude mcp plugins" "$CLAUDE_SKILLS_DEST_DIR" "$plugin_detail"
 fi
 
 [[ -f "$GROK_CONFIG_SRC" ]] || fail "missing $(tildify "$GROK_CONFIG_SRC")"
@@ -505,12 +535,16 @@ cp "$GROK_CONFIG_SRC" "$GROK_CONFIG_DEST"
 if [[ -n "$grok_theme" ]]; then
   sed -i "s/^theme = \".*\"/theme = \"$grok_theme\"/" "$GROK_CONFIG_DEST"
 fi
-step "grok config" "$GROK_CONFIG_DEST"
+grok_detail="Stop → bell.mp3"
+if [[ -n "$grok_theme" ]]; then
+  grok_detail+="; theme preserved"
+fi
+step "grok config" "$GROK_CONFIG_DEST" "$grok_detail"
 
 [[ -f "$CLAUDE_CONFIG_SRC" ]] || fail "missing $(tildify "$CLAUDE_CONFIG_SRC")"
 mkdir -p "$(dirname "$CLAUDE_CONFIG_DEST")"
 cp "$CLAUDE_CONFIG_SRC" "$CLAUDE_CONFIG_DEST"
-step "claude" "$CLAUDE_CONFIG_DEST"
+step "claude" "$CLAUDE_CONFIG_DEST" "Stop → bell.mp3"
 
 [[ -f "$CLAUDE_STATUSLINE_SRC" ]] || fail "missing $(tildify "$CLAUDE_STATUSLINE_SRC")"
 [[ -f "$CLAUDE_USAGE_FETCH_SRC" ]] || fail "missing $(tildify "$CLAUDE_USAGE_FETCH_SRC")"
@@ -520,6 +554,7 @@ chmod +x "$CLAUDE_STATUSLINE_DEST"
 cp "$CLAUDE_USAGE_FETCH_SRC" "$CLAUDE_USAGE_FETCH_DEST"
 chmod +x "$CLAUDE_USAGE_FETCH_DEST"
 step "claude status" "$CLAUDE_STATUSLINE_DEST"
+substep "$CLAUDE_USAGE_FETCH_DEST"
 
 [[ -f "$CURSOR_STATUSLINE_SRC" ]] || fail "missing $(tildify "$CURSOR_STATUSLINE_SRC")"
 [[ -f "$CURSOR_USAGE_FETCH_SRC" ]] || fail "missing $(tildify "$CURSOR_USAGE_FETCH_SRC")"
@@ -529,6 +564,7 @@ chmod +x "$CURSOR_STATUSLINE_DEST"
 cp "$CURSOR_USAGE_FETCH_SRC" "$CURSOR_USAGE_FETCH_DEST"
 chmod +x "$CURSOR_USAGE_FETCH_DEST"
 step "cursor status" "$CURSOR_STATUSLINE_DEST"
+substep "$CURSOR_USAGE_FETCH_DEST"
 
 # Cursor MCP: expand ${VAR} from clusterfork .env so secrets stay out of the repo.
 [[ -f "$CURSOR_MCP_SRC" ]] || fail "missing $(tildify "$CURSOR_MCP_SRC")"
@@ -567,7 +603,7 @@ def walk(obj):
 data = walk(json.loads(src.read_text(encoding="utf-8")))
 dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY
-step "cursor mcp" "$CURSOR_MCP_DEST"
+step "cursor mcp" "$CURSOR_MCP_DEST" "$(mcp_server_names "$CURSOR_MCP_SRC")"
 
 # Command Code MCP: same ${VAR} expansion as Cursor so secrets stay out of the repo.
 [[ -f "$COMMAND_CODE_MCP_SRC" ]] || fail "missing $(tildify "$COMMAND_CODE_MCP_SRC")"
@@ -606,7 +642,7 @@ def walk(obj):
 data = walk(json.loads(src.read_text(encoding="utf-8")))
 dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY
-step "command code mcp" "$COMMAND_CODE_MCP_DEST"
+step "command code mcp" "$COMMAND_CODE_MCP_DEST" "$(mcp_server_names "$COMMAND_CODE_MCP_SRC")"
 
 # Antigravity MCP: same ${VAR} expansion as Cursor/Command Code so secrets stay out of the repo.
 [[ -f "$ANTIGRAVITY_MCP_SRC" ]] || fail "missing $(tildify "$ANTIGRAVITY_MCP_SRC")"
@@ -645,7 +681,7 @@ def walk(obj):
 data = walk(json.loads(src.read_text(encoding="utf-8")))
 dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY
-step "antigravity mcp" "$ANTIGRAVITY_MCP_DEST"
+step "antigravity mcp" "$ANTIGRAVITY_MCP_DEST" "$(mcp_server_names "$ANTIGRAVITY_MCP_SRC")"
 
 # Command Code config: ensure telemetry is disabled. Merge keys from the repo
 # template into ~/.commandcode/config.json so existing user settings (provider,
@@ -674,7 +710,7 @@ merged = {**current, **wanted}
 if merged != current:
     dest.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
 PY
-step "command code config" "$COMMAND_CODE_CONFIG_DEST"
+step "command code config" "$COMMAND_CODE_CONFIG_DEST" "merge: $(python3 -c 'import json, sys; print(", ".join(json.load(open(sys.argv[1], encoding="utf-8"))))' "$COMMAND_CODE_CONFIG_SRC")"
 
 # Codex config: update top-level settings (such as notify) and replace the
 # mcp_servers tables from agents/codex.toml. Other settings (model, approvals,
@@ -854,7 +890,7 @@ for k, v in before.items():
 if result != current:
     dest_path.write_text(result, encoding="utf-8")
 PY
-step "codex config" "$CODEX_CONFIG_DEST"
+step "codex config" "$CODEX_CONFIG_DEST" "notify → bell.mp3; mcp_servers: $(python3 -c 'import sys, tomllib; print(", ".join(tomllib.load(open(sys.argv[1], "rb")).get("mcp_servers", {})))' "$CODEX_CONFIG_SRC")"
 
 # Ensure Claude Code user-scope MCP includes ElevenLabs. ~/.claude.json holds a lot
 # of unrelated state, so only upsert this one server entry.
@@ -876,7 +912,7 @@ if servers.get("ElevenLabs") != server:
     servers["ElevenLabs"] = server
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY
-step "claude mcp" "$CLAUDE_USER_JSON"
+step "claude mcp" "$CLAUDE_USER_JSON" "merge: mcpServers.ElevenLabs"
 
 # Ensure Cursor CLI statusLine points at the installed script. Unlike other
 # agent configs, cli-config.json holds session/auth caches we must not replace.
@@ -897,7 +933,7 @@ if data.get("statusLine") != wanted:
         json.dump(data, f, indent=2)
         f.write("\n")
 PY
-  step "cursor cli" "$CURSOR_CLI_CONFIG"
+  step "cursor cli" "$CURSOR_CLI_CONFIG" "merge: statusLine"
 else
   mkdir -p "$(dirname "$CURSOR_CLI_CONFIG")"
   python3 - "$CURSOR_CLI_CONFIG" <<'PY'
@@ -916,7 +952,7 @@ with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
 PY
-  step "cursor cli" "$CURSOR_CLI_CONFIG"
+  step "cursor cli" "$CURSOR_CLI_CONFIG" "merge: statusLine"
 fi
 
 # Ensure ~/.bashrc sources clusterfork. Keep $HOME literal so it stays portable,
