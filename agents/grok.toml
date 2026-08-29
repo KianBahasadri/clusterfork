@@ -63,3 +63,9 @@ Accept = "application/json, text/event-stream"
 command = "bash"
 args = ["-c", "exec \"$HOME/.config/clusterfork/bin/elevenlabs-mcp\""]
 enabled = true
+
+[[hooks.Stop]]
+  [[hooks.Stop.hooks]]
+  type = "command"
+  command = "mpv --no-video --no-terminal ~/.config/clusterfork/bell.mp3"
+

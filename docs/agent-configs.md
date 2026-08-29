@@ -40,6 +40,12 @@ Antigravity MCP servers. The installer expands `${ENV}` placeholders from the cl
 - **chrome-devtools:** local `pnpm dlx chrome-devtools-mcp@latest`, disabled — uses Chromium on port 9222
 - **pixellab:** remote `https://api.pixellab.ai/mcp`, disabled, with its bearer token from `PIXELLAB_API_KEY` in `.env`
 
+## agents/antigravity-hooks.json → ~/.gemini/config/hooks.json
+
+Antigravity lifecycle hooks:
+
+- **turn-bell:** `Stop` command hook playing `~/.config/clusterfork/bell.mp3` via `mpv --no-video --no-terminal`
+
 ## agents/grok.toml → ~/.grok/config.toml
 
 Grok CLI settings:
@@ -51,6 +57,7 @@ Grok CLI settings:
   so it is not shown on fresh installations
 - **Marketplace:** xAI Official plugin marketplace source; default skills installs are not purged (`default_skills_installs_purged = false`)
 - **MCP servers:** context7 (remote, requires `CONTEXT7_API_KEY`), linear (remote, disabled), chrome-devtools (local, disabled — uses Chromium on port 9222), pixellab (remote, disabled — requires `PIXELLAB_API_KEY`), ElevenLabs (local via clusterfork launcher)
+- **Hooks:** `[[hooks.Stop]]` command hook playing `~/.config/clusterfork/bell.mp3` via `mpv --no-video --no-terminal`
 - **Plugins:** chrome-devtools-mcp disabled
 - **Updates:** auto-update enabled; `installer = internal`
 
@@ -62,6 +69,7 @@ Claude Code settings:
 - **Model:** `claude-opus-4-8` (Opus 4.8; not the `opus` alias, which resolves to Opus 5)
 - **Status line:** command `bash ~/.claude/statusline-command.sh`, refresh every 60s (see [Statusline](statusline.md))
 - **Plugins:** context7 enabled; linear, chrome-devtools, and pixellab shipped disabled — see [agents/claude-plugins/](#agentsclaude-plugins--claudeskills)
+- **Hooks:** `Stop` command hook playing `~/.config/clusterfork/bell.mp3` via `mpv --no-video --no-terminal`
 - **UI:** dark theme, fullscreen TUI, prompt suggestions off
 - **Voice:** enabled, hold mode
 - **Other:** auto-memory off, skip dangerous-mode permission prompt, agent push notifications on, drafted feedback off (`"feedbackDrafts": "off"`)

@@ -11,6 +11,18 @@
     "chrome-devtools@skills-dir": false,
     "pixellab@skills-dir": false
   },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mpv --no-video --no-terminal ~/.config/clusterfork/bell.mp3"
+          }
+        ]
+      }
+    ]
+  },
   "promptSuggestionEnabled": false,
   "tui": "fullscreen",
   "voice": {
