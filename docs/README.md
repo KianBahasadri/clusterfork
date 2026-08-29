@@ -11,6 +11,7 @@
 - [Conventions](conventions.md) — style, safety, idempotency, and repo-as-source-of-truth
 - [OpenCode Go endpoint](opencode-go.md) — what the subscription's three wire formats serve, per-model, the Codex experiment that was not shipped, and the 2026-08-07 deepseek-v4-flash high-cap effort ladders (raw log: [opencode-go-effort-highcap-2026-08-07.log](opencode-go-effort-highcap-2026-08-07.log))
 - [Codex rewind bug (0.147.0)](codex-rewind-bug-0147.md) — why Esc-Esc branching fails, why it is not clusterfork, and what fixes it
+- [Codex bell vs usage-limit deaths](codex-usage-limit-bell.md) — why the notify bell is silent when the usage limit kills a turn (verified in upstream source), coverage options evaluated, and why no change shipped
 - [cmd "No conversations found to resume." (investigated, fix reverted)](cmd-resume-bug.md) — why `cmd` kicks you out in session-free dirs, the Command Code CLI mechanics, and the validated-but-unshipped fix
 - [aerolink.sh (removed)](aerolink-removed.md) — historical record of the deleted Aerolink proxy launcher
 - [Pioneer (removed)](pioneer-removed.md) — historical record of the deleted Pioneer gateway integration
