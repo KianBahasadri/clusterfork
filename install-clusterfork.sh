@@ -18,18 +18,21 @@
 #      ${ENV} placeholders from the clusterfork .env)
 #   8. Overwrites ~/.commandcode/mcp.json from agents/command-code-mcp.json
 #      (expands ${ENV} placeholders from the clusterfork .env)
-#   9. Ensures telemetry is disabled in ~/.commandcode/config.json from
+#   9. Overwrites ~/.gemini/config/mcp_config.json from agents/antigravity-mcp.json
+#      (expands ${ENV} placeholders from the clusterfork .env)
+#  10. Ensures telemetry is disabled in ~/.commandcode/config.json from
 #      agents/command-code.json (key only; does not replace the whole file)
-#  10. Replaces the mcp_servers table in ~/.codex/config.toml from
-#      agents/codex-mcp.toml (table only; Codex owns the rest of that file)
-#  11. Installs agents/claude-plugins/* into ~/.claude/skills/ as skills-dir
+#  11. Updates ~/.codex/config.toml from agents/codex.toml (merges top-level
+#      settings like notify and replaces mcp_servers tables; Codex owns the rest
+#      of that file)
+#  12. Installs agents/claude-plugins/* into ~/.claude/skills/ as skills-dir
 #      plugins; agents/claude.json ships each one disabled
-#  12. Ensures ElevenLabs in ~/.claude.json mcpServers (key only; does not
+#  13. Ensures ElevenLabs in ~/.claude.json mcpServers (key only; does not
 #      replace the whole file)
-#  13. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
+#  14. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
 #      replace the whole file)
-#  14. Appends a source line to ~/.bashrc if it is not already present
-#  15. Best-effort: ensures Codex/Cursor/OpenCode auth.json links through
+#  15. Appends a source line to ~/.bashrc if it is not already present
+#  16. Best-effort: ensures Codex/Cursor/OpenCode auth.json links through
 #      ~/.local/share/clusterfork-auth/<agent>/current when profiles exist
 #
 # Usage:
@@ -41,6 +44,8 @@ REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 CLUSTERFORK_CONFIG_DIR="$HOME/.config/clusterfork"
 DOTENV_SRC="$REPO_DIR/.env"
 DOTENV_DEST="$CLUSTERFORK_CONFIG_DIR/.env"
+BELL_SOUND_SRC="$REPO_DIR/bell.mp3"
+BELL_SOUND_DEST="$CLUSTERFORK_CONFIG_DIR/bell.mp3"
 LOCAL_ENV_SRC="$REPO_DIR/bash_profile.sh"
 LOCAL_ENV_DEST="$CLUSTERFORK_CONFIG_DIR/bash_profile.sh"
 SHELL_SRC_DIR="$REPO_DIR/shell"
@@ -60,6 +65,8 @@ QWEN_CONFIG_SRC="$AGENTS_SRC_DIR/qwen.json"
 QWEN_CONFIG_DEST="$HOME/.qwen/settings.json"
 ANTIGRAVITY_CONFIG_SRC="$AGENTS_SRC_DIR/antigravity.json"
 ANTIGRAVITY_CONFIG_DEST="$HOME/.gemini/antigravity-cli/settings.json"
+ANTIGRAVITY_MCP_SRC="$AGENTS_SRC_DIR/antigravity-mcp.json"
+ANTIGRAVITY_MCP_DEST="$HOME/.gemini/config/mcp_config.json"
 SKILLS_SRC_DIR="$REPO_DIR/skills"
 QWEN_SKILLS_DEST_DIR="$HOME/.qwen/skills"
 GROK_SKILLS_DEST_DIR="$HOME/.grok/skills"
@@ -90,7 +97,7 @@ COMMAND_CODE_MCP_SRC="$AGENTS_SRC_DIR/command-code-mcp.json"
 COMMAND_CODE_MCP_DEST="$HOME/.commandcode/mcp.json"
 COMMAND_CODE_CONFIG_SRC="$AGENTS_SRC_DIR/command-code.json"
 COMMAND_CODE_CONFIG_DEST="$HOME/.commandcode/config.json"
-CODEX_MCP_SRC="$AGENTS_SRC_DIR/codex-mcp.toml"
+CODEX_CONFIG_SRC="$AGENTS_SRC_DIR/codex.toml"
 CODEX_CONFIG_DEST="$HOME/.codex/config.toml"
 SHARED_AUTH_ROOT="$HOME/.local/share/clusterfork-auth"
 CODEX_AUTH_DIR="$HOME/.codex"
@@ -350,6 +357,11 @@ mkdir -p "$CLUSTERFORK_CONFIG_DIR"
 cp "$DOTENV_SRC" "$DOTENV_DEST"
 step "env file" "$DOTENV_DEST"
 
+if [[ -f "$BELL_SOUND_SRC" ]]; then
+  cp "$BELL_SOUND_SRC" "$BELL_SOUND_DEST"
+  step "bell sound" "$BELL_SOUND_DEST"
+fi
+
 [[ -f "$LOCAL_ENV_SRC" ]] || fail "missing $(tildify "$LOCAL_ENV_SRC")" "Create it in the repo root with your local shell aliases/functions."
 [[ -d "$SHELL_SRC_DIR" ]] || fail "missing $(tildify "$SHELL_SRC_DIR")"
 
@@ -589,6 +601,45 @@ dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY
 step "command code mcp" "$COMMAND_CODE_MCP_DEST"
 
+# Antigravity MCP: same ${VAR} expansion as Cursor/Command Code so secrets stay out of the repo.
+[[ -f "$ANTIGRAVITY_MCP_SRC" ]] || fail "missing $(tildify "$ANTIGRAVITY_MCP_SRC")"
+mkdir -p "$(dirname "$ANTIGRAVITY_MCP_DEST")"
+python3 - "$ANTIGRAVITY_MCP_SRC" "$ANTIGRAVITY_MCP_DEST" "$DOTENV_DEST" <<'PY'
+import json, re, sys
+from pathlib import Path
+
+src, dest, dotenv = map(Path, sys.argv[1:])
+env = {}
+if dotenv.is_file():
+    for line in dotenv.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        env[k.strip()] = v.strip().strip('"').strip("'")
+
+def expand(value: str) -> str:
+    def repl(m: re.Match[str]) -> str:
+        key = m.group(1)
+        if key not in env:
+            raise SystemExit(f"antigravity mcp: ${{{key}}} not set in {dotenv}")
+        return env[key]
+    return re.sub(r"\$\{([A-Z_][A-Z0-9_]*)\}", repl, value)
+
+def walk(obj):
+    if isinstance(obj, dict):
+        return {k: walk(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [walk(v) for v in obj]
+    if isinstance(obj, str):
+        return expand(obj)
+    return obj
+
+data = walk(json.loads(src.read_text(encoding="utf-8")))
+dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+PY
+step "antigravity mcp" "$ANTIGRAVITY_MCP_DEST"
+
 # Command Code config: ensure telemetry is disabled. Merge keys from the repo
 # template into ~/.commandcode/config.json so existing user settings (provider,
 # model, etc.) are preserved. If the file does not exist, create it.
@@ -618,25 +669,47 @@ if merged != current:
 PY
 step "command code config" "$COMMAND_CODE_CONFIG_DEST"
 
-# Codex MCP: ~/.codex/config.toml also holds the model, approval settings, and
-# the per-project trust levels Codex writes itself, so replace only the
-# mcp_servers table. No ${ENV} expansion here — the server entries name the env
-# vars instead, and Codex resolves them at launch from the exported .env.
-[[ -f "$CODEX_MCP_SRC" ]] || fail "missing $(tildify "$CODEX_MCP_SRC")"
+# Codex config: update top-level settings (such as notify) and replace the
+# mcp_servers tables from agents/codex.toml. Other settings (model, approvals,
+# per-project trust levels written by Codex) are preserved.
+[[ -f "$CODEX_CONFIG_SRC" ]] || fail "missing $(tildify "$CODEX_CONFIG_SRC")"
 mkdir -p "$(dirname "$CODEX_CONFIG_DEST")"
-python3 - "$CODEX_MCP_SRC" "$CODEX_CONFIG_DEST" <<'PY'
-import sys, tomllib
+python3 - "$CODEX_CONFIG_SRC" "$CODEX_CONFIG_DEST" "$DOTENV_DEST" <<'PY'
+import os, re, sys, tomllib
 from pathlib import Path
 
-src, dest = map(Path, sys.argv[1:])
-block = src.read_text(encoding="utf-8").strip("\n")
-wanted = tomllib.loads(block)
-current = dest.read_text(encoding="utf-8") if dest.is_file() else ""
+src_path, dest_path, dotenv_path = map(Path, sys.argv[1:])
+
+env = dict(os.environ)
+if dotenv_path.is_file():
+    for line in dotenv_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        env[k.strip()] = v.strip().strip('"').strip("'")
+
+src_raw = src_path.read_text(encoding="utf-8")
+
+def expand_match(m: re.Match[str]) -> str:
+    var = m.group(1)
+    if var not in env:
+        raise SystemExit(f"codex config: ${{{var}}} not set in environment or {dotenv_path}")
+    return env[var]
+
+expanded_src = re.sub(r"\$\{([A-Z_][A-Z0-9_]*)\}", expand_match, src_raw)
+
+try:
+    wanted = tomllib.loads(expanded_src)
+except tomllib.TOMLDecodeError as exc:
+    raise SystemExit(f"codex config: {src_path} is not valid TOML: {exc}")
+
+current = dest_path.read_text(encoding="utf-8") if dest_path.is_file() else ""
 if current.strip():
     try:
         before = tomllib.loads(current)
     except tomllib.TOMLDecodeError as exc:
-        raise SystemExit(f"codex mcp: {dest} is not valid TOML: {exc}")
+        raise SystemExit(f"codex config: {dest_path} is not valid TOML: {exc}")
 else:
     before = {}
 
@@ -657,22 +730,89 @@ def table_root(line: str) -> str | None:
     return None
 
 
-# Drop every [mcp_servers...] table. Comments and blank lines are buffered so a
-# comment block introducing a dropped table goes with it, while one introducing
-# the next kept table stays.
-kept: list[str] = []
+src_lines = expanded_src.splitlines()
+first_table_idx = None
+for idx, line in enumerate(src_lines):
+    if table_root(line) is not None:
+        first_table_idx = idx
+        break
+
+if first_table_idx is not None:
+    src_top_lines = src_lines[:first_table_idx]
+    src_tables_block = "\n".join(src_lines[first_table_idx:]).strip("\n")
+else:
+    src_top_lines = src_lines
+    src_tables_block = ""
+
+wanted_top_keys = {k: v for k, v in wanted.items() if not isinstance(v, dict)}
+wanted_tables = set(k for k, v in wanted.items() if isinstance(v, dict))
+
+
+def key_name(line: str) -> str | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or stripped.startswith("["):
+        return None
+    if "=" in stripped:
+        return stripped.split("=", 1)[0].strip()
+    return None
+
+
+dest_lines = current.splitlines()
+dest_first_table_idx = len(dest_lines)
+for idx, line in enumerate(dest_lines):
+    if table_root(line) is not None:
+        dest_first_table_idx = idx
+        break
+
+dest_top_lines = dest_lines[:dest_first_table_idx]
+dest_table_lines = dest_lines[dest_first_table_idx:]
+
+src_key_chunks = {}
+current_k = None
+for line in src_top_lines:
+    k = key_name(line)
+    if k in wanted_top_keys:
+        current_k = k
+        src_key_chunks[current_k] = [line]
+    elif current_k and (line.startswith(" ") or line.startswith("\t") or line.startswith("]") or line.startswith("}")):
+        src_key_chunks[current_k].append(line)
+    else:
+        current_k = None
+
+new_dest_top_lines = []
+skip = False
+for line in dest_top_lines:
+    k = key_name(line)
+    if k in wanted_top_keys:
+        skip = True
+        continue
+    elif skip and (line.startswith(" ") or line.startswith("\t") or line.startswith("]") or line.startswith("}")):
+        continue
+    else:
+        skip = False
+        new_dest_top_lines.append(line)
+
+while new_dest_top_lines and not new_dest_top_lines[-1].strip():
+    new_dest_top_lines.pop()
+
+for k, chunk in src_key_chunks.items():
+    if new_dest_top_lines:
+        new_dest_top_lines.append("")
+    new_dest_top_lines.extend(chunk)
+
+kept_tables: list[str] = []
 pending: list[str] = []
 dropping = False
-for line in current.splitlines():
+for line in dest_table_lines:
     root = table_root(line)
     if root is not None:
-        dropping = root == "mcp_servers"
+        dropping = root in wanted_tables
         if dropping:
             pending = []
         else:
-            kept.extend(pending)
+            kept_tables.extend(pending)
             pending = []
-            kept.append(line)
+            kept_tables.append(line)
         continue
     if not line.strip() or line.lstrip().startswith("#"):
         pending.append(line)
@@ -680,29 +820,34 @@ for line in current.splitlines():
     if dropping:
         pending = []
         continue
-    kept.extend(pending)
+    kept_tables.extend(pending)
     pending = []
-    kept.append(line)
-kept.extend(pending)
+    kept_tables.append(line)
+kept_tables.extend(pending)
 
-body = "\n".join(kept).strip("\n")
-result = f"{body}\n\n{block}\n" if body else f"{block}\n"
+top_section = "\n".join(new_dest_top_lines).strip("\n")
+table_section = "\n".join(kept_tables).strip("\n")
 
-# The rewrite is textual, so check it against the parsed result: our table must
-# land intact and nothing else in the file may move.
-parsed = tomllib.loads(result)
-if parsed.get("mcp_servers") != wanted["mcp_servers"]:
-    raise SystemExit(f"codex mcp: mcp_servers was not installed cleanly into {dest}")
-before.pop("mcp_servers", None)
-after = dict(parsed)
-after.pop("mcp_servers", None)
-if before != after:
-    raise SystemExit(f"codex mcp: refusing to write, unrelated config in {dest} would change")
+parts = [p for p in [top_section, table_section, src_tables_block] if p]
+result = "\n\n".join(parts) + "\n"
+
+# Verify parsed output
+after = tomllib.loads(result)
+for k, v in wanted_top_keys.items():
+    if after.get(k) != v:
+        raise SystemExit(f"codex config: {k} was not installed cleanly into {dest_path}")
+for tbl in wanted_tables:
+    if after.get(tbl) != wanted.get(tbl):
+        raise SystemExit(f"codex config: table [{tbl}] was not installed cleanly into {dest_path}")
+for k, v in before.items():
+    if k not in wanted_top_keys and k not in wanted_tables:
+        if after.get(k) != v:
+            raise SystemExit(f"codex config: refusing to write, unrelated key '{k}' in {dest_path} would change")
 
 if result != current:
-    dest.write_text(result, encoding="utf-8")
+    dest_path.write_text(result, encoding="utf-8")
 PY
-step "codex mcp" "$CODEX_CONFIG_DEST"
+step "codex config" "$CODEX_CONFIG_DEST"
 
 # Ensure Claude Code user-scope MCP includes ElevenLabs. ~/.claude.json holds a lot
 # of unrelated state, so only upsert this one server entry.

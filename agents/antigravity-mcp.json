@@ -1,0 +1,39 @@
+{
+  "mcpServers": {
+    "context7": {
+      "serverUrl": "https://mcp.context7.com/mcp",
+      "headers": {
+        "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}"
+      }
+    },
+    "ElevenLabs": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "exec \"$HOME/.config/clusterfork/bin/elevenlabs-mcp\""
+      ]
+    },
+    "linear": {
+      "serverUrl": "https://mcp.linear.app/mcp",
+      "disabled": true
+    },
+    "chrome-devtools": {
+      "command": "pnpm",
+      "args": [
+        "dlx",
+        "chrome-devtools-mcp@latest",
+        "--no-usage-statistics",
+        "--browserUrl",
+        "http://127.0.0.1:9222"
+      ],
+      "disabled": true
+    },
+    "pixellab": {
+      "serverUrl": "https://api.pixellab.ai/mcp",
+      "headers": {
+        "Authorization": "Bearer ${PIXELLAB_API_KEY}"
+      },
+      "disabled": true
+    }
+  }
+}

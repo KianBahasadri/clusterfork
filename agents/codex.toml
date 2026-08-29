@@ -1,10 +1,14 @@
-# Codex MCP servers. The installer replaces only the mcp_servers table in
-# ~/.codex/config.toml, so the model, approval settings, and per-project trust
-# levels Codex writes there survive.
+# Codex settings and MCP servers.
+#
+# Top-level settings defined here (like notify) and [mcp_servers] tables are
+# installed/overwritten into ~/.codex/config.toml. Other settings (model,
+# approvals, per-project trust levels written by Codex) are preserved.
 #
 # Secrets stay in .env: Codex resolves env_http_headers and bearer_token_env_var
 # from the environment at launch, and bash_profile.sh exports .env into every
 # shell, so no API key is written into config.toml.
+
+notify = ["mpv", "--no-video", "--no-terminal", "${HOME}/.config/clusterfork/bell.mp3"]
 
 [mcp_servers.context7]
 url = "https://mcp.context7.com/mcp"

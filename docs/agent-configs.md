@@ -30,6 +30,16 @@ Antigravity CLI settings:
 - **Telemetry:** disabled
 - **Trusted workspaces:** `~/.config/clusterfork`, `~/steam_cart_evaluator`
 
+## agents/antigravity-mcp.json → ~/.gemini/config/mcp_config.json
+
+Antigravity MCP servers. The installer expands `${ENV}` placeholders from the clusterfork `.env` when writing the destination (full replace, `disabled: true` means off):
+
+- **context7:** remote `https://mcp.context7.com/mcp` with `CONTEXT7_API_KEY`
+- **ElevenLabs:** clusterfork `bin/elevenlabs-mcp` launcher (`ELEVENLABS_API_KEY` from `.env`)
+- **linear:** remote `https://mcp.linear.app/mcp`, disabled
+- **chrome-devtools:** local `pnpm dlx chrome-devtools-mcp@latest`, disabled — uses Chromium on port 9222
+- **pixellab:** remote `https://api.pixellab.ai/mcp`, disabled, with its bearer token from `PIXELLAB_API_KEY` in `.env`
+
 ## agents/grok.toml → ~/.grok/config.toml
 
 Grok CLI settings:
@@ -115,27 +125,30 @@ Command Code MCP servers. The installer expands `${ENV}` placeholders from the c
 - **chrome-devtools:** local `pnpm dlx chrome-devtools-mcp@latest`, disabled — uses Chromium on port 9222
 - **pixellab:** remote `https://api.pixellab.ai/mcp`, disabled, with its bearer token from `PIXELLAB_API_KEY` in `.env`
 
-## agents/codex-mcp.toml → ~/.codex/config.toml (`mcp_servers` table only)
+## agents/codex.toml → ~/.codex/config.toml
 
-Codex MCP servers. Codex owns the rest of `~/.codex/config.toml` — `model`,
+Codex settings and MCP servers. Top-level settings defined in `agents/codex.toml`
+(such as `notify`) and all `[mcp_servers…]` tables are updated/overwritten into
+`~/.codex/config.toml`. Codex owns the rest of `~/.codex/config.toml` — `model`,
 `model_reasoning_effort`, `approvals_reviewer`, `service_tier`, and the
-`[projects]` trust levels it writes as you accept directories — so this is a
-table-only exception to the overwrite rule: the installer drops every
-`[mcp_servers…]` table, appends the repo's block, then re-parses the result and
-refuses to write if anything outside `mcp_servers` would change.
+`[projects]` trust levels it writes as you accept directories — so other keys
+and tables stay untouched. `${HOME}` placeholders in values are expanded at
+install time.
 
+- **notify:** turn-completion sound notification (`mpv --no-video --no-terminal ~/.config/clusterfork/bell.mp3`)
 - **context7:** remote `https://mcp.context7.com/mcp`
 - **ElevenLabs:** clusterfork `bin/elevenlabs-mcp` launcher
 - **linear:** remote `https://mcp.linear.app/mcp`, disabled
 - **chrome-devtools:** local `pnpm dlx chrome-devtools-mcp@latest`, disabled — uses Chromium on port 9222
 - **pixellab:** remote `https://api.pixellab.ai/mcp`, disabled
 
-No `${ENV}` expansion happens here, unlike Cursor and Command Code. Codex
-resolves `env_http_headers` (context7's `CONTEXT7_API_KEY` header) and
-`bearer_token_env_var` (pixellab's `PIXELLAB_API_KEY`) from its own environment
-at launch, and `bash_profile.sh` exports all of `.env` with `set -a`, so no key
-is written to disk. Verified against a header-logging server: both arrive on the
-wire, and an unset variable drops the header instead of failing the server.
+No `${ENV}` expansion is needed for the MCP secrets themselves, unlike Cursor
+and Command Code. Codex resolves `env_http_headers` (context7's `CONTEXT7_API_KEY`
+header) and `bearer_token_env_var` (pixellab's `PIXELLAB_API_KEY`) from its own
+environment at launch, and `bash_profile.sh` exports all of `.env` with `set -a`,
+so no key is written to disk. Verified against a header-logging server: both
+arrive on the wire, and an unset variable drops the header instead of failing
+the server.
 
 ## ElevenLabs MCP launcher
 
@@ -143,7 +156,7 @@ wire, and an unset variable drops the header instead of failing the server.
 
 ## Disabled-by-default MCP servers
 
-linear, chrome-devtools, and pixellab ship disabled in OpenCode (`"enabled": false`), Grok (`enabled = false`), Qwen (`mcp.excluded`), Codex (`enabled = false`), Command Code (`"enabled": false` on each `mcpServers` entry), and Claude Code (`enabledPlugins` set to `false`, one plugin per server) — present but inactive; flip the flag (or remove the name from Qwen's exclude list) in the live config to use one, and a reinstall resets it to disabled.
+linear, chrome-devtools, and pixellab ship disabled in OpenCode (`"enabled": false`), Grok (`enabled = false`), Qwen (`mcp.excluded`), Codex (`enabled = false`), Command Code (`"enabled": false` on each `mcpServers` entry), Antigravity (`"disabled": true` in `mcp_config.json`), and Claude Code (`enabledPlugins` set to `false`, one plugin per server) — present but inactive; flip the flag (or remove the name from Qwen's exclude list, or run `agy mcp enable <name>` for Antigravity) in the live config to use one, and a reinstall resets it to disabled.
 
 They are deliberately omitted from Cursor, which has no shippable off switch at all: `mcp.json` has no per-server disabled field, and on/off is IDE state toggled in Customize → MCPs, tracked per project (the CLI has `cursor-agent mcp enable/disable`, also local state).
 
@@ -209,7 +222,7 @@ entry without the flag was. `codex mcp list` reports a `Status` column of
 unlike `qwen mcp list`, connection-tests nothing — no spawn there either.
 
 This is what the installer ships — see
-[agents/codex-mcp.toml](#agentscodex-mcptoml--codexconfigtoml-mcp_servers-table-only)
+[agents/codex.toml](#agentscodextoml--codexconfigtoml)
 above. Re-running it resets a locally flipped `enabled` back to the repo value,
 same as the other CLIs.
 
