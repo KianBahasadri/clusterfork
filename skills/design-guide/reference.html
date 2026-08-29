@@ -12,12 +12,13 @@
      - No rounded corners. The only `border-radius` in the file is a `0`
        reset for the Firefox range thumb, which is round by default.
      - Borders are load-bearing: 1px for containers, 2px for interactive.
-     - The only shadow is a hard offset (no blur) and only the primary action
-       gets one, so it is the single unmistakable target on a view.
+      - The only shadow is a hard offset (no blur): the primary action is the
+        only content element that gets one; overlays and the phone frames have
+        their own (values in FOUNDATIONS.md § Structure).
      - No soft gradients. `repeating-linear-gradient`/`conic-gradient` appear
        only with coincident stops, i.e. hard-edged patterns.
      - Motion is stepped, never eased, and is disabled under reduced-motion.
-     - UPPERCASE is for labels and headings only, never body copy.
+      - UPPERCASE is for labels, headings and badges only, never body copy.
    Rules live in FOUNDATIONS.md; this file only renders them.
    ========================================================================== */
 
@@ -53,7 +54,7 @@ body {
           display: flex; align-items: stretch; }
 .brand { display: flex; align-items: center; gap: 9px; padding: 0 16px; flex: none;
          border-right: 1px solid var(--text); white-space: nowrap;
-         font-family: var(--mono); font-size: 12px; font-weight: 700;
+         font-family: var(--mono); font-size: 11px; font-weight: 700;
          letter-spacing: .18em; text-transform: uppercase; }
 .brand .sq { width: 10px; height: 10px; background: var(--accent); }
 .views { display: flex; align-items: stretch; overflow-x: auto; scrollbar-width: none;
@@ -121,7 +122,7 @@ h2 .n { font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(
 .icon-grid figure { margin: 0; padding: 14px 6px 9px; border: 1px solid var(--border);
                     border-width: 0 1px 1px 0;
                     display: flex; flex-direction: column; align-items: center; gap: 9px; }
-.icon-grid figcaption { font-family: var(--mono); font-size: 9px; letter-spacing: .08em;
+.icon-grid figcaption { font-family: var(--mono); font-size: 10px; letter-spacing: .08em;
                         text-transform: uppercase; color: var(--text-2); }
 
 /* --- 01 Color ----------------------------------------------------------- */
@@ -153,7 +154,7 @@ h2 .n { font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(
           padding: 9px 0; }
 .sp-row:first-child { border-top: 0; padding-top: 0; }
 .sp-row:last-child { padding-bottom: 0; }
-.sp-n { font-family: var(--mono); font-size: 12px; width: 22px; flex: none; text-align: right; }
+.sp-n { font-family: var(--mono); font-size: 11px; width: 22px; flex: none; text-align: right; }
 .sp-track { width: 64px; flex: none; }
 .sp-bar { height: 12px; background: var(--accent); display: block; }
 
@@ -197,11 +198,11 @@ h2 .n { font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(
                margin-bottom: 6px; }
 .field input[type=text], .field input[type=email], .field input[type=url],
 .field input[type=search], .field textarea, .field select {
-  font-family: var(--mono); font-size: 14px; width: 100%; padding: 10px 12px;
+  font-family: var(--mono); font-size: 13px; width: 100%; padding: 10px 12px;
   background: var(--bg); border: 2px solid var(--border-hi); color: var(--text); }
 .field textarea { resize: vertical; min-height: 84px; line-height: 1.45; }
 .field select { appearance: none; padding-right: 34px; cursor: pointer;
-                text-transform: uppercase; letter-spacing: .06em; font-size: 12px; }
+                text-transform: uppercase; letter-spacing: .06em; font-size: 13px; }
 .sel-wrap { position: relative; }
 .sel-wrap .icon { position: absolute; right: 11px; top: 50%; margin-top: -8px;
                   pointer-events: none; color: var(--text-2); }
@@ -219,7 +220,7 @@ h2 .n { font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(
 
 /* --- Choice controls ---------------------------------------------------- */
 .choice { display: flex; align-items: center; gap: 10px; cursor: pointer;
-          font-size: 14px; user-select: none; }
+          font-size: 15px; user-select: none; }
 .choice input { appearance: none; margin: 0; width: 18px; height: 18px; flex: none;
                 border: 2px solid var(--border-hi); background: var(--bg); cursor: pointer;
                 display: grid; place-content: center; }
@@ -233,7 +234,7 @@ h2 .n { font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(
 .choice input:disabled { border-color: var(--border); cursor: not-allowed; }
 .choice input:disabled + span { color: var(--text-2); }
 .choice.is-disabled { cursor: not-allowed; }
-.switch { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; }
+.switch { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 15px; }
 .switch input { appearance: none; margin: 0; width: 44px; height: 22px; flex: none;
                 border: 2px solid var(--border-hi); background: var(--bg); cursor: pointer;
                 position: relative; }
@@ -269,7 +270,7 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 22px; background: var
             border: 1px solid var(--text); background: var(--surface);
             box-shadow: 6px 6px 0 rgba(0,0,0,.55); }
 .menu-pop .sec { padding: 6px 12px; border-bottom: 1px solid var(--border);
-                 font-family: var(--mono); font-size: 9px; letter-spacing: .16em;
+                 font-family: var(--mono); font-size: 10px; letter-spacing: .16em;
                  text-transform: uppercase; color: var(--text-2); background: var(--bg); }
 .menu-pop a, .menu-pop button.mi { display: flex; align-items: center; gap: 10px; width: 100%;
             padding: 8px 12px; border: 0; background: transparent; color: var(--text);
@@ -289,7 +290,7 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 22px; background: var
             border-bottom: 1px solid var(--border-hi); font-family: var(--mono); font-size: 13px; }
 .combo .q .caret { width: 8px; height: 15px; background: var(--accent);
                    animation: blink 1s steps(1) infinite; }
-.combo li { list-style: none; padding: 8px 11px; font-family: var(--mono); font-size: 12px;
+.combo li { list-style: none; padding: 8px 11px; font-family: var(--mono); font-size: 13px;
             display: flex; align-items: center; gap: 9px; }
 .combo ul { margin: 0; padding: 0; }
 .combo li mark { background: transparent; color: var(--accent); font-weight: 700; }
@@ -305,7 +306,7 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 22px; background: var
                border-bottom: 2px solid transparent; }
 .tabs button:hover { color: var(--text); }
 .tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
-.tabpanel { padding: 16px 0 0; font-size: 14px; }
+.tabpanel { padding: 16px 0 0; font-size: 15px; }
 .seg { display: inline-flex; border: 2px solid var(--border-hi); }
 .seg button { font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .1em;
               text-transform: uppercase; padding: 7px 13px; border: 0; background: transparent;
@@ -321,7 +322,7 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 22px; background: var
 .crumbs b { color: var(--text); }
 .pager { display: flex; }
 .pager button { width: 32px; height: 32px; border: 1px solid var(--border-hi); background: transparent;
-                color: var(--text); font-family: var(--mono); font-size: 12px; cursor: pointer;
+                color: var(--text); font-family: var(--mono); font-size: 13px; cursor: pointer;
                 margin-left: -1px; }
 .pager button:first-child { margin-left: 0; }
 .pager button:hover { background: var(--raised); }
@@ -348,7 +349,7 @@ kbd { font-family: var(--mono); font-size: 10px; font-weight: 700; padding: 3px 
       box-shadow: 2px 2px 0 var(--border); }
 .avatar { width: 34px; height: 34px; flex: none; display: grid; place-content: center;
           border: 1px solid var(--border-hi); background: var(--raised);
-          font-family: var(--mono); font-size: 12px; font-weight: 700; letter-spacing: .04em; }
+          font-family: var(--mono); font-size: 13px; font-weight: 700; letter-spacing: .04em; }
 .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .avatar-stack { display: flex; }
 .avatar-stack .avatar { margin-left: -8px; box-shadow: -2px 0 0 var(--bg); }
@@ -376,7 +377,7 @@ kbd { font-family: var(--mono); font-size: 10px; font-weight: 700; padding: 3px 
 table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 13px;
         border: 1px solid var(--text); }
 th { text-align: left; background: var(--text); color: var(--bg); padding: 10px 14px;
-     font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em;
+     font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em;
      white-space: nowrap; }
 th.sortable { cursor: pointer; }
 th .sort { opacity: .55; }
@@ -389,7 +390,7 @@ tbody tr[aria-selected="true"] td:first-child { box-shadow: inset 3px 0 0 var(--
 td .ok { color: var(--success); font-weight: 700; }
 td .bad { color: var(--danger); font-weight: 700; }
 td .warn { color: var(--warning); font-weight: 700; }
-table.compact td, table.compact th { padding: 6px 10px; font-size: 12px; }
+table.compact td, table.compact th { padding: 6px 10px; font-size: 13px; }
 
 /* --- Cards -------------------------------------------------------------- */
 .card { border: 1px solid var(--border-hi); background: var(--surface); }
@@ -457,15 +458,15 @@ a.card:hover h3 { color: var(--accent); }
 .dialog .hd button { border: 0; background: transparent; color: var(--bg); cursor: pointer;
                      padding: 0; line-height: 1; }
 .dialog .bd { padding: 18px; }
-.dialog h3 { font-size: 18px; font-weight: 800; text-transform: uppercase;
+.dialog h3 { font-size: 20px; font-weight: 800; text-transform: uppercase;
              letter-spacing: .01em; margin: 0 0 8px; }
-.dialog p { margin: 0; font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+.dialog p { margin: 0; font-family: var(--mono); font-size: 13px; color: var(--text-2); }
 .dialog .ft { display: flex; gap: 10px; justify-content: flex-end; padding: 0 18px 18px; }
 .drawer { border-left: 1px solid var(--text); background: var(--surface); width: 260px;
           align-self: stretch; margin: -26px -26px -26px auto; }
 .toast { border: 1px solid var(--text); background: var(--surface); display: flex;
          align-items: center; gap: 12px; padding: 12px 14px; max-width: 380px;
-         box-shadow: 6px 6px 0 rgba(0,0,0,.55); font-family: var(--mono); font-size: 12px; }
+         box-shadow: 6px 6px 0 rgba(0,0,0,.55); font-family: var(--mono); font-size: 13px; }
 .toast .bar { margin-top: 0; }
 .tip { position: relative; display: inline-block; }
 .tip .bubble { position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
@@ -486,7 +487,7 @@ a.card:hover h3 { color: var(--accent); }
          font-family: var(--mono); font-size: 13px; display: flex; gap: 14px;
          align-items: baseline; }
 .alert:first-child { margin-top: 0; }
-.alert .sig { font-family: var(--sans); font-size: 14px; font-weight: 800;
+.alert .sig { font-family: var(--sans); font-size: 15px; font-weight: 800;
               text-transform: uppercase; letter-spacing: .06em; flex: none; }
 .a-info { border-color: var(--accent); } .a-info .sig { color: var(--accent); }
 .a-ok { border-color: var(--success); } .a-ok .sig { color: var(--success); }
@@ -506,21 +507,21 @@ a.card:hover h3 { color: var(--accent); }
 .empty { border: 1px dashed var(--border-hi); padding: 34px 20px; text-align: center; }
 .empty .icon { color: var(--border-hi); }
 .empty h3 { margin: 12px 0 6px; font-size: 15px; font-weight: 800; text-transform: uppercase; }
-.empty p { margin: 0 0 16px; font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+.empty p { margin: 0 0 16px; font-family: var(--mono); font-size: 13px; color: var(--text-2); }
 @media (prefers-reduced-motion: reduce) {
   .skel::after, .spinner, .bar-indef > i, .combo .q .caret, .blinker { animation: none; }
 }
 
 /* --- Code / tree / log -------------------------------------------------- */
 .code { border: 1px solid var(--border-hi); background: var(--bg); display: flex;
-        font-family: var(--mono); font-size: 12px; line-height: 1.65; overflow-x: auto; }
+        font-family: var(--mono); font-size: 13px; line-height: 1.65; overflow-x: auto; }
 .code .ln { padding: 10px 0; border-right: 1px solid var(--border); color: var(--border-hi);
             text-align: right; user-select: none; flex: none; }
 .code .ln span { display: block; padding: 0 10px; }
 .code pre { margin: 0; padding: 10px 14px; }
 .code .kw { color: var(--accent); } .code .str { color: var(--success); }
 .code .cm { color: var(--text-2); }
-.tree { font-family: var(--mono); font-size: 12px; }
+.tree { font-family: var(--mono); font-size: 13px; }
 .tree .row { display: flex; align-items: center; gap: 7px; padding: 4px 8px; cursor: pointer; }
 .tree .row:hover { background: var(--raised); }
 .tree .row[aria-selected="true"] { background: var(--accent); color: var(--accent-text); }
@@ -528,7 +529,7 @@ a.card:hover h3 { color: var(--accent); }
 .tree .i1 { padding-left: 22px; } .tree .i2 { padding-left: 40px; }
 .tree .row .icon { color: var(--text-2); }
 .tree .row[aria-selected="true"] .icon { color: var(--accent-text); }
-.log { font-family: var(--mono); font-size: 12px; line-height: 1.7; background: var(--bg);
+.log { font-family: var(--mono); font-size: 13px; line-height: 1.7; background: var(--bg);
        border: 1px solid var(--border-hi); padding: 10px 12px; overflow: auto; }
 .log div { display: flex; gap: 12px; white-space: nowrap; }
 .log .t { color: var(--border-hi); flex: none; }
@@ -541,8 +542,8 @@ a.card:hover h3 { color: var(--accent); }
 .chart { display: block; width: 100%; height: auto; font-family: var(--mono); }
 .chart .axis { stroke: var(--border-hi); stroke-width: 1; }
 .chart .grid { stroke: var(--border); stroke-width: 1; }
-.chart .lbl { fill: var(--text-2); font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
-.chart .val { fill: var(--text); font-size: 9px; font-weight: 700; }
+.chart .lbl { fill: var(--text-2); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+.chart .val { fill: var(--text); font-size: 10px; font-weight: 700; }
 .chart .col { fill: var(--s3); }          /* NOT .bar: a CSS height would
 .chart .col.hi { fill: var(--accent); }      beat the SVG height attribute */
 .chart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: miter;
@@ -562,7 +563,7 @@ a.card:hover h3 { color: var(--accent); }
 .donut-wrap { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
 .donut { position: relative; flex: none; }
 .donut .mid { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; }
-.donut .mid b { display: block; font-family: var(--mono); font-size: 24px; font-weight: 700; }
+.donut .mid b { display: block; font-family: var(--mono); font-size: 20px; font-weight: 700; }
 .stack100 { display: flex; height: 34px; border: 1px solid var(--border-hi);
             font-family: var(--mono); font-size: 10px; font-weight: 700; }
 .stack100 span { display: flex; align-items: center; justify-content: center; overflow: hidden;
@@ -603,7 +604,7 @@ a.card:hover h3 { color: var(--accent); }
 /* Dashboard */
 .side { width: 214px; flex: none; border-right: 1px solid var(--text); display: flex;
         flex-direction: column; background: var(--bg); overflow: auto; }
-.side .grp { padding: 14px 14px 5px; font-family: var(--mono); font-size: 9px;
+.side .grp { padding: 14px 14px 5px; font-family: var(--mono); font-size: 10px;
              letter-spacing: .18em; text-transform: uppercase; color: var(--border-hi); }
 .side a { display: flex; align-items: center; gap: 10px; padding: 8px 14px; color: var(--text-2);
           text-decoration: none; font-size: 13px; border-left: 3px solid transparent; }
@@ -670,7 +671,7 @@ a.card:hover h3 { color: var(--accent); }
 .phone .tabbar { display: flex; flex: none; border-top: 1px solid var(--text); }
 .phone .tabbar a { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
          padding: 9px 0 10px; color: var(--text-2); text-decoration: none;
-         font-family: var(--mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
+         font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
 .phone .tabbar a + a { border-left: 1px solid var(--border); }
 .phone .tabbar a.on { color: var(--accent-text); background: var(--accent); }
 .phone .fab { position: absolute; right: 14px; bottom: 74px; width: 48px; height: 48px;
@@ -678,7 +679,7 @@ a.card:hover h3 { color: var(--accent); }
          border: 2px solid var(--accent); box-shadow: 4px 4px 0 rgba(0,0,0,.6); cursor: pointer; }
 .mrow { display: flex; align-items: center; gap: 11px; padding: 12px; border-bottom: 1px solid var(--border); }
 .mrow .tx { min-width: 0; flex: 1; }
-.mrow .tx b { display: block; font-size: 14px; font-weight: 700; }
+.mrow .tx b { display: block; font-size: 15px; font-weight: 700; }
 .mrow .tx span { display: block; font-family: var(--mono); font-size: 11px; color: var(--text-2);
          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mrow .icon { color: var(--border-hi); }
@@ -721,7 +722,7 @@ a.card:hover h3 { color: var(--accent); }
 .cbox .sub { font-family: var(--mono); font-size: 11px; color: var(--text-2); }
 .cbox.span2 { grid-column: span 2; }
 .alarm { background: var(--danger); color: #0a0a0a; display: flex; align-items: center; gap: 14px;
-         padding: 12px 16px; font-family: var(--mono); font-size: 14px; font-weight: 700;
+         padding: 12px 16px; font-family: var(--mono); font-size: 15px; font-weight: 700;
          letter-spacing: .12em; text-transform: uppercase; }
 .alarm .blinker { width: 14px; height: 14px; background: #0a0a0a;
                   animation: blink 1s steps(1) infinite; }
@@ -869,6 +870,10 @@ a.card:hover h3 { color: var(--accent); }
       <p style="font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.12em">Repository URL</p>
       <span class="cap">11 · mono · label</span>
     </div>
+    <div class="spec-row">
+      <p style="font-family:var(--mono);font-size:10px;color:var(--text-2)">12:04:31 · 0.42% · 184ms</p>
+      <span class="cap">10 · mono · micro</span>
+    </div>
   </div>
 
   <h2><span class="n">03</span><span>Spacing</span></h2>
@@ -969,7 +974,7 @@ a.card:hover h3 { color: var(--accent); }
     <div class="cell"><svg class="icon icon-sm"><use href="#i-star"/></svg><span class="cap">13 · inline</span></div>
     <div class="cell"><svg class="icon"><use href="#i-star"/></svg><span class="cap">16 · control</span></div>
     <div class="cell"><svg class="icon icon-lg"><use href="#i-star"/></svg><span class="cap">24 · standalone</span></div>
-    <div class="cell"><span style="display:inline-flex;align-items:center;gap:6px;font-size:14px"><svg class="icon"><use href="#i-download"/></svg>Download</span><span class="cap">icon + word</span></div>
+    <div class="cell"><span style="display:inline-flex;align-items:center;gap:6px;font-size:15px"><svg class="icon"><use href="#i-download"/></svg>Download</span><span class="cap">icon + word</span></div>
   </div>
 
 </div>
@@ -1274,15 +1279,15 @@ a.card:hover h3 { color: var(--accent); }
       <div class="delta"><span class="up">▲ 12.4%</span><svg class="spark" viewBox="0 0 62 18"><polyline points="1,15 10,12 19,13 28,8 37,9 46,4 55,2"/></svg></div>
     </div>
     <div class="kpi">
-      <div class="lab">Error rate</div><div class="val">0.42<span style="font-size:18px">%</span></div>
+      <div class="lab">Error rate</div><div class="val">0.42<span style="font-size:20px">%</span></div>
       <div class="delta"><span class="down">▼ 0.08pt</span><svg class="spark" viewBox="0 0 62 18"><polyline points="1,4 10,6 19,5 28,9 37,11 46,13 55,15"/></svg></div>
     </div>
     <div class="kpi">
-      <div class="lab">p95 latency</div><div class="val">184<span style="font-size:18px">ms</span></div>
+      <div class="lab">p95 latency</div><div class="val">184<span style="font-size:20px">ms</span></div>
       <div class="delta"><span class="up">▲ 9ms</span><svg class="spark" viewBox="0 0 62 18"><polyline points="1,12 10,10 19,13 28,9 37,10 46,7 55,8"/></svg></div>
     </div>
     <div class="kpi">
-      <div class="lab">Nodes</div><div class="val">14<span style="font-size:18px">/16</span></div>
+      <div class="lab">Nodes</div><div class="val">14<span style="font-size:20px">/16</span></div>
       <div class="delta"><span class="down">▼ 2 offline</span><span class="cap">since 09:12</span></div>
     </div>
   </div>
@@ -1852,7 +1857,7 @@ a.card:hover h3 { color: var(--accent); }
         </nav>
         <div class="input-icon" style="margin-left:auto;width:230px">
           <svg class="icon"><use href="#i-search"/></svg>
-          <input type="search" placeholder="Search…" style="font-family:var(--mono);font-size:12px;width:100%;padding:6px 10px 6px 34px;background:var(--bg);border:2px solid var(--border-hi);color:var(--text)">
+          <input type="search" placeholder="Search…" style="font-family:var(--mono);font-size:13px;width:100%;padding:6px 10px 6px 34px;background:var(--bg);border:2px solid var(--border-hi);color:var(--text)">
         </div>
         <div class="seg">
           <button aria-pressed="false">24h</button><button aria-pressed="true">7d</button><button aria-pressed="false">30d</button>
@@ -1869,9 +1874,9 @@ a.card:hover h3 { color: var(--accent); }
 
         <div class="g4" style="margin-top:18px">
           <div class="kpi"><div class="lab">Requests</div><div class="val">1 284</div><div class="delta"><span class="up">▲ 12.4%</span><svg class="spark" viewBox="0 0 62 18"><polyline points="1,15 10,12 19,13 28,8 37,9 46,4 55,2"/></svg></div></div>
-          <div class="kpi"><div class="lab">Error rate</div><div class="val">0.42<span style="font-size:18px">%</span></div><div class="delta"><span class="down">▼ 0.08pt</span><svg class="spark" viewBox="0 0 62 18"><polyline points="1,4 10,6 19,5 28,9 37,11 46,13 55,15"/></svg></div></div>
-          <div class="kpi"><div class="lab">p95 latency</div><div class="val">184<span style="font-size:18px">ms</span></div><div class="delta"><span class="up">▲ 9ms</span><svg class="spark" viewBox="0 0 62 18"><polyline points="1,12 10,10 19,13 28,9 37,10 46,7 55,8"/></svg></div></div>
-          <div class="kpi"><div class="lab">Nodes</div><div class="val">14<span style="font-size:18px">/16</span></div><div class="delta"><span class="down">▼ 2 offline</span><span class="cap">09:12</span></div></div>
+          <div class="kpi"><div class="lab">Error rate</div><div class="val">0.42<span style="font-size:20px">%</span></div><div class="delta"><span class="down">▼ 0.08pt</span><svg class="spark" viewBox="0 0 62 18"><polyline points="1,4 10,6 19,5 28,9 37,11 46,13 55,15"/></svg></div></div>
+          <div class="kpi"><div class="lab">p95 latency</div><div class="val">184<span style="font-size:20px">ms</span></div><div class="delta"><span class="up">▲ 9ms</span><svg class="spark" viewBox="0 0 62 18"><polyline points="1,12 10,10 19,13 28,9 37,10 46,7 55,8"/></svg></div></div>
+          <div class="kpi"><div class="lab">Nodes</div><div class="val">14<span style="font-size:20px">/16</span></div><div class="delta"><span class="down">▼ 2 offline</span><span class="cap">09:12</span></div></div>
         </div>
 
         <div style="display:grid;gap:18px;grid-template-columns:minmax(0,2fr) minmax(0,1fr);margin-top:18px" class="dash-split">
@@ -1997,7 +2002,7 @@ a.card:hover h3 { color: var(--accent); }
     <span class="sep"></span>
     <div class="input-icon" style="width:210px">
       <svg class="icon"><use href="#i-search"/></svg>
-      <input type="search" placeholder="Filter 142 assets…" style="font-family:var(--mono);font-size:12px;width:100%;padding:5px 10px 5px 34px;background:var(--bg);border:2px solid var(--border-hi);color:var(--text)">
+      <input type="search" placeholder="Filter 142 assets…" style="font-family:var(--mono);font-size:13px;width:100%;padding:5px 10px 5px 34px;background:var(--bg);border:2px solid var(--border-hi);color:var(--text)">
     </div>
     <div style="margin-left:auto" class="stepper"><button aria-label="Zoom out">&minus;</button><span class="val">100%</span><button aria-label="Zoom in">+</button></div>
   </div>
@@ -2173,8 +2178,8 @@ a.card:hover h3 { color: var(--accent); }
         </div>
         <div class="msheet">
           <div class="grab"></div>
-          <h3 style="margin:0 0 6px;font-size:16px;font-weight:800;text-transform:uppercase">Deploy to production?</h3>
-          <p style="margin:0 0 14px;font-family:var(--mono);font-size:12px;color:var(--text-2)">Runs immediately on 14 nodes. You can stop it from the run page.</p>
+          <h3 style="margin:0 0 6px;font-size:15px;font-weight:800;text-transform:uppercase">Deploy to production?</h3>
+          <p style="margin:0 0 14px;font-family:var(--mono);font-size:13px;color:var(--text-2)">Runs immediately on 14 nodes. You can stop it from the run page.</p>
           <button class="btn btn-block btn-primary" style="margin-bottom:10px">Deploy now</button>
           <button class="btn btn-block btn-ghost">Cancel</button>
         </div>
@@ -2213,12 +2218,12 @@ a.card:hover h3 { color: var(--accent); }
     </div>
     <div class="cbox">
       <div class="lab">p95 latency</div>
-      <div class="big">184<span style="font-size:22px">ms</span></div>
+      <div class="big">184<span style="font-size:20px">ms</span></div>
       <div class="sub" style="color:var(--danger)">▲ 9ms vs 1h</div>
     </div>
     <div class="cbox">
       <div class="lab">Nodes online</div>
-      <div class="big" style="color:var(--danger)">14<span style="font-size:22px">/16</span></div>
+      <div class="big" style="color:var(--danger)">14<span style="font-size:20px">/16</span></div>
       <div class="sub">2 draining</div>
     </div>
 
@@ -2269,7 +2274,7 @@ a.card:hover h3 { color: var(--accent); }
     </div>
     <div class="cbox">
       <div class="lab">Uptime</div>
-      <div class="big">19<span style="font-size:22px">d</span></div>
+      <div class="big">19<span style="font-size:20px">d</span></div>
       <div class="sub">since 2026-08-09 04:12</div>
       <div class="bar thin" style="margin-top:12px"><i style="width:99.94%"></i></div>
       <div class="sub" style="margin-top:6px">99.94% · 30d</div>

@@ -32,25 +32,29 @@ Rule: pick from the scale by *relationship* — things related are closer than t
 
 ## Type
 
-**GUI (px, base 16, ratio ~1.25):**
+**GUI (px):**
 
-Scale: `12, 14, 16, 20, 25, 31`.
+Scale: `10, 11, 13, 15, 20, 30, 48`.
 
-- Body: 16, line-height 1.5
-- Secondary/meta text: 14
-- Small print / badges: 12
+- Body: 15, line-height 1.5
+- Secondary/meta text: 13
+- Small print / badges: 10; mono labels (uppercase, tracked): 11
+- Mono data (tables, code, log lines, values): 13
 - Section heading: 20 bold
-- Page title: 25–31 bold, line-height 1.2
+- Page title: 30 bold; display numerals (glance-distance counters): 48
 - Body text measure: 60–75 characters per line — wider columns tire readers
 
-Use the system font stack; do not require custom font downloads:
+Three font roles; system stacks only, no custom font downloads:
 
 ```css
-font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; /* code */
+--sans: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;   /* prose, sans headings */
+--mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;         /* labels, data, code, page title */
+--mono-term: "DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", Menlo, Consolas, ui-monospace, monospace;
 ```
 
-Emphasis: **bold** for weight, never italic-at-small-sizes or ALL CAPS for body text (caps only for tiny labels/badges).
+`--mono-term` is a separate stack used **only** for TUI/CLI views: box-drawing and block elements must be single-cell, which the GUI stacks do not guarantee.
+
+Emphasis: **bold** for weight, never italic-at-small-sizes or ALL CAPS for body text (caps are for labels, headings and badges — see Structure).
 
 **TUI:** one font, so hierarchy comes from attributes and placement, not size:
 
@@ -68,27 +72,44 @@ Universal rules:
 - **Contrast:** text meets 4.5:1 against its background (3:1 for text ≥ 24px/19px bold). Borders of interactive elements ≥ 3:1.
 - **Never color alone:** color communicates *in addition to* a word or icon — `✗ Failed`, not a red row by itself. This is also what makes TUI/CLI (16 colors, or none) and color-blind users workable.
 - **Meaning is reserved:** success/warning/danger colors mean exactly that, everywhere, in every surface. Do not use the danger red for a delete *icon* theme or marketing accent.
+- **Chart series are not status:** series take `--accent`, `--text`, `--border-hi`, `--border` — luminance steps, told apart further by pattern (solid / dashed / hatch). Status colors never appear as a series color. This is why the reference charts are monochrome plus one accent.
 - **60/30/10:** ~60% neutral background, ~30% secondary surface/text, ~10% accent. One accent color. If two things compete in saturation, one of them is wrong.
 
-**GUI palette shape** (see `reference.html` for the rendered version — GUI only):
+**GUI palette** (dark is the base; no light theme ships. Rendered in `reference.html#foundations`; ratios are against `--bg`):
 
 ```
-background      #ffffff   secondary surface #f5f5f5   border #e0e0e0
-text            #1a1a1a   secondary text    #5f5f5f
-accent          #2563eb   accent-text-on    #ffffff
-success #15803d   warning #b45309   danger #b91c1c   (on light bg; all ≥ 4.5:1)
+--bg        #0a0a0a   page
+--surface   #131313   panel
+--raised    #1b1b1b   hover
+--border    #2e2e2e   hairline inside a panel
+--border-hi #6b645a   3.4:1    panel edge and every interactive border
+--text      #e8e5e0   15.8:1
+--text-2    #8f8a82   5.8:1
+--accent    #ff5900   6.3:1    (--accent-text #0a0a0a sits on it)
+--success   #2fe08a   11.5:1
+--warning   #ffd000   13.5:1
+--danger    #ff2b55   5.4:1
 ```
-
-Dark mode: invert roles, keep the contrast ratios; never just swap pure black/white (use `#0f172a`-style near-black and off-white text).
 
 **TUI:** use the terminal's 16 ANSI colors, or 256/truecolor only when already detected as supported. Secondary text = dim/gray. Respect `NO_COLOR` and non-TTY: output must remain fully understandable monochrome.
 
 **CLI:** same as TUI, and: color only goes to a TTY (check `isatty`, honor `NO_COLOR`, offer `--color=auto|always|never` when output is likely to be piped).
 
+## Structure (GUI)
+
+The brutalist invariants the reference render never breaks:
+
+- **Radius 0.** Nothing is rounded anywhere. (The reference's only `border-radius` declaration is a `0` reset on `::-moz-range-thumb`, which Firefox rounds by default.)
+- **Border weight is meaning:** 1px `--border` = hairline inside a panel; 1px `--border-hi` = panel edge and every interactive border; 1px `--text` = region split and dialog frame; 2px `--border-hi` = interactive edge; 2px `--accent` = focus ring and active tab.
+- **Shadows are hard offsets, never blurred — and scarce:** `4px 4px 0 var(--border-hi)` on the primary button only; `6px 6px 0 rgba(0,0,0,.55)` on overlays (menu, toast, popover); `8px 8px 0` on the mobile phone frames; `inset 3px 0 0 var(--accent)` marks a selected row's first cell. Nothing else gets a shadow.
+- **No soft gradients.** Gradients appear only as hard-edged patterns (`repeating-linear-gradient`, `conic-gradient`, `radial-gradient` with coincident stops) for generated artwork.
+- **Motion is stepped** (`steps(1)`, `steps(8)`, `steps(9)`, `steps(10)`), never eased, and all of it is killed under `prefers-reduced-motion: reduce`.
+- **UPPERCASE is for labels, headings and badges** — never body copy.
+
 ## Layout
 
-**GUI:** content in a single readable column where possible; max content width ~1200px for dashboards, ~720px for prose. Grids of cards share identical heights per row or explicitly not (mixed heights must look deliberate, not broken). Whitespace is a layout element: cramped screens are redesigned, not shrunk.
+**GUI:** doc-style views are a single readable column capped at **1040px**; app shells (dashboard, desktop, console, terminal screens) are full-viewport frames with their own chrome and no page scroll on the body. Grids of cards share identical heights per row or explicitly not (mixed heights must look deliberate, not broken). Whitespace is a layout element: cramped screens are redesigned, not shrunk.
 
-**TUI:** design for 80×24 minimum, degrade gracefully below. Panels have a 1-cell gap or share connected borders — not both. Key hints go on a bottom bar (e.g. `q quit  / search  ? help`).
+**TUI:** design for 80×24 minimum, degrade gracefully below. Panels have a 1-cell gap or share connected borders — not both. Key hints go on a bottom bar (e.g. `q quit  / search  ? help`). Rendered: [reference.html](reference.html)`#tui`.
 
-**CLI:** output reads top-down like a document: summary → detail → next actions. Line width ≤ 80 chars for help text; data output (tables, JSON) is allowed to be wide because it is consumed by tools.
+**CLI:** output reads top-down like a document: summary → detail → next actions. Line width ≤ 80 chars for help text; data output (tables, JSON) is allowed to be wide because it is consumed by tools. Rendered: [reference.html](reference.html)`#cli`.
