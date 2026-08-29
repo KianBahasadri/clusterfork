@@ -9,6 +9,7 @@ fork_secondary_model = "grok-4.5"
 yolo = false
 compact_mode = false
 permission_mode = "always-approve"
+prompt_suggestions = false
 
 [features]
 telemetry = false
