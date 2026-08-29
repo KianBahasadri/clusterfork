@@ -106,6 +106,8 @@ accurate to the implementation.
    - Information should not be repeated anywhere else; each topic lives in
      exactly one file.
    - Experiments and dead-ends should get their own doc files.
+   - Keep each doc file under ~400 lines; past that, split by sub-topic and
+     list each part in this README.
 
 7. **Write one file per topic.** Each doc file covers exactly one topic.
    Information must not be repeated across files. If a detail belongs to two

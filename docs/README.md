@@ -30,3 +30,8 @@ lives in exactly one file.
 If something was tried but not shipped — an experiment, a dead-end approach,
 a feature that was reverted — it should still get its own doc file here. The
 goal is a complete record, not just a catalog of what survived.
+
+Keep each doc file under ~400 lines. Agents open only the topic files they
+need, so a file too large to open cheaply gets skipped or eats the context
+budget. Past that size, split by sub-topic and list each part in the index
+above.
