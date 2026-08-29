@@ -123,6 +123,14 @@ Command Code settings. The installer merges keys from the repo template into the
 
 If `~/.commandcode/config.json` does not exist, it is created with `{"telemetry": false}`.
 
+## agents/command-code-settings.json → ~/.commandcode/settings.json
+
+Command Code user-scope settings. The installer ensures the `Stop` turn-bell
+hook — it appends the hook definition when missing and preserves every other
+key in the file:
+
+- **Hooks:** `Stop` command hook playing `~/.config/clusterfork/bell.mp3` via `mpv --no-video --no-terminal`
+
 ## agents/command-code-mcp.json → ~/.commandcode/mcp.json
 
 Command Code MCP servers. The installer expands `${ENV}` placeholders from the clusterfork `.env` when writing the destination (full replace):

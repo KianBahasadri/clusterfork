@@ -31,6 +31,7 @@
 | `agents/cursor-mcp.json`          | `~/.cursor/mcp.json`                     | Cursor MCP servers (`${ENV}` expanded from `.env`) |
 | `agents/command-code-mcp.json`    | `~/.commandcode/mcp.json`                | Command Code MCP servers (`${ENV}` expanded from `.env`) |
 | `agents/command-code.json`        | `~/.commandcode/config.json`             | Command Code settings (`telemetry` only; other keys preserved) |
+| `agents/command-code-settings.json` | `~/.commandcode/settings.json`         | Command Code user settings (ensures the `Stop` turn-bell hook; other keys preserved) |
 | `agents/codex.toml`               | `~/.codex/config.toml`                   | Codex settings and MCP servers (merges top-level keys like `notify` and replaces `mcp_servers`) |
 | `statusline/claude/statusline.sh` | `~/.claude/statusline-command.sh`        | Claude status line script         |
 | `statusline/claude/usage-fetch.py`| `~/.claude/claude-usage-fetch.py`        | Claude usage cache helper         |

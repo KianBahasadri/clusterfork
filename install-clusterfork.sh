@@ -22,17 +22,20 @@
 #      (expands ${ENV} placeholders from the clusterfork .env)
 #  10. Ensures telemetry is disabled in ~/.commandcode/config.json from
 #      agents/command-code.json (key only; does not replace the whole file)
-#  11. Updates ~/.codex/config.toml from agents/codex.toml (merges top-level
+#  11. Ensures the Stop turn-bell hook in ~/.commandcode/settings.json from
+#      agents/command-code-settings.json (appends the hook if missing; preserves
+#      the rest of the file)
+#  12. Updates ~/.codex/config.toml from agents/codex.toml (merges top-level
 #      settings like notify and replaces mcp_servers tables; Codex owns the rest
 #      of that file)
-#  12. Installs agents/claude-plugins/* into ~/.claude/skills/ as skills-dir
+#  13. Installs agents/claude-plugins/* into ~/.claude/skills/ as skills-dir
 #      plugins; agents/claude.json ships each one disabled
-#  13. Ensures ElevenLabs in ~/.claude.json mcpServers (key only; does not
+#  14. Ensures ElevenLabs in ~/.claude.json mcpServers (key only; does not
 #      replace the whole file)
-#  14. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
+#  15. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
 #      replace the whole file)
-#  15. Appends a source line to ~/.bashrc if it is not already present
-#  16. Best-effort: ensures Codex/Cursor/OpenCode auth.json links through
+#  16. Appends a source line to ~/.bashrc if it is not already present
+#  17. Best-effort: ensures Codex/Cursor/OpenCode auth.json links through
 #      ~/.local/share/clusterfork-auth/<agent>/current when profiles exist
 #
 # Usage:
@@ -99,6 +102,8 @@ COMMAND_CODE_MCP_SRC="$AGENTS_SRC_DIR/command-code-mcp.json"
 COMMAND_CODE_MCP_DEST="$HOME/.commandcode/mcp.json"
 COMMAND_CODE_CONFIG_SRC="$AGENTS_SRC_DIR/command-code.json"
 COMMAND_CODE_CONFIG_DEST="$HOME/.commandcode/config.json"
+COMMAND_CODE_SETTINGS_SRC="$AGENTS_SRC_DIR/command-code-settings.json"
+COMMAND_CODE_SETTINGS_DEST="$HOME/.commandcode/settings.json"
 CODEX_CONFIG_SRC="$AGENTS_SRC_DIR/codex.toml"
 CODEX_CONFIG_DEST="$HOME/.codex/config.toml"
 SHARED_AUTH_ROOT="$HOME/.local/share/clusterfork-auth"
@@ -711,6 +716,38 @@ if merged != current:
     dest.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
 PY
 step "command code config" "$COMMAND_CODE_CONFIG_DEST" "merge: $(python3 -c 'import json, sys; print(", ".join(json.load(open(sys.argv[1], encoding="utf-8"))))' "$COMMAND_CODE_CONFIG_SRC")"
+
+# Command Code user settings: ensure the Stop turn-bell hook. settings.json holds
+# other user-scope keys, so only the hook definition is appended when missing.
+[[ -f "$COMMAND_CODE_SETTINGS_SRC" ]] || fail "missing $(tildify "$COMMAND_CODE_SETTINGS_SRC")"
+mkdir -p "$(dirname "$COMMAND_CODE_SETTINGS_DEST")"
+python3 - "$COMMAND_CODE_SETTINGS_SRC" "$COMMAND_CODE_SETTINGS_DEST" <<'PY'
+import json, sys
+from pathlib import Path
+
+src, dest = map(Path, sys.argv[1:])
+wanted_stop = json.loads(src.read_text(encoding="utf-8"))["hooks"]["Stop"]
+if dest.is_file():
+    try:
+        data = json.loads(dest.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"command code settings: {dest} is not valid JSON: {exc}")
+    if not isinstance(data, dict):
+        raise SystemExit(f"command code settings: {dest} must be a JSON object")
+else:
+    data = {}
+
+hooks = data.setdefault("hooks", {})
+if not isinstance(hooks, dict):
+    raise SystemExit(f"command code settings: 'hooks' in {dest} must be a JSON object")
+stop = hooks.setdefault("Stop", [])
+if not isinstance(stop, list):
+    raise SystemExit(f"command code settings: 'hooks.Stop' in {dest} must be a JSON array")
+if not any(d in stop for d in wanted_stop):
+    stop.extend(wanted_stop)
+    dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+PY
+step "command code hooks" "$COMMAND_CODE_SETTINGS_DEST" "Stop → bell.mp3"
 
 # Codex config: update top-level settings (such as notify) and replace the
 # mcp_servers tables from agents/codex.toml. Other settings (model, approvals,
