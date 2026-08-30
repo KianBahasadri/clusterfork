@@ -8,7 +8,7 @@
 
 ## claude.sh
 
-`cl` launches `claude --dangerously-skip-permissions --effort max` via `_cf_tmux` and sets `ANTHROPIC_CUSTOM_MODEL_OPTION=claude-opus-4-8` (label `Opus 4.8`) so `/model` keeps a 4.8 row after the `opus` alias moved to Opus 5. The env vars are scoped to that launch. `rotate-claude` switches between multiple saved Claude account credentials.
+`cl` launches `claude --dangerously-skip-permissions --effort max` via `_cf_tmux`, resuming the last conversation (`--continue`) unless arguments are given, in which case it forwards them unchanged. It sets `ANTHROPIC_CUSTOM_MODEL_OPTION=claude-opus-4-8` (label `Opus 4.8`) so `/model` keeps a 4.8 row after the `opus` alias moved to Opus 5. The env vars are scoped to that launch. `rotate-claude` switches between multiple saved Claude account credentials.
 
 ## cmd.sh
 
