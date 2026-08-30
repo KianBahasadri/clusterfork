@@ -72,6 +72,8 @@ function svgLineChart(series, labels, opts = {}) {
   return out + "</svg>";
 }
 
+let chartHoverAbort = null;
+
 function bindHistoryChartHover(wrap, commits) {
   if (!wrap) return;
   const svg = wrap.querySelector("svg.chart");
@@ -82,6 +84,12 @@ function bindHistoryChartHover(wrap, commits) {
   if (!svg || !tip || !hair || !line || !dot || !commits.length) return;
   const scale = chartScale(commits.map(c => c.total));
   let last = -1;
+  let pinned = -1;
+  let hovering = false;
+
+  chartHoverAbort?.abort();
+  chartHoverAbort = new AbortController();
+  const { signal } = chartHoverAbort;
 
   function cssPos(viewX, viewY) {
     const rect = svg.getBoundingClientRect();
@@ -91,10 +99,31 @@ function bindHistoryChartHover(wrap, commits) {
     };
   }
 
+  function indexFromEvent(e) {
+    const rect = svg.getBoundingClientRect();
+    if (!rect.width) return last < 0 ? 0 : last;
+    const viewX = ((e.clientX - rect.left) / rect.width) * CHART_W;
+    const n = commits.length;
+    const t = n <= 1 ? 0 : (viewX - CHART_PAD.l) / scale.iw;
+    return Math.max(0, Math.min(n - 1, Math.round(t * Math.max(n - 1, 1))));
+  }
+
   function hide() {
+    if (pinned >= 0) return;
     last = -1;
     hair.hidden = true;
     tip.hidden = true;
+    tip.classList.remove("pinned");
+    wrap.classList.remove("is-pinned");
+  }
+
+  function unpin() {
+    const i = pinned;
+    pinned = -1;
+    tip.classList.remove("pinned");
+    wrap.classList.remove("is-pinned");
+    if (hovering && i >= 0) show(i);
+    else hide();
   }
 
   function show(i) {
@@ -118,6 +147,9 @@ function bindHistoryChartHover(wrap, commits) {
         <div class="chart-tip-row"><span class="k">loc</span>
           <span class="v">${fmt(c.total)}</span></div>`;
     }
+    const isPinned = pinned >= 0;
+    tip.classList.toggle("pinned", isPinned);
+    wrap.classList.toggle("is-pinned", isPinned);
     tip.hidden = false;
     const bounds = wrap.getBoundingClientRect();
     const tw = tip.offsetWidth, th = tip.offsetHeight;
@@ -132,15 +164,31 @@ function bindHistoryChartHover(wrap, commits) {
   }
 
   wrap.addEventListener("mousemove", e => {
-    const rect = svg.getBoundingClientRect();
-    if (!rect.width) return;
-    const viewX = ((e.clientX - rect.left) / rect.width) * CHART_W;
-    const n = commits.length;
-    const t = n <= 1 ? 0 : (viewX - CHART_PAD.l) / scale.iw;
-    const i = Math.max(0, Math.min(n - 1, Math.round(t * Math.max(n - 1, 1))));
+    hovering = true;
+    if (pinned >= 0) return;
+    show(indexFromEvent(e));
+  }, { signal });
+  wrap.addEventListener("mouseleave", () => {
+    hovering = false;
+    hide();
+  }, { signal });
+  wrap.addEventListener("click", e => {
+    if (e.target.closest(".chart-tip")) return;
+    const i = indexFromEvent(e);
+    if (pinned === i) {
+      unpin();
+      return;
+    }
+    pinned = i;
     show(i);
-  });
-  wrap.addEventListener("mouseleave", hide);
+  }, { signal });
+  document.addEventListener("click", e => {
+    if (pinned < 0 || wrap.contains(e.target)) return;
+    unpin();
+  }, { signal });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && pinned >= 0) unpin();
+  }, { signal });
 }
 
 function barRows(entries, colorFn = () => "") {

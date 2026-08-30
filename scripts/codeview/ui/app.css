@@ -128,6 +128,13 @@ svg.sparkline { height: 32px; width: 120px; }
   color: var(--fg); font-variant-numeric: tabular-nums;
 }
 .chart-tip-row:last-child .v { font-weight: bold; }
+.chart-tip.pinned {
+  pointer-events: auto; user-select: text; cursor: text;
+  border-color: var(--fg);
+}
+.chart-wrap.is-pinned .chart-crosshair-dot {
+  width: 10px; height: 10px; margin: -5px 0 0 -5px;
+}
 
 input[type=search] {
   background: var(--card); border: 1px solid var(--border); color: var(--fg);

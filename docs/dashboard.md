@@ -60,7 +60,9 @@ dependencies anywhere in the tool):
 - **History** — cumulative LOC over commit history (`git log --numstat`
   aggregates, capped at `--max-commits`, default 1000); hovering the graph
   snaps to the nearest commit and shows its date, short hash, and exact
-  cumulative LOC. Also most-changed dirs and recent commits
+  cumulative LOC. Click pins that tooltip (click again, click outside, or
+  Esc to dismiss) so the sha can be copied. Also most-changed dirs and
+  recent commits
 - **Files** — tracked-file index with physical/source/blank/comment lines,
   functions, imports, and estimated cyclomatic complexity in every row;
   filterable and excludes vendor dirs, minified/lockfile/map suffixes by
