@@ -237,7 +237,23 @@ class MockTmuxTests(unittest.TestCase):
         self._script_run("'source bash_profile.sh; PWD=/tmp/proj cl hello'")
         log = self._log()
         self.assertIn("-e ANTHROPIC_CUSTOM_MODEL_OPTION=claude-opus-4-8", log)
-        self.assertIn("-- claude --dangerously-skip-permissions --effort max hello", log)
+        self.assertIn("-- claude --dangerously-skip-permissions --effort max --continue hello", log)
+        self.assertNotIn("MOCK_TMUX_ERROR", log)
+
+    def test_cl_bare_resumes_via_mock(self):
+        self.log.unlink(missing_ok=True)
+        self._script_run("'source bash_profile.sh; PWD=/tmp/proj cl'")
+        log = self._log()
+        self.assertIn("TMUX_CALL:", log)
+        self.assertIn("-- claude --dangerously-skip-permissions --effort max --continue", log)
+        self.assertNotIn("MOCK_TMUX_ERROR", log)
+
+    def test_cl_flags_forward_unchanged(self):
+        self.log.unlink(missing_ok=True)
+        self._script_run("'source bash_profile.sh; PWD=/tmp/proj cl --model claude-opus-4-8'")
+        log = self._log()
+        self.assertIn("-- claude --dangerously-skip-permissions --effort max --model claude-opus-4-8", log)
+        self.assertNotIn("--continue", log)
         self.assertNotIn("MOCK_TMUX_ERROR", log)
 
     def test_occ_env_forwarding(self):
