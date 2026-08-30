@@ -2,11 +2,11 @@
 """codeview — repo introspection dashboard control CLI.
 
 Manages one localhost dashboard daemon per git repository. With no
-arguments prints `codeview status`. Data caches under <repo>/.codeview/;
+arguments runs `codeview start`. Data caches under <repo>/.codeview/;
 drop-in modules live in <repo>/.codeview/modules/*.py. See docs/dashboard.md.
 
 Usage:
-  codeview                     same as: codeview status
+  codeview                     same as: codeview start
   codeview start [--port N] [--max-commits N] [--reindex] [--no-watch] [--no-open]
   codeview stop
   codeview restart [start flags]
@@ -61,13 +61,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="codeview",
         description="Repo introspection dashboard for the current git repo. "
-                    "With no command, prints status.",
+                    "With no command, starts the daemon.",
         epilog="run 'codeview <command> -h' for command-specific flags")
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("status", help="show daemon status (default command)")
+    sub.add_parser("status", help="show daemon status")
 
-    p_start = sub.add_parser("start", help="start the dashboard daemon")
+    p_start = sub.add_parser("start",
+                             help="start the dashboard daemon (default command)")
     p_start.add_argument("--port", type=int, help=START_FLAGS_HELP["port"])
     p_start.add_argument("--max-commits", type=int, dest="max_commits",
                          default=1000, help=START_FLAGS_HELP["max_commits"])
@@ -450,11 +451,17 @@ def cmd_open(repo: Path, default_port) -> int:
 
 # ------------------------------------------------------------------ main --
 
-def main(argv=None) -> int:
+def resolve_args(argv=None):
+    """Parse argv; a missing subcommand is `start` (with its flag defaults)."""
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command is None:
-        args = parser.parse_args(["status"])
+        args = parser.parse_args(["start"])
+    return parser, args
+
+
+def main(argv=None) -> int:
+    parser, args = resolve_args(argv)
 
     if shutil.which("git") is None:
         fail("git is required", "codeview introspects git repositories.")

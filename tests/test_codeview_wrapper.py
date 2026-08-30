@@ -151,5 +151,22 @@ class DaemonCLITests(unittest.TestCase):
         self.assertIn("not running", proc.stderr)
 
 
+class DefaultCommandTests(unittest.TestCase):
+    def test_no_args_defaults_to_start(self):
+        w = load_wrapper()
+        _, args = w.resolve_args([])
+        self.assertEqual(args.command, "start")
+        self.assertFalse(args.no_open)
+        self.assertFalse(args.no_watch)
+        self.assertFalse(args.reindex)
+        self.assertEqual(args.max_commits, 1000)
+        self.assertIsNone(args.port)
+
+    def test_explicit_status_is_still_status(self):
+        w = load_wrapper()
+        _, args = w.resolve_args(["status"])
+        self.assertEqual(args.command, "status")
+
+
 if __name__ == "__main__":
     unittest.main()

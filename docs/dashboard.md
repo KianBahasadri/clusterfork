@@ -2,7 +2,7 @@
 
 `codeview` runs a localhost web dashboard for the git repository you run it
 in, as a background daemon you control with a small CLI (start/stop/reload/
-status/open — no arguments prints status). No install-in-repo step; data
+status/open — no arguments starts the daemon). No install-in-repo step; data
 caches inside the repo and rescans in the background. Project-specific views
 are added by dropping Python "modules" into the repo, which appear as extra
 tabs.
@@ -10,10 +10,10 @@ tabs.
 ## Running
 
 `codeview` is a control CLI for a per-repo dashboard daemon. With no
-arguments it prints `codeview status`.
+arguments it runs `codeview start`.
 
 ```
-codeview                     # same as: codeview status
+codeview                     # same as: codeview start
 codeview start [--port N] [--max-commits N] [--reindex] [--no-watch] [--no-open]
 codeview stop
 codeview restart [start flags]
@@ -58,7 +58,9 @@ dependencies anywhere in the tool):
 
 - **Overview** — file/line/commit counts, lines by top-level dir, lines by language
 - **History** — cumulative LOC over commit history (`git log --numstat`
-  aggregates, capped at `--max-commits`, default 1000), most-changed dirs, recent commits
+  aggregates, capped at `--max-commits`, default 1000); hovering the graph
+  snaps to the nearest commit and shows its date, short hash, and exact
+  cumulative LOC. Also most-changed dirs and recent commits
 - **Files** — tracked-file index with physical/source/blank/comment lines,
   functions, imports, and estimated cyclomatic complexity in every row;
   filterable and excludes vendor dirs, minified/lockfile/map suffixes by
@@ -143,7 +145,7 @@ level as running the repo's own build scripts.
 
 | Repo path | Installed to | Role |
 |---|---|---|
-| `bin/codeview` | `~/.config/clusterfork/bin/codeview` | control CLI (status/start/stop/restart/reload/open) |
+| `bin/codeview` | `~/.config/clusterfork/bin/codeview` | control CLI (start/stop/restart/reload/status/open; no args = start) |
 | `scripts/codeview/` | `~/.config/clusterfork/scripts/codeview/` | server, scanners, module runtime, UI assets |
 
 The launcher imports the server package from the installed copy — re-run

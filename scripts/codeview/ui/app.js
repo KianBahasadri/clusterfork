@@ -19,17 +19,30 @@ function fmtDate(iso) {
 
 // ---------------------------------------------------------------- charts --
 
+const CHART_W = 1000, CHART_H = 240;
+const CHART_PAD = { l: 46, r: 8, t: 8, b: 20 };
+
+function chartScale(values) {
+  const vmax = Math.max(1, ...values), vmin = Math.min(0, ...values);
+  const iw = CHART_W - CHART_PAD.l - CHART_PAD.r;
+  const ih = CHART_H - CHART_PAD.t - CHART_PAD.b;
+  const n = values.length;
+  return {
+    vmax, vmin, iw, ih, n,
+    x: i => CHART_PAD.l + (n <= 1 ? iw / 2 : (i / (n - 1)) * iw),
+    y: v => CHART_PAD.t + ih - ((v - vmin) / (vmax - vmin || 1)) * ih,
+  };
+}
+
 function svgLineChart(series, labels, opts = {}) {
   // series: [{values:[...], color}], all same length. Simple SVG polyline
   // chart with area fill; no external chart lib needed.
-  const w = 1000, h = 240, pad = { l: 46, r: 8, t: 8, b: 20 };
   const vals = series.flatMap(s => s.values);
-  const vmax = Math.max(1, ...vals), vmin = Math.min(0, ...vals);
-  const iw = w - pad.l - pad.r, ih = h - pad.t - pad.b;
-  const n = (series[0]?.values.length) || 0;
-  const x = i => pad.l + (n <= 1 ? iw / 2 : (i / (n - 1)) * iw);
-  const y = v => pad.t + ih - ((v - vmin) / (vmax - vmin || 1)) * ih;
-  let out = `<svg class="chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">`;
+  const scale = chartScale(vals);
+  const { vmax, vmin, ih, n, x, y } = scale;
+  const w = CHART_W, h = CHART_H, pad = CHART_PAD;
+  let out = `<svg class="chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"
+    role="img" aria-label="${esc(opts.ariaLabel || "line chart")}">`;
   for (let g = 0; g <= 4; g++) {
     const gy = pad.t + (ih * g) / 4;
     const val = Math.round(vmax - (ih * g) / 4 * (vmax - vmin) / ih);
@@ -57,6 +70,77 @@ function svgLineChart(series, labels, opts = {}) {
       text-anchor="middle">${short}</text>`;
   });
   return out + "</svg>";
+}
+
+function bindHistoryChartHover(wrap, commits) {
+  if (!wrap) return;
+  const svg = wrap.querySelector("svg.chart");
+  const tip = wrap.querySelector(".chart-tip");
+  const hair = wrap.querySelector(".chart-crosshair");
+  const line = wrap.querySelector(".chart-crosshair-line");
+  const dot = wrap.querySelector(".chart-crosshair-dot");
+  if (!svg || !tip || !hair || !line || !dot || !commits.length) return;
+  const scale = chartScale(commits.map(c => c.total));
+  let last = -1;
+
+  function cssPos(viewX, viewY) {
+    const rect = svg.getBoundingClientRect();
+    return {
+      x: (viewX / CHART_W) * rect.width,
+      y: (viewY / CHART_H) * rect.height,
+    };
+  }
+
+  function hide() {
+    last = -1;
+    hair.hidden = true;
+    tip.hidden = true;
+  }
+
+  function show(i) {
+    const c = commits[i];
+    const p = cssPos(scale.x(i), scale.y(c.total));
+    const top = cssPos(0, CHART_PAD.t).y;
+    const bot = cssPos(0, CHART_H - CHART_PAD.b).y;
+    hair.hidden = false;
+    line.style.left = `${p.x}px`;
+    line.style.top = `${top}px`;
+    line.style.height = `${bot - top}px`;
+    dot.style.left = `${p.x}px`;
+    dot.style.top = `${p.y}px`;
+    if (i !== last) {
+      last = i;
+      tip.innerHTML = `
+        <div class="chart-tip-row"><span class="k">date</span>
+          <span class="v">${esc(fmtDate(c.date))}</span></div>
+        <div class="chart-tip-row"><span class="k">sha</span>
+          <span class="v">${esc(c.sha)}</span></div>
+        <div class="chart-tip-row"><span class="k">loc</span>
+          <span class="v">${fmt(c.total)}</span></div>`;
+    }
+    tip.hidden = false;
+    const bounds = wrap.getBoundingClientRect();
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let left = p.x + 12;
+    let topPx = p.y - th - 8;
+    if (left + tw > bounds.width) left = p.x - tw - 12;
+    if (left < 0) left = 0;
+    if (topPx < 0) topPx = p.y + 12;
+    if (topPx + th > bounds.height) topPx = Math.max(0, bounds.height - th);
+    tip.style.left = `${left}px`;
+    tip.style.top = `${topPx}px`;
+  }
+
+  wrap.addEventListener("mousemove", e => {
+    const rect = svg.getBoundingClientRect();
+    if (!rect.width) return;
+    const viewX = ((e.clientX - rect.left) / rect.width) * CHART_W;
+    const n = commits.length;
+    const t = n <= 1 ? 0 : (viewX - CHART_PAD.l) / scale.iw;
+    const i = Math.max(0, Math.min(n - 1, Math.round(t * Math.max(n - 1, 1))));
+    show(i);
+  });
+  wrap.addEventListener("mouseleave", hide);
 }
 
 function barRows(entries, colorFn = () => "") {
@@ -312,8 +396,16 @@ async function renderHistory() {
     .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 6);
   panel.innerHTML = `
     <h2>cumulative lines over history</h2>
-    ${svgLineChart([{ values: totalSeries, color: "#0f4c98" }],
-                   commits.map(c => c.date))}
+    <div class="chart-wrap">
+      ${svgLineChart([{ values: totalSeries, color: "#0f4c98" }],
+                     commits.map(c => c.date),
+                     { ariaLabel: "Cumulative lines over commit history" })}
+      <div class="chart-crosshair" hidden>
+        <div class="chart-crosshair-line"></div>
+        <div class="chart-crosshair-dot"></div>
+      </div>
+      <div class="chart-tip" hidden></div>
+    </div>
     <h2>most-changed dirs (recent commits)</h2>
     ${barRows(hotDirs)}
     <h2>recent commits (${commits.length} scanned)</h2>
@@ -331,6 +423,7 @@ async function renderHistory() {
           <td class="num">${fmt(c.total)}</td>
         </tr>`).join("")}
     </tbody></table>`;
+  bindHistoryChartHover(panel.querySelector(".chart-wrap"), commits);
 }
 
 async function renderFiles() {
