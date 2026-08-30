@@ -48,7 +48,7 @@ class ParseActionTests(unittest.TestCase):
             rotate_auth.parse_action("cmd", ["--save", "a", "b"])
 
     def test_flags_reject_extra_args(self):
-        for flag in ("-h", "--help", "--list", "--unhook", "--start", "--kickoff"):
+        for flag in ("-h", "--help", "--list", "--unhook"):
             with self.assertRaises(rotate_auth.RotateError):
                 rotate_auth.parse_action("cmd", [flag, "extra"])
 

@@ -12,10 +12,11 @@ and GNOME Keyring (Antigravity). All five share the same flags:
 - `rotate-* --list` — list saved profiles (`*` marks the current one)
 - `rotate-*` — rotate to the next account in sorted order
 - `rotate-* NAME` — switch to a specific account
-- `rotate-* --start` (alias `--kickoff`) — for every saved profile of that
-  provider, temporarily install it and send one tiny one-shot message ("hi")
-  via the agent CLI's non-interactive mode. Intent is only to kick off each
-  account's usage ticker; the active credentials are restored afterwards.
+- `rotate-* --start [names]` (alias `--kickoff`) — for every saved profile of
+  that provider, or just the named ones, temporarily install it and send one
+  tiny one-shot message ("hi") via the agent CLI's non-interactive mode. Intent
+  is only to kick off each account's usage ticker; the active credentials are
+  restored afterwards.
 
 `--save` overwrites an existing profile of that name. Profile names may only
 contain letters, numbers, dots, underscores, and dashes.
@@ -36,7 +37,8 @@ sourced from the repo or from `~/.config/clusterfork/shell/` after install
 
 ## --start (alias --kickoff)
 
-Pings every saved profile once with a one-shot non-interactive message (`hi`)
+Pings every saved profile by default, or only the named ones (`--start alice bob`),
+once per profile with a one-shot non-interactive message (`hi`)
 so the provider starts counting usage for each account. Per-agent ping
 commands: `claude -p`, `codex exec --skip-git-repo-check`, `cursor-agent -p`,
 `opencode run`, `agy --print`. Each invocation gets a 120s timeout; stdin is
@@ -56,7 +58,7 @@ State handling per backend:
   the original profile is reinstalled at the end, and a fully unhooked state is
   restored by clearing the active item.
 
-Exit code is 1 if any account's ping failed; failures are reported per line
+An unknown name fails fast before any pings run, with the known profiles listed; duplicates and dashed args are rejected. Exit code is 1 if any account's ping failed; failures are reported per line
 and do not stop the sweep. The command refuses to run when the active
 credentials are not recoverable through rotation machinery (a regular-file
 `auth.json`, or an Antigravity active keyring item that matches no profile).

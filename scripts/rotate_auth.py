@@ -215,11 +215,11 @@ def usage(command: str) -> list[str]:
         f"  {command} --save name",
         f"  {command} --unhook",
         f"  {command} --list",
-        f"  {command} --start (alias --kickoff)",
+        f"  {command} --start [names] (alias --kickoff)",
     ]
 
 
-def parse_action(command: str, args: list[str]) -> tuple[str, str | None]:
+def parse_action(command: str, args: list[str]) -> tuple[str, str | list[str] | None]:
     if not args:
         return "rotate", None
     first = args[0]
@@ -236,9 +236,15 @@ def parse_action(command: str, args: list[str]) -> tuple[str, str | None]:
             fail(*usage(command))
         return "unhook", None
     if first in ("--start", "--kickoff"):
-        if len(args) != 1:
+        profiles = args[1:]
+        if any(n.startswith("-") or not n for n in profiles):
             fail(*usage(command))
-        return "start", None
+        if len(profiles) != len(set(profiles)):
+            fail(*usage(command))
+        if profiles:
+            for name in profiles:
+                validate_suffix(command, name)
+        return "start", profiles or None  # type: ignore[return-value]
     if first == "--save":
         if len(args) != 2:
             fail(*usage(command))
@@ -346,13 +352,23 @@ class ClaudeBackend:
         print(f"  Log in, then: {self.command} --save NAME")
         return 0
 
-    def start(self) -> int:
+    def start(self, selected: list[str] | None = None) -> int:  # noqa: C901
         names = self.suffixes()
         if not names:
             fail(
                 f"{self.command}: no saved profiles",
                 f"  Save the active account first: {self.command} --save NAME",
             )
+        if selected is not None:
+            missing = [n for n in selected if n not in set(names)]
+            if missing:
+                extra = format_suffixes("suffixes", names)
+                lines = [f"{self.command}: no matching {CLAUDE_PREFIX}{missing[0]} file"]
+                if extra:
+                    lines.append(extra)
+                fail(*lines)
+            # Preserve the on-disk sorted order for determinism.
+            names = [n for n in names if n in set(selected)]
 
         active_bytes: bytes | None = None
         if self.active.is_file():
@@ -476,7 +492,7 @@ class SharedStoreBackend:
         )
         return 0
 
-    def start(self) -> int:
+    def start(self, selected: list[str] | None = None) -> int:
         if self.auth.exists() and not self.auth.is_symlink():
             fail(
                 f"{self.command}: {self.auth} exists but is not a symlink",
@@ -493,6 +509,15 @@ class SharedStoreBackend:
                 f"{self.command}: no saved profiles",
                 f"  Save the active account first: {self.command} --save NAME",
             )
+        if selected is not None:
+            missing = [n for n in selected if n not in set(names)]
+            if missing:
+                extra = format_suffixes("suffixes", names)
+                lines = [f"{self.command}: no matching {PROFILE_PREFIX}{missing[0]} file"]
+                if extra:
+                    lines.append(extra)
+                fail(*lines)
+            names = [n for n in names if n in set(selected)]
 
         orig_current = readlink_text(self.current) if self.current.is_symlink() else None
         orig_auth_hooked = self.auth.is_symlink()
@@ -652,10 +677,19 @@ class AntigravityBackend:
         print(f"  Active: service={self.active_service} username={self.active_user}")
         return 0
 
-    def start(self) -> int:
+    def start(self, selected: list[str] | None = None) -> int:
         self._require_secret_tool()
         self._prepare_state()
         names = self.suffixes()
+        if selected is not None:
+            missing = [n for n in selected if n not in set(names)]
+            if missing:
+                extra = format_suffixes("profiles", names)
+                lines = [f"{self.command}: no matching profile: {missing[0]}"]
+                if extra:
+                    lines.append(extra)
+                fail(*lines)
+            names = [n for n in names if n in set(selected)]
         if not names:
             fail(
                 f"{self.command}: no saved profiles",
@@ -868,7 +902,7 @@ def run(argv: list[str]) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         print(
             "usage: rotate_auth.py <claude|codex|cursor|opencode|antigravity> "
-            "[name | --save name | --unhook | --list | --start]",
+            "[name | --save name | --unhook | --list | --start [names]]",
             file=sys.stderr,
         )
         return 0 if argv else 1
@@ -883,10 +917,12 @@ def run(argv: list[str]) -> int:
     if action == "unhook":
         return backend.unhook()
     if action == "start":
-        return backend.start()
+        selected = name if isinstance(name, list) else None
+        return backend.start(selected)
     if action == "save":
-        assert name is not None
+        assert name is not None and isinstance(name, str)
         return backend.save(name)
+    assert name is None or isinstance(name, str)
     return backend.select(name)
 
 
