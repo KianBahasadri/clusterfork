@@ -44,7 +44,7 @@ Antigravity MCP servers. The installer expands `${ENV}` placeholders from the cl
 
 Antigravity lifecycle hooks:
 
-- **turn-bell:** `Stop` command hook playing `~/.config/clusterfork/bell.mp3` via `mpv --no-video --no-terminal`
+- **turn-bell:** `Stop` command hook playing `~/.config/clusterfork/bell.mp3` via `mpv --no-video --no-terminal` when `fullyIdle: true` (checked via inline Python over stdin to avoid firing on intermediate tool yields and subagents)
 
 ## agents/grok.toml → ~/.grok/config.toml
 

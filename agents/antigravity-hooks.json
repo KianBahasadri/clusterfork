@@ -3,7 +3,7 @@
     "Stop": [
       {
         "type": "command",
-        "command": "mpv --no-video --no-terminal ~/.config/clusterfork/bell.mp3"
+        "command": "python3 -c \"import sys, json, os, subprocess; (lambda raw: subprocess.run(['mpv', '--no-video', '--no-terminal', os.path.expanduser('~/.config/clusterfork/bell.mp3')]) if (json.loads(raw).get('fullyIdle', False) if raw.startswith('{') else False) else None)(sys.stdin.read().strip() if not sys.stdin.isatty() else '')\""
       }
     ]
   }
