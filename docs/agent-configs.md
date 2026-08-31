@@ -25,7 +25,7 @@ OpenCode settings:
 
 Antigravity CLI settings:
 
-- **Model:** Gemini 3.5 Flash (High)
+- **Model:** not pinned by clusterfork
 - **Theme:** dark
 - **Telemetry:** disabled
 - **Trusted workspaces:** `~/.config/clusterfork`, `~/steam_cart_evaluator`
