@@ -52,10 +52,6 @@ Invokes Antigravity CLI headlessly (`agy --print`; default model `gemini-3.6-fla
 
 Scans the codebase for deepening opportunities (shallow modules, leaky seams, poor locality/leverage), presents candidates as a self-contained HTML report (Tailwind + Mermaid) in the OS temp dir, then grills the user on the chosen candidate. Sourced from [mattpocock/skills](https://github.com/mattpocock/skills) (MIT). Invoked via `/improve-codebase-architecture`. Depends on `codebase-design` (vocabulary), `grilling` (interview loop), and `domain-modeling` (CONTEXT.md/ADR updates).
 
-## design-guide
-
-Design guide for user-facing interfaces. Contains an interactive HTML reference.
-
 ## codebase-design
 
 Shared vocabulary and principles for designing deep modules (module, interface, depth, seam, adapter, leverage, locality) including the deletion test and seam discipline. Model-invoked; also used directly when designing interfaces or deepening modules. Sourced from [mattpocock/skills](https://github.com/mattpocock/skills). Companion docs: `DEEPENING.md` and `DESIGN-IT-TWICE.md`.
