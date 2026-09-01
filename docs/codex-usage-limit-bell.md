@@ -14,14 +14,21 @@ installer bug.
 
 ## Current setup
 
-`agents/codex.toml` installs Codex's **legacy `notify`** hook:
+`agents/codex.toml` installs a root-only `[[hooks.Stop]]` bell (async `mpv`).
+The installer also strips the retired top-level `notify` key so it cannot
+stack with Stop. See [Agent Configs](agent-configs.md).
 
 ```toml
-notify = ["mpv", "--no-video", "--no-terminal", "${HOME}/.config/clusterfork/bell.mp3"]
+[[hooks.Stop]]
+  [[hooks.Stop.hooks]]
+  type = "command"
+  command = "mpv --no-video --no-terminal ${HOME}/.config/clusterfork/bell.mp3"
+  async = true
 ```
 
-The installer merges this top-level key into `~/.codex/config.toml` (see
-[Agent Configs](agent-configs.md)).
+Stop was chosen over `notify` so thread-spawned subagent completions do not
+ring (`SubagentStop` is not registered). That does not change the usage-limit
+gap below: Stop still only runs on normal turn completion.
 
 ## What we verified in the Codex source (upstream `main`, 2026-08-29)
 
@@ -60,8 +67,8 @@ The installer merges this top-level key into `~/.codex/config.toml` (see
 
 | Approach | Covers interactive usage-limit? | Verdict |
 |---|---|---|
-| Legacy `notify` (current) | No | fires only on `agent-turn-complete` |
-| `[[Stop]]` hooks (newer system) | No | same dispatch point; normal completion only |
+| Legacy `notify` (retired) | No | fires only on `agent-turn-complete`, including subagents |
+| `[[Stop]]` hooks (current) | No | same dispatch point; normal root completion only |
 | `[[SessionEnd]]` hook | No (delayed only) | rings only when the session is eventually closed |
 | `codex exec` + wrapper exit-code bell | No | non-interactive runs only |
 | Tail `~/.codex/sessions/**/*.jsonl` for `EventMsg::Error`/`UsageLimitExceeded` | Yes | works, but keys the bell to an undocumented file format rather than a hook contract |
@@ -70,12 +77,12 @@ The installer merges this top-level key into `~/.codex/config.toml` (see
 
 ## Outcome
 
-**No change shipped.** The rollout-log watcher is the only approach that rings
-the bell at the moment the limit hits in an interactive session, but it was
-rejected as too much complexity for a workaround keyed to a serialization
-format rather than a documented hook contract. The fleet keeps the legacy
-`notify` key, which already covers normal turn ends identically to what a
-`[[Stop]]` migration would provide.
+**No usage-limit coverage shipped.** The rollout-log watcher is the only
+approach that rings at the moment the limit hits in an interactive session,
+but it was rejected as too much complexity for a workaround keyed to a
+serialization format rather than a documented hook contract. The fleet later
+moved the bell from `notify` to `[[hooks.Stop]]` so subagent completions stay
+silent; that path still does not run on a usage-limit death.
 
 Upstream has a "broader event taxonomy — including `error`, `session-limit`,
 `authentication-required`" on the roadmap; if that lands, revisit.

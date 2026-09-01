@@ -144,14 +144,15 @@ Command Code MCP servers. The installer expands `${ENV}` placeholders from the c
 ## agents/codex.toml → ~/.codex/config.toml
 
 Codex settings and MCP servers. Top-level settings defined in `agents/codex.toml`
-(such as `notify`) and all `[mcp_servers…]` tables are updated/overwritten into
-`~/.codex/config.toml`. Codex owns the rest of `~/.codex/config.toml` — `model`,
+and all `[mcp_servers…]` / `[hooks…]` tables are updated/overwritten into
+`~/.codex/config.toml`. The installer also strips retired clusterfork keys
+(`notify`). Codex owns the rest of `~/.codex/config.toml` — `model`,
 `model_reasoning_effort`, `approvals_reviewer`, `service_tier`, and the
 `[projects]` trust levels it writes as you accept directories — so other keys
 and tables stay untouched. `${HOME}` placeholders in values are expanded at
 install time.
 
-- **notify:** turn-completion sound notification (`mpv --no-video --no-terminal ~/.config/clusterfork/bell.mp3`)
+- **Hooks:** `[[hooks.Stop]]` command hook playing `~/.config/clusterfork/bell.mp3` via `mpv --no-video --no-terminal`, `async = true`. Stop is root-turn only (thread-spawned subagents fire `SubagentStop`, which is not registered). Codex skips untrusted user hooks until they are trusted in `/hooks`.
 - **context7:** remote `https://mcp.context7.com/mcp`
 - **ElevenLabs:** clusterfork `bin/elevenlabs-mcp` launcher
 - **linear:** remote `https://mcp.linear.app/mcp`, disabled

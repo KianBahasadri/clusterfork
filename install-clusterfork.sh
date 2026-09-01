@@ -26,8 +26,8 @@
 #      agents/command-code-settings.json (appends the hook if missing; preserves
 #      the rest of the file)
 #  12. Updates ~/.codex/config.toml from agents/codex.toml (merges top-level
-#      settings like notify and replaces mcp_servers tables; Codex owns the rest
-#      of that file)
+#      settings, replaces mcp_servers and hooks tables, strips retired keys
+#      like notify; Codex owns the rest of that file)
 #  13. Installs agents/claude-plugins/* into ~/.claude/skills/ as skills-dir
 #      plugins; agents/claude.json ships each one disabled
 #  14. Ensures ElevenLabs in ~/.claude.json mcpServers (key only; does not
@@ -749,9 +749,10 @@ if not any(d in stop for d in wanted_stop):
 PY
 step "command code hooks" "$COMMAND_CODE_SETTINGS_DEST" "Stop → bell.mp3"
 
-# Codex config: update top-level settings (such as notify) and replace the
-# mcp_servers tables from agents/codex.toml. Other settings (model, approvals,
-# per-project trust levels written by Codex) are preserved.
+# Codex config: update top-level settings, replace mcp_servers and hooks
+# tables from agents/codex.toml, and strip retired clusterfork keys (notify).
+# Other settings (model, approvals, per-project trust levels written by Codex)
+# are preserved.
 [[ -f "$CODEX_CONFIG_SRC" ]] || fail "missing $(tildify "$CODEX_CONFIG_SRC")"
 mkdir -p "$(dirname "$CODEX_CONFIG_DEST")"
 python3 - "$CODEX_CONFIG_SRC" "$CODEX_CONFIG_DEST" "$DOTENV_DEST" <<'PY'
@@ -826,6 +827,12 @@ else:
 
 wanted_top_keys = {k: v for k, v in wanted.items() if not isinstance(v, dict)}
 wanted_tables = set(k for k, v in wanted.items() if isinstance(v, dict))
+# Clusterfork-owned top-level keys no longer in the template. Strip them so a
+# reinstall does not leave the old notify bell stacked on the Stop hook.
+dropped_top_keys = {"notify"}
+if dropped_top_keys & wanted_top_keys.keys():
+    raise SystemExit("codex config: dropped top keys must not also be in the template")
+replace_or_drop = wanted_top_keys.keys() | dropped_top_keys
 
 
 def key_name(line: str) -> str | None:
@@ -863,7 +870,7 @@ new_dest_top_lines = []
 skip = False
 for line in dest_top_lines:
     k = key_name(line)
-    if k in wanted_top_keys:
+    if k in replace_or_drop:
         skip = True
         continue
     elif skip and (line.startswith(" ") or line.startswith("\t") or line.startswith("]") or line.startswith("}")):
@@ -919,7 +926,12 @@ for k, v in wanted_top_keys.items():
 for tbl in wanted_tables:
     if after.get(tbl) != wanted.get(tbl):
         raise SystemExit(f"codex config: table [{tbl}] was not installed cleanly into {dest_path}")
+for k in dropped_top_keys:
+    if k in after:
+        raise SystemExit(f"codex config: retired key '{k}' was not removed from {dest_path}")
 for k, v in before.items():
+    if k in dropped_top_keys:
+        continue
     if k not in wanted_top_keys and k not in wanted_tables:
         if after.get(k) != v:
             raise SystemExit(f"codex config: refusing to write, unrelated key '{k}' in {dest_path} would change")
@@ -927,7 +939,7 @@ for k, v in before.items():
 if result != current:
     dest_path.write_text(result, encoding="utf-8")
 PY
-step "codex config" "$CODEX_CONFIG_DEST" "notify → bell.mp3; mcp_servers: $(python3 -c 'import sys, tomllib; print(", ".join(tomllib.load(open(sys.argv[1], "rb")).get("mcp_servers", {})))' "$CODEX_CONFIG_SRC")"
+step "codex config" "$CODEX_CONFIG_DEST" "Stop → bell.mp3; mcp_servers: $(python3 -c 'import sys, tomllib; print(", ".join(tomllib.load(open(sys.argv[1], "rb")).get("mcp_servers", {})))' "$CODEX_CONFIG_SRC")"
 
 # Ensure Claude Code user-scope MCP includes ElevenLabs. ~/.claude.json holds a lot
 # of unrelated state, so only upsert this one server entry.
