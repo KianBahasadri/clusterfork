@@ -78,7 +78,7 @@ The Claude statusline detects `occ` from `ANTHROPIC_BASE_URL` and swaps in the O
 
 ## grok.sh
 
-`gk` launches `grok` via `_cf_tmux` — no flags; `agents/grok.toml` ships `permission_mode = "always-approve"` so the CLI already auto-approves.
+`gk` launches `grok` via `_cf_tmux` — no flags; `agents/grok.toml` ships `permission_mode = "always-approve"` so the CLI already auto-approves. `rotate-grok` switches between saved Grok accounts via symlinks.
 
 ## chrome.sh
 

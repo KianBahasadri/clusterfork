@@ -12,6 +12,7 @@ storage layout: [Auth Rotation](auth-rotation.md).
 python3 scripts/rotate_auth.py claude --list
 python3 scripts/rotate_auth.py codex --save NAME
 python3 scripts/rotate_auth.py cursor
+python3 scripts/rotate_auth.py grok
 python3 scripts/rotate_auth.py opencode NAME
 python3 scripts/rotate_auth.py antigravity --save NAME
 ```

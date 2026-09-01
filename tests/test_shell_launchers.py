@@ -71,7 +71,7 @@ class SourcingTests(unittest.TestCase):
     def test_rotate_helpers_exist(self):
         proc = run_bash(
             "source bash_profile.sh; "
-            "for fn in rotate-claude rotate-codex rotate-cursor-cli rotate-opencode rotate-antigravity; "
+            "for fn in rotate-claude rotate-codex rotate-cursor-cli rotate-grok rotate-opencode rotate-antigravity; "
             "do type \"$fn\" >/dev/null; done; echo ok"
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)

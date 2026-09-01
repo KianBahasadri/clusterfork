@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Rotate saved accounts for Claude, Codex, Cursor, OpenCode, and Antigravity.
+"""Rotate saved accounts for Claude, Codex, Cursor, Grok, OpenCode, and Antigravity.
 
 Shell wrappers (`rotate-claude`, `rotate-codex`, …) call this script. Three
 backends share one CLI: copy (Claude), shared-store symlink (Codex / Cursor /
-OpenCode), and GNOME Keyring (Antigravity).
+Grok / OpenCode), and GNOME Keyring (Antigravity).
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ START_PINGS = {
     "rotate-claude": ["claude", "-p", START_MESSAGE],
     "rotate-codex": ["codex", "exec", "--skip-git-repo-check", START_MESSAGE],
     "rotate-cursor-cli": ["cursor-agent", "-p", START_MESSAGE],
+    "rotate-grok": ["grok", "-p", START_MESSAGE],
     "rotate-opencode": ["opencode", "run", START_MESSAGE],
     "rotate-antigravity": ["agy", "--print", START_MESSAGE],
 }
@@ -876,6 +877,14 @@ def make_backend(agent: str) -> ClaudeBackend | SharedStoreBackend | Antigravity
             default_agent=Path(".config/cursor"),
             default_store=Path(".local/share/clusterfork-auth/cursor"),
         ),
+        "grok": dict(
+            command="rotate-grok",
+            label="Grok",
+            agent_dir_env="ROTATE_GROK_DIR",
+            store_dir_env="ROTATE_GROK_AUTH_STORE_DIR",
+            default_agent=Path(".grok"),
+            default_store=Path(".local/share/clusterfork-auth/grok"),
+        ),
         "opencode": dict(
             command="rotate-opencode",
             label="OpenCode",
@@ -893,7 +902,7 @@ def make_backend(agent: str) -> ClaudeBackend | SharedStoreBackend | Antigravity
         return SharedStoreBackend(**shared[agent])
     fail(
         f"rotate-auth: unknown agent: {agent}",
-        "  agents: claude, codex, cursor, opencode, antigravity",
+        "  agents: claude, codex, cursor, grok, opencode, antigravity",
     )
     raise AssertionError
 
@@ -901,7 +910,7 @@ def make_backend(agent: str) -> ClaudeBackend | SharedStoreBackend | Antigravity
 def run(argv: list[str]) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         print(
-            "usage: rotate_auth.py <claude|codex|cursor|opencode|antigravity> "
+            "usage: rotate_auth.py <claude|codex|cursor|grok|opencode|antigravity> "
             "[name | --save name | --unhook | --list | --start [names]]",
             file=sys.stderr,
         )

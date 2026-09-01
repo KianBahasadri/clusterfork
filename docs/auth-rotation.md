@@ -3,8 +3,8 @@
 Several agents support switching between multiple saved accounts without re-logging-in.
 
 The `rotate-*` shell functions call `scripts/rotate_auth.py`. One implementation,
-three backends: copy (Claude), shared-store symlink (Codex / Cursor / OpenCode),
-and GNOME Keyring (Antigravity). All five share the same flags:
+three backends: copy (Claude), shared-store symlink (Codex / Cursor / Grok /
+OpenCode), and GNOME Keyring (Antigravity). All six share the same flags:
 
 - `rotate-* --save NAME` — save the active account as a named profile
 - `rotate-* --unhook` — detach the active credentials so a new login does not
@@ -41,7 +41,7 @@ Pings every saved profile by default, or only the named ones (`--start alice bob
 once per profile with a one-shot non-interactive message (`hi`)
 so the provider starts counting usage for each account. Per-agent ping
 commands: `claude -p`, `codex exec --skip-git-repo-check`, `cursor-agent -p`,
-`opencode run`, `agy --print`. Each invocation gets a 120s timeout; stdin is
+`grok -p`, `opencode run`, `agy --print`. Each invocation gets a 120s timeout; stdin is
 detached so nothing blocks.
 
 The sweep is strictly sequential: install a profile, run its ping to
@@ -51,7 +51,7 @@ State handling per backend:
 
 - Claude: the active `.credentials.json` bytes are backed up and restored
   byte-identical after the sweep.
-- Codex / Cursor / OpenCode: only the shared `current` symlink is repointed
+- Codex / Cursor / Grok / OpenCode: only the shared `current` symlink is repointed
   per profile; it is restored to its previous target afterwards. If the agent
   side was unhooked, the temporary `auth.json` link is removed again.
 - Antigravity: each profile is installed into the active keyring slot in turn;
@@ -125,7 +125,8 @@ and the secret stays inside Python / `secret-tool`.
 Override directories (empty or unset uses the default, same as bash
 `${VAR:-default}`): `ROTATE_CLAUDE_DIR`, `ROTATE_CODEX_CODEX_DIR`,
 `ROTATE_CODEX_AUTH_STORE_DIR`, `ROTATE_CURSOR_DIR`,
-`ROTATE_CURSOR_AUTH_STORE_DIR`, `ROTATE_OPENCODE_DIR`,
+`ROTATE_CURSOR_AUTH_STORE_DIR`, `ROTATE_GROK_DIR`,
+`ROTATE_GROK_AUTH_STORE_DIR`, `ROTATE_OPENCODE_DIR`,
 `ROTATE_OPENCODE_AUTH_STORE_DIR`, `ROTATE_ANTIGRAVITY_STATE_DIR`. Shared-store
 `--save` chmods only the store directory itself (700), never its parent.
 
@@ -168,6 +169,17 @@ Same pattern as `rotate-codex`, including `--save` and `--unhook`, with profiles
   → auth.json.SUFFIX
 ```
 
+## rotate-grok
+
+Same pattern as `rotate-codex`, including `--save` and `--unhook`, with profiles stored under
+`~/.local/share/clusterfork-auth/grok/` and this link chain:
+
+```text
+~/.grok/auth.json
+  → ../.local/share/clusterfork-auth/grok/current
+  → auth.json.SUFFIX
+```
+
 ## rotate-opencode
 
 Same pattern as `rotate-codex`, including `--save` and `--unhook`, with profiles stored under
@@ -201,7 +213,7 @@ The active account lives at keyring entry `service=gemini username=antigravity`.
 ## Installer repair
 
 `install-clusterfork.sh` runs `configure_shared_auth` as a best-effort,
-non-fatal step for Codex, Cursor, and OpenCode. When multi-account profiles
+non-fatal step for Codex, Cursor, Grok, and OpenCode. When multi-account profiles
 exist under `~/.local/share/clusterfork-auth/<agent>/`, it:
 
 - migrates any leftover `auth.json.*` files still in the agent directory into
@@ -218,7 +230,7 @@ valid `current` link.
 If the agent's `auth.json` is a regular file (for example after a login that
 replaced the symlink), repair refuses. Save it as a named profile and restore
 the link chain with `rotate-codex --save NAME`, `rotate-cursor-cli --save NAME`,
-or `rotate-opencode --save NAME`. That copies the regular file into the store,
+`rotate-grok --save NAME`, or `rotate-opencode --save NAME`. That copies the regular file into the store,
 points `current` at it, and replaces `auth.json` with the shared symlink.
 
 Manual equivalent:

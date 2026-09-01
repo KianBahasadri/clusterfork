@@ -343,6 +343,17 @@ class SharedStoreBackendTests(unittest.TestCase):
         self.assertIn("saved profiles", proc.stdout)
         self.assertIn("alpha", proc.stdout)
 
+    def test_make_backend_grok(self):
+        backend = rotate_auth.make_backend("grok")
+        self.assertIsInstance(backend, rotate_auth.SharedStoreBackend)
+        self.assertEqual(backend.command, "rotate-grok")
+        self.assertEqual(backend.label, "Grok")
+        self.assertEqual(backend.agent_dir, Path.home() / ".grok")
+        self.assertEqual(
+            backend.store_dir, Path.home() / ".local/share/clusterfork-auth/grok"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
+

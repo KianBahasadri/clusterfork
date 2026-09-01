@@ -110,6 +110,8 @@ CODEX_AUTH_DIR="$HOME/.codex"
 CODEX_AUTH_STORE_DIR="$SHARED_AUTH_ROOT/codex"
 CURSOR_AUTH_DIR="$HOME/.config/cursor"
 CURSOR_AUTH_STORE_DIR="$SHARED_AUTH_ROOT/cursor"
+GROK_AUTH_DIR="$HOME/.grok"
+GROK_AUTH_STORE_DIR="$SHARED_AUTH_ROOT/grok"
 OPENCODE_AUTH_DIR="$HOME/.local/share/opencode"
 OPENCODE_AUTH_STORE_DIR="$SHARED_AUTH_ROOT/opencode"
 BASHRC="$HOME/.bashrc"
@@ -1071,6 +1073,16 @@ if configure_shared_auth "Cursor" "$CURSOR_AUTH_DIR" "$CURSOR_AUTH_STORE_DIR"; t
 else
   warn \
     "Cursor shared auth was not configured; the rest of the install is complete." \
+    "Fix the reported auth state, then re-run the installer."
+fi
+
+if configure_shared_auth "Grok" "$GROK_AUTH_DIR" "$GROK_AUTH_STORE_DIR"; then
+  if (( AUTH_STORE_CONFIGURED )); then
+    step "grok auth" "$GROK_AUTH_STORE_DIR"
+  fi
+else
+  warn \
+    "Grok shared auth was not configured; the rest of the install is complete." \
     "Fix the reported auth state, then re-run the installer."
 fi
 
