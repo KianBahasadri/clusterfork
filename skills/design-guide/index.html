@@ -3,9 +3,1646 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Design Guide</title>
+  <title>Operational Telemetry Cockpit — Cluster Control</title>
+  <style>
+    /* ==========================================================================
+       DARK COCKPIT DESIGN SYSTEM — OPERATIONAL & TELEMETRY SPECIFICATION
+       Principles: High density, zero ambient glare, restrained semantic color,
+       tabular optical alignment, visual emergence of anomalies only.
+       ========================================================================== */
+
+    :root {
+      /* Background Hierarchy (Layered Surface Elevation without drop shadows) */
+      --bg-canvas: #090b10;
+      --bg-surface: #0e121a;
+      --bg-surface-elevated: #141923;
+      --bg-inset: #07090d;
+      --bg-hover: #19202c;
+      --bg-active: #1f2737;
+
+      /* Restrained Low-Contrast Hairline Grid Borders */
+      --border-subtle: #171d29;
+      --border-muted: #21293a;
+      --border-focus: #35435c;
+
+      /* Typography Grayscale (Off-whites to avoid harsh glare) */
+      --text-bright: #e6edf3;
+      --text-main: #9aa7b8;
+      --text-muted: #59677a;
+      --text-faint: #384252;
+
+      /* Semantic Status Signals (Restrained, used strictly for state) */
+      --status-nominal: #10b981;
+      --status-nominal-dim: #064e3b;
+      --status-nominal-bg: rgba(16, 185, 129, 0.08);
+
+      --status-warning: #f59e0b;
+      --status-warning-dim: #78350f;
+      --status-warning-bg: rgba(245, 158, 11, 0.12);
+
+      --status-critical: #ef4444;
+      --status-critical-dim: #7f1d1d;
+      --status-critical-bg: rgba(239, 68, 68, 0.12);
+
+      --status-info: #38bdf8;
+      --status-info-dim: #0c4a6e;
+      --status-info-bg: rgba(56, 189, 248, 0.08);
+
+      --accent-active: #3b82f6;
+
+      /* Typography Scale */
+      --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
+      --font-mono: ui-monospace, "SF Mono", "Geist Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    }
+
+    /* Baseline Reset & Box Model */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-canvas);
+      color: var(--text-main);
+      font-family: var(--font-ui);
+      font-size: 11px;
+      line-height: 1.35;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+      overflow-x: hidden;
+    }
+
+    /* Tabular Monospace Data Class */
+    .mono {
+      font-family: var(--font-mono);
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.01em;
+    }
+
+    /* SVG Icon Alignment */
+    .icon {
+      width: 12px;
+      height: 12px;
+      stroke-width: 1.75;
+      stroke: currentColor;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex-shrink: 0;
+      display: inline-block;
+      vertical-align: middle;
+    }
+
+    /* ==========================================================================
+       1. GLOBAL MASTER TELEMETRY BAR (Sticky 30px)
+       ========================================================================== */
+    #master-bar {
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-subtle);
+      height: 30px;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .master-cluster-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+    }
+
+    .cluster-badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      color: var(--text-bright);
+      background: var(--bg-surface-elevated);
+      border: 1px solid var(--border-muted);
+      padding: 1px 6px;
+      border-radius: 2px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .status-indicator {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--status-nominal);
+      box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.2);
+    }
+    .status-indicator.warning {
+      background: var(--status-warning);
+      box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.3);
+      animation: pulse-warn 1.8s infinite;
+    }
+    .status-indicator.critical {
+      background: var(--status-critical);
+      box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.4);
+      animation: pulse-crit 1.2s infinite;
+    }
+
+    @keyframes pulse-warn {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    @keyframes pulse-crit {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.2; }
+    }
+
+    .master-summary {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 10.5px;
+      color: var(--text-muted);
+    }
+
+    .summary-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .summary-item strong {
+      color: var(--text-bright);
+      font-weight: 600;
+    }
+
+    .master-controls {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+
+    .btn-group {
+      display: flex;
+      align-items: center;
+      background: var(--bg-inset);
+      border: 1px solid var(--border-subtle);
+      border-radius: 2px;
+      padding: 1px;
+    }
+
+    .ctrl-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-family: var(--font-ui);
+      font-size: 10px;
+      font-weight: 500;
+      padding: 2px 7px;
+      cursor: pointer;
+      border-radius: 1px;
+      transition: color 0.1s, background-color 0.1s;
+    }
+    .ctrl-btn:hover {
+      color: var(--text-bright);
+      background: var(--bg-surface-elevated);
+    }
+    .ctrl-btn.active {
+      color: var(--text-bright);
+      background: var(--bg-surface-elevated);
+      font-weight: 600;
+      border: 1px solid var(--border-muted);
+    }
+
+    /* Cockpit Scenario Simulator Select */
+    .scenario-select {
+      background: var(--bg-inset);
+      border: 1px solid var(--border-muted);
+      color: var(--text-bright);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 2px;
+      cursor: pointer;
+      outline: none;
+    }
+    .scenario-select:focus {
+      border-color: var(--accent-active);
+    }
+
+    /* ==========================================================================
+       2. ALERT BANNER (Reveals only when an anomaly is active)
+       ========================================================================== */
+    #incident-banner {
+      display: none;
+      background: var(--status-warning-bg);
+      border-bottom: 1px solid var(--status-warning-dim);
+      color: var(--text-bright);
+      padding: 3px 10px;
+      font-size: 10.5px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    #incident-banner.visible {
+      display: flex;
+    }
+    #incident-banner.critical-mode {
+      background: var(--status-critical-bg);
+      border-bottom-color: var(--status-critical-dim);
+    }
+
+    .banner-content {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .banner-tag {
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      padding: 0 4px;
+      border-radius: 2px;
+      background: var(--status-warning);
+      color: #000;
+    }
+    .banner-tag.critical {
+      background: var(--status-critical);
+      color: #fff;
+    }
+
+    /* ==========================================================================
+       3. MAIN COCKPIT VIEWPORT (High Density Grid Layout)
+       ========================================================================== */
+    #cockpit-main {
+      flex: 1;
+      padding: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-width: 1920px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    /* KPI Primary Telemetry Ribbon (6 Columns) */
+    .telemetry-ribbon {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 4px;
+    }
+
+    @media (max-width: 1200px) {
+      .telemetry-ribbon { grid-template-columns: repeat(3, 1fr); }
+    }
+    @media (max-width: 700px) {
+      .telemetry-ribbon { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    .metric-cell {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 2px;
+      padding: 4px 7px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 48px;
+    }
+    .metric-cell.alerting {
+      border-color: var(--status-warning);
+      background: var(--status-warning-bg);
+    }
+    .metric-cell.critical {
+      border-color: var(--status-critical);
+      background: var(--status-critical-bg);
+    }
+
+    .metric-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      color: var(--text-muted);
+      text-transform: uppercase;
+    }
+
+    .metric-body {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin: 2px 0;
+    }
+
+    .metric-value {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text-bright);
+    }
+
+    .metric-delta {
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+    .metric-delta.warn { color: var(--status-warning); font-weight: 600; }
+    .metric-delta.crit { color: var(--status-critical); font-weight: 600; }
+
+    .metric-foot {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 9.5px;
+      color: var(--text-muted);
+      border-top: 1px solid rgba(255, 255, 255, 0.03);
+      padding-top: 2px;
+    }
+
+    /* ==========================================================================
+       4. MIDDLE DECK: TIME-SERIES MATRIX & NODE MATRIX
+       ========================================================================== */
+    .middle-deck {
+      display: grid;
+      grid-template-columns: 1fr 310px;
+      gap: 6px;
+      align-items: stretch;
+    }
+
+    @media (max-width: 1100px) {
+      .middle-deck { grid-template-columns: 1fr; }
+    }
+
+    .deck-panel {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 2px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .panel-header {
+      background: var(--bg-surface-elevated);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 3px 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      color: var(--text-bright);
+      text-transform: uppercase;
+    }
+
+    .panel-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 9.5px;
+      color: var(--text-muted);
+      text-transform: none;
+      font-weight: 400;
+    }
+
+    .panel-body {
+      padding: 6px;
+      flex: 1;
+    }
+
+    /* Synchronized Multi-Band Time-Series Canvas */
+    .timeseries-container {
+      position: relative;
+      width: 100%;
+      height: 154px;
+    }
+
+    .timeseries-svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      cursor: crosshair;
+    }
+
+    .chart-cursor-line {
+      stroke: var(--text-muted);
+      stroke-width: 1;
+      stroke-dasharray: 2 2;
+      pointer-events: none;
+      display: none;
+    }
+
+    .chart-tooltip {
+      position: absolute;
+      top: 4px;
+      background: var(--bg-surface-elevated);
+      border: 1px solid var(--border-muted);
+      padding: 3px 6px;
+      font-size: 9.5px;
+      border-radius: 2px;
+      pointer-events: none;
+      display: none;
+      white-space: nowrap;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+
+    /* Right Deck: 48-Node Topology Matrix */
+    .topology-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 9.5px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+
+    .node-grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 2px;
+    }
+
+    .node-slot {
+      aspect-ratio: 1;
+      background: var(--bg-inset);
+      border: 1px solid var(--border-subtle);
+      border-radius: 1px;
+      cursor: pointer;
+      position: relative;
+      transition: border-color 0.1s, background-color 0.1s;
+    }
+    .node-slot:hover {
+      border-color: var(--text-muted);
+      z-index: 10;
+    }
+    .node-slot.selected {
+      border-color: var(--accent-active);
+      outline: 1px solid var(--accent-active);
+    }
+
+    /* Dark Cockpit Node State Colors: Nominal state is subtle/receded */
+    .node-slot.nominal {
+      background: #11221b;
+      border-color: #17382c;
+    }
+    .node-slot.nominal::after {
+      content: '';
+      position: absolute;
+      inset: 2px;
+      background: var(--status-nominal);
+      opacity: 0.45;
+      border-radius: 1px;
+    }
+
+    .node-slot.warning {
+      background: var(--status-warning-bg);
+      border-color: var(--status-warning);
+    }
+    .node-slot.warning::after {
+      content: '';
+      position: absolute;
+      inset: 2px;
+      background: var(--status-warning);
+      border-radius: 1px;
+      animation: pulse-warn 1.5s infinite;
+    }
+
+    .node-slot.critical {
+      background: var(--status-critical-bg);
+      border-color: var(--status-critical);
+    }
+    .node-slot.critical::after {
+      content: '';
+      position: absolute;
+      inset: 2px;
+      background: var(--status-critical);
+      border-radius: 1px;
+      animation: pulse-crit 1s infinite;
+    }
+
+    /* Subsystem Resource Capacity Stack */
+    .resource-stack {
+      margin-top: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 6px;
+    }
+
+    .res-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 9.5px;
+    }
+
+    .res-label {
+      width: 46px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .res-track {
+      flex: 1;
+      height: 5px;
+      background: var(--bg-inset);
+      border: 1px solid var(--border-subtle);
+      border-radius: 1px;
+      overflow: hidden;
+      display: flex;
+    }
+
+    .res-fill {
+      height: 100%;
+      background: var(--text-muted);
+    }
+    .res-fill.warn { background: var(--status-warning); }
+    .res-fill.crit { background: var(--status-critical); }
+
+    .res-val {
+      width: 44px;
+      text-align: right;
+      color: var(--text-bright);
+    }
+
+    /* ==========================================================================
+       5. LOWER DECK: HIGH DENSITY DATA GRID & TELEMETRY STREAM
+       ========================================================================== */
+    .lower-deck {
+      display: grid;
+      grid-template-columns: 1.45fr 1fr;
+      gap: 6px;
+      min-height: 230px;
+    }
+
+    @media (max-width: 1000px) {
+      .lower-deck { grid-template-columns: 1fr; }
+    }
+
+    /* Filter & Search Bar within panel header */
+    .table-search-input {
+      background: var(--bg-inset);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-bright);
+      font-family: var(--font-ui);
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 2px;
+      outline: none;
+      width: 120px;
+    }
+    .table-search-input:focus {
+      border-color: var(--accent-active);
+    }
+
+    /* Compact Telemetry Data Grid */
+    .data-table-wrap {
+      overflow-x: auto;
+      max-height: 230px;
+      overflow-y: auto;
+    }
+
+    .cockpit-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 10px;
+      text-align: left;
+    }
+
+    .cockpit-table thead {
+      position: sticky;
+      top: 0;
+      background: var(--bg-surface-elevated);
+      z-index: 5;
+    }
+
+    .cockpit-table th {
+      padding: 3px 6px;
+      font-size: 9px;
+      font-weight: 700;
+      color: var(--text-muted);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--border-muted);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .cockpit-table th:hover {
+      color: var(--text-bright);
+    }
+
+    .cockpit-table td {
+      padding: 2.5px 6px;
+      border-bottom: 1px solid var(--border-subtle);
+      white-space: nowrap;
+      color: var(--text-main);
+    }
+
+    .cockpit-table tbody tr:hover td {
+      background: var(--bg-hover);
+      color: var(--text-bright);
+    }
+
+    .cockpit-table tbody tr.row-alert td {
+      background: var(--status-warning-bg);
+    }
+
+    .cockpit-table tbody tr.row-crit td {
+      background: var(--status-critical-bg);
+    }
+
+    /* Inline micro telemetry meter */
+    .mini-meter {
+      display: inline-block;
+      width: 32px;
+      height: 4px;
+      background: var(--bg-inset);
+      border-radius: 1px;
+      overflow: hidden;
+      margin-left: 4px;
+      vertical-align: middle;
+    }
+    .mini-meter-fill {
+      height: 100%;
+      background: var(--text-muted);
+    }
+    .mini-meter-fill.warn { background: var(--status-warning); }
+    .mini-meter-fill.crit { background: var(--status-critical); }
+
+    /* Telemetry Log Stream */
+    .stream-filter-bar {
+      display: flex;
+      gap: 4px;
+    }
+
+    .stream-tag-btn {
+      background: transparent;
+      border: 1px solid var(--border-subtle);
+      color: var(--text-muted);
+      font-size: 9px;
+      font-family: var(--font-mono);
+      padding: 1px 4px;
+      border-radius: 1px;
+      cursor: pointer;
+    }
+    .stream-tag-btn.active {
+      color: var(--text-bright);
+      background: var(--bg-inset);
+      border-color: var(--border-muted);
+    }
+
+    .stream-container {
+      height: 200px;
+      overflow-y: auto;
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      background: var(--bg-inset);
+      padding: 3px;
+      border: 1px solid var(--border-subtle);
+      border-radius: 1px;
+    }
+
+    .stream-row {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      padding: 1.5px 4px;
+      border-radius: 1px;
+      white-space: nowrap;
+      line-height: 1.3;
+    }
+    .stream-row:hover {
+      background: var(--bg-surface-elevated);
+    }
+
+    .stream-ts {
+      color: var(--text-faint);
+      font-size: 9px;
+      flex-shrink: 0;
+    }
+
+    .stream-lvl {
+      font-size: 8.5px;
+      font-weight: 700;
+      padding: 0 3px;
+      border-radius: 1px;
+      flex-shrink: 0;
+    }
+    .stream-lvl.lvl-inf { color: var(--text-muted); background: rgba(255, 255, 255, 0.05); }
+    .stream-lvl.lvl-wrn { color: var(--status-warning); background: var(--status-warning-bg); }
+    .stream-lvl.lvl-err { color: var(--status-critical); background: var(--status-critical-bg); }
+    .stream-lvl.lvl-sync { color: var(--status-info); background: var(--status-info-bg); }
+
+    .stream-source {
+      color: var(--text-bright);
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .stream-msg {
+      color: var(--text-main);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 1;
+    }
+
+    /* ==========================================================================
+       6. BOTTOM STATUS / RUNTIME STRIP (22px)
+       ========================================================================== */
+    #cockpit-footer {
+      background: var(--bg-surface);
+      border-top: 1px solid var(--border-subtle);
+      height: 22px;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 9.5px;
+      color: var(--text-muted);
+    }
+
+    .footer-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .footer-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .footer-pill {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .footer-pill strong {
+      color: var(--text-bright);
+    }
+  </style>
 </head>
 <body>
+
+  <!-- ====================================================================== -->
+  <!-- 1. MASTER COCKPIT CONTROL BAR (30px)                                  -->
+  <!-- ====================================================================== -->
+  <header id="master-bar">
+    <div class="master-cluster-info">
+      <div class="cluster-badge mono">
+        <span class="status-indicator" id="global-status-dot"></span>
+        <span>PROD-CLUSTER-04</span>
+      </div>
+      <div class="master-summary">
+        <div class="summary-item"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span> <span>UPTIME:</span> <strong class="mono">418d 14h</strong></div>
+        <div class="summary-item"><span>NODES:</span> <strong class="mono" id="summary-nodes">48/48 SYNCED</strong></div>
+        <div class="summary-item"><span>RAFT TERM:</span> <strong class="mono">#84,912 (5/5 QUORUM)</strong></div>
+      </div>
+    </div>
+
+    <div class="master-controls">
+      <!-- Cockpit Condition Simulator (Demonstrates Dark Cockpit Philosophy) -->
+      <label for="scenario-ctrl" style="font-size: 9.5px; color: var(--text-muted); font-weight: 600;">SIMULATE CONDITION:</label>
+      <select id="scenario-ctrl" class="scenario-select" onchange="setCockpitScenario(this.value)">
+        <option value="nominal">1. Nominal Baseline (Quiet Dark Cockpit)</option>
+        <option value="latency-spike">2. Latency Anomaly on Node c1-b2 (Amber Alert)</option>
+        <option value="network-drop">3. Packet Drop & Gateway Saturation (Red Alert)</option>
+      </select>
+
+      <div class="btn-group">
+        <button class="ctrl-btn" onclick="setTimeRange('15m')">15m</button>
+        <button class="ctrl-btn active" onclick="setTimeRange('1h')">1h</button>
+        <button class="ctrl-btn" onclick="setTimeRange('6h')">6h</button>
+        <button class="ctrl-btn" onclick="setTimeRange('24h')">24h</button>
+      </div>
+
+      <button class="ctrl-btn mono" id="live-toggle-btn" style="border: 1px solid var(--border-muted);" onclick="toggleLiveFeed()">
+        <span style="color: var(--status-nominal);">●</span> LIVE (1s)
+      </button>
+    </div>
+  </header>
+
+  <!-- ====================================================================== -->
+  <!-- 2. ANOMALY / INCIDENT ACCELERATOR BANNER (Quiet when nominal)          -->
+  <!-- ====================================================================== -->
+  <aside id="incident-banner" role="alert">
+    <div class="banner-content">
+      <span class="banner-tag" id="banner-severity">WARN</span>
+      <span style="font-weight: 600;" id="banner-title">LATENCY EXCURSION DETECTED</span>
+      <span style="color: var(--text-bright);" id="banner-desc">— Node c1-b2 p99 latency exceeded 12.0ms threshold (current: 14.82ms).</span>
+    </div>
+    <div style="display: flex; gap: 6px; align-items: center;">
+      <span class="mono" style="font-size: 9.5px; color: var(--text-muted);">AUTO-REBALANCE ARMED</span>
+      <button class="ctrl-btn mono" style="border: 1px solid var(--border-muted); background: var(--bg-surface-elevated);" onclick="setCockpitScenario('nominal')">ACKNOWLEDGE &amp; ISOLATE</button>
+    </div>
+  </aside>
+
+  <!-- ====================================================================== -->
+  <!-- 3. MAIN COCKPIT VIEWPORT                                               -->
+  <!-- ====================================================================== -->
+  <main id="cockpit-main">
+
+    <!-- KPI Master Telemetry Ribbon (6 Columns) -->
+    <section class="telemetry-ribbon" aria-label="Key Performance Indicators">
+      
+      <!-- 1. QPS / Throughput -->
+      <article class="metric-cell" id="cell-qps">
+        <header class="metric-head">
+          <span>Throughput (Ingress)</span>
+          <span class="mono" style="color: var(--text-muted);">REQ/S</span>
+        </header>
+        <div class="metric-body">
+          <span class="metric-value mono" id="val-qps">1,482,900</span>
+          <span class="metric-delta mono" id="delta-qps">+1.8% vs 1h</span>
+        </div>
+        <footer class="metric-foot">
+          <span>Peak: 1.62M/s</span>
+          <span class="mono">Egress: 4.88 Gbps</span>
+        </footer>
+      </article>
+
+      <!-- 2. Latency Envelope -->
+      <article class="metric-cell" id="cell-latency">
+        <header class="metric-head">
+          <span>Latency (p99 / p50)</span>
+          <span class="mono" style="color: var(--text-muted);">MS</span>
+        </header>
+        <div class="metric-body">
+          <span class="metric-value mono" id="val-latency">1.14<span style="font-size:11px; font-weight:400; color:var(--text-muted);"> / 0.38</span></span>
+          <span class="metric-delta mono" id="delta-latency">NOMINAL</span>
+        </div>
+        <footer class="metric-foot">
+          <span>p99.9: 1.82ms</span>
+          <span class="mono">Budget: 94.2% rem</span>
+        </footer>
+      </article>
+
+      <!-- 3. Availability & SLO -->
+      <article class="metric-cell" id="cell-errors">
+        <header class="metric-head">
+          <span>Availability / SLO</span>
+          <span class="mono" style="color: var(--text-muted);">TARGET 99.99%</span>
+        </header>
+        <div class="metric-body">
+          <span class="metric-value mono" id="val-slo">99.998%</span>
+          <span class="metric-delta mono" id="delta-slo">0.002% ERR</span>
+        </div>
+        <footer class="metric-foot">
+          <span>Drops: 3/min</span>
+          <span class="mono">5xx: 0</span>
+        </footer>
+      </article>
+
+      <!-- 4. Compute Saturation -->
+      <article class="metric-cell" id="cell-cpu">
+        <header class="metric-head">
+          <span>Compute Saturation</span>
+          <span class="mono" style="color: var(--text-muted);">128 CORES</span>
+        </header>
+        <div class="metric-body">
+          <span class="metric-value mono" id="val-cpu">64.2%</span>
+          <span class="metric-delta mono" id="delta-cpu">Usr: 51% | Sys: 13%</span>
+        </div>
+        <footer class="metric-foot">
+          <span>Futex: 0.0%</span>
+          <span class="mono">Throttle: 0/s</span>
+        </footer>
+      </article>
+
+      <!-- 5. Memory RSS & GC -->
+      <article class="metric-cell" id="cell-mem">
+        <header class="metric-head">
+          <span>Memory (TCMalloc Arena)</span>
+          <span class="mono" style="color: var(--text-muted);">RESIDENT</span>
+        </header>
+        <div class="metric-body">
+          <span class="metric-value mono" id="val-mem">218.4 <span style="font-size:11px; font-weight:400; color:var(--text-muted);">GB</span></span>
+          <span class="metric-delta mono" id="delta-mem">GC: 0.0ms</span>
+        </div>
+        <footer class="metric-foot">
+          <span>Pool: 512GB cap</span>
+          <span class="mono">Frag: 2.1%</span>
+        </footer>
+      </article>
+
+      <!-- 6. Clock Sync & Drift -->
+      <article class="metric-cell" id="cell-drift">
+        <header class="metric-head">
+          <span>TrueTime GPS Drift</span>
+          <span class="mono" style="color: var(--text-muted);">UNCERTAINTY</span>
+        </header>
+        <div class="metric-body">
+          <span class="metric-value mono" id="val-drift">&plusmn;12 <span style="font-size:11px; font-weight:400; color:var(--text-muted);">&mu;s</span></span>
+          <span class="metric-delta mono" id="delta-drift">GPS + Rb LOCKED</span>
+        </div>
+        <footer class="metric-foot">
+          <span>Stratum 1 Sync</span>
+          <span class="mono">Skew: 0.00ppm</span>
+        </footer>
+      </article>
+
+    </section>
+
+    <!-- MIDDLE DECK: Synchronized Time-Series Chart + 48-Node Topology -->
+    <section class="middle-deck">
+      
+      <!-- Time Series Chart Panel -->
+      <div class="deck-panel">
+        <div class="panel-header">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span>Synchronized Telemetry Profile</span>
+            <span class="mono" style="font-size: 9.5px; color: var(--text-muted);">[QPS BAND &bull; p99 LATENCY &bull; ERROR SPIKES]</span>
+          </div>
+          <div class="panel-header-actions">
+            <span class="mono" id="chart-time-label">WINDOW: LAST 60m (1s RES)</span>
+            <button class="ctrl-btn mono" style="padding: 1px 4px;" onclick="resetChartZoom()">RESET ZOOM</button>
+          </div>
+        </div>
+
+        <div class="panel-body" style="padding: 4px 6px;">
+          <div class="timeseries-container" id="chart-wrap">
+            <svg class="timeseries-svg" id="main-telemetry-chart" viewBox="0 0 800 154" preserveAspectRatio="none">
+              <defs>
+                <!-- Area Gradients (Subtle, strictly non-neon) -->
+                <linearGradient id="qpsAreaGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.18" />
+                  <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.0" />
+                </linearGradient>
+                <linearGradient id="warnAreaGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#f59e0b" stop-opacity="0.30" />
+                  <stop offset="100%" stop-color="#f59e0b" stop-opacity="0.0" />
+                </linearGradient>
+              </defs>
+
+              <!-- Subtle Background Gridlines -->
+              <line x1="36" y1="20" x2="796" y2="20" stroke="#171d29" stroke-width="1" stroke-dasharray="2 2" />
+              <line x1="36" y1="58" x2="796" y2="58" stroke="#171d29" stroke-width="1" stroke-dasharray="2 2" />
+              <line x1="36" y1="96" x2="796" y2="96" stroke="#171d29" stroke-width="1" stroke-dasharray="2 2" />
+              <line x1="36" y1="134" x2="796" y2="134" stroke="#171d29" stroke-width="1" />
+
+              <!-- Y-Axis Ticks & Units -->
+              <text x="32" y="23" fill="#59677a" font-size="8.5" font-family="ui-monospace, monospace" text-anchor="end">1.8M</text>
+              <text x="32" y="61" fill="#59677a" font-size="8.5" font-family="ui-monospace, monospace" text-anchor="end">1.2M</text>
+              <text x="32" y="99" fill="#59677a" font-size="8.5" font-family="ui-monospace, monospace" text-anchor="end">0.6M</text>
+              <text x="32" y="137" fill="#59677a" font-size="8.5" font-family="ui-monospace, monospace" text-anchor="end">0.0M</text>
+
+              <!-- Telemetry QPS Area & Stroke Path -->
+              <path id="chart-qps-area" d="" fill="url(#qpsAreaGrad)" />
+              <path id="chart-qps-line" d="" fill="none" stroke="#38bdf8" stroke-width="1.25" />
+
+              <!-- p99 Latency Curve (Muted Gray during normal; turns Amber/Red during excursion) -->
+              <path id="chart-p99-line" d="" fill="none" stroke="#9aa7b8" stroke-width="1.2" stroke-dasharray="3 2" />
+
+              <!-- Critical Latency Threshold Reference Line (10ms) -->
+              <line id="chart-threshold-line" x1="36" y1="42" x2="796" y2="42" stroke="#78350f" stroke-width="1" stroke-dasharray="4 3" opacity="0.4" />
+              <text x="792" y="39" fill="#78350f" font-size="8" font-family="ui-monospace, monospace" text-anchor="end">p99 THRESHOLD (10ms)</text>
+
+              <!-- Interactive Cursor Crosshair Line -->
+              <line id="cursor-crosshair" class="chart-cursor-line" x1="0" y1="10" x2="0" y2="134" />
+
+              <!-- Time Axis Ticks (X-Axis) -->
+              <text x="36" y="148" fill="#59677a" font-size="8" font-family="ui-monospace, monospace" id="chart-t0">-60m</text>
+              <text x="226" y="148" fill="#59677a" font-size="8" font-family="ui-monospace, monospace" id="chart-t1">-45m</text>
+              <text x="416" y="148" fill="#59677a" font-size="8" font-family="ui-monospace, monospace" id="chart-t2">-30m</text>
+              <text x="606" y="148" fill="#59677a" font-size="8" font-family="ui-monospace, monospace" id="chart-t3">-15m</text>
+              <text x="796" y="148" fill="#59677a" font-size="8" font-family="ui-monospace, monospace" text-anchor="end" id="chart-t4">NOW</text>
+            </svg>
+
+            <!-- Cursor Tooltip Box -->
+            <div id="chart-tooltip" class="chart-tooltip mono"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Panel: 48-Node Topology Matrix -->
+      <div class="deck-panel">
+        <div class="panel-header">
+          <span>Topology Grid (48 Nodes)</span>
+          <span class="mono" id="matrix-status-pill" style="font-size: 9.5px; color: var(--status-nominal);">ALL NOMINAL</span>
+        </div>
+
+        <div class="panel-body">
+          <div class="topology-header">
+            <span>RACK DISTRIBUTION</span>
+            <span class="mono" id="node-count-label">48 / 48 ACTIVE</span>
+          </div>
+
+          <!-- 48 Micro Node Slots (12x4 Grid) -->
+          <div class="node-grid" id="node-matrix-grid">
+            <!-- Dynamically populated with 48 nodes -->
+          </div>
+
+          <!-- Hardware Saturation Progress Stack -->
+          <div class="resource-stack">
+            <div class="res-row">
+              <span class="res-label">CPU.Usr</span>
+              <div class="res-track"><div class="res-fill" id="fill-cpu-usr" style="width: 51%;"></div></div>
+              <span class="res-val mono" id="val-cpu-usr">51.2%</span>
+            </div>
+
+            <div class="res-row">
+              <span class="res-label">CPU.Sys</span>
+              <div class="res-track"><div class="res-fill" id="fill-cpu-sys" style="width: 13%;"></div></div>
+              <span class="res-val mono" id="val-cpu-sys">13.0%</span>
+            </div>
+
+            <div class="res-row">
+              <span class="res-label">TCMalloc</span>
+              <div class="res-track"><div class="res-fill" id="fill-tcmalloc" style="width: 42%;"></div></div>
+              <span class="res-val mono" id="val-tcmalloc">218 GB</span>
+            </div>
+
+            <div class="res-row">
+              <span class="res-label">Disk IO</span>
+              <div class="res-track"><div class="res-fill" id="fill-diskio" style="width: 38%;"></div></div>
+              <span class="res-val mono" id="val-diskio">142 k/s</span>
+            </div>
+
+            <div class="res-row">
+              <span class="res-label">BBR Net</span>
+              <div class="res-track"><div class="res-fill" id="fill-net" style="width: 48%;"></div></div>
+              <span class="res-val mono" id="val-net">4.88G</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+    </section>
+
+    <!-- LOWER DECK: High Density Node Fleet Inspector & Telemetry Stream -->
+    <section class="lower-deck">
+      
+      <!-- Left: Fleet Data Table -->
+      <div class="deck-panel">
+        <div class="panel-header">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span>Fleet Node Directory</span>
+            <span class="mono" style="font-size: 9.5px; color: var(--text-muted);">(10 ACTIVE SAMPLE)</span>
+          </div>
+          <div class="panel-header-actions">
+            <input type="text" id="fleet-search" class="table-search-input mono" placeholder="Filter node / role..." oninput="filterFleetTable(this.value)">
+          </div>
+        </div>
+
+        <div class="panel-body" style="padding: 0;">
+          <div class="data-table-wrap">
+            <table class="cockpit-table" id="fleet-table">
+              <thead>
+                <tr>
+                  <th onclick="sortFleet('name')">NODE</th>
+                  <th onclick="sortFleet('zone')">ZONE</th>
+                  <th onclick="sortFleet('role')">ROLE</th>
+                  <th onclick="sortFleet('cpu')">CPU</th>
+                  <th onclick="sortFleet('mem')">RAM</th>
+                  <th onclick="sortFleet('qps')">QPS</th>
+                  <th onclick="sortFleet('p99')">p99 LAT</th>
+                  <th onclick="sortFleet('status')">STATUS</th>
+                </tr>
+              </thead>
+              <tbody id="fleet-tbody" class="mono">
+                <!-- Dynamically populated table rows -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Live Event Telemetry Stream -->
+      <div class="deck-panel">
+        <div class="panel-header">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span>Live Telemetry Event Log</span>
+            <span class="mono" style="font-size: 9.5px; color: var(--text-muted);">RING BUFFER (5000)</span>
+          </div>
+          <div class="stream-filter-bar">
+            <button class="stream-tag-btn active" onclick="setLogFilter('ALL')">ALL</button>
+            <button class="stream-tag-btn" onclick="setLogFilter('WARN')">WARN/ERR</button>
+            <button class="stream-tag-btn" onclick="setLogFilter('SYNC')">SYNC</button>
+            <button class="ctrl-btn mono" style="padding: 0 4px;" onclick="clearLogStream()">CLEAR</button>
+          </div>
+        </div>
+
+        <div class="panel-body" style="padding: 4px;">
+          <div class="stream-container" id="telemetry-log-stream">
+            <!-- Dynamically populated event rows -->
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- ====================================================================== -->
+  <!-- 4. BOTTOM COCKPIT RUNTIME STRIP (22px)                                  -->
+  <!-- ====================================================================== -->
+  <footer id="cockpit-footer">
+    <div class="footer-left">
+      <div class="footer-pill"><span>STATUS:</span> <strong id="foot-status" class="mono">NOMINAL</strong></div>
+      <div class="footer-pill"><span>CONSENSUS:</span> <strong class="mono">RAFT LEADER c1-a1</strong></div>
+      <div class="footer-pill"><span>TLS CIPHER:</span> <strong class="mono">CHACHA20-POLY1305 (ZERO DEGRADE)</strong></div>
+    </div>
+    <div class="footer-right mono">
+      <span>INGEST: <strong id="foot-ingest">1,482,900 e/s</strong></span>
+      <span>CLOCK DELTA: <strong>&plusmn;0.012ms</strong></span>
+      <span style="color: var(--text-faint);">PRESS '/' TO FILTER</span>
+    </div>
+  </footer>
+
+  <!-- ====================================================================== -->
+  <!-- 5. REALTIME ENGINE & SCENARIO CONTROLLER                                -->
+  <!-- ====================================================================== -->
+  <script>
+    (function () {
+      'use strict';
+
+      // --- State Model ---
+      let currentScenario = 'nominal';
+      let isLiveActive = true;
+      let logFilter = 'ALL';
+      let searchQuery = '';
+      let sortKey = 'name';
+      let sortAsc = true;
+      let selectedNodeId = null;
+
+      // --- 48-Node Grid State ---
+      const nodeCount = 48;
+      const nodeMatrixData = [];
+      const zones = ['us-c1-a', 'us-c1-b', 'us-e4-a', 'eu-w1-b', 'ap-e1-a'];
+      const roles = ['Router', 'Core', 'Coord', 'Mirror', 'Edge'];
+
+      for (let i = 0; i < nodeCount; i++) {
+        const zone = zones[i % zones.length];
+        const role = roles[i % roles.length];
+        const id = `c${Math.floor(i / 10) + 1}-${String.fromCharCode(97 + (i % 5))}${i % 4 + 1}`;
+        nodeMatrixData.push({
+          id: id,
+          index: i,
+          zone: zone,
+          role: role,
+          cpu: 45 + Math.floor(Math.random() * 25),
+          mem: 18 + Math.floor(Math.random() * 14),
+          qps: 120000 + Math.floor(Math.random() * 80000),
+          p99: (0.85 + Math.random() * 0.45).toFixed(2),
+          status: 'nominal'
+        });
+      }
+
+      // Initial Fleet Subset (10 nodes)
+      const fleetSample = nodeMatrixData.slice(0, 10);
+
+      // --- Time Series Telemetry History (60 datapoints) ---
+      const dataPoints = 60;
+      let qpsData = [];
+      let p99Data = [];
+      let errData = [];
+
+      function initTelemetryData() {
+        qpsData = [];
+        p99Data = [];
+        errData = [];
+        const baseQps = 1480000;
+        for (let i = 0; i < dataPoints; i++) {
+          const jitter = (Math.sin(i / 4) * 40000) + ((Math.random() - 0.5) * 25000);
+          qpsData.push(baseQps + jitter);
+          p99Data.push(1.10 + (Math.sin(i / 5) * 0.08) + ((Math.random() - 0.5) * 0.05));
+          errData.push(Math.random() > 0.85 ? 1 : 0);
+        }
+      }
+      initTelemetryData();
+
+      // --- Render Topology Matrix ---
+      const matrixGrid = document.getElementById('node-matrix-grid');
+      function renderNodeMatrix() {
+        matrixGrid.innerHTML = '';
+        nodeMatrixData.forEach(node => {
+          const slot = document.createElement('div');
+          slot.className = `node-slot ${node.status}`;
+          slot.id = `slot-${node.id}`;
+          slot.title = `Node: ${node.id} (${node.zone})\nRole: ${node.role}\nCPU: ${node.cpu}%\np99: ${node.p99}ms`;
+          
+          if (selectedNodeId === node.id) {
+            slot.classList.add('selected');
+          }
+
+          slot.onclick = () => {
+            selectedNodeId = (selectedNodeId === node.id) ? null : node.id;
+            renderNodeMatrix();
+            filterFleetTable(node.id);
+            document.getElementById('fleet-search').value = selectedNodeId || '';
+          };
+          matrixGrid.appendChild(slot);
+        });
+      }
+
+      // --- Render Fleet Table ---
+      const fleetTbody = document.getElementById('fleet-tbody');
+      function renderFleetTable() {
+        let filtered = fleetSample.filter(item => {
+          if (!searchQuery) return true;
+          const q = searchQuery.toLowerCase();
+          return item.id.toLowerCase().includes(q) ||
+                 item.zone.toLowerCase().includes(q) ||
+                 item.role.toLowerCase().includes(q) ||
+                 item.status.toLowerCase().includes(q);
+        });
+
+        filtered.sort((a, b) => {
+          let valA = a[sortKey];
+          let valB = b[sortKey];
+          if (typeof valA === 'string') {
+            return sortAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+          }
+          return sortAsc ? valA - valB : valB - valA;
+        });
+
+        fleetTbody.innerHTML = '';
+        filtered.forEach(row => {
+          const tr = document.createElement('tr');
+          if (row.status === 'warning') tr.className = 'row-alert';
+          if (row.status === 'critical') tr.className = 'row-crit';
+
+          const cpuMeterClass = row.cpu > 85 ? 'crit' : (row.cpu > 75 ? 'warn' : '');
+          const statusText = row.status === 'nominal' ? '<span style="color:var(--status-nominal)">● NOMINAL</span>' :
+                             (row.status === 'warning' ? '<span style="color:var(--status-warning); font-weight:700;">● WARN</span>' :
+                             '<span style="color:var(--status-critical); font-weight:700;">● CRIT</span>');
+
+          tr.innerHTML = `
+            <td style="font-weight:600; color:var(--text-bright);">${row.id}</td>
+            <td style="color:var(--text-muted);">${row.zone}</td>
+            <td>${row.role}</td>
+            <td>
+              ${row.cpu}%
+              <span class="mini-meter"><span class="mini-meter-fill ${cpuMeterClass}" style="width:${row.cpu}%"></span></span>
+            </td>
+            <td>${row.mem} GB</td>
+            <td>${(row.qps / 1000).toFixed(0)}k</td>
+            <td style="${row.p99 > 5.0 ? 'color:var(--status-warning); font-weight:700;' : ''}">${row.p99}ms</td>
+            <td>${statusText}</td>
+          `;
+          fleetTbody.appendChild(tr);
+        });
+      }
+
+      // --- Render SVG Telemetry Chart ---
+      const chartQpsArea = document.getElementById('chart-qps-area');
+      const chartQpsLine = document.getElementById('chart-qps-line');
+      const chartP99Line = document.getElementById('chart-p99-line');
+      const chartSvg = document.getElementById('main-telemetry-chart');
+      const cursorCrosshair = document.getElementById('cursor-crosshair');
+      const chartTooltip = document.getElementById('chart-tooltip');
+      const chartWrap = document.getElementById('chart-wrap');
+
+      function renderChart() {
+        const width = 800;
+        const leftMargin = 36;
+        const rightMargin = 796;
+        const topY = 16;
+        const bottomY = 134;
+        const usableWidth = rightMargin - leftMargin;
+        const usableHeight = bottomY - topY;
+
+        const maxQps = 2000000;
+        const minQps = 0;
+        const maxP99 = 15.0; // scale up to 15ms for anomaly headroom
+
+        let qpsPoints = [];
+        let p99Points = [];
+
+        for (let i = 0; i < qpsData.length; i++) {
+          const x = leftMargin + (i / (qpsData.length - 1)) * usableWidth;
+          
+          // QPS mapping
+          const qNorm = (qpsData[i] - minQps) / (maxQps - minQps);
+          const yQ = bottomY - (qNorm * usableHeight);
+          qpsPoints.push(`${x.toFixed(1)},${yQ.toFixed(1)}`);
+
+          // p99 mapping
+          const pNorm = Math.min(1.0, p99Data[i] / maxP99);
+          const yP = bottomY - (pNorm * usableHeight);
+          p99Points.push(`${x.toFixed(1)},${yP.toFixed(1)}`);
+        }
+
+        // QPS Path strings
+        const qpsLineD = `M ${qpsPoints.join(' L ')}`;
+        const qpsAreaD = `M ${qpsPoints[0]} L ${qpsPoints.join(' L ')} L ${rightMargin},${bottomY} L ${leftMargin},${bottomY} Z`;
+        const p99LineD = `M ${p99Points.join(' L ')}`;
+
+        chartQpsLine.setAttribute('d', qpsLineD);
+        chartQpsArea.setAttribute('d', qpsAreaD);
+        chartP99Line.setAttribute('d', p99LineD);
+
+        // Alert condition styling for chart lines
+        if (currentScenario === 'latency-spike') {
+          chartP99Line.setAttribute('stroke', '#f59e0b');
+          chartP99Line.setAttribute('stroke-width', '1.75');
+        } else if (currentScenario === 'network-drop') {
+          chartP99Line.setAttribute('stroke', '#ef4444');
+          chartP99Line.setAttribute('stroke-width', '2');
+        } else {
+          chartP99Line.setAttribute('stroke', '#718096');
+          chartP99Line.setAttribute('stroke-width', '1.2');
+        }
+      }
+
+      // Chart Crosshair Interaction
+      chartWrap.addEventListener('mousemove', (e) => {
+        const rect = chartSvg.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const svgScale = 800 / rect.width;
+        const svgX = mouseX * svgScale;
+
+        const leftMargin = 36;
+        const rightMargin = 796;
+
+        if (svgX >= leftMargin && svgX <= rightMargin) {
+          cursorCrosshair.style.display = 'block';
+          cursorCrosshair.setAttribute('x1', svgX);
+          cursorCrosshair.setAttribute('x2', svgX);
+
+          // Calculate nearest data index
+          const fraction = (svgX - leftMargin) / (rightMargin - leftMargin);
+          const index = Math.min(dataPoints - 1, Math.max(0, Math.round(fraction * (dataPoints - 1))));
+          const curQps = qpsData[index];
+          const curP99 = p99Data[index];
+          const curT = -Math.round((dataPoints - 1 - index) * 1);
+
+          chartTooltip.style.display = 'block';
+          chartTooltip.style.left = `${Math.min(rect.width - 130, Math.max(10, mouseX + 10))}px`;
+          chartTooltip.innerHTML = `T${curT}s &bull; QPS: <strong>${Math.round(curQps).toLocaleString()}</strong> &bull; p99: <strong>${curP99.toFixed(2)}ms</strong>`;
+        } else {
+          cursorCrosshair.style.display = 'none';
+          chartTooltip.style.display = 'none';
+        }
+      });
+
+      chartWrap.addEventListener('mouseleave', () => {
+        cursorCrosshair.style.display = 'none';
+        chartTooltip.style.display = 'none';
+      });
+
+      // --- Telemetry Event Log Stream ---
+      const logStream = document.getElementById('telemetry-log-stream');
+      const sampleEvents = [
+        { lvl: 'lvl-inf', tag: 'INF', src: 'c1-a1', msg: 'direct_io ring sync verified: ±8μs delta' },
+        { lvl: 'lvl-sync', tag: 'SYNC', src: 'raft', msg: 'consensus heartbeat ack term #84,912 [5/5 synced]' },
+        { lvl: 'lvl-inf', tag: 'INF', src: 'arena', msg: 'TCMalloc recycled 4.2GB unfragmented pages' },
+        { lvl: 'lvl-sync', tag: 'BBR', src: 'net', msg: 'congestion window scaled to 4.88 Gbps (0.0% loss)' }
+      ];
+
+      function appendLogEvent(event) {
+        const now = new Date();
+        const ts = now.toTimeString().split(' ')[0] + '.' + String(now.getMilliseconds()).padStart(3, '0');
+
+        const row = document.createElement('div');
+        row.className = 'stream-row';
+        row.setAttribute('data-lvl', event.tag);
+
+        if (logFilter !== 'ALL' && !event.tag.includes(logFilter)) {
+          row.style.display = 'none';
+        }
+
+        row.innerHTML = `
+          <span class="stream-ts">${ts}</span>
+          <span class="stream-lvl ${event.lvl}">${event.tag}</span>
+          <span class="stream-source">${event.src}</span>
+          <span class="stream-msg">${event.msg}</span>
+        `;
+
+        logStream.insertBefore(row, logStream.firstChild);
+
+        // Keep buffer under 100 rows in DOM
+        if (logStream.children.length > 100) {
+          logStream.removeChild(logStream.lastChild);
+        }
+      }
+
+      // Initial Log Fill
+      sampleEvents.forEach(ev => appendLogEvent(ev));
+
+      // --- Cockpit Condition Scenario Controller ---
+      window.setCockpitScenario = function (scenario) {
+        currentScenario = scenario;
+        document.getElementById('scenario-ctrl').value = scenario;
+
+        const banner = document.getElementById('incident-banner');
+        const bannerSev = document.getElementById('banner-severity');
+        const bannerTitle = document.getElementById('banner-title');
+        const bannerDesc = document.getElementById('banner-desc');
+        const statusDot = document.getElementById('global-status-dot');
+        const footStatus = document.getElementById('foot-status');
+        const matrixPill = document.getElementById('matrix-status-pill');
+
+        // Reset node matrix states
+        nodeMatrixData.forEach(n => {
+          n.status = 'nominal';
+          n.p99 = (0.85 + Math.random() * 0.45).toFixed(2);
+          n.cpu = 45 + Math.floor(Math.random() * 25);
+        });
+
+        // Reset metric cells
+        document.getElementById('cell-latency').className = 'metric-cell';
+        document.getElementById('cell-errors').className = 'metric-cell';
+        document.getElementById('cell-qps').className = 'metric-cell';
+
+        if (scenario === 'nominal') {
+          banner.className = '';
+          statusDot.className = 'status-indicator';
+          footStatus.textContent = 'NOMINAL';
+          footStatus.style.color = 'var(--text-bright)';
+          matrixPill.textContent = 'ALL NOMINAL';
+          matrixPill.style.color = 'var(--status-nominal)';
+
+          document.getElementById('val-latency').innerHTML = '1.14<span style="font-size:11px; font-weight:400; color:var(--text-muted);"> / 0.38</span>';
+          document.getElementById('delta-latency').textContent = 'NOMINAL';
+          document.getElementById('delta-latency').className = 'metric-delta mono';
+
+          document.getElementById('val-slo').textContent = '99.998%';
+          document.getElementById('delta-slo').textContent = '0.002% ERR';
+          document.getElementById('delta-slo').className = 'metric-delta mono';
+
+          appendLogEvent({ lvl: 'lvl-inf', tag: 'INF', src: 'cockpit', msg: 'System returned to nominal baseline state. Dark cockpit armed.' });
+        }
+        else if (scenario === 'latency-spike') {
+          banner.className = 'visible';
+          bannerSev.className = 'banner-tag';
+          bannerSev.textContent = 'WARN';
+          bannerTitle.textContent = 'LATENCY ANOMALY EXCURSION';
+          bannerDesc.textContent = '— Node c1-b2 p99 latency spiked to 14.82ms. Auto-drain queue armed.';
+          statusDot.className = 'status-indicator warning';
+          footStatus.textContent = 'DEGRADED (1 NODE)';
+          footStatus.style.color = 'var(--status-warning)';
+          matrixPill.textContent = '1 NODE WARN';
+          matrixPill.style.color = 'var(--status-warning)';
+
+          // Mark node c1-b2 as warning
+          const badNode = nodeMatrixData.find(n => n.id === 'c1-b2') || nodeMatrixData[5];
+          badNode.status = 'warning';
+          badNode.p99 = '14.82';
+          badNode.cpu = 92;
+
+          document.getElementById('cell-latency').className = 'metric-cell alerting';
+          document.getElementById('val-latency').innerHTML = '14.82<span style="font-size:11px; font-weight:400; color:var(--status-warning);"> / 0.42</span>';
+          document.getElementById('delta-latency').textContent = '▲ +1,180% BREACH';
+          document.getElementById('delta-latency').className = 'metric-delta mono warn';
+
+          appendLogEvent({ lvl: 'lvl-wrn', tag: 'WRN', src: 'c1-b2', msg: 'p99 latency threshold breached: 14.82ms > 10.0ms [drain queue lagging]' });
+        }
+        else if (scenario === 'network-drop') {
+          banner.className = 'visible critical-mode';
+          bannerSev.className = 'banner-tag critical';
+          bannerSev.textContent = 'CRIT';
+          bannerTitle.textContent = 'EGRESS SATURATION & PACKET DROP';
+          bannerDesc.textContent = '— BBR congestion window throttled on Edge routers. 4.12% drop rate.';
+          statusDot.className = 'status-indicator critical';
+          footStatus.textContent = 'CRITICAL ALERT';
+          footStatus.style.color = 'var(--status-critical)';
+          matrixPill.textContent = '4 NODES CRIT';
+          matrixPill.style.color = 'var(--status-critical)';
+
+          nodeMatrixData[0].status = 'critical';
+          nodeMatrixData[1].status = 'critical';
+          nodeMatrixData[2].status = 'warning';
+
+          document.getElementById('cell-errors').className = 'metric-cell critical';
+          document.getElementById('val-slo').textContent = '95.880%';
+          document.getElementById('delta-slo').textContent = '▲ 4.12% DROPS';
+          document.getElementById('delta-slo').className = 'metric-delta mono crit';
+
+          appendLogEvent({ lvl: 'lvl-err', tag: 'ERR', src: 'gateway', msg: 'NIC ingress buffer overrun: 14,800 packets dropped on c1-a1' });
+        }
+
+        renderNodeMatrix();
+        renderFleetTable();
+        renderChart();
+      };
+
+      // --- Live Ingest Tick Generator (1s cycle) ---
+      setInterval(() => {
+        if (!isLiveActive) return;
+
+        // Shift telemetry data
+        qpsData.shift();
+        p99Data.shift();
+
+        let newQps = 1480000 + ((Math.random() - 0.5) * 35000);
+        let newP99 = 1.12 + ((Math.random() - 0.5) * 0.08);
+
+        if (currentScenario === 'latency-spike') {
+          newP99 = 14.2 + ((Math.random() - 0.5) * 1.5);
+        } else if (currentScenario === 'network-drop') {
+          newQps = 980000 + ((Math.random() - 0.5) * 60000);
+          newP99 = 8.4 + ((Math.random() - 0.5) * 2.0);
+        }
+
+        qpsData.push(newQps);
+        p99Data.push(newP99);
+
+        // Update KPI values
+        document.getElementById('val-qps').textContent = Math.round(newQps).toLocaleString();
+        document.getElementById('foot-ingest').textContent = `${Math.round(newQps).toLocaleString()} e/s`;
+
+        renderChart();
+
+        // Occasional ambient background log
+        if (Math.random() > 0.65) {
+          const sample = sampleEvents[Math.floor(Math.random() * sampleEvents.length)];
+          appendLogEvent(sample);
+        }
+      }, 1000);
+
+      // --- Global Filter / Search Handlers ---
+      window.filterFleetTable = function (query) {
+        searchQuery = query;
+        renderFleetTable();
+      };
+
+      window.sortFleet = function (key) {
+        if (sortKey === key) {
+          sortAsc = !sortAsc;
+        } else {
+          sortKey = key;
+          sortAsc = true;
+        }
+        renderFleetTable();
+      };
+
+      window.setLogFilter = function (filter) {
+        logFilter = filter;
+        document.querySelectorAll('.stream-tag-btn').forEach(btn => {
+          btn.classList.toggle('active', btn.textContent.includes(filter) || (filter === 'ALL' && btn.textContent === 'ALL'));
+        });
+
+        document.querySelectorAll('.stream-row').forEach(row => {
+          const lvl = row.getAttribute('data-lvl');
+          if (filter === 'ALL') {
+            row.style.display = 'flex';
+          } else if (filter === 'WARN') {
+            row.style.display = (lvl === 'WRN' || lvl === 'ERR') ? 'flex' : 'none';
+          } else if (filter === 'SYNC') {
+            row.style.display = (lvl === 'SYNC') ? 'flex' : 'none';
+          }
+        });
+      };
+
+      window.clearLogStream = function () {
+        logStream.innerHTML = '';
+      };
+
+      window.toggleLiveFeed = function () {
+        isLiveActive = !isLiveActive;
+        const btn = document.getElementById('live-toggle-btn');
+        if (isLiveActive) {
+          btn.innerHTML = '<span style="color: var(--status-nominal);">●</span> LIVE (1s)';
+        } else {
+          btn.innerHTML = '<span style="color: var(--text-faint);">○</span> PAUSED';
+        }
+      };
+
+      window.setTimeRange = function (range) {
+        document.querySelectorAll('.master-controls .ctrl-btn').forEach(b => {
+          if (b.textContent === range) b.classList.add('active');
+          else if (['15m', '1h', '6h', '24h'].includes(b.textContent)) b.classList.remove('active');
+        });
+        document.getElementById('chart-time-label').textContent = `WINDOW: LAST ${range.toUpperCase()} (1s RES)`;
+        initTelemetryData();
+        renderChart();
+      };
+
+      window.resetChartZoom = function () {
+        initTelemetryData();
+        renderChart();
+      };
+
+      // Keyboard Shortcut '/' for Fast Search
+      document.addEventListener('keydown', (e) => {
+        if (e.key === '/' && document.activeElement.tagName !== 'INPUT') {
+          e.preventDefault();
+          const input = document.getElementById('fleet-search');
+          input.focus();
+          input.select();
+        }
+      });
+
+      // --- Initialization ---
+      renderNodeMatrix();
+      renderFleetTable();
+      renderChart();
+
+    })();
+  </script>
 
 </body>
 </html>
