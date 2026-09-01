@@ -1,6 +1,6 @@
 # Scripts
 
-Standalone Python utilities under `scripts/`.
+Standalone Python utilities under `scripts/`. `scripts/codex_hook_trust.py` is not a user-facing command — the installer uses it to stamp Codex Stop-bell `trusted_hash`; see [Agent Configs](agent-configs.md).
 
 ## scripts/rotate_auth.py
 

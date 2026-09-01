@@ -26,8 +26,9 @@
 #      agents/command-code-settings.json (appends the hook if missing; preserves
 #      the rest of the file)
 #  12. Updates ~/.codex/config.toml from agents/codex.toml (merges top-level
-#      settings, replaces mcp_servers and hooks tables, strips retired keys
-#      like notify; Codex owns the rest of that file)
+#      settings, replaces mcp_servers and hook event tables, strips retired
+#      keys like notify, stamps trusted_hash for the Stop bell only; Codex owns
+#      the rest of that file)
 #  13. Installs agents/claude-plugins/* into ~/.claude/skills/ as skills-dir
 #      plugins; agents/claude.json ships each one disabled
 #  14. Ensures ElevenLabs in ~/.claude.json mcpServers (key only; does not
@@ -749,17 +750,20 @@ if not any(d in stop for d in wanted_stop):
 PY
 step "command code hooks" "$COMMAND_CODE_SETTINGS_DEST" "Stop → bell.mp3"
 
-# Codex config: update top-level settings, replace mcp_servers and hooks
-# tables from agents/codex.toml, and strip retired clusterfork keys (notify).
+# Codex config: update top-level settings, replace mcp_servers and hook event
+# tables from agents/codex.toml, strip retired clusterfork keys (notify), and
+# stamp trusted_hash for the Stop bell only (other hooks.state entries kept).
 # Other settings (model, approvals, per-project trust levels written by Codex)
 # are preserved.
 [[ -f "$CODEX_CONFIG_SRC" ]] || fail "missing $(tildify "$CODEX_CONFIG_SRC")"
 mkdir -p "$(dirname "$CODEX_CONFIG_DEST")"
-python3 - "$CODEX_CONFIG_SRC" "$CODEX_CONFIG_DEST" "$DOTENV_DEST" <<'PY'
+python3 - "$CODEX_CONFIG_SRC" "$CODEX_CONFIG_DEST" "$DOTENV_DEST" "$REPO_DIR/scripts" <<'PY'
 import os, re, sys, tomllib
 from pathlib import Path
 
-src_path, dest_path, dotenv_path = map(Path, sys.argv[1:])
+src_path, dest_path, dotenv_path, scripts_dir = map(Path, sys.argv[1:])
+sys.path.insert(0, str(scripts_dir))
+import codex_hook_trust
 
 env = dict(os.environ)
 if dotenv_path.is_file():
@@ -918,14 +922,53 @@ table_section = "\n".join(kept_tables).strip("\n")
 parts = [p for p in [top_section, table_section, src_tables_block] if p]
 result = "\n\n".join(parts) + "\n"
 
+# Stamp trust for the clusterfork Stop bell only. hooks.state is Codex-managed;
+# keep any other entries and overwrite just dest:stop:0:0.
+stop_groups = (wanted.get("hooks") or {}).get("Stop") or []
+if not (
+    stop_groups
+    and stop_groups[0].get("hooks")
+    and stop_groups[0]["hooks"][0].get("type") == "command"
+    and stop_groups[0]["hooks"][0].get("command")
+):
+    raise SystemExit("codex config: agents/codex.toml must define [[hooks.Stop]] command hook")
+stop_handler = stop_groups[0]["hooks"][0]
+stop_key = codex_hook_trust.stop_hook_state_key(dest_path)
+stop_hash = codex_hook_trust.trust_hash_for_stop_handler(stop_handler)
+before_state = {}
+if isinstance((before.get("hooks") or {}).get("state"), dict):
+    before_state = {
+        k: dict(v) for k, v in before["hooks"]["state"].items() if isinstance(v, dict)
+    }
+stop_entry = dict(before_state.get(stop_key) or {})
+stop_entry["trusted_hash"] = stop_hash
+before_state[stop_key] = stop_entry
+state_block = codex_hook_trust.format_hooks_state_toml(before_state)
+if state_block:
+    result = result.rstrip() + "\n\n" + state_block
+    if not result.endswith("\n"):
+        result += "\n"
+
+def event_hooks(table):
+    if not isinstance(table, dict):
+        return {}
+    return {k: v for k, v in table.items() if k != "state"}
+
 # Verify parsed output
 after = tomllib.loads(result)
 for k, v in wanted_top_keys.items():
     if after.get(k) != v:
         raise SystemExit(f"codex config: {k} was not installed cleanly into {dest_path}")
 for tbl in wanted_tables:
+    if tbl == "hooks":
+        if event_hooks(after.get("hooks")) != event_hooks(wanted.get("hooks")):
+            raise SystemExit(f"codex config: table [{tbl}] was not installed cleanly into {dest_path}")
+        continue
     if after.get(tbl) != wanted.get(tbl):
         raise SystemExit(f"codex config: table [{tbl}] was not installed cleanly into {dest_path}")
+after_stop = ((after.get("hooks") or {}).get("state") or {}).get(stop_key) or {}
+if after_stop.get("trusted_hash") != stop_hash:
+    raise SystemExit(f"codex config: Stop hook trusted_hash was not installed into {dest_path}")
 for k in dropped_top_keys:
     if k in after:
         raise SystemExit(f"codex config: retired key '{k}' was not removed from {dest_path}")

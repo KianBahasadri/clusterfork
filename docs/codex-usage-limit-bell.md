@@ -16,7 +16,8 @@ installer bug.
 
 `agents/codex.toml` installs a root-only `[[hooks.Stop]]` bell (async `mpv`).
 The installer also strips the retired top-level `notify` key so it cannot
-stack with Stop. See [Agent Configs](agent-configs.md).
+stack with Stop, and stamps `trusted_hash` for that Stop hook so it does not
+wait on `/hooks`. See [Agent Configs](agent-configs.md).
 
 ```toml
 [[hooks.Stop]]

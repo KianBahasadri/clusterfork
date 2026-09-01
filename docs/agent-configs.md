@@ -144,15 +144,17 @@ Command Code MCP servers. The installer expands `${ENV}` placeholders from the c
 ## agents/codex.toml → ~/.codex/config.toml
 
 Codex settings and MCP servers. Top-level settings defined in `agents/codex.toml`
-and all `[mcp_servers…]` / `[hooks…]` tables are updated/overwritten into
+and all `[mcp_servers…]` / hook event tables are updated/overwritten into
 `~/.codex/config.toml`. The installer also strips retired clusterfork keys
-(`notify`). Codex owns the rest of `~/.codex/config.toml` — `model`,
+(`notify`) and stamps `trusted_hash` for the clusterfork Stop bell only
+(`[hooks.state."…/config.toml:stop:0:0"]`; other `hooks.state` entries stay).
+Codex owns the rest of `~/.codex/config.toml` — `model`,
 `model_reasoning_effort`, `approvals_reviewer`, `service_tier`, and the
 `[projects]` trust levels it writes as you accept directories — so other keys
 and tables stay untouched. `${HOME}` placeholders in values are expanded at
 install time.
 
-- **Hooks:** `[[hooks.Stop]]` command hook playing `~/.config/clusterfork/bell.mp3` via `mpv --no-video --no-terminal`, `async = true`. Stop is root-turn only (thread-spawned subagents fire `SubagentStop`, which is not registered). Codex skips untrusted user hooks until they are trusted in `/hooks`.
+- **Hooks:** `[[hooks.Stop]]` command hook playing `~/.config/clusterfork/bell.mp3` via `mpv --no-video --no-terminal`, `async = true`. Stop is root-turn only (thread-spawned subagents fire `SubagentStop`, which is not registered). The installer writes the matching `trusted_hash` so this hook does not wait on `/hooks`.
 - **context7:** remote `https://mcp.context7.com/mcp`
 - **ElevenLabs:** clusterfork `bin/elevenlabs-mcp` launcher
 - **linear:** remote `https://mcp.linear.app/mcp`, disabled
