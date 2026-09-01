@@ -40,12 +40,6 @@ Antigravity MCP servers. The installer expands `${ENV}` placeholders from the cl
 - **chrome-devtools:** local `pnpm dlx chrome-devtools-mcp@latest`, disabled — uses Chromium on port 9222
 - **pixellab:** remote `https://api.pixellab.ai/mcp`, disabled, with its bearer token from `PIXELLAB_API_KEY` in `.env`
 
-## agents/antigravity-hooks.json → ~/.gemini/config/hooks.json
-
-Antigravity lifecycle hooks:
-
-- **turn-bell:** `Stop` command hook playing `~/.config/clusterfork/bell.mp3` via `mpv --no-video --no-terminal` when `fullyIdle: true` (checked via inline Python over stdin to avoid firing on intermediate tool yields and subagents)
-
 ## agents/grok.toml → ~/.grok/config.toml
 
 Grok CLI settings:

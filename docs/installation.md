@@ -24,7 +24,6 @@
 | `agents/qwen.json`                | `~/.qwen/settings.json`                  | Qwen Code settings                |
 | `agents/antigravity.json`         | `~/.gemini/antigravity-cli/settings.json`| Antigravity settings              |
 | `agents/antigravity-mcp.json`     | `~/.gemini/config/mcp_config.json`        | Antigravity MCP servers (`${ENV}` expanded from `.env`) |
-| `agents/antigravity-hooks.json`   | `~/.gemini/config/hooks.json`             | Antigravity lifecycle hooks (`Stop` sound) |
 | `agents/grok.toml`                | `~/.grok/config.toml`                    | Grok CLI settings                 |
 | `agents/claude.json`              | `~/.claude/settings.json`                | Claude Code settings              |
 | `agents/claude-plugins/`          | `~/.claude/skills/<name>/`               | Claude Code MCP servers, shipped disabled (one skills-dir plugin each) |
