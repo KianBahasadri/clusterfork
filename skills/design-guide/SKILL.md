@@ -1,230 +1,286 @@
 ---
 name: design-guide
-description: Concrete component specifications, design tokens, and core design principles for building clean, accessible, high-craft GUIs across web, desktop, and mobile.
+description: Apply an exact UI implementation contract covering tokens, component anatomy, dimensions, states, interaction, accessibility, responsive behavior, and acceptance checks.
 metadata:
-  short-description: UI component specifications and design tokens
+  short-description: Exact UI implementation contract
 ---
 
-# Design Guide & Component Specifications
+## Components
 
-Build interfaces with quiet defaults, direct manipulation, and progressive mastery. Rather than applying decorative treatments across an entire surface, design interfaces from consistent structural tokens and concrete, accessible component rules.
+### Shared Baseline
 
-## Core Principles & Authority
+* Apply `box-sizing: border-box` to every element and pseudo-element.
+* Set the minimum supported viewport width to 320px. Do not introduce horizontal page scrolling at 320px or at 200% browser zoom; only bounded data regions such as tables may scroll horizontally.
+* Set body text in `--ui` at 15px with a 1.5 line-height. Set buttons, inputs, textareas, and custom comboboxes to inherit the surrounding font and color.
+* Set `--ui` to `"IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif` and `--mono` to `"IBM Plex Mono", Consolas, monospace`.
+* Use `--mono` only for code, tokens, identifiers, keyboard keys, timestamps, aligned numeric data, and compact ordinal headings.
+* Render keyboard focus with a 2px solid `--focus` outline and a 2px offset. Do not remove focus without replacing it with this treatment.
+* Keep source order identical to visual reading order. Every visible interactive element must be reachable and operable by keyboard.
+* Limit routine color, border, opacity, and background transitions to 80–150ms. Limit overlay entrance transitions to 200ms. Disable non-essential animation when `prefers-reduced-motion: reduce` matches.
 
-1. **Color Exclusively Conveys Information (`[INV]`):** Colors (hues) are strictly reserved for communicating meaning, state, and data. They must **never** be used for decoration, aesthetic flair, brand styling, or general interface chrome. The entire structural foundation—canvas, cards, text, dividers, borders, nominal buttons, tabs, selection controls, and focus indicators—is strictly neutral and monochromatic.
-2. **Non-Color Meaning (`[REQ]`):** Color must never be the sole carrier of status or action (WCAG 2.2 SC 1.4.1). Whenever a color communicates an informational state (such as an alert, success, or error), it must be accompanied by text, shape, iconography, or position.
-3. **Quiet Nominal Default (`[SIG]`):** Healthy, routine state should look settled and neutral. Reserve brightness, saturation, and motion for changes, active user focus, or genuine exceptions.
-4. **Truthful State (`[INV]`):** Displayed values, capability, and progress must reflect the real system. Never show unverified external success or collapse simulated/derived data into observed ground truth.
-5. **Platform Conventions (`[CONV]`):** Default to native controls, selection, scrolling, focus order, and keyboard shortcuts. Replace them only when the replacement preserves expected behavior and adds measurable capability.
+### Shared Tokens
 
----
+#### Color Values
 
-## Icon System
+| Token | Dark | Light | Apply to |
+| --- | --- | --- | --- |
+| `--canvas` | `#080b0d` | `#ecefec` | Viewport background and inverted text |
+| `--surface` | `#11171b` | `#f7f8f5` | Form controls and bounded content surfaces |
+| `--surface-raised` | `#151d21` | `#ffffff` | Menus, dialogs, popovers, and hovered neutral rows |
+| `--ink` | `#dbe3e6` | `#172027` | Body text and data values |
+| `--ink-strong` | `#f3f6f5` | `#0a0d0f` | Headings, selected labels, and primary fills |
+| `--muted` | `#849094` | `#536168` | Secondary metadata and inactive labels |
+| `--faint` | `#566166` | `#778287` | Placeholders and inactive icons |
+| `--line` | `#263137` | `#c8d1d0` | Standard borders and row dividers |
+| `--line-strong` | `#3a4a51` | `#9dacab` | Active borders, overlay borders, and tab rules |
+| `--focus` | `#9cc8ff` | `#005fcc` | Keyboard focus only |
+| `--accent` | `#62c8d8` | `#006f7c` | One observed chart series |
+| `--accent-soft` | `rgba(98, 200, 216, 0.12)` | `rgba(0, 111, 124, 0.10)` | Soft observed-series treatment |
+| `--good` | `#79c99e` | `#1d6846` | Confirmed healthy or successful state |
+| `--good-soft` | `rgba(121, 201, 158, 0.14)` | `rgba(29, 104, 70, 0.12)` | Healthy or successful surface |
+| `--caution` | `#d6ad63` | `#805600` | Warning or degraded state |
+| `--caution-soft` | `rgba(214, 173, 99, 0.14)` | `rgba(128, 86, 0, 0.12)` | Warning or degraded surface |
+| `--danger` | `#df7e78` | `#9a332f` | Error, outage, or destructive action |
+| `--danger-soft` | `rgba(223, 126, 120, 0.14)` | `rgba(154, 51, 47, 0.12)` | Error, outage, or destructive surface |
+| `--derived` | `#b9aaef` | `#63559b` | Estimated, modeled, or synthetic data |
+| `--derived-soft` | `rgba(185, 170, 239, 0.14)` | `rgba(99, 85, 155, 0.12)` | Estimated, modeled, or synthetic surface |
 
-* Use [Lucide](https://lucide.dev/icons/) as the canonical general-purpose icon set. Choose the official icon whose documented name most directly matches the action or concept; do not mix icon packs, substitute Unicode glyphs, or redraw a standard symbol when Lucide already provides one.
-* Preserve Lucide's 24×24 view box, 2px outline stroke, round caps and joins, and `currentColor` behavior. Scale the complete icon uniformly to fit its context; do not stretch it, fill an outline icon, splice paths from different icons, or change stroke weight from icon to icon.
-* Import, tree-shake, or embed only the icons the interface uses. Avoid shipping the complete catalog or adding a remote runtime dependency to a surface that needs to work offline. Preserve Lucide's ISC notice when vendoring SVGs; the reference asset's copy is [assets/LUCIDE-LICENSE.txt](assets/LUCIDE-LICENSE.txt).
-* Use a custom icon only for a real domain concept absent from Lucide, and construct it on Lucide's grid and stroke grammar. For danger-colored status, select an angular Lucide silhouette such as an octagon rather than recoloring a circular status icon.
-* Treat decorative icons as hidden from assistive technology. Give every icon-only control an accessible name and a visible tooltip; pair ambiguous, rare, or consequential symbols with visible text.
+* Use `--canvas`, `--surface`, `--surface-raised`, `--ink`, `--ink-strong`, `--muted`, `--faint`, `--line`, and `--line-strong` for routine interface chrome.
+* Use `--good`, `--caution`, `--danger`, and `--derived` only on elements that communicate the corresponding state or data provenance.
+* Pair every semantic color with explicit text and, when the color is on a shaped element, the geometry specified below.
 
----
+#### Geometry, Spacing, and Elevation
 
-## Design Tokens
+* Set `--radius` to 6px, `--radius-sm` to 4px, and `--radius-pill` to 9999px.
+* Give good-state containers the most rounded geometry in a severity family: use `--radius-pill` for compact badges and `--radius` for larger surfaces.
+* Give caution-state containers intermediate geometry: use `--radius-sm`.
+* Give every element filled, outlined, or otherwise shaped with `--danger` or `--danger-soft` a 0px radius. Use square or angular danger markers and icons. Danger-colored text with no surrounding shape has no radius requirement.
+* Use the spacing sequence 4, 8, 12, 16, 20, 24, 32, 40, and 56px. Do not introduce adjacent one-off spacing values unless required to align text optically inside a fixed-size control.
+* Use `0 2px 6px rgba(0, 0, 0, 0.25)` for a small dark-theme shadow and `0 2px 6px rgba(23, 32, 39, 0.08)` in light theme.
+* Use `0 16px 40px rgba(0, 0, 0, 0.42)` for a large dark-theme overlay shadow and `0 16px 36px rgba(23, 32, 39, 0.12)` in light theme.
+* Apply shadows only to overlays such as menus, popovers, dialogs, and toasts. Do not shadow static page sections or metric groups.
 
-### Monochromatic Structural Tokens (Chrome, Structure & Typography)
-Surfaces, borders, typography, and nominal controls use exclusively monochromatic tokens:
+### Icons
 
-* `--canvas`: Base viewport background (`#080b0d` dark / `#ecefec` light).
-* `--surface`: Content containers, panels, cards (`#11171b` dark / `#f7f8f5` light).
-* `--surface-raised`: Elevated overlays, dialogs, popovers, dropdowns (`#151d21` dark / `#ffffff` light).
-* `--ink`: Standard body text, prose, data values (`#dbe3e6` dark / `#172027` light).
-* `--ink-strong`: High-contrast headings, primary metrics, active labels, primary action fills (`#f3f6f5` dark / `#0a0d0f` light).
-* `--muted`: Secondary metadata, captions, timestamps, unit labels (`#849094` dark / `#536168` light).
-* `--faint`: Tertiary borders, inactive icons, placeholder hints (`#566166` dark / `#778287` light).
-* `--line`: Standard structural borders, table row dividers (`#263137` dark / `#c8d1d0` light).
-* `--line-strong`: High-contrast dividers, active borders, active tab underlines (`#3a4a51` dark / `#9dacab` light).
-* `--focus`: High-contrast keyboard navigation focus ring (`#9cc8ff` dark / `#005fcc` light).
+* Use Lucide as the only general-purpose icon set. Select icons by their official Lucide names.
+* Preserve the Lucide 24×24 view box, 2px stroke, round caps, round joins, no fill, and `currentColor`. Scale the entire SVG uniformly.
+* Render standard control icons at 16×16px, compact inline icons at 14×14px, and utility-control icons at 16–18px. Do not vary stroke width to compensate for size.
+* Import, tree-shake, or embed only used icons. When vendoring SVG paths, retain the ISC notice in [assets/LUCIDE-LICENSE.txt](assets/LUCIDE-LICENSE.txt).
+* Do not substitute Unicode characters, emoji, hand-drawn SVGs, or icons from another pack when Lucide contains the concept.
+* Use a custom icon only when Lucide has no matching domain concept; construct it on the same 24×24 grid with the same stroke treatment.
+* Set decorative SVGs to `aria-hidden="true"` and `focusable="false"`. Give an icon-only button an accessible name and a tooltip containing the same action label.
+* Do not add an icon to an inline validation message or status callout when visible text, semantic color, and severity geometry already identify the state.
 
-### Informational Color Tokens (Strictly Reserved for Meaning & State)
-Hues are applied **only** when directly communicating system state, errors, or discrete data series:
+### Page Shell and Component Sections
 
-* `--good`: Confirmed success, healthy state (`#79c99e` dark / `#1d6846` light). Shaped good-state surfaces and markers use the most rounded geometry in a severity family.
-* `--caution`: Degraded condition, warning, impending threshold (`#d6ad63` dark / `#805600` light). Shaped caution surfaces use an intermediate corner radius, and markers use rounded-square geometry—visibly between healthy circles or pills and danger squares.
-* `--danger`: Critical error, destructive action, hard failure (`#df7e78` dark / `#9a332f` light). Every container, border, marker, or icon rendered with `--danger` or `--danger-soft` uses sharp geometry: zero corner radius and square or angular indicators rather than circles or pills. Danger-colored text without a surrounding shape needs no geometry treatment.
-* `--derived`: Estimated, modeled, or synthetic data distinguished from ground truth (`#b9aaef` dark / `#63559b` light).
-* *Rule:* Never apply these colors to nominal buttons, background headers, navigational chrome, or decorative accents.
+#### Interactive Page Utilities
 
----
+* On every page containing interactive controls, navigation, or commands, place a utility group at the upper right. Put the search launcher immediately left of the theme toggle with an 8px gap.
+* Size the search launcher to 72×36px. Give it a 1px `--line` border, `--surface` background, 6px radius, and 10px horizontal padding. Place a 15×15px Lucide `Search` icon at the left inset. Leave the rest of the launcher empty.
+* Give the search launcher the accessible name `Open search and commands`. Do not render `Search page`, `Ctrl+K`, `⌘K`, or any other visible text inside or beside it.
+* Size the theme toggle to 36×36px. Use a Lucide `Sun` or `Moon` icon. Keep the toggle background, border, and shadow transparent in every state; change only icon color or opacity on hover and active states.
+* At viewport widths above 600px, position the utility group 20px from the top and 24px from the right. At 600px and below, use 12px top and right offsets and reserve at least 68px above page content.
 
-## Component Specifications
+#### Spotlight Search and Commands
 
-### 1. Buttons & Action Triggers
-* **Variants:**
-  * *Primary:* Solid neutral high-contrast fill (`--ink-strong`) with inverted text (`--canvas`). Never a colored accent button. Use once per primary action on a surface.
-  * *Secondary / Outline:* Transparent fill, 1px `--line` border, `--ink` text. On hover: `--surface-raised` background and `--line-strong` border.
-  * *Quiet / Ghost:* Transparent fill, no border, `--muted` text. On hover: `--ink-strong` text and subtle neutral background tint.
-  * *Danger:* Red fill or border (`--danger`) with sharp, zero-radius corners. The **only** colored button variant, permitted because it conveys critical risk and destructive consequences.
-  * *Icon Button:* Square or circular hit target (minimum 36×36px visual, 44×44px touch area) with a transparent background, no border, and no shadow. Use the matching Lucide icon and adjust its neutral tone or opacity for hover and active feedback while preserving a clear focus-visible ring. Provide an accessible label via `aria-label` or `title` plus a tooltip.
-* **States:**
-  * *Hover:* Shift filled or outlined button backgrounds by 8–12% neutrally. For icon-only buttons, change the icon tone or opacity without adding container chrome.
-  * *Active:* Slight downscale (`transform: scale(0.98)`).
-  * *Focus-Visible:* 2px solid `--focus` ring with 2px offset.
-  * *Disabled:* `opacity: 0.45`, `cursor: not-allowed`, `aria-disabled="true"`.
-  * *Loading / Busy:* Retain fixed button width to prevent layout jump; show inline neutral spinner; set `aria-busy="true"` and disable repeated clicks.
+* Activating the search launcher or pressing `Ctrl+K` or `Command+K` opens one modal command palette and moves focus to its search input.
+* Size the palette to `min(600px, viewport width minus 32px)`. Position its top edge at 12vh, cap its height at the smaller of 560px and the viewport height minus 24vh, and use `--surface-raised`, a 1px `--line-strong` border, 6px radius, and the large overlay shadow.
+* Give the palette a neutral backdrop at `rgba(0, 0, 0, 0.65)`. Keep focus inside the palette while open.
+* Place a 15×15px Lucide `Search` icon 16px from the input's left edge. Size the input to 52px high with 42px left padding and 16px right padding. Use only a 1px `--line` bottom border.
+* Search page destinations and executable commands together with case-insensitive substring matching on every input event.
+* Include only commands the page implements. Standard commands are `Export as Markdown`, `Print or export as PDF`, `Copy page link`, `Toggle theme`, and `Keyboard shortcuts`.
+* Render result rows at 14px with 7px vertical and 10px horizontal padding. Use `--surface` plus `--ink-strong` and weight 600 for the active row.
+* Keep DOM focus in the search input. `ArrowDown` and `ArrowUp` move the active result, `Enter` executes it, and `Escape` closes the palette. Closing returns focus to the launcher.
+* Give the input `role="combobox"`, `aria-autocomplete="list"`, `aria-expanded`, `aria-controls`, and `aria-activedescendant`. Give results `role="option"` and maintain `aria-selected`.
+* The `Keyboard shortcuts` command opens a popup containing every shortcut active on that page. Render shortcuts as neutral `<kbd>` elements only in this popup. Do not show shortcuts in persistent chrome, buttons, tooltips, labels, navigation items, metadata, or placeholders.
 
-### 2. Dropdowns & Menus
-* **Search Field & Selection Modes:**
-  * Every value-selection dropdown uses a custom editable text field and popover rather than a browser-default `<select>` or a button-only picker. Typing filters the available options immediately.
-  * Decide whether the field is list-only or free-entry. A list-only field commits only an available option and restores its last committed value when unmatched text is dismissed. A free-entry field also accepts text not present in the list and offers the entered text itself as a selectable custom option. Distinguish that value with quotes or text treatment when needed, but do not prepend an instruction such as `Use`.
-  * Display the committed value in the text field with a right-aligned Lucide `Chevron Down`. Keep that value synchronized with form submission or application state.
-  * Give the editable field `role="combobox"`, `aria-autocomplete="list"`, `aria-expanded="true/false"`, and `aria-controls` pointing to the listbox. Expose the active option with `aria-activedescendant`; options use `role="option"` and accurate `aria-selected` state.
-* **Menu Surface:**
-  * Elevated container (`--surface-raised`), 1px `--line-strong` border, neutral box shadow.
-  * Constrained height (`max-height: 280px; overflow-y: auto`).
-  * Options: use compact 28–30px rows with 3–4px vertical and 10–12px horizontal padding in pointer-dense interfaces. Keep labels clearly separated without leaving large empty bands between them, and preserve at least a 44px target for coarse-pointer or touch layouts. Indicate the selected option with stronger `--ink-strong` text and font weight plus accurate `aria-selected`; do not add a checkmark or reserve a trailing indicator gutter.
-  * Show an explicit empty result when filtering finds no available option. In free-entry mode, offer the entered text as the custom option instead.
-* **Sizing & Wrapping:**
-  * Content-fit the field and menu instead of applying one generous width to every dropdown. Use the narrowest stable width that accommodates ordinary labels and the field's chevron, with a practical minimum and viewport cap; do not leave a large empty area after the content. Let unusually long or user-defined values wrap in the menu rather than permanently widening the control.
-  * Wrap labels at spaces whenever possible. Keep short words, region codes, and other compact identifiers intact; break inside a token only when it is too long to fit the available width. Never use indiscriminate break-all wrapping.
-* **Keyboard & Dismissal:**
-  * Keep DOM focus in the editable field while `Up/Down Arrows` move the active option. Preserve ordinary text-editing keys while the user types.
-  * `Enter` commits the active option or an offered custom value. `Escape` restores the last committed value and closes. `Tab`, click outside, and viewport blur close the popover and apply the dropdown's list-only or free-entry commit policy.
+#### Component Section Construction
 
-### 3. Form Inputs & Textareas
-* **Structure & Labeling:**
-  * Always pair inputs with a visible `<label for="id">`. Never use placeholder text as a substitute for a label.
-  * Add help text below the label or input only when it communicates a non-obvious format, constraint, consequence, or recovery instruction, and link it with `aria-describedby`. Omit copy that merely restates the field label, current value, or data type.
-* **Field Styling:**
-  * Background: `--surface` or `--canvas`.
-  * Border: 1px solid `--line`, border-radius 4–6px, padding 8px 12px.
-  * Font: Proportional `--ui` for text, `--mono` for code/tokens/API keys.
-* **States:**
-  * *Hover:* Border becomes `--line-strong`.
-  * *Focus:* Border becomes `--ink-strong` with 2px `--focus` ring.
-  * *Invalid / Error:* Border becomes `--danger` and corners become sharp. Render concise inline text beneath the field with `role="alert"` and the shortest complete instruction needed to fix the error. When the label and field type already make the expected format obvious, use direct copy such as `Enter a valid email address` instead of explaining basic syntax. Do not prepend a status icon when the field treatment and message already identify the error. Omit a trailing period from a short, one-line corrective message. This is where color is permitted, because it conveys an error state.
-  * *Search / Clearable:* Lucide `Search` icon on the left; icon-only clear button using Lucide `X` on the right, appearing only when the input has a value.
+* Wrap each top-level component example in a semantic `<section>` with a unique `id` and `aria-labelledby` pointing to its heading.
+* Use one `h2` as the visible heading. Format it as a two-digit ordinal, one space, and the specific component name, for example `01 Buttons & Actions`.
+* Put the rendered component content immediately after the heading. Use a 20px gap between heading and content and 56px between top-level sections.
+* Do not place a slash, em dash, colon, or decorative separator between the ordinal and component name.
+* Do not render `Component`, `Components`, `Specification`, `Variants`, `States`, `States: Disabled & Loading`, or another showcase taxonomy label.
+* Do not render a subtitle, description, summary sentence, or horizontal rule beneath the section heading.
+* Do not add a border, background fill, radius, or shadow to a page section or example wrapper solely to distinguish it from adjacent sections. Use the heading and spacing for separation.
+* Preserve a border or fill only when it is part of the demonstrated component itself, such as an input boundary, menu, table, dialog, chart, alert, or toast.
+* Build every example so its visible labels, values, and controls identify the component and its state without explanatory prose.
 
-### 4. Selection Controls (Checkboxes, Radios, Switches)
-* **Checkboxes:**
-  * 16×16px or 18×18px square, 3px border radius.
-  * Checked: Solid `--ink-strong` fill with contrasting inverted checkmark (`--canvas`). Supports indeterminate dash state. No decorative color.
-* **Radio Buttons:**
-  * 16×16px or 18×18px circle. Checked: Outer border and centered solid dot in `--ink-strong`.
-  * Always group related radio buttons inside `<fieldset>` with `<legend>`.
-* **Toggle Switches:**
-  * Pill track (36×20px), sliding circle thumb (16×16px).
-  * State transition: Track shifts from neutral `--line` (off) to neutral `--ink-strong` (on).
-  * Set `role="switch"` and `aria-checked="true/false"`.
-* **Target & Label:** Clicking label toggles the control. Minimum 44px clickable touch row.
+#### Page Layout
 
-### 5. Labels, Badges, Tags & Metadata
-* **Form Labels:** 13–14px, weight 500/600, `--ink` or `--ink-strong`. Mark required fields with text `(required)` or an accessible symbol with `aria-hidden="true"`.
-* **Status Badges / Pills (Informational Color):**
-  * Used **specifically** to communicate health, condition, and telemetry state.
-  * Compact padding (2px 8px), border-radius 4px or 999px (pill).
-  * Composed of a soft background tint and crisp, explicit status text. Do not prepend a colored indicator dot; it repeats information, consumes space, and adds visual noise without improving identification.
-  * *Nominal:* Neutral tint, `--muted` text.
-  * *Good:* `--good-soft` tint, `--good` text, and a fully rounded container.
-  * *Caution:* `--caution-soft` tint, `--caution` text, and a medium-radius container.
-  * *Danger:* `--danger-soft` tint, `--danger` text, and a sharp rectangular container.
-  * *Derived:* `--derived-soft` tint, `--derived` text.
-  * Keep labels self-explanatory so status remains understandable without color.
-* **Flashing Status Badges:**
-  * Reserve flashing for a live, time-sensitive condition that genuinely requires attention. Keep the explicit status label visible throughout; flash the tint or border treatment rather than making the text disappear.
-  * Make the slow variant a smooth, eased tint or border pulse around 1.5–2 seconds per cycle. Make the fast variant a discrete flash around 600–800ms per cycle. Keep every cadence below three flashes per second. Tempo can increase urgency, but it does not replace the severity geometry: caution remains medium-radius and danger remains sharp.
-  * Continue flashing for as long as the represented live condition remains active, and stop immediately when that condition clears. Do not impose an arbitrary time limit that makes an unresolved state appear settled. Honor `prefers-reduced-motion: reduce` by presenting the same badge as a static status; add a user-facing pause control when the product's accessibility requirements call for one.
-* **Metadata Tags:** Non-status tags, commit hashes, and versions are strictly neutral (`--surface-raised`, `--line`, `--muted`). Do not mix keyboard hints into metadata rows.
+* On desktop, cap content at 1240px, center it, use 32px top, 24px horizontal, and 80px bottom padding, and use a 240px navigation column plus one flexible content column separated by 40px.
+* Collapse to one column at 900px and below. Hide the component index at that breakpoint unless a mobile navigation replacement is implemented.
+* Set content columns and flex children to `min-width: 0` so long labels cannot force page overflow.
+* Mark the active side-navigation row with `--ink-strong`, weight 600, and an optional neutral surface. Do not add a leading stripe or border.
 
-### 6. Tables & Data Grids
-* **Alignment Rules:**
-  * Text and descriptions: Left-aligned.
-  * Numbers, timestamps, metrics, currency: Right-aligned with tabular figures (`font-variant-numeric: tabular-nums`).
-  * Status badges: Centered or left-aligned with headers.
-  * Action menus / buttons: Right-aligned in final column.
-* **Headers & Borders:**
-  * Neutral sticky headers (`position: sticky; top: 0; background: var(--surface)`).
-  * 1px bottom border `--line` per row. Neutral row hover highlight (`--surface-raised`).
-  * Color appears **only** inside status badges or threshold-breaching values (e.g. error rate in `--danger`).
-* **Empty & Loading States:**
-  * Empty table displays an explicit neutral message explaining why no records exist and an action button to reset filters.
+### 1. Buttons and Action Triggers
 
-### 7. Charts & Data Graphics (Informational Color)
-* **Rendering & Axes:**
-  * Clean vector SVG with neutral gridlines (`--line`) and neutral axis typography (`--muted`).
-  * Explicit units (e.g., "ms", "req/s", "%") on axes.
-* **Series Differentiation:**
-  * Color is permitted exclusively to differentiate discrete data series.
-  * Series colors must be paired with stroke patterns (solid, dashed, dotted) or markers so non-color users can distinguish series.
-* **Inspection & Fallback:**
-  * Hover crosshair with floating neutral tooltip displaying the exact date/time and values.
-  * Mandatory accessible fallback: an expandable `<details>` table displaying the exact plotted values.
+* Use a native `<button>` and always set `type="button"`, `type="submit"`, or `type="reset"` explicitly.
+* Use 14px text, weight 500, line-height 1, 8px internal gap, 9px vertical padding, 16px horizontal padding, a 1px transparent base border, and a 6px radius for non-danger text buttons.
+* Primary: use `--ink-strong` fill, `--canvas` text, and weight 600. Place at most one primary action in an action group.
+* Secondary: use a transparent fill, 1px `--line` border, and `--ink` text. On hover, use `--surface-raised` and `--line-strong`.
+* Quiet: use no border, transparent fill, and `--muted` text. On hover, use `--ink-strong` text and `--surface-raised`.
+* Danger: use `--danger-soft` fill, a danger-tinted 1px border, `--danger` text, and 0px radius. On hover, use `--danger` fill and white text. Every red button remains sharp-edged.
+* Icon-only: use a 36×36px visual button with at least a 44×44px touch target. Keep its background, border, and shadow transparent in default, hover, and active states. Use icon color or opacity for hover feedback.
+* On pointer activation, scale an enabled button to 0.98 while pressed. Do not apply the scale to disabled buttons.
+* For native disabled controls, set `disabled`. For custom disabled controls, set `aria-disabled="true"`, block pointer and keyboard activation, use opacity 0.45, and use `cursor: not-allowed`.
+* Before entering a loading state, preserve the button's rendered width as `min-width`. Set `aria-busy="true"`, disable repeated activation, and show a 14×14px neutral spinner with an action-specific present-participle label such as `Saving…`. Restore the final or idle state without changing width.
+* Show the global focus-visible ring on every enabled button.
 
-### 8. Dialogs & Modals
-* **Container & Backdrop:** Neutral surface (`--surface-raised`), 1px `--line-strong` border, dimmed neutral backdrop (`rgba(0,0,0,0.65)`).
-* **Focus Management:**
-  * Move focus to first interactive element on open.
-  * Trap focus within dialog while active; `Escape` closes dialog; return focus to trigger on close.
-* **Actions Footer:**
-  * Cancel (quiet / secondary neutral) aligned left.
-  * Primary confirm on right. Destructive actions use Danger button (`--danger`).
+### 2. Editable Dropdowns and Menus
 
-### 9. Tooltips & Popovers
-* **Tooltips:**
-  * Purely informative, neutral text hints for icon buttons or truncated strings.
-  * Triggered on hover and keyboard focus after short delay (~150ms).
-  * *Never contain interactive controls or links.*
-* **Popovers:** Neutral floating card for interactive options (filters, menus).
+#### Anatomy
 
-### 10. Navigation, Tabs & Breadcrumbs
-* **Spotlight Search & Actions:**
-  * Every interactive page includes a compact search launcher in the upper-right utility area, immediately left of the theme toggle. Static or non-interactive pages do not need it. Render the launcher as a short field-shaped button with a neutral surface and thin neutral border, and place the magnifier at the field's left inset rather than centering it; this makes the control read as a search bar instead of an icon button. Give it an accessible label, but do not place visible copy such as `Search page` or a shortcut hint in the persistent chrome.
-  * Activating the launcher opens a centered Spotlight-style palette and moves focus into its editable search field. Filter the page's meaningful destinations and available commands together as the user types. Common commands include exporting as Markdown, opening the print-to-PDF flow, copying the page link, toggling the theme, and opening keyboard shortcuts; include only actions the page actually implements.
-  * Make the palette keyboard-accessible: `Up/Down Arrows` move the active result, `Enter` runs it, and `Escape` closes the palette and returns focus to the launcher. Support `Ctrl+K` and `Command+K` to open the palette, but do not display that hint beside the launcher.
-  * Include `Keyboard shortcuts` as a palette command; it opens a popup listing every shortcut the current surface actually supports.
-  * The shortcuts popup is the only visible place keyboard shortcuts appear. Do not append shortcut hints to buttons, labels, tooltips, navigation items, metadata, or placeholders. Render keys as compact neutral `<kbd>` elements inside that popup and keep its list synchronized with actual behavior.
-* **Side Navigation:**
-  * Mark the active row with stronger text and font weight plus an optional neutral surface. Do not add a leading selection stripe or border; it duplicates the selected treatment and creates unnecessary visual noise.
-* **Tabs:**
-  * Container has `role="tablist"`, each tab has `role="tab"` and `aria-selected="true|false"`.
-  * Active tab has strong text (`--ink-strong`) and an active neutral underline (`--ink-strong` or `--line-strong`). No colored accent line.
-  * Supports keyboard arrow navigation (`Left`/`Right` arrow keys cycle active tabs).
-* **Breadcrumbs:**
-  * Neutral `<nav aria-label="Breadcrumb">` with `<ol>`, neutral separators (`/`), and current page marked with `aria-current="page"`.
+* Do not use a browser-default `<select>` for these dropdowns.
+* Include a visible label, an editable text input, a right-aligned Lucide `ChevronDown`, a popover listbox, options, an empty-result row, and a form value synchronized to the committed selection.
+* Give the input `role="combobox"`, `aria-autocomplete="list"`, `aria-haspopup="listbox"`, `aria-expanded`, and `aria-controls`. Point `aria-activedescendant` to the active option while one exists.
+* Give the popover `role="listbox"`. Give every selectable row a stable unique `id`, `role="option"`, and accurate `aria-selected`.
+* Keep DOM focus in the text input while the listbox is open. Do not move focus into option rows.
 
-### 11. Cards & Panels
-* **Container:** Purely neutral `--surface` background, 1px `--line` border, 6px border-radius, subtle neutral shadow.
-* **Header & Action:** Bold neutral title, optional subtitle, right-aligned action.
+#### Geometry and Content
 
-### 12. Alerts, Callouts & Toasts (Informational Color)
-* **Inline Callouts:**
-  * Permitted to use status colors because they communicate abnormal or consequential conditions:
-    * *Info / System:* Neutral or faint tint.
-    * *Caution:* `--caution` icon, border, and text with an intermediate corner radius.
-    * *Danger / Outage:* `--danger` icon, border, and text with sharp container and icon geometry.
-    * *Success:* `--good` icon, border, and text with rounded geometry.
-* **Toast Notifications:**
-  * Neutral floating container (`--surface-raised`, `--line-strong`) with status icon, operation message, and neutral "Undo" action button.
-  * Auto-dismisses after 4–6 seconds; pauses countdown when hovered or focused.
-  * Announced via `role="status"` or `aria-live="polite"`.
+* Use 14px input text, 9px vertical padding, 14px left padding, 36px right padding, a 1px `--line` border, `--surface` fill, and 6px radius.
+* Position the 14×14px chevron 13px from the right edge. Rotate it 180 degrees while expanded.
+* Compute width from the larger of the current input or placeholder width plus 52px and the widest ordinary option label plus 28px. Clamp the result from 176px through 232px and cap it at the available viewport width.
+* Match the popover width to the field. Place it 6px below the field and cap height at 240px with vertical scrolling. Use 2px internal padding, `--surface-raised`, a 1px `--line-strong` border, 6px radius, and the large overlay shadow.
+* Render pointer-dense option rows at 13.5px, line-height 1.35, minimum height 28px, 3px vertical padding, and 10px horizontal padding. At coarse-pointer breakpoints, increase rows to at least 44px high with 10px vertical padding.
+* Mark the selected option with `--ink-strong` and weight 600. Do not render a checkmark and do not reserve a trailing checkmark gutter.
+* Wrap option labels at spaces with normal word breaking. Use overflow wrapping only when one token is too long to fit. Do not use `word-break: break-all`.
 
----
+#### Filtering and Commit Rules
 
-## Layout & Section Architecture
+* Filter options on every input event with trimmed, locale-lowercased, case-insensitive substring matching. Announce the number of available options through a polite live region.
+* Open the popover when the input is activated or edited. When no fixed option matches, render `No matching options` in list-only mode.
+* Configure each dropdown explicitly as list-only or free-entry.
+* In list-only mode, commit only an exact option. On `Enter`, commit the active option. On `Escape`, outside click, `Tab`, or window blur with unmatched text, restore the last committed label and value.
+* In free-entry mode, when non-empty text has no exact match, add one selectable custom option containing only the entered text in quotation marks. Do not prefix it with `Use`, `Create`, or another instruction. `Enter`, `Tab`, or outside dismissal commits the trimmed custom value according to the product's form policy.
+* `ArrowDown` and `ArrowUp` move the active option and scroll it into view. `Enter` commits it. `Escape` restores the prior committed state and closes. Preserve normal cursor movement, deletion, selection, and composition behavior for all other text-editing input.
+* Synchronize the visible committed label, submitted value, selected class, and `aria-selected` state in one operation. Dispatch one change event only when the committed value changes.
 
-### Component Sections Must Identify Themselves
+### 3. Form Inputs, Search Fields, and Textareas
 
-* **Include:** One compact heading containing the ordinal followed directly by the specific component name, such as `01 Buttons & Actions`.
-* **Include:** A semantic heading (`h2` at the top section level) connected to its section with `aria-labelledby`.
-* **Include:** The rendered component immediately after the heading, with visible control labels, familiar affordances, and states that identify themselves.
-* **Do not include:** A description, subtitle, or summary sentence explaining the component. `[INV]` A viewer must be able to identify it from its visible name, rendered content, and boundary.
-* **Do not include:** Decorative punctuation such as a slash between the ordinal and section name, a generic heading such as `01 Specification`, a second larger title that repeats the component name, or a horizontal rule beneath the heading.
-* **Do not include:** Self-evident showcase taxonomy such as `Variants` or `States: Disabled & Loading`. If those labels seem necessary, strengthen the examples' visible labels and states instead.
-* **Do not include:** A generic visible label such as `Components` above a navigation list when the links already identify its contents. Keep an accessible navigation name even when the visible label is unnecessary.
-* **Do not include:** A border or background color whose only purpose is to visually distinguish separate sections of a page. Repeated boxes add visual fatigue without clarifying the interface.
-* **Boundary:** Separate page sections with clear headings and whitespace. Preserve borders and surface fills only when they belong to an actual component or communicate a real control boundary or state.
+* Pair every form control with a visible `<label>` whose `for` matches the control `id`. Do not use a placeholder as the label.
+* Use 13.5px label text, weight 500, and `--ink-strong`. Put 6px between label, control, and associated message.
+* Mark required controls with visible `(required)` text or an `aria-hidden="true"` symbol plus required state available in the accessible name. Set the control's native `required` attribute when submission requires it.
+* Use `--surface`, a 1px `--line` border, 6px radius, 9px vertical padding, 12px horizontal padding, and 14px text for one-line inputs.
+* Use `--mono` at 13px for code, tokens, API keys, and machine identifiers. Do not use monospace for ordinary names, email addresses, search terms, or prose.
+* Give textareas the same border and typography, a minimum height of 96px, and vertical-only resizing unless the surrounding layout supports both axes.
+* On hover, change only the border to `--line-strong`. On focus, keep a strong border and render the global 2px focus ring.
+* On disabled controls, set the native `disabled` attribute, opacity 0.5, `cursor: not-allowed`, and `--canvas` fill.
+* Add helper text only for a non-obvious format, constraint, consequence, or recovery step and associate it through `aria-describedby`. Do not include copy that merely restates the label, value, editability, data type, or organizational scope. Specifically omit generic lines such as `Unique identifier within your organization` and `Read-only live credentials token`.
+* For an invalid field, set `aria-invalid="true"`, point `aria-describedby` to its message, use a 1px `--danger` border, and set radius to 0px. Render the correction beneath the field in 12px `--danger` text with `role="alert"`.
+* Do not prepend an error icon. Write one direct corrective instruction and omit its trailing period. For an email format error, use `Enter a valid email address`.
+* Keep ordinary text inputs free of a leading icon.
+* Put a 15×15px Lucide `Search` icon 11px from the left edge of every search input and increase left padding to 36px. The icon, not placeholder wording, distinguishes search from ordinary text entry.
+* When a search field is clearable, show a borderless and backgroundless Lucide `X` button at the right only while the field contains a value. Give the input 36px right padding. Activating clear empties the value, dispatches an input event, hides the button, preserves focus in the field, and updates filtered results immediately.
 
----
+### 4. Selection Controls
+
+* Use native checkbox and radio inputs for state and form submission. A visually hidden native input must remain focusable and must receive the global focus-visible treatment on its visible companion.
+* Render checkboxes at 18×18px with a 1px `--line-strong` border, `--surface` fill, and 4px radius. Checked and indeterminate states use `--ink-strong` fill and border with a 14×14px inverted Lucide `Check` or `Minus`.
+* Render radio controls at 18×18px with a circular `--line-strong` border and an 8×8px `--ink-strong` selected dot.
+* Wrap related radios in `<fieldset>` and provide a visible `<legend>`.
+* Render switches with a 38×22px pill track and a 16×16px circular thumb inset 3px. Use `--line` for the off track, `--ink-strong` for the on track, and translate the thumb 16px when on.
+* Use a checkbox with `role="switch"` and maintain `aria-checked` only when native checked semantics do not already expose the required switch role.
+* Put the input and visible label in one clickable row with a 10px gap and a minimum 44px target height. Clicking the text toggles the control.
+* Support `Space` for checkboxes and switches and arrow-key movement within a native radio group. Disabled controls must not toggle.
+
+### 5. Labels, Badges, and Metadata
+
+* Render status badges as inline-flex containers with 12px text, weight 500, line-height 1.2, 3px vertical padding, and 8px horizontal padding.
+* Do not prepend a colored dot or reserve space for one. Put the complete status in visible text.
+* Nominal badge: use `--surface-raised`, `--muted`, a 1px `--line` border, and pill radius.
+* Good badge: use `--good-soft`, `--good`, a 30%-mixed good border, and pill radius.
+* Caution badge: use `--caution-soft`, `--caution`, a 30%-mixed caution border, and 4px radius.
+* Danger badge: use `--danger-soft`, `--danger`, a 30%-mixed danger border, and 0px radius.
+* Derived badge: use `--derived-soft`, `--derived`, a 30%-mixed derived border, and pill radius.
+* Apply a slow live-state pulse with a 1600ms `ease-in-out` cycle between the base soft background and a 28% current-color tint. Set iteration count to infinite.
+* Apply a fast live-state flash with a 600ms `steps(1, end)` cycle between the same two backgrounds. Set iteration count to infinite and keep the rate below three flashes per second.
+* Continue either animation while the represented state remains active. Remove the animation immediately when that state clears. Under `prefers-reduced-motion: reduce`, remove the animation and keep the same static text, color, border, and geometry.
+* Render non-status tags, versions, and commit hashes in `--mono` at 12px with 2px vertical and 6px horizontal padding, 4px radius, `--surface-raised`, `--muted`, and a 1px `--line` border.
+* Do not place keyboard shortcut labels in badge or metadata rows.
+
+### 6. Tables and Data Grids
+
+* Wrap a table in a full-width region with horizontal overflow. Use a 1px `--line` border, 6px radius, and `--surface` only on the table boundary, not on the containing page section.
+* Use semantic `<table>`, `<thead>`, `<tbody>`, `<th scope="col">`, and `<td>` elements. Supply a caption, visible or screen-reader-only, that names the dataset.
+* Set table text to 13.5px and collapse borders. Use 10px vertical and 14px horizontal header padding and 12px vertical and 14px horizontal cell padding.
+* Use 12px uppercase header text, weight 600, letter-spacing 0.04em, `--muted`, `--surface-raised`, and a 1px `--line-strong` bottom border.
+* Left-align prose and identifiers. Right-align numeric values, timestamps, currency, and measurements; use `font-variant-numeric: tabular-nums` and `--mono` for those cells. Align action controls to the right in the final column.
+* Separate body rows with a 1px `--line` bottom border and remove that border from the final row. Use `--surface-raised` on row hover.
+* Keep a header sticky only inside a vertically scrolling table region. Set its top offset to the region's scroll inset and preserve an opaque surface beneath it.
+* Put an actual button inside a sortable header. Set `aria-sort="none"`, `ascending`, or `descending` on the corresponding `<th>`, update the direction icon, and apply a stable sort when activated. Support pointer click, `Enter`, and `Space` through native button behavior.
+* Keep routine cell text neutral. Put semantic color only inside a status badge or on a threshold-breaching value that also has a textual status.
+* For loading, keep column widths stable and set `aria-busy="true"` on the table region. For empty results, render one neutral message that states no records match and include a filter-reset action when filters are active.
+
+### 7. Charts and Data Graphics
+
+* Render line and area charts as SVG with a responsive width, a 200px default plot height, neutral `--line` gridlines, and 11px `--mono` axis labels in `--muted`.
+* Include units in axis titles or every applicable tick label. Do not require the surrounding prose to identify a unit.
+* Use semantic color only to distinguish real series or provenance. Pair each series color with a unique solid, dashed, or dotted stroke and, when points are selectable, a distinct marker shape.
+* Label every legend entry with the full series name. Match its line sample to the rendered stroke pattern.
+* On pointer hover or keyboard focus of a point, show a crosshair and a neutral floating tooltip containing the exact timestamp, series names, values, and units. Keep the tooltip inside the chart's visible bounds.
+* Give the graphic an accessible name and concise summary. Follow it with an expandable `<details>` table containing every plotted timestamp and exact value; keep the table data generated from the same source as the SVG.
+* Do not encode observed and modeled data with color alone. Use `--accent` with a solid stroke for observed data and `--derived` with a dashed stroke for modeled data by default.
+
+### 8. Dialogs and Modals
+
+* Use the native `<dialog>` element with `showModal()` where supported. Give it `aria-labelledby` pointing to a visible title and use `aria-describedby` when body copy is present.
+* Use `--surface-raised`, a 1px `--line-strong` border, 6px radius, the large overlay shadow, 24px padding, `min(480px, 90vw)` width, and no viewport-edge overflow.
+* Use a neutral backdrop at `rgba(0, 0, 0, 0.65)`. Apply up to 4px backdrop blur only when the runtime supports it without degrading scrolling.
+* On open, save the invoking element and focus the first task-specific interactive control. If none exists, focus the close button. Keep `Tab` and `Shift+Tab` inside the dialog.
+* `Escape` closes a dismissible dialog. Closing by any method restores focus to the invoking element without scrolling it out of place.
+* Use an 18px, weight-600 title. Put 16px below the header, 24px below the body, and 12px between footer actions.
+* Align footer actions to the right. Place cancel before confirm in DOM and visual order. Use the danger-button treatment with 0px radius for a destructive confirmation.
+* Give every icon-only close control a Lucide `X`, accessible name `Close`, and tooltip. Keep its background and border transparent.
+
+### 9. Tooltips and Popovers
+
+* Use a tooltip only for non-interactive explanatory text attached to an icon-only control or a visually truncated value.
+* Show it after 150ms on both pointer hover and keyboard focus. Hide it on pointer exit, blur, or `Escape`.
+* Give the bubble `role="tooltip"`, a stable `id`, and connect the trigger with `aria-describedby` while it is visible.
+* Use 12px text, 5px vertical and 10px horizontal padding, `--surface-raised`, `--ink-strong`, a 1px `--line-strong` border, 4px radius, and the small overlay shadow.
+* Keep tooltip content on one line only while it fits within the viewport. Constrain long content and allow normal word wrapping.
+* Set tooltip pointer events to none. Do not place links, buttons, inputs, or other interactive content inside it.
+* Use a popover for interactive floating content. Move focus into it when required by its task, support expected arrow-key behavior for menus, close on `Escape` and outside activation, and restore focus to its trigger.
+
+### 10. Navigation, Tabs, and Breadcrumbs
+
+* For side navigation, use a semantic `<nav>` with an accessible name and list markup. Mark the current link with `aria-current="page"`.
+* Render side-navigation links at 13.5px with 5px vertical and 8px horizontal padding and 4px radius. Use `--muted` by default and `--ink-strong`, weight 600, and an optional `--surface-raised` fill for the current row. Do not add a white or colored stripe to the current row.
+* Give a tab container `role="tablist"`. Give each tab `role="tab"`, a matching `aria-controls`, and accurate `aria-selected`. Give each panel `role="tabpanel"` and `aria-labelledby`.
+* Use roving tab stops: the active tab has `tabindex="0"`; all other tabs have `tabindex="-1"`.
+* Render tabs at 14px with 10px vertical and 4px horizontal padding and 20px between tabs. Use a 1px `--line` rule under the list and a 2px `--ink-strong` underline on the selected tab.
+* `ArrowRight` and `ArrowLeft` move focus and selection cyclically. `Home` selects the first tab and `End` selects the last. Hide inactive panels with the `hidden` attribute.
+* Use `<nav aria-label="Breadcrumb">` containing an ordered list for breadcrumbs. Mark the current item with `aria-current="page"` and do not link it.
+* Render breadcrumb separators as neutral `/` characters hidden from assistive technology. These separators are allowed only in breadcrumb trails, not component section titles.
+
+### 11. Metrics, Cards, and Panels
+
+* For a metric group, render only a metric label and value. Put required units, scope, source, or time range into the label or value.
+* Do not render a descriptive or supporting subline beneath the value.
+* Keep each metric group transparent, borderless, shadowless, and without container padding. Do not use a card background to separate neighboring metrics.
+* Lay out three metrics as equal columns with a 32px gap. At 600px and below, use one column with a 24px gap.
+* Set metric labels in `--mono` at 12px, uppercase, letter-spacing 0.08em, and `--muted`. Set metric values at 26px, weight 700, line-height 1, `--ink-strong`, and tabular numerals.
+* Add a bordered or filled card only for a real interactive, independently stateful, draggable, selectable, collapsible, or semantically bounded object. Do not add one for page-section separation.
+* When a real card boundary is required, use `--surface`, a 1px `--line` border, 6px radius, and no shadow unless the card is temporarily elevated during drag.
+
+### 12. Alerts, Callouts, and Toasts
+
+* Start every inline callout with a visible weight-600 status label followed by its message, such as `Telemetry Delay:` or `Outage Detected:`.
+* Do not prepend an info, warning, error, or success icon to an inline callout. Do not reserve an icon column.
+* Use 13.5px text, line-height 1.5, 14px vertical padding, and 16px horizontal padding.
+* Info callout: use `--surface-raised`, a 1px `--line-strong` border, `--ink`, and 6px radius.
+* Caution callout: use `--caution-soft`, a 35%-mixed caution border, `--ink`, and 4px radius.
+* Danger callout: use `--danger-soft`, a 35%-mixed danger border, `--ink`, and 0px radius.
+* Success callout: use `--good-soft`, a 35%-mixed good border, `--ink`, and 6px radius.
+* Position toast stacks 24px from the bottom and right with 10px between toasts. At narrow mobile widths, use 12px side offsets and cap each toast to the available width.
+* Size a toast from 280px through 360px, use 12px vertical and 16px horizontal padding, a 1px `--line-strong` border, `--surface-raised`, and the large overlay shadow.
+* Use 6px radius for neutral or success toasts, 4px for caution toasts, and 0px for danger toasts.
+* Put an operation-specific message and optional neutral `Undo` action in each toast. If a status icon is included, use Lucide and apply the same severity geometry; use an angular icon for danger.
+* Announce non-urgent toasts through `role="status"` or `aria-live="polite"`. Use `role="alert"` only when immediate interruption is required.
+* Auto-dismiss non-critical toasts after 4–6 seconds. Pause the remaining countdown on hover and whenever focus is inside the toast, then resume from the remaining duration. Do not auto-dismiss a critical error that requires action.
 
 ## Reference Asset
 
-Inspect [skills/design-guide/assets/component-reference.html](assets/component-reference.html) for a runnable, interactive catalog implementing every component specified above in dark and light modes.
+* Open [assets/component-reference.html](assets/component-reference.html)
