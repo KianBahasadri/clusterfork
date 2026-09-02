@@ -1,0 +1,2738 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Relay is a fictional operations dashboard used as a worked design-guide artifact.">
+  <link rel="icon" href="data:,">
+  <title>Relay — checkout operations exercise</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #ecefec;
+      --surface: #f7f8f5;
+      --raised: #ffffff;
+      --ink: #172027;
+      --muted: #536168;
+      --quiet: #778287;
+      --line: #c8d1d0;
+      --line-strong: #9dacab;
+      --accent: #006f7c;
+      --accent-soft: #d8eef0;
+      --good: #1d6846;
+      --good-soft: #deeee5;
+      --caution: #805600;
+      --caution-soft: #f7e9c6;
+      --danger: #9a332f;
+      --danger-soft: #f8dfdb;
+      --derived: #63559b;
+      --derived-soft: #ebe7f7;
+      --focus: #005fcc;
+      --shadow: 0 14px 38px rgba(23, 32, 39, 0.12);
+      --radius: 5px;
+      --mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+      --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    [data-theme="dark"] {
+      color-scheme: dark;
+      --canvas: #101719;
+      --surface: #151e20;
+      --raised: #1c2729;
+      --ink: #edf3f1;
+      --muted: #b1bfbc;
+      --quiet: #889693;
+      --line: #344345;
+      --line-strong: #526365;
+      --accent: #71c9d1;
+      --accent-soft: #17383d;
+      --good: #82cba6;
+      --good-soft: #1a382a;
+      --caution: #e4ba64;
+      --caution-soft: #3c3019;
+      --danger: #ef8e87;
+      --danger-soft: #412322;
+      --derived: #b9aaef;
+      --derived-soft: #302b46;
+      --focus: #9cc8ff;
+      --shadow: 0 16px 44px rgba(0, 0, 0, 0.36);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      scroll-padding-top: 96px;
+    }
+
+    body {
+      margin: 0;
+      min-width: 0;
+      background: var(--canvas);
+      color: var(--ink);
+      font: 14px/1.45 var(--sans);
+    }
+
+    button,
+    select,
+    input {
+      font: inherit;
+    }
+
+    button,
+    select {
+      min-height: 36px;
+    }
+
+    button {
+      color: inherit;
+    }
+
+    a {
+      color: var(--accent);
+      text-underline-offset: 0.18em;
+    }
+
+    :focus-visible {
+      outline: 3px solid var(--focus);
+      outline-offset: 2px;
+    }
+
+    .skip-link {
+      position: fixed;
+      z-index: 100;
+      top: 8px;
+      left: 8px;
+      padding: 10px 14px;
+      transform: translateY(-180%);
+      background: var(--ink);
+      color: var(--raised);
+      border-radius: var(--radius);
+    }
+
+    .skip-link:focus {
+      transform: translateY(0);
+    }
+
+    .visually-hidden {
+      position: absolute !important;
+      width: 1px !important;
+      height: 1px !important;
+      padding: 0 !important;
+      margin: -1px !important;
+      overflow: hidden !important;
+      clip: rect(0, 0, 0, 0) !important;
+      white-space: nowrap !important;
+      border: 0 !important;
+    }
+
+    .topbar {
+      min-height: 64px;
+      display: flex;
+      align-items: center;
+      gap: 22px;
+      padding: 10px clamp(16px, 3vw, 34px);
+      background: var(--raised);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      min-width: max-content;
+    }
+
+    .brand-mark {
+      width: 27px;
+      height: 27px;
+      position: relative;
+      border: 1px solid var(--ink);
+      background:
+        linear-gradient(135deg, transparent 43%, var(--accent) 44% 57%, transparent 58%),
+        var(--surface);
+    }
+
+    .brand-mark::after {
+      content: "";
+      position: absolute;
+      width: 7px;
+      height: 7px;
+      right: 3px;
+      top: 3px;
+      background: var(--danger);
+    }
+
+    .brand-name {
+      font-size: 16px;
+      font-weight: 760;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-context {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .exercise-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-right: auto;
+      padding: 5px 9px;
+      border: 1px solid var(--derived);
+      background: var(--derived-soft);
+      color: var(--derived);
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .exercise-label::before {
+      content: "◇";
+      font-size: 14px;
+    }
+
+    .replay {
+      display: grid;
+      justify-items: end;
+      line-height: 1.25;
+    }
+
+    .eyebrow {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 760;
+      letter-spacing: 0.075em;
+      text-transform: uppercase;
+    }
+
+    .replay time,
+    .mono,
+    .number {
+      font-family: var(--mono);
+      font-variant-numeric: tabular-nums lining-nums;
+    }
+
+    .icon-button,
+    .quiet-button,
+    .secondary-button,
+    .primary-button,
+    .danger-button,
+    .sort-button,
+    .text-button {
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--raised);
+      cursor: pointer;
+    }
+
+    .icon-button,
+    .quiet-button,
+    .secondary-button,
+    .primary-button,
+    .danger-button {
+      padding: 7px 11px;
+    }
+
+    .icon-button:hover,
+    .quiet-button:hover,
+    .secondary-button:hover,
+    .sort-button:hover,
+    .text-button:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .primary-button {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+      font-weight: 720;
+    }
+
+    [data-theme="dark"] .primary-button {
+      color: #102024;
+    }
+
+    [data-theme="dark"] .danger-button {
+      color: #172027;
+    }
+
+    .danger-button {
+      border-color: var(--danger);
+      background: var(--danger);
+      color: #fff;
+      font-weight: 720;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.56;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 184px minmax(0, 1fr);
+      max-width: 1680px;
+      margin: 0 auto;
+    }
+
+    .side-rail {
+      min-width: 0;
+      padding: 26px 14px;
+      border-right: 1px solid var(--line);
+    }
+
+    .side-rail nav {
+      position: sticky;
+      top: 20px;
+    }
+
+    .side-rail ol {
+      display: grid;
+      gap: 5px;
+      list-style: none;
+      margin: 10px 0 22px;
+      padding: 0;
+    }
+
+    .side-rail a {
+      display: flex;
+      gap: 9px;
+      align-items: center;
+      min-height: 36px;
+      padding: 6px 8px;
+      border-radius: var(--radius);
+      color: var(--muted);
+      text-decoration: none;
+    }
+
+    .side-rail a:hover {
+      background: var(--surface);
+      color: var(--ink);
+    }
+
+    .nav-index {
+      width: 20px;
+      color: var(--muted);
+      font: 11px var(--mono);
+    }
+
+    .rail-note {
+      padding: 12px 8px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    main {
+      min-width: 0;
+      padding: 0 clamp(14px, 2.5vw, 34px) 64px;
+    }
+
+    .scope-bar {
+      position: sticky;
+      z-index: 10;
+      top: 0;
+      margin: 0 calc(clamp(14px, 2.5vw, 34px) * -1);
+      padding: 12px clamp(14px, 2.5vw, 34px);
+      background: color-mix(in srgb, var(--canvas) 93%, transparent);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(12px);
+    }
+
+    .scope-controls {
+      display: flex;
+      align-items: end;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .scope-static,
+    .control {
+      display: grid;
+      gap: 3px;
+    }
+
+    .scope-static {
+      min-height: 56px;
+      align-content: center;
+      padding: 5px 10px;
+      border-left: 2px solid var(--line-strong);
+    }
+
+    .control label,
+    .control-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 720;
+    }
+
+    select,
+    input[type="search"] {
+      max-width: 100%;
+      padding: 7px 32px 7px 9px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--raised);
+      color: var(--ink);
+    }
+
+    input[type="search"] {
+      min-height: 36px;
+      padding-right: 9px;
+    }
+
+    .scope-summary {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .scope-summary strong {
+      color: var(--ink);
+    }
+
+    .page-heading {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 34px 0 18px;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      margin-bottom: 5px;
+      font-size: clamp(25px, 3vw, 38px);
+      line-height: 1.08;
+      letter-spacing: -0.035em;
+    }
+
+    h2 {
+      margin-bottom: 4px;
+      font-size: 18px;
+      line-height: 1.25;
+      letter-spacing: -0.015em;
+    }
+
+    h3 {
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+
+    .lede,
+    .section-note {
+      margin-bottom: 0;
+      color: var(--muted);
+    }
+
+    .sync-state {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .sync-state::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border: 2px solid var(--accent);
+      border-radius: 50%;
+    }
+
+    .incident-band {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 15px;
+      padding: 15px 16px;
+      border: 1px solid var(--danger);
+      border-left-width: 5px;
+      background: var(--danger-soft);
+    }
+
+    .incident-band.nominal {
+      border-color: var(--line-strong);
+      background: var(--surface);
+    }
+
+    .condition-mark {
+      display: grid;
+      place-items: center;
+      width: 35px;
+      height: 35px;
+      border: 2px solid currentColor;
+      color: var(--danger);
+      font-weight: 800;
+      transform: rotate(45deg);
+    }
+
+    .condition-mark span {
+      transform: rotate(-45deg);
+    }
+
+    .nominal .condition-mark {
+      border-radius: 50%;
+      color: var(--muted);
+      transform: none;
+    }
+
+    .nominal .condition-mark span {
+      transform: none;
+    }
+
+    .incident-title {
+      margin-bottom: 3px;
+      font-weight: 780;
+    }
+
+    .incident-meta {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .incident-actions {
+      display: flex;
+      align-items: center;
+      justify-content: end;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .permission-note {
+      max-width: 170px;
+      color: var(--danger);
+      font-size: 11px;
+      text-align: right;
+    }
+
+    .metric-ledger {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin: 18px 0 24px;
+      border-block: 1px solid var(--line);
+    }
+
+    .metric {
+      min-width: 0;
+      padding: 15px 16px 14px 0;
+    }
+
+    .metric + .metric {
+      padding-left: 16px;
+      border-left: 1px solid var(--line);
+    }
+
+    .metric-label {
+      margin-bottom: 7px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 720;
+    }
+
+    .metric-value {
+      margin-bottom: 3px;
+      font: 700 clamp(20px, 2.2vw, 28px)/1.05 var(--mono);
+      letter-spacing: -0.045em;
+      font-variant-numeric: tabular-nums lining-nums;
+    }
+
+    .metric-detail {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .metric-value.unavailable {
+      max-width: 24ch;
+      font: 690 14px/1.3 var(--sans);
+      letter-spacing: 0;
+    }
+
+    .analysis-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 2fr) minmax(270px, 0.78fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .panel {
+      min-width: 0;
+      background: var(--raised);
+      border: 1px solid var(--line);
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 15px 16px 13px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel-header p {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .segmented {
+      display: inline-flex;
+      min-width: 0;
+      margin: 0;
+      padding: 2px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .segmented label {
+      position: relative;
+      cursor: pointer;
+    }
+
+    .segmented input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .segmented span {
+      display: grid;
+      place-items: center;
+      min-height: 31px;
+      padding: 4px 10px;
+      border-radius: 3px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .segmented input:checked + span {
+      background: var(--raised);
+      box-shadow: 0 0 0 1px var(--line);
+      color: var(--ink);
+    }
+
+    .segmented input:focus-visible + span {
+      outline: 3px solid var(--focus);
+      outline-offset: 2px;
+    }
+
+    .chart-wrap {
+      padding: 14px 16px 0;
+    }
+
+    .chart-stage {
+      position: relative;
+      min-width: 0;
+      border: 1px solid transparent;
+    }
+
+    .chart-stage:focus-visible {
+      border-color: var(--focus);
+      outline: 2px solid var(--focus);
+      outline-offset: 1px;
+    }
+
+    #metric-chart {
+      display: block;
+      width: 100%;
+      height: auto;
+      overflow: visible;
+    }
+
+    .chart-grid {
+      stroke: var(--line);
+      stroke-width: 1;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .chart-axis {
+      fill: var(--muted);
+      font: 11px var(--mono);
+    }
+
+    .chart-threshold {
+      stroke: var(--danger);
+      stroke-width: 1.5;
+      stroke-dasharray: 5 5;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .chart-deploy {
+      stroke: var(--derived);
+      stroke-width: 1.5;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .series-line {
+      fill: none;
+      stroke-width: 2.5;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .series-east {
+      stroke: var(--accent);
+    }
+
+    .series-west {
+      stroke: var(--danger);
+      stroke-dasharray: 8 3;
+    }
+
+    .series-eu {
+      stroke: var(--derived);
+      stroke-dasharray: 2 4;
+    }
+
+    .series-point {
+      stroke: var(--raised);
+      stroke-width: 1.5;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .inspection-line {
+      stroke: var(--ink);
+      stroke-width: 1;
+      stroke-dasharray: 2 3;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .chart-empty {
+      fill: var(--muted);
+      font: 600 14px var(--sans);
+    }
+
+    .chart-readout {
+      display: flex;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 7px 16px;
+      min-height: 43px;
+      padding: 9px 11px;
+      background: var(--surface);
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .chart-readout strong {
+      color: var(--ink);
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px 15px;
+      margin: 10px 0 12px;
+      padding: 0;
+      list-style: none;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .legend li {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .legend-line {
+      width: 22px;
+      border-top: 3px solid;
+    }
+
+    .legend-line.east {
+      border-color: var(--accent);
+    }
+
+    .legend-line.west {
+      border-color: var(--danger);
+      border-top-style: dashed;
+    }
+
+    .legend-line.eu {
+      border-color: var(--derived);
+      border-top-style: dotted;
+    }
+
+    details.data-disclosure {
+      border-top: 1px solid var(--line);
+    }
+
+    details.data-disclosure summary {
+      min-height: 44px;
+      padding: 12px 16px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .table-scroll {
+      max-width: 100%;
+      overflow: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    caption {
+      padding: 10px 16px;
+      color: var(--muted);
+      text-align: left;
+    }
+
+    th,
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    thead th {
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 740;
+      white-space: nowrap;
+    }
+
+    tbody th {
+      font-weight: 700;
+    }
+
+    .exact-table th,
+    .exact-table td {
+      padding-block: 7px;
+      white-space: nowrap;
+    }
+
+    .diagnosis {
+      display: grid;
+      gap: 0;
+    }
+
+    .diagnosis > section {
+      padding: 15px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .diagnosis > section:last-child {
+      border-bottom: 0;
+    }
+
+    .diagnosis dl {
+      display: grid;
+      grid-template-columns: minmax(90px, auto) minmax(0, 1fr);
+      gap: 8px 12px;
+      margin: 0;
+      font-size: 12px;
+    }
+
+    .diagnosis dt {
+      color: var(--muted);
+    }
+
+    .diagnosis dd {
+      margin: 0;
+      text-align: right;
+      overflow-wrap: anywhere;
+    }
+
+    .hypothesis {
+      margin: 0;
+      padding-left: 12px;
+      border-left: 3px solid var(--derived);
+      color: var(--muted);
+    }
+
+    .hypothesis strong {
+      color: var(--ink);
+    }
+
+    .section {
+      scroll-margin-top: 100px;
+      margin-top: 30px;
+    }
+
+    .section-heading {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 11px;
+    }
+
+    .table-tools {
+      display: flex;
+      align-items: end;
+      gap: 8px;
+    }
+
+    .table-tools .control {
+      min-width: min(250px, 45vw);
+    }
+
+    .sort-button,
+    .text-button {
+      min-height: 30px;
+      padding: 3px 7px;
+      border-color: transparent;
+      background: transparent;
+      color: inherit;
+      font-weight: inherit;
+    }
+
+    .sort-button::after {
+      content: " ↕";
+      color: var(--quiet);
+    }
+
+    [aria-sort="ascending"] .sort-button::after {
+      content: " ↑";
+      color: var(--accent);
+    }
+
+    [aria-sort="descending"] .sort-button::after {
+      content: " ↓";
+      color: var(--accent);
+    }
+
+    .region-table tbody tr {
+      background: var(--raised);
+    }
+
+    .region-table tbody tr:hover,
+    .region-table tbody tr.selected {
+      background: var(--accent-soft);
+    }
+
+    .region-button {
+      min-height: 34px;
+      padding: 4px 6px;
+      border: 1px solid transparent;
+      border-radius: 3px;
+      background: transparent;
+      color: var(--accent);
+      cursor: pointer;
+      font: 700 12px var(--mono);
+      text-decoration: underline;
+      text-underline-offset: 0.18em;
+    }
+
+    .state {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      white-space: nowrap;
+      font-weight: 680;
+    }
+
+    .state::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      flex: 0 0 auto;
+      border: 2px solid currentColor;
+    }
+
+    .state.nominal-state {
+      color: var(--good);
+    }
+
+    .state.nominal-state::before {
+      border-radius: 50%;
+    }
+
+    .state.degraded-state {
+      color: var(--danger);
+    }
+
+    .state.degraded-state::before {
+      transform: rotate(45deg);
+    }
+
+    .state.partial-state {
+      color: var(--caution);
+    }
+
+    .state.partial-state::before {
+      border-radius: 50%;
+      border-style: dashed;
+    }
+
+    .state.unknown-state {
+      color: var(--muted);
+    }
+
+    .freshness {
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .stale {
+      color: var(--caution);
+      font-weight: 680;
+    }
+
+    .lower-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+      gap: 18px;
+    }
+
+    .stack {
+      display: grid;
+      gap: 18px;
+    }
+
+    .panel-body {
+      padding: 15px 16px;
+    }
+
+    .breakdown {
+      display: grid;
+      gap: 13px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .breakdown-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 5px 12px;
+      align-items: center;
+    }
+
+    .bar-track {
+      grid-column: 1 / -1;
+      height: 7px;
+      background: var(--line);
+    }
+
+    .bar {
+      display: block;
+      height: 100%;
+      background: var(--danger);
+    }
+
+    .bar-64 {
+      width: 64%;
+    }
+
+    .bar-23 {
+      width: 23%;
+    }
+
+    .bar-13 {
+      width: 13%;
+    }
+
+    .breakdown-row:nth-child(2) .bar {
+      background: var(--caution);
+    }
+
+    .breakdown-row:nth-child(3) .bar {
+      background: var(--derived);
+    }
+
+    .timeline,
+    .source-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .timeline li {
+      display: grid;
+      grid-template-columns: 52px 12px minmax(0, 1fr);
+      gap: 8px;
+      min-height: 45px;
+    }
+
+    .timeline time {
+      color: var(--muted);
+      font: 11px var(--mono);
+    }
+
+    .timeline-mark {
+      position: relative;
+    }
+
+    .timeline-mark::before {
+      content: "";
+      position: absolute;
+      z-index: 1;
+      top: 4px;
+      left: 2px;
+      width: 7px;
+      height: 7px;
+      border: 2px solid var(--derived);
+      background: var(--raised);
+      transform: rotate(45deg);
+    }
+
+    .timeline-mark::after {
+      content: "";
+      position: absolute;
+      top: 14px;
+      bottom: -2px;
+      left: 6px;
+      border-left: 1px solid var(--line-strong);
+    }
+
+    .timeline li:last-child .timeline-mark::after {
+      display: none;
+    }
+
+    .timeline p {
+      margin: 0 0 8px;
+    }
+
+    .source-list li {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      padding: 10px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .source-list li:first-child {
+      padding-top: 0;
+      border-top: 0;
+    }
+
+    .source-name {
+      font-weight: 700;
+    }
+
+    .source-detail {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .source-status {
+      align-self: start;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .status-current {
+      color: var(--good);
+    }
+
+    .status-stale {
+      color: var(--caution);
+    }
+
+    .status-unavailable {
+      color: var(--danger);
+    }
+
+    dialog {
+      width: min(620px, calc(100vw - 28px));
+      max-height: calc(100vh - 28px);
+      padding: 0;
+      overflow: auto;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: var(--raised);
+      color: var(--ink);
+      box-shadow: var(--shadow);
+    }
+
+    dialog::backdrop {
+      background: rgba(12, 18, 20, 0.58);
+      backdrop-filter: blur(2px);
+    }
+
+    .dialog-header,
+    .dialog-body,
+    .dialog-footer {
+      padding: 16px 18px;
+    }
+
+    .dialog-header {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .dialog-header h2 {
+      margin: 0;
+    }
+
+    .dialog-body dl {
+      display: grid;
+      grid-template-columns: minmax(110px, auto) minmax(0, 1fr);
+      gap: 10px 18px;
+      margin: 0 0 16px;
+    }
+
+    .dialog-body dt {
+      color: var(--muted);
+    }
+
+    .dialog-body dd {
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .caveat,
+    .operation-status {
+      padding: 11px 12px;
+      border-left: 3px solid var(--caution);
+      background: var(--caution-soft);
+    }
+
+    .operation-status {
+      margin-top: 10px;
+      border-left-color: var(--accent);
+      background: var(--accent-soft);
+    }
+
+    .dialog-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      border-top: 1px solid var(--line);
+    }
+
+    .footer-note {
+      margin-top: 28px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .noscript-note {
+      padding: 1rem;
+    }
+
+    @media (max-width: 1120px) {
+      .analysis-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .diagnosis {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .diagnosis > section {
+        border-right: 1px solid var(--line);
+        border-bottom: 0;
+      }
+
+      .diagnosis > section:last-child {
+        border-right: 0;
+      }
+    }
+
+    @media (max-width: 900px) {
+      .topbar {
+        gap: 12px;
+      }
+
+      .exercise-label {
+        order: 4;
+        width: 100%;
+        justify-content: center;
+      }
+
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .side-rail {
+        padding: 8px 14px;
+        overflow-x: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .side-rail nav {
+        position: static;
+      }
+
+      .side-rail .eyebrow,
+      .rail-note {
+        display: none;
+      }
+
+      .side-rail ol {
+        display: flex;
+        width: max-content;
+        margin: 0;
+      }
+
+      .side-rail a {
+        padding-inline: 10px;
+      }
+
+      .nav-index {
+        display: none;
+      }
+
+      .metric-ledger {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .metric:nth-child(3) {
+        padding-left: 0;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .metric:nth-child(4) {
+        border-top: 1px solid var(--line);
+      }
+    }
+
+    @media (max-width: 700px) {
+      .topbar {
+        align-items: start;
+        flex-wrap: wrap;
+      }
+
+      .replay {
+        margin-left: auto;
+      }
+
+      .scope-bar {
+        position: static;
+        backdrop-filter: none;
+      }
+
+      html {
+        scroll-padding-top: 0;
+      }
+
+      .page-heading,
+      .section-heading {
+        align-items: start;
+        flex-direction: column;
+      }
+
+      .incident-band {
+        grid-template-columns: auto minmax(0, 1fr);
+      }
+
+      .incident-actions {
+        grid-column: 1 / -1;
+        justify-content: start;
+      }
+
+      .permission-note {
+        max-width: none;
+        text-align: left;
+      }
+
+      .panel-header {
+        flex-direction: column;
+      }
+
+      .diagnosis,
+      .lower-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .diagnosis > section {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .table-tools {
+        width: 100%;
+      }
+
+      .table-tools .control {
+        width: 100%;
+      }
+
+      input[type="search"] {
+        width: 100%;
+      }
+    }
+
+    @media (max-width: 470px) {
+      .topbar {
+        padding-inline: 13px;
+      }
+
+      .brand {
+        width: 100%;
+      }
+
+      .replay {
+        justify-items: start;
+        margin-left: 0;
+      }
+
+      .scope-controls {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .scope-static,
+      .control,
+      .scope-controls select {
+        min-width: 0;
+        width: 100%;
+      }
+
+      .scope-controls .quiet-button {
+        width: 100%;
+      }
+
+      .metric-ledger {
+        grid-template-columns: 1fr;
+      }
+
+      .metric,
+      .metric + .metric,
+      .metric:nth-child(3) {
+        padding: 12px 0;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .metric:first-child {
+        border-top: 0;
+      }
+
+      .chart-wrap {
+        padding-inline: 9px;
+      }
+
+      th,
+      td {
+        padding-inline: 9px;
+      }
+
+      .dialog-body dl {
+        grid-template-columns: 1fr;
+        gap: 3px;
+      }
+
+      .dialog-body dd {
+        margin-bottom: 8px;
+      }
+
+      .dialog-footer {
+        align-items: stretch;
+        flex-direction: column-reverse;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+
+      *,
+      *::before,
+      *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+      }
+    }
+
+    @media (forced-colors: active) {
+      .exercise-label,
+      .incident-band,
+      .operation-status,
+      .caveat,
+      .region-table tbody tr.selected {
+        forced-color-adjust: none;
+      }
+
+      .exercise-label {
+        color: LinkText;
+        background: Canvas;
+      }
+
+      .incident-band,
+      .operation-status,
+      .caveat {
+        color: CanvasText;
+        background: Canvas;
+      }
+
+      .series-east {
+        stroke: LinkText;
+      }
+
+      .series-west {
+        stroke: Mark;
+      }
+
+      .series-eu {
+        stroke: CanvasText;
+      }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to incident overview</a>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>
+        <span class="brand-name">Relay</span><br>
+        <span class="brand-context">Checkout operations</span>
+      </span>
+    </div>
+    <div class="exercise-label">Recorded exercise · simulated fixture · no external systems</div>
+    <div class="replay">
+      <span class="eyebrow">Recorded position</span>
+      <time datetime="2026-09-02T14:37:20Z">2026-09-02 14:37:20 UTC</time>
+    </div>
+    <button class="icon-button" id="theme-toggle" type="button" aria-label="Use dark theme">◐</button>
+  </header>
+
+  <div class="shell">
+    <aside class="side-rail" aria-label="Dashboard sections">
+      <nav>
+        <div class="eyebrow">Inspection path</div>
+        <ol>
+          <li><a href="#overview"><span class="nav-index">01</span> Overview</a></li>
+          <li><a href="#regions"><span class="nav-index">02</span> Regions</a></li>
+          <li><a href="#activity"><span class="nav-index">03</span> Activity</a></li>
+          <li><a href="#sources"><span class="nav-index">04</span> Sources</a></li>
+        </ol>
+        <p class="rail-note">This is a deterministic design exercise. Controls update local fixture data only.</p>
+      </nav>
+    </aside>
+
+    <main id="main" tabindex="-1">
+      <section class="scope-bar" aria-labelledby="scope-title">
+        <h2 class="visually-hidden" id="scope-title">Active analysis scope</h2>
+        <div class="scope-controls">
+          <div class="scope-static">
+            <span class="control-label">Service</span>
+            <strong class="mono">checkout-api</strong>
+          </div>
+          <div class="scope-static">
+            <span class="control-label">Environment</span>
+            <strong>Production</strong>
+          </div>
+          <div class="control">
+            <label for="region-filter">Region</label>
+            <select id="region-filter">
+              <option value="all">All regions</option>
+              <option value="east">us-east-1</option>
+              <option value="west">us-west-2</option>
+              <option value="eu">eu-west-1</option>
+            </select>
+          </div>
+          <div class="control">
+            <label for="range-filter">Time range</label>
+            <select id="range-filter">
+              <option value="15">Last 15 minutes</option>
+              <option value="60" selected>Last 60 minutes</option>
+              <option value="360">Last 6 hours</option>
+            </select>
+          </div>
+          <div class="scope-static">
+            <span class="control-label">Time zone</span>
+            <strong>UTC</strong>
+          </div>
+          <div class="control">
+            <label for="fixture-filter">Fixture state</label>
+            <select id="fixture-filter">
+              <option value="active">Active incident</option>
+              <option value="partial">Partial telemetry</option>
+              <option value="permission">Permission lost</option>
+              <option value="nominal">Nominal</option>
+            </select>
+          </div>
+          <button class="quiet-button" id="reset-exercise" type="button">Reset exercise</button>
+        </div>
+        <p class="scope-summary" id="scope-summary"><strong>checkout-api</strong> · Production · All regions · Last 60 minutes · UTC</p>
+      </section>
+
+      <div id="overview" class="page-heading section">
+        <div>
+          <span class="eyebrow" id="overview-kicker">Recorded incident · INC-2481</span>
+          <h1>Authorization latency</h1>
+          <p class="lede">Determine whether the rise is real, where it is concentrated, what changed, and whether rollback is justified.</p>
+        </div>
+        <span class="sync-state" id="sync-state">Fixture synchronized at 14:37:20</span>
+      </div>
+
+      <section class="incident-band" id="incident-band" aria-labelledby="incident-title">
+        <div class="condition-mark" aria-hidden="true"><span>!</span></div>
+        <div>
+          <p class="incident-title" id="incident-title">Elevated authorization latency in us-west-2</p>
+          <div class="incident-meta" id="incident-meta">Degraded · acknowledged by Maya Chen at 14:29 · mitigation not started · Payments on-call</div>
+        </div>
+        <div class="incident-actions">
+          <button class="secondary-button" id="acknowledge" type="button">Clear local acknowledgement</button>
+          <button class="danger-button" id="review-rollback" type="button">Review rollback</button>
+          <span class="permission-note" id="permission-note" hidden>Traffic Admin permission required.</span>
+        </div>
+      </section>
+
+      <section class="metric-ledger" aria-label="Scoped metric summary">
+        <div class="metric">
+          <div class="metric-label">Request rate</div>
+          <div class="metric-value" id="metric-rpm">12,480/min</div>
+          <div class="metric-detail" id="metric-rpm-detail">Requests · current within 8 s</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Latest p95 authorization latency</div>
+          <div class="metric-value" id="metric-latency">1,326 ms</div>
+          <div class="metric-detail" id="metric-latency-detail">Maximum regional value · traces</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Weighted error rate</div>
+          <div class="metric-value" id="metric-error">1.94%</div>
+          <div class="metric-detail" id="metric-error-detail">Request-weighted · all selected regions</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Trace coverage</div>
+          <div class="metric-value" id="metric-coverage">81%</div>
+          <div class="metric-detail" id="metric-coverage-detail">Observed spans / eligible requests</div>
+        </div>
+      </section>
+
+      <section class="analysis-grid" aria-label="Primary incident analysis">
+        <article class="panel" aria-labelledby="chart-heading">
+          <header class="panel-header">
+            <div>
+              <h2 id="chart-heading">Regional signal</h2>
+              <p id="chart-subtitle">p95 authorization latency · milliseconds · five-minute samples</p>
+            </div>
+            <fieldset class="segmented">
+              <legend class="visually-hidden">Chart metric</legend>
+              <label>
+                <input type="radio" name="chart-metric" value="latency" checked>
+                <span>Latency</span>
+              </label>
+              <label>
+                <input type="radio" name="chart-metric" value="errors">
+                <span>Error rate</span>
+              </label>
+            </fieldset>
+          </header>
+          <div class="chart-wrap">
+            <p class="visually-hidden" id="chart-instructions">Use left and right arrow keys to inspect samples. Use Home or End to move to the first or last sample.</p>
+            <div class="chart-stage" id="chart-stage" tabindex="0" aria-describedby="chart-instructions chart-readout">
+              <svg id="metric-chart" viewBox="0 0 900 350" role="img" aria-labelledby="chart-svg-title chart-svg-desc">
+                <title id="chart-svg-title">Regional p95 authorization latency</title>
+                <desc id="chart-svg-desc">Three regional time series on a common millisecond scale. us-west-2 rises above the 600 millisecond threshold after the 14:18 deployment. eu-west-1 stops when trace data becomes stale.</desc>
+              </svg>
+            </div>
+            <div class="chart-readout" id="chart-readout" aria-live="polite"></div>
+            <ul class="legend" id="chart-legend" aria-label="Chart series">
+              <li><span class="legend-line east" aria-hidden="true"></span> us-east-1 · solid</li>
+              <li><span class="legend-line west" aria-hidden="true"></span> us-west-2 · dashed</li>
+              <li><span class="legend-line eu" aria-hidden="true"></span> eu-west-1 · dotted; stale trace gap</li>
+            </ul>
+          </div>
+          <details class="data-disclosure">
+            <summary>Exact plotted values</summary>
+            <div class="table-scroll">
+              <table class="exact-table" id="exact-values">
+                <caption id="exact-caption">Exact values shown in the regional signal chart.</caption>
+                <thead>
+                  <tr id="exact-head">
+                    <th scope="col">Time (UTC)</th>
+                    <th scope="col">us-east-1</th>
+                    <th scope="col">us-west-2</th>
+                    <th scope="col">eu-west-1</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </details>
+        </article>
+
+        <aside class="panel diagnosis" aria-label="Diagnostic context">
+          <section>
+            <h2>Selected sample</h2>
+            <dl id="selected-sample">
+              <dt>Time</dt><dd class="mono">14:35 UTC</dd>
+              <dt>Region</dt><dd>All regions</dd>
+              <dt>Largest value</dt><dd class="mono">1,326 ms · us-west-2</dd>
+              <dt>Threshold</dt><dd class="mono">&gt; 600 ms for 5 min</dd>
+            </dl>
+          </section>
+          <section>
+            <h2>Working hypothesis</h2>
+            <p class="hypothesis" id="hypothesis"><strong>Correlation, not confirmed cause.</strong> Latency increased three minutes after the pay-router deployment in us-west-2. Regions without the release did not show the same rise. Trace coverage is 81%.</p>
+          </section>
+          <section>
+            <h2>Decision context</h2>
+            <dl id="decision-list">
+              <dt>Owner</dt><dd>Payments on-call</dd>
+              <dt>Consequence</dt><dd>2.6% delayed &gt; 2 s</dd>
+              <dt>Change</dt><dd class="mono">pay-router 2026.09.02.3</dd>
+              <dt>Deploy scope</dt><dd class="mono">us-west-2</dd>
+              <dt>Threshold owner</dt><dd>Checkout SRE</dd>
+            </dl>
+          </section>
+        </aside>
+      </section>
+
+      <section class="section" id="regions" aria-labelledby="regions-heading">
+        <div class="section-heading">
+          <div>
+            <span class="eyebrow">Exact comparison</span>
+            <h2 id="regions-heading">Regional snapshot</h2>
+            <p class="section-note">Select a region to apply the same scope to the chart, metrics, and diagnosis.</p>
+          </div>
+          <div class="table-tools">
+            <div class="control">
+              <label for="region-search">Filter regions</label>
+              <input id="region-search" type="search" placeholder="Region name or state" autocomplete="off">
+            </div>
+          </div>
+        </div>
+        <div class="panel table-scroll">
+          <table class="region-table" id="region-table">
+            <caption id="region-caption">Three regions in the active Production scope.</caption>
+            <thead>
+              <tr>
+                <th scope="col" data-sort="region" aria-sort="ascending"><button class="sort-button" type="button" data-key="region">Region</button></th>
+                <th scope="col" data-sort="status"><button class="sort-button" type="button" data-key="status">Operational state</button></th>
+                <th scope="col" data-sort="traffic"><button class="sort-button" type="button" data-key="traffic">Traffic</button></th>
+                <th scope="col" data-sort="latency"><button class="sort-button" type="button" data-key="latency">p95 latency</button></th>
+                <th scope="col" data-sort="error"><button class="sort-button" type="button" data-key="error">Error rate</button></th>
+                <th scope="col" data-sort="rpm"><button class="sort-button" type="button" data-key="rpm">Requests/min</button></th>
+                <th scope="col">Freshness and source</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section lower-grid" id="activity" aria-label="Incident evidence and activity">
+        <div class="stack">
+          <article class="panel" aria-labelledby="breakdown-heading">
+            <header class="panel-header">
+              <div>
+                <h2 id="breakdown-heading">Error composition</h2>
+                <p id="breakdown-subtitle">us-west-2 · failed requests · 14:30–14:35 UTC</p>
+              </div>
+            </header>
+            <div class="panel-body" id="breakdown-body">
+              <ul class="breakdown">
+                <li class="breakdown-row">
+                  <span>Upstream timeout</span><strong class="number">64%</strong>
+                  <span class="bar-track" aria-hidden="true"><span class="bar bar-64"></span></span>
+                </li>
+                <li class="breakdown-row">
+                  <span>Connection-pool wait</span><strong class="number">23%</strong>
+                  <span class="bar-track" aria-hidden="true"><span class="bar bar-23"></span></span>
+                </li>
+                <li class="breakdown-row">
+                  <span>Other</span><strong class="number">13%</strong>
+                  <span class="bar-track" aria-hidden="true"><span class="bar bar-13"></span></span>
+                </li>
+              </ul>
+            </div>
+          </article>
+
+          <article class="panel" id="sources" aria-labelledby="sources-heading">
+            <header class="panel-header">
+              <div>
+                <h2 id="sources-heading">Source integrity</h2>
+                <p>Freshness belongs to each source, not the dashboard as a whole.</p>
+              </div>
+            </header>
+            <div class="panel-body">
+              <ul class="source-list" id="source-list">
+                <li>
+                  <div><div class="source-name">Request counters</div><div class="source-detail">Request rate and error rate · regional 10 s rollups</div></div>
+                  <span class="source-status status-current">Current · 6 s</span>
+                </li>
+                <li>
+                  <div><div class="source-name">Trace collector</div><div class="source-detail">Latency and coverage · last complete five-minute sample</div></div>
+                  <span class="source-status status-stale">EU stale · 6 min</span>
+                </li>
+                <li>
+                  <div><div class="source-name">Deploy events</div><div class="source-detail">Change markers · delivery controller</div></div>
+                  <span class="source-status status-current">Current · 12 s</span>
+                </li>
+              </ul>
+            </div>
+          </article>
+        </div>
+
+        <article class="panel" aria-labelledby="timeline-heading">
+          <header class="panel-header">
+              <div>
+                <h2 id="timeline-heading">Incident activity</h2>
+                <p id="timeline-subtitle">Recorded actors and system events · UTC</p>
+            </div>
+          </header>
+          <div class="panel-body">
+            <ol class="timeline" id="timeline">
+              <li><time datetime="2026-09-02T14:18:00Z">14:18</time><span class="timeline-mark" aria-hidden="true"></span><p><strong class="mono">pay-router 2026.09.02.3</strong> deployed to us-west-2.</p></li>
+              <li><time datetime="2026-09-02T14:21:00Z">14:21</time><span class="timeline-mark" aria-hidden="true"></span><p>p95 authorization latency first exceeded 600 ms.</p></li>
+              <li><time datetime="2026-09-02T14:24:00Z">14:24</time><span class="timeline-mark" aria-hidden="true"></span><p><strong>INC-2481</strong> opened by the alert controller.</p></li>
+              <li id="ack-timeline"><time datetime="2026-09-02T14:29:00Z">14:29</time><span class="timeline-mark" aria-hidden="true"></span><p>Maya Chen acknowledged the incident. Mitigation was not started.</p></li>
+              <li><time datetime="2026-09-02T14:31:00Z">14:31</time><span class="timeline-mark" aria-hidden="true"></span><p>EU trace collector stopped reporting; request counters remained current.</p></li>
+              <li><time datetime="2026-09-02T14:37:20Z">14:37</time><span class="timeline-mark" aria-hidden="true"></span><p>Current replay position. Incident remains open.</p></li>
+            </ol>
+          </div>
+        </article>
+      </section>
+
+      <p class="footer-note">Relay is a fictional, local-only worked artifact for the operational design guide. It is not a product template, monitoring system, or evidence source.</p>
+      <div class="visually-hidden" id="live-log" role="status" aria-live="polite" aria-atomic="true"></div>
+    </main>
+  </div>
+
+  <dialog id="rollback-dialog" aria-labelledby="rollback-title">
+    <div class="dialog-header">
+      <div>
+        <span class="eyebrow">Bounded exercise action</span>
+        <h2 id="rollback-title">Review rollback</h2>
+      </div>
+      <button class="icon-button" id="close-dialog" type="button" aria-label="Close rollback review">×</button>
+    </div>
+    <div class="dialog-body">
+      <dl>
+        <dt>Target</dt><dd class="mono">pay-router</dd>
+        <dt>Current release</dt><dd class="mono">2026.09.02.3</dd>
+        <dt>Restore release</dt><dd class="mono">2026.08.29.7</dd>
+        <dt>Environment</dt><dd>Production</dd>
+        <dt>Scope</dt><dd class="mono">us-west-2 · 12 pods</dd>
+        <dt>Expected effect</dt><dd>Replace the deployed release; does not close INC-2481.</dd>
+      </dl>
+      <p class="caveat"><strong>Recovery is not guaranteed.</strong> The deployment is correlated with the rise but has not been confirmed as its cause. Trace coverage is 81%.</p>
+      <div class="operation-status" id="rollback-status" role="status">Ready for exercise review. No command has been submitted.</div>
+    </div>
+    <div class="dialog-footer">
+      <button class="secondary-button" id="cancel-rollback" type="button">Cancel</button>
+      <button class="danger-button" id="apply-rollback" type="button">Apply rollback in exercise</button>
+    </div>
+  </dialog>
+
+  <noscript>
+    <p class="noscript-note">This interactive fixture requires JavaScript. The regional snapshot remains described in the source document.</p>
+  </noscript>
+
+  <script>
+    (function () {
+      "use strict";
+
+      var regionMeta = {
+        east: { region: "us-east-1", status: "Nominal", statusClass: "nominal-state", traffic: 46, latency: 286, error: 0.38, rpm: 5740, freshness: "Current · 8 s", source: "Requests and traces current" },
+        west: { region: "us-west-2", status: "Degraded", statusClass: "degraded-state", traffic: 32, latency: 1326, error: 4.72, rpm: 3994, freshness: "Current · 6 s", source: "Requests and traces current" },
+        eu: { region: "eu-west-1", status: "Partial data", statusClass: "partial-state", traffic: 22, latency: 641, error: 1.18, rpm: 2746, freshness: "Traces stale · 6 min", source: "641 ms · last trace sample 14:31; requests current" }
+      };
+
+      var samples60 = {
+        times: ["14:00", "14:05", "14:10", "14:15", "14:20", "14:25", "14:30", "14:35"],
+        latency: {
+          east: [248, 252, 247, 259, 263, 271, 280, 286],
+          west: [264, 270, 281, 298, 522, 846, 1188, 1326],
+          eu: [290, 300, 302, 310, 358, 484, 641, null]
+        },
+        errors: {
+          east: [0.31, 0.32, 0.29, 0.34, 0.35, 0.36, 0.38, 0.38],
+          west: [0.34, 0.36, 0.37, 0.39, 0.82, 2.14, 3.88, 4.72],
+          eu: [0.41, 0.42, 0.39, 0.44, 0.49, 0.74, 1.18, null]
+        }
+      };
+
+      var samples360 = {
+        times: ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "14:20", "14:35"],
+        latency: {
+          east: [236, 242, 251, 247, 253, 248, 263, 286],
+          west: [249, 255, 261, 258, 266, 264, 522, 1326],
+          eu: [270, 276, 282, 279, 286, 290, 358, null]
+        },
+        errors: {
+          east: [0.28, 0.29, 0.31, 0.30, 0.30, 0.31, 0.35, 0.38],
+          west: [0.31, 0.32, 0.33, 0.34, 0.32, 0.34, 0.82, 4.72],
+          eu: [0.38, 0.39, 0.41, 0.40, 0.42, 0.41, 0.49, null]
+        }
+      };
+
+      var nominalSamples = {
+        latency: {
+          east: [248, 252, 247, 259, 263, 271, 280, 286],
+          west: [264, 270, 281, 276, 284, 289, 296, 302],
+          eu: [290, 300, 302, 310, 304, 299, 296, 294]
+        },
+        errors: {
+          east: [0.31, 0.32, 0.29, 0.34, 0.35, 0.36, 0.38, 0.38],
+          west: [0.34, 0.36, 0.37, 0.39, 0.38, 0.39, 0.40, 0.41],
+          eu: [0.41, 0.42, 0.39, 0.44, 0.43, 0.42, 0.41, 0.40]
+        }
+      };
+
+      var state = {
+        region: "all",
+        range: "60",
+        fixture: "active",
+        metric: "latency",
+        selectedIndex: 7,
+        sortKey: "region",
+        sortDirection: 1,
+        query: "",
+        acknowledged: true,
+        rollbackState: "idle",
+        rollbackRun: 0
+      };
+
+      var regionOrder = ["east", "west", "eu"];
+      var regionLabels = { all: "All regions", east: "us-east-1", west: "us-west-2", eu: "eu-west-1" };
+      var rangeLabels = { "15": "Last 15 minutes", "60": "Last 60 minutes", "360": "Last 6 hours" };
+      var svgNS = "http://www.w3.org/2000/svg";
+
+      var els = {
+        region: document.getElementById("region-filter"),
+        range: document.getElementById("range-filter"),
+        fixture: document.getElementById("fixture-filter"),
+        scopeSummary: document.getElementById("scope-summary"),
+        incidentBand: document.getElementById("incident-band"),
+        incidentTitle: document.getElementById("incident-title"),
+        incidentMeta: document.getElementById("incident-meta"),
+        acknowledge: document.getElementById("acknowledge"),
+        rollback: document.getElementById("review-rollback"),
+        permission: document.getElementById("permission-note"),
+        chart: document.getElementById("metric-chart"),
+        chartStage: document.getElementById("chart-stage"),
+        chartTitle: document.getElementById("chart-svg-title"),
+        chartDesc: document.getElementById("chart-svg-desc"),
+        chartSubtitle: document.getElementById("chart-subtitle"),
+        chartReadout: document.getElementById("chart-readout"),
+        chartLegend: document.getElementById("chart-legend"),
+        exactHead: document.getElementById("exact-head"),
+        exactCaption: document.getElementById("exact-caption"),
+        exactBody: document.querySelector("#exact-values tbody"),
+        selectedSample: document.getElementById("selected-sample"),
+        hypothesis: document.getElementById("hypothesis"),
+        overviewKicker: document.getElementById("overview-kicker"),
+        decisionList: document.getElementById("decision-list"),
+        regionBody: document.querySelector("#region-table tbody"),
+        regionCaption: document.getElementById("region-caption"),
+        search: document.getElementById("region-search"),
+        sources: document.getElementById("source-list"),
+        breakdownSubtitle: document.getElementById("breakdown-subtitle"),
+        breakdownBody: document.getElementById("breakdown-body"),
+        timelineSubtitle: document.getElementById("timeline-subtitle"),
+        timeline: document.getElementById("timeline"),
+        live: document.getElementById("live-log"),
+        dialog: document.getElementById("rollback-dialog"),
+        rollbackStatus: document.getElementById("rollback-status"),
+        applyRollback: document.getElementById("apply-rollback"),
+        cancelRollback: document.getElementById("cancel-rollback"),
+        themeToggle: document.getElementById("theme-toggle")
+      };
+
+      function announce(message) {
+        els.live.textContent = "";
+        window.setTimeout(function () {
+          els.live.textContent = message;
+        }, 20);
+      }
+
+      function safeTheme() {
+        try {
+          return window.localStorage.getItem("relay-theme");
+        } catch (error) {
+          return null;
+        }
+      }
+
+      function setTheme(theme, persist) {
+        document.documentElement.dataset.theme = theme;
+        els.themeToggle.setAttribute("aria-label", theme === "light" ? "Use dark theme" : "Use light theme");
+        els.themeToggle.textContent = theme === "light" ? "◐" : "◑";
+        if (persist) {
+          try {
+            window.localStorage.setItem("relay-theme", theme);
+          } catch (error) {
+            return;
+          }
+        }
+      }
+
+      function restoreURLScope() {
+        try {
+          var url = new URL(window.location.href);
+          var nextRegion = url.searchParams.get("region");
+          var nextRange = url.searchParams.get("range");
+          var nextFixture = url.searchParams.get("fixture");
+          if (regionLabels[nextRegion]) state.region = nextRegion;
+          if (rangeLabels[nextRange]) state.range = nextRange;
+          if (["active", "partial", "permission", "nominal"].indexOf(nextFixture) >= 0) state.fixture = nextFixture;
+        } catch (error) {
+          return;
+        }
+      }
+
+      function writeURLScope() {
+        try {
+          var url = new URL(window.location.href);
+          url.searchParams.set("region", state.region);
+          url.searchParams.set("range", state.range);
+          url.searchParams.set("fixture", state.fixture);
+          window.history.replaceState({}, "", url.href);
+        } catch (error) {
+          return;
+        }
+      }
+
+      function activeRegionKeys() {
+        return state.region === "all" ? regionOrder.slice() : [state.region];
+      }
+
+      function getRows() {
+        var rows = regionOrder.map(function (key) {
+          var row = Object.assign({ key: key }, regionMeta[key]);
+
+          if (state.fixture === "partial" && (key === "east" || key === "west")) {
+            row.latency = null;
+            row.status = "Telemetry unavailable";
+            row.statusClass = "unknown-state";
+            row.freshness = "Latency unavailable";
+            row.source = "Request counters current; latest trace input unavailable";
+          }
+
+          if (state.fixture === "nominal") {
+            row.status = "Nominal";
+            row.statusClass = "nominal-state";
+            row.latency = key === "east" ? 286 : key === "west" ? 302 : 294;
+            row.error = key === "east" ? 0.38 : key === "west" ? 0.41 : 0.40;
+            row.freshness = key === "east" ? "Current · 8 s" : "Current · 6 s";
+            row.source = "Requests and traces current";
+          }
+
+          return row;
+        });
+
+        if (state.region !== "all") {
+          rows = rows.filter(function (row) { return row.key === state.region; });
+        }
+
+        return rows;
+      }
+
+      function getSamples() {
+        var base = state.range === "360" ? samples360 : samples60;
+        var start = state.range === "15" ? 4 : 0;
+        var result = {
+          times: base.times.slice(start),
+          latency: {},
+          errors: {}
+        };
+
+        ["latency", "errors"].forEach(function (metric) {
+          regionOrder.forEach(function (key) {
+            var values;
+            if (state.fixture === "nominal") {
+              values = nominalSamples[metric][key].slice();
+            } else {
+              values = base[metric][key].slice();
+            }
+            if (state.fixture === "partial" && metric === "latency" && (key === "east" || key === "west")) {
+              values[values.length - 1] = null;
+            }
+            result[metric][key] = values.slice(start);
+          });
+        });
+
+        return result;
+      }
+
+      function number(value, digits) {
+        if (value === null || typeof value === "undefined") return "Not available";
+        return Number(value).toLocaleString("en-US", {
+          minimumFractionDigits: digits || 0,
+          maximumFractionDigits: digits || 0
+        });
+      }
+
+      function formatValue(value, metric) {
+        if (value === null || typeof value === "undefined") return "Not available";
+        return metric === "latency" ? number(value, 0) + " ms" : number(value, 2) + "%";
+      }
+
+      function renderScope() {
+        els.region.value = state.region;
+        els.range.value = state.range;
+        els.fixture.value = state.fixture;
+        els.scopeSummary.innerHTML = "<strong>checkout-api</strong> · Production · " + regionLabels[state.region] + " · " + rangeLabels[state.range] + " · UTC";
+        writeURLScope();
+      }
+
+      function renderIncident() {
+        var nominal = state.fixture === "nominal";
+        var incidentInScope = state.region === "all" || state.region === "west";
+        var quiet = nominal || !incidentInScope;
+        els.incidentBand.classList.toggle("nominal", quiet);
+        els.permission.hidden = state.fixture !== "permission" || !incidentInScope;
+        els.rollback.disabled = quiet || state.fixture === "permission";
+
+        if (nominal) {
+          els.incidentTitle.textContent = "No active incidents in this scope";
+          els.incidentMeta.textContent = "Nominal at the recorded replay position · no response requested";
+          els.incidentBand.querySelector(".condition-mark span").textContent = "–";
+          els.acknowledge.hidden = true;
+          els.rollback.hidden = true;
+          return;
+        }
+
+        if (!incidentInScope) {
+          els.incidentTitle.textContent = "No active incidents in " + regionLabels[state.region];
+          els.incidentMeta.textContent = "INC-2481 affects us-west-2 outside this regional scope";
+          els.incidentBand.querySelector(".condition-mark span").textContent = "–";
+          els.acknowledge.hidden = true;
+          els.rollback.hidden = true;
+          return;
+        }
+
+        els.incidentBand.querySelector(".condition-mark span").textContent = "!";
+        els.incidentTitle.textContent = "Elevated authorization latency in us-west-2";
+        els.incidentMeta.textContent = "Degraded · " + (state.acknowledged ? "acknowledged by Maya Chen at 14:29" : "not acknowledged") + " · mitigation not started · Payments on-call";
+        els.acknowledge.hidden = false;
+        els.rollback.hidden = false;
+        els.acknowledge.textContent = state.acknowledged ? "Clear local acknowledgement" : "Acknowledge";
+      }
+
+      function setMetricText(id, text, detail, unavailable) {
+        var value = document.getElementById(id);
+        value.textContent = text;
+        value.classList.toggle("unavailable", Boolean(unavailable));
+        document.getElementById(id + "-detail").textContent = detail;
+      }
+
+      function renderMetrics() {
+        var rows = getRows();
+        var rpm = rows.reduce(function (sum, row) { return sum + row.rpm; }, 0);
+        var latencyValues = rows.map(function (row) { return row.latency; }).filter(function (value) { return value !== null; });
+        var weightedError = rows.reduce(function (sum, row) { return sum + row.error * row.rpm; }, 0) / rpm;
+
+        setMetricText("metric-rpm", number(rpm, 0) + "/min", "Requests · current within 8 s", false);
+
+        if (state.fixture === "partial" && state.region === "all") {
+          setMetricText("metric-latency", "Not computed — two regional inputs unavailable", "Trace aggregate withheld; missing values are not zero", true);
+        } else if (!latencyValues.length) {
+          setMetricText("metric-latency", "Not available", "No current trace input in this scope", true);
+        } else {
+          setMetricText("metric-latency", number(Math.max.apply(null, latencyValues), 0) + " ms", rows.length > 1 ? "Maximum regional value · traces" : "Latest regional value · traces", false);
+        }
+
+        setMetricText("metric-error", number(weightedError, 2) + "%", "Request-weighted · selected scope", false);
+
+        var coverage = state.fixture === "partial" ? null : state.fixture === "nominal" ? 96 : state.region === "eu" ? 54 : state.region === "all" ? 81 : 94;
+        if (coverage === null) {
+          setMetricText("metric-coverage", "Not computed", "Latest trace inputs unavailable", true);
+        } else {
+          setMetricText("metric-coverage", number(coverage, 0) + "%", "Observed spans / eligible requests", false);
+        }
+      }
+
+      function svgElement(name, attrs, text) {
+        var node = document.createElementNS(svgNS, name);
+        Object.keys(attrs || {}).forEach(function (key) {
+          node.setAttribute(key, attrs[key]);
+        });
+        if (typeof text !== "undefined") node.textContent = text;
+        return node;
+      }
+
+      function seriesPath(values, x, y) {
+        var path = "";
+        var drawing = false;
+        values.forEach(function (value, index) {
+          if (value === null || typeof value === "undefined") {
+            drawing = false;
+            return;
+          }
+          path += (drawing ? " L " : "M ") + x(index) + " " + y(value);
+          drawing = true;
+        });
+        return path;
+      }
+
+      function renderChart() {
+        var sample = getSamples();
+        var metric = state.metric;
+        var values = sample[metric];
+        var keys = activeRegionKeys();
+        var measuredWidth = Math.round(els.chartStage.getBoundingClientRect().width || 900);
+        var width = Math.max(300, measuredWidth);
+        var compact = width < 520;
+        var height = compact ? 300 : 350;
+        var margin = compact
+          ? { top: 28, right: 12, bottom: 42, left: 48 }
+          : { top: 28, right: 24, bottom: 44, left: 62 };
+        var plotWidth = width - margin.left - margin.right;
+        var plotHeight = height - margin.top - margin.bottom;
+        var max = metric === "latency" ? 1500 : 5;
+        var ticks = metric === "latency" ? [0, 300, 600, 900, 1200, 1500] : [0, 1, 2, 3, 4, 5];
+        var threshold = metric === "latency" ? 600 : 2;
+        var thresholdLabel = metric === "latency" ? "trigger 600 ms" : "review line 2%";
+        var unit = metric === "latency" ? "milliseconds" : "percent";
+        var x = function (index) {
+          return margin.left + (sample.times.length === 1 ? 0 : index * plotWidth / (sample.times.length - 1));
+        };
+        var y = function (value) {
+          return margin.top + plotHeight - value / max * plotHeight;
+        };
+
+        while (els.chart.firstChild) els.chart.removeChild(els.chart.firstChild);
+        els.chart.setAttribute("viewBox", "0 0 " + width + " " + height);
+
+        var title = svgElement("title", { id: "chart-svg-title" }, "Regional " + (metric === "latency" ? "p95 authorization latency" : "authorization error rate"));
+        var description = metric === "latency"
+          ? "Regional p95 latency on a common millisecond scale. us-west-2 rises above the 600 millisecond incident threshold after the 14:18 deployment. Gaps indicate unavailable or stale trace samples."
+          : "Regional error rate on a common percent scale. us-west-2 rises to 4.72 percent. Gaps indicate unavailable source samples.";
+        els.chart.appendChild(title);
+        els.chart.appendChild(svgElement("desc", { id: "chart-svg-desc" }, description));
+
+        ticks.forEach(function (tick) {
+          els.chart.appendChild(svgElement("line", { x1: margin.left, y1: y(tick), x2: width - margin.right, y2: y(tick), class: "chart-grid" }));
+          els.chart.appendChild(svgElement("text", { x: margin.left - 10, y: y(tick) + 4, "text-anchor": "end", class: "chart-axis" }, metric === "latency" ? String(tick) : tick + "%"));
+        });
+
+        sample.times.forEach(function (time, index) {
+          if (compact && index % 2 === 1 && index !== sample.times.length - 1) return;
+          els.chart.appendChild(svgElement("text", { x: x(index), y: height - 15, "text-anchor": index === 0 ? "start" : index === sample.times.length - 1 ? "end" : "middle", class: "chart-axis" }, time));
+        });
+
+        els.chart.appendChild(svgElement("text", { x: margin.left, y: 15, class: "chart-axis" }, unit));
+        els.chart.appendChild(svgElement("line", { x1: margin.left, y1: y(threshold), x2: width - margin.right, y2: y(threshold), class: "chart-threshold" }));
+        els.chart.appendChild(svgElement("text", { x: width - margin.right, y: y(threshold) - 7, "text-anchor": "end", class: "chart-axis" }, thresholdLabel));
+
+        if (state.fixture !== "nominal") {
+          var deployIndex = state.range === "15" ? 0 : state.range === "360" ? 6 : 4;
+          var deployX = state.range === "15" ? margin.left + 4 : x(deployIndex);
+          els.chart.appendChild(svgElement("line", { x1: deployX, y1: margin.top, x2: deployX, y2: margin.top + plotHeight, class: "chart-deploy" }));
+          els.chart.appendChild(svgElement("text", { x: deployX + 6, y: margin.top + 12, class: "chart-axis" }, "deploy 14:18"));
+        }
+
+        keys.forEach(function (key) {
+          var path = seriesPath(values[key], x, y);
+          if (path) {
+            els.chart.appendChild(svgElement("path", { d: path, class: "series-line series-" + key }));
+          }
+          values[key].forEach(function (value, index) {
+            if (value === null || typeof value === "undefined") return;
+            var circle = svgElement("circle", {
+              cx: x(index),
+              cy: y(value),
+              r: index === state.selectedIndex ? 5 : 3,
+              class: "series-point series-" + key
+            });
+            circle.setAttribute("fill", key === "east" ? "var(--accent)" : key === "west" ? "var(--danger)" : "var(--derived)");
+            els.chart.appendChild(circle);
+          });
+        });
+
+        els.chart.appendChild(svgElement("line", {
+          x1: x(state.selectedIndex),
+          y1: margin.top,
+          x2: x(state.selectedIndex),
+          y2: margin.top + plotHeight,
+          class: "inspection-line"
+        }));
+
+        els.chartSubtitle.textContent = (metric === "latency" ? "p95 authorization latency · milliseconds" : "authorization error rate · percent of requests") + " · " + rangeLabels[state.range].toLowerCase();
+        renderChartReadout(sample);
+        renderExactValues(sample);
+      }
+
+      function renderChartReadout(sample) {
+        var time = sample.times[state.selectedIndex];
+        var parts = activeRegionKeys().map(function (key) {
+          return "<span><strong>" + regionLabels[key] + "</strong> <span class=\"mono\">" + formatValue(sample[state.metric][key][state.selectedIndex], state.metric) + "</span></span>";
+        });
+        els.chartReadout.innerHTML = "<strong class=\"mono\">" + time + " UTC</strong>" + parts.join("");
+
+        var available = activeRegionKeys().map(function (key) {
+          return { key: key, value: sample[state.metric][key][state.selectedIndex] };
+        }).filter(function (item) { return item.value !== null; });
+        var largest = available.sort(function (a, b) { return b.value - a.value; })[0];
+        var largestText = largest ? formatValue(largest.value, state.metric) + " · " + regionLabels[largest.key] : "Not available";
+
+        els.selectedSample.innerHTML =
+          "<dt>Time</dt><dd class=\"mono\">" + time + " UTC</dd>" +
+          "<dt>Region</dt><dd>" + regionLabels[state.region] + "</dd>" +
+          "<dt>Largest value</dt><dd class=\"mono\">" + largestText + "</dd>" +
+          "<dt>Reference</dt><dd class=\"mono\">" + (state.metric === "latency" ? "&gt; 600 ms for 5 min" : "2.00% review line") + "</dd>";
+      }
+
+      function renderExactValues(sample) {
+        var keys = activeRegionKeys();
+        els.exactHead.innerHTML = "";
+        var timeHeading = document.createElement("th");
+        timeHeading.scope = "col";
+        timeHeading.textContent = "Time (UTC)";
+        els.exactHead.appendChild(timeHeading);
+        keys.forEach(function (key) {
+          var heading = document.createElement("th");
+          heading.scope = "col";
+          heading.textContent = regionLabels[key];
+          els.exactHead.appendChild(heading);
+        });
+        els.exactCaption.textContent = "Exact " + (state.metric === "latency" ? "latency" : "error-rate") + " values for " + regionLabels[state.region] + " in the regional signal chart.";
+        els.exactBody.innerHTML = "";
+        sample.times.forEach(function (time, index) {
+          var tr = document.createElement("tr");
+          var timeCell = document.createElement("th");
+          timeCell.scope = "row";
+          timeCell.className = "mono";
+          timeCell.textContent = time + " UTC";
+          tr.appendChild(timeCell);
+          keys.forEach(function (key) {
+            var td = document.createElement("td");
+            td.className = "mono";
+            td.textContent = formatValue(sample[state.metric][key][index], state.metric);
+            if (sample[state.metric][key][index] === null) td.classList.add("stale");
+            tr.appendChild(td);
+          });
+          els.exactBody.appendChild(tr);
+        });
+
+        els.chartLegend.innerHTML = keys.map(function (key) {
+          var pattern = key === "east" ? "solid" : key === "west" ? "dashed" : "dotted; stale trace gap";
+          return "<li><span class=\"legend-line " + key + "\" aria-hidden=\"true\"></span> " + regionLabels[key] + " · " + pattern + "</li>";
+        }).join("");
+      }
+
+      function sortValue(row, key) {
+        if (key === "region") return row.region;
+        if (key === "status") return row.status;
+        var value = row[key];
+        return value === null ? -Infinity : value;
+      }
+
+      function renderRegionTable() {
+        var rows = getRows();
+        var query = state.query.trim().toLowerCase();
+        if (query) {
+          rows = rows.filter(function (row) {
+            return (row.region + " " + row.status + " " + row.source).toLowerCase().indexOf(query) >= 0;
+          });
+        }
+        rows.sort(function (a, b) {
+          var av = sortValue(a, state.sortKey);
+          var bv = sortValue(b, state.sortKey);
+          if (typeof av === "string") return av.localeCompare(bv) * state.sortDirection;
+          return (av - bv) * state.sortDirection;
+        });
+
+        document.querySelectorAll("#region-table thead th[data-sort]").forEach(function (th) {
+          var direction = th.dataset.sort === state.sortKey ? (state.sortDirection === 1 ? "ascending" : "descending") : "none";
+          th.setAttribute("aria-sort", direction);
+        });
+
+        els.regionBody.innerHTML = "";
+        rows.forEach(function (row) {
+          var tr = document.createElement("tr");
+          if (state.region === row.key) tr.classList.add("selected");
+
+          var regionCell = document.createElement("th");
+          regionCell.scope = "row";
+          var button = document.createElement("button");
+          button.type = "button";
+          button.className = "region-button";
+          button.dataset.region = row.key;
+          button.textContent = row.region;
+          button.setAttribute("aria-label", "Scope dashboard to " + row.region);
+          regionCell.appendChild(button);
+          tr.appendChild(regionCell);
+
+          var stateCell = document.createElement("td");
+          stateCell.innerHTML = "<span class=\"state " + row.statusClass + "\">" + row.status + "</span>";
+          tr.appendChild(stateCell);
+
+          var trafficCell = document.createElement("td");
+          trafficCell.className = "mono";
+          trafficCell.textContent = number(row.traffic, 0) + "%";
+          tr.appendChild(trafficCell);
+
+          var latencyCell = document.createElement("td");
+          latencyCell.className = "mono";
+          latencyCell.textContent = row.latency === null ? "Not available" : number(row.latency, 0) + " ms";
+          if (row.key === "eu" && state.fixture !== "nominal") {
+            latencyCell.innerHTML = "<span class=\"stale\">641 ms</span><br><span class=\"source-detail\">last trace 14:31</span>";
+          }
+          tr.appendChild(latencyCell);
+
+          var errorCell = document.createElement("td");
+          errorCell.className = "mono";
+          errorCell.textContent = number(row.error, 2) + "%";
+          tr.appendChild(errorCell);
+
+          var rpmCell = document.createElement("td");
+          rpmCell.className = "mono";
+          rpmCell.textContent = number(row.rpm, 0);
+          tr.appendChild(rpmCell);
+
+          var freshCell = document.createElement("td");
+          freshCell.innerHTML = "<span class=\"" + (row.freshness.indexOf("stale") >= 0 ? "stale" : "freshness") + "\">" + row.freshness + "</span><br><span class=\"source-detail\">" + row.source + "</span>";
+          tr.appendChild(freshCell);
+
+          els.regionBody.appendChild(tr);
+        });
+
+        if (!rows.length) {
+          var empty = document.createElement("tr");
+          empty.innerHTML = "<td colspan=\"7\">No regions match this local filter. Clear the search to restore rows.</td>";
+          els.regionBody.appendChild(empty);
+        }
+        els.regionCaption.textContent = rows.length + (rows.length === 1 ? " region" : " regions") + " shown in the active Production scope.";
+      }
+
+      function renderSources() {
+        var traceStatus = els.sources.children[1].querySelector(".source-status");
+        var traceDetail = els.sources.children[1].querySelector(".source-detail");
+        traceStatus.className = "source-status";
+
+        if (state.fixture === "partial") {
+          traceStatus.textContent = "2 unavailable";
+          traceStatus.classList.add("status-unavailable");
+          traceDetail.textContent = "Latency and coverage · east and west latest inputs unavailable; EU stale";
+        } else if (state.fixture === "nominal") {
+          traceStatus.textContent = "Current · 6 s";
+          traceStatus.classList.add("status-current");
+          traceDetail.textContent = "Latency and coverage · regional five-minute samples";
+        } else {
+          traceStatus.textContent = "EU stale · 6 min";
+          traceStatus.classList.add("status-stale");
+          traceDetail.textContent = "Latency and coverage · last complete five-minute sample";
+        }
+      }
+
+      function renderHypothesis() {
+        if (state.fixture === "nominal") {
+          els.overviewKicker.textContent = "Recorded baseline · no incident";
+          els.hypothesis.innerHTML = "<strong>No active causal question.</strong> Current regional values remain below the incident threshold in this recorded nominal fixture.";
+          els.decisionList.innerHTML =
+            "<dt>Evaluation</dt><dd>No response required</dd>" +
+            "<dt>Highest p95</dt><dd class=\"mono\">302 ms · us-west-2</dd>" +
+            "<dt>Threshold</dt><dd class=\"mono\">600 ms for 5 min</dd>" +
+            "<dt>Source state</dt><dd>All inputs current</dd>";
+        } else if (state.fixture === "partial") {
+          els.overviewKicker.textContent = "Recorded incident · INC-2481";
+          els.hypothesis.innerHTML = "<strong>Assessment constrained by missing data.</strong> The deployment remains correlated with the earlier rise, but two latest regional trace inputs are unavailable. Do not treat missing values as recovery.";
+          els.decisionList.innerHTML =
+            "<dt>Owner</dt><dd>Payments on-call</dd>" +
+            "<dt>Consequence</dt><dd>2.6% delayed &gt; 2 s</dd>" +
+            "<dt>Change</dt><dd class=\"mono\">pay-router 2026.09.02.3</dd>" +
+            "<dt>Trace state</dt><dd>2 unavailable · EU stale</dd>" +
+            "<dt>Decision limit</dt><dd>Recovery cannot be computed</dd>";
+        } else {
+          els.overviewKicker.textContent = "Recorded incident · INC-2481";
+          els.hypothesis.innerHTML = "<strong>Correlation, not confirmed cause.</strong> Latency increased three minutes after the pay-router deployment in us-west-2. Regions without the release did not show the same rise. Trace coverage is 81%.";
+          els.decisionList.innerHTML =
+            "<dt>Owner</dt><dd>Payments on-call</dd>" +
+            "<dt>Consequence</dt><dd>2.6% delayed &gt; 2 s</dd>" +
+            "<dt>Change</dt><dd class=\"mono\">pay-router 2026.09.02.3</dd>" +
+            "<dt>Deploy scope</dt><dd class=\"mono\">us-west-2</dd>" +
+            "<dt>Threshold owner</dt><dd>Checkout SRE</dd>" +
+            (state.fixture === "permission" ? "<dt>Action authority</dt><dd>Traffic Admin missing</dd>" : "");
+        }
+      }
+
+      function timelineItem(time, text) {
+        return "<li><time datetime=\"2026-09-02T" + time + ":00Z\">" + time + "</time><span class=\"timeline-mark\" aria-hidden=\"true\"></span><p>" + text + "</p></li>";
+      }
+
+      function breakdownMarkup() {
+        return "<ul class=\"breakdown\">" +
+          "<li class=\"breakdown-row\"><span>Upstream timeout</span><strong class=\"number\">64%</strong><span class=\"bar-track\" aria-hidden=\"true\"><span class=\"bar bar-64\"></span></span></li>" +
+          "<li class=\"breakdown-row\"><span>Connection-pool wait</span><strong class=\"number\">23%</strong><span class=\"bar-track\" aria-hidden=\"true\"><span class=\"bar bar-23\"></span></span></li>" +
+          "<li class=\"breakdown-row\"><span>Other</span><strong class=\"number\">13%</strong><span class=\"bar-track\" aria-hidden=\"true\"><span class=\"bar bar-13\"></span></span></li>" +
+          "</ul>";
+      }
+
+      function renderActivity() {
+        var incidentInScope = state.region === "all" || state.region === "west";
+
+        if (state.fixture === "nominal") {
+          els.breakdownSubtitle.textContent = regionLabels[state.region] + " · recorded baseline";
+          els.breakdownBody.innerHTML = "<p class=\"section-note\">No failed-request composition is available because this fixture has no active incident.</p>";
+          els.timelineSubtitle.textContent = "Recorded baseline events · UTC";
+          els.timeline.innerHTML = timelineItem("14:37", "No active incidents or mitigation operations in this scope.");
+          return;
+        }
+
+        if (incidentInScope) {
+          els.breakdownSubtitle.textContent = "us-west-2 · failed requests · 14:30–14:35 UTC";
+          els.breakdownBody.innerHTML = breakdownMarkup();
+          els.timelineSubtitle.textContent = "Recorded actors and system events · UTC";
+          var items = [
+            timelineItem("14:18", "<strong class=\"mono\">pay-router 2026.09.02.3</strong> deployed to us-west-2."),
+            timelineItem("14:21", "p95 authorization latency first exceeded 600 ms."),
+            timelineItem("14:24", "<strong>INC-2481</strong> opened by the alert controller.")
+          ];
+          if (state.acknowledged) {
+            items.push(timelineItem("14:29", "Maya Chen acknowledged the incident. Mitigation was not started."));
+          }
+          if (state.region === "all") {
+            items.push(timelineItem("14:31", "EU trace collector stopped reporting; request counters remained current."));
+          }
+          if (state.fixture === "partial") {
+            items.push(timelineItem("14:35", "Latest east and west trace inputs became unavailable; no aggregate recovery value was computed."));
+          }
+          if (state.rollbackState !== "idle") {
+            var operationText = state.rollbackState === "completed"
+              ? "Exercise rollback completed; recovery remains unverified and INC-2481 remains open."
+              : state.rollbackState === "applying"
+                ? "Exercise rollback is applying; completion and recovery are not yet confirmed."
+                : "Exercise controller accepted the rollback request; completion is pending.";
+            items.push(timelineItem("14:37", operationText));
+          } else {
+            items.push(timelineItem("14:37", "Current replay position. Incident remains open."));
+          }
+          els.timeline.innerHTML = items.join("");
+        } else if (state.region === "eu") {
+          els.breakdownSubtitle.textContent = "eu-west-1 · no incident error breakdown";
+          els.breakdownBody.innerHTML = "<p class=\"section-note\">The incident breakdown is scoped to us-west-2. EU request counters remain available, while its trace source is stale.</p>";
+          els.timelineSubtitle.textContent = "Events in eu-west-1 · UTC";
+          els.timeline.innerHTML =
+            timelineItem("14:31", "EU trace collector stopped reporting; request counters remained current.") +
+            timelineItem("14:37", "No active incidents in eu-west-1. Trace freshness still requires attention.");
+        } else {
+          els.breakdownSubtitle.textContent = "us-east-1 · no incident error breakdown";
+          els.breakdownBody.innerHTML = "<p class=\"section-note\">The incident breakdown is scoped to us-west-2. No failed-request composition was collected for this region.</p>";
+          els.timelineSubtitle.textContent = "Events in us-east-1 · UTC";
+          els.timeline.innerHTML = timelineItem("14:37", "No active incidents or mitigation operations in us-east-1.");
+        }
+      }
+
+      function renderAll() {
+        var sample = getSamples();
+        state.selectedIndex = Math.min(state.selectedIndex, sample.times.length - 1);
+        renderScope();
+        renderIncident();
+        renderMetrics();
+        renderChart();
+        renderRegionTable();
+        renderSources();
+        renderHypothesis();
+        renderActivity();
+      }
+
+      function resetExercise(announceReset) {
+        state.region = "all";
+        state.range = "60";
+        state.fixture = "active";
+        state.metric = "latency";
+        state.selectedIndex = 7;
+        state.sortKey = "region";
+        state.sortDirection = 1;
+        state.query = "";
+        state.acknowledged = true;
+        state.rollbackState = "idle";
+        state.rollbackRun += 1;
+        els.search.value = "";
+        document.querySelector("input[name=\"chart-metric\"][value=\"latency\"]").checked = true;
+        renderAll();
+        if (announceReset) announce("Exercise reset to the recorded active incident.");
+      }
+
+      els.region.addEventListener("change", function () {
+        state.region = els.region.value;
+        renderAll();
+        announce("Scope changed to " + regionLabels[state.region] + ".");
+      });
+
+      els.range.addEventListener("change", function () {
+        state.range = els.range.value;
+        state.selectedIndex = getSamples().times.length - 1;
+        renderAll();
+        announce("Time range changed to " + rangeLabels[state.range] + ".");
+      });
+
+      els.fixture.addEventListener("change", function () {
+        state.fixture = els.fixture.value;
+        state.acknowledged = state.fixture !== "nominal";
+        state.rollbackState = "idle";
+        state.rollbackRun += 1;
+        renderAll();
+        announce("Fixture changed to " + els.fixture.options[els.fixture.selectedIndex].text + ".");
+      });
+
+      document.querySelectorAll("input[name=\"chart-metric\"]").forEach(function (input) {
+        input.addEventListener("change", function () {
+          if (!input.checked) return;
+          state.metric = input.value;
+          renderChart();
+          announce("Chart now shows " + (state.metric === "latency" ? "latency" : "error rate") + ".");
+        });
+      });
+
+      els.chartStage.addEventListener("keydown", function (event) {
+        var samples = getSamples();
+        var next = state.selectedIndex;
+        if (event.key === "ArrowLeft") next -= 1;
+        else if (event.key === "ArrowRight") next += 1;
+        else if (event.key === "Home") next = 0;
+        else if (event.key === "End") next = samples.times.length - 1;
+        else return;
+        event.preventDefault();
+        state.selectedIndex = Math.max(0, Math.min(samples.times.length - 1, next));
+        renderChart();
+      });
+
+      els.search.addEventListener("input", function () {
+        state.query = els.search.value;
+        renderRegionTable();
+      });
+
+      document.querySelectorAll(".sort-button").forEach(function (button) {
+        button.addEventListener("click", function () {
+          var key = button.dataset.key;
+          if (state.sortKey === key) state.sortDirection *= -1;
+          else {
+            state.sortKey = key;
+            state.sortDirection = 1;
+          }
+          renderRegionTable();
+        });
+      });
+
+      els.regionBody.addEventListener("click", function (event) {
+        var button = event.target.closest(".region-button");
+        if (!button) return;
+        state.region = button.dataset.region;
+        renderAll();
+        els.chartStage.focus();
+        announce("Dashboard scoped to " + regionLabels[state.region] + ". Focus moved to the chart.");
+      });
+
+      els.acknowledge.addEventListener("click", function () {
+        state.acknowledged = !state.acknowledged;
+        renderIncident();
+        renderActivity();
+        announce(state.acknowledged ? "Incident acknowledged locally. It remains open and mitigation has not started." : "Local acknowledgement cleared. The incident remains open.");
+      });
+
+      els.rollback.addEventListener("click", function () {
+        if (state.rollbackState === "idle") {
+          els.rollbackStatus.textContent = "Ready for exercise review. No command has been submitted.";
+          els.applyRollback.disabled = false;
+          els.applyRollback.textContent = "Apply rollback in exercise";
+          els.cancelRollback.textContent = "Cancel";
+        } else if (state.rollbackState === "completed") {
+          els.rollbackStatus.textContent = "Rollback completed in exercise · recovery unverified. INC-2481 remains open.";
+          els.applyRollback.disabled = true;
+          els.applyRollback.textContent = "Rollback completed";
+          els.cancelRollback.textContent = "Close";
+        } else {
+          els.rollbackStatus.textContent = state.rollbackState === "applying"
+            ? "Applying rollback in the exercise. Completion and recovery are not yet confirmed."
+            : "Request accepted by exercise controller. Completion is pending.";
+          els.applyRollback.disabled = true;
+          els.applyRollback.textContent = "Applying…";
+          els.cancelRollback.textContent = "Close";
+        }
+        els.dialog.showModal();
+      });
+
+      document.getElementById("close-dialog").addEventListener("click", function () {
+        els.dialog.close();
+      });
+
+      els.cancelRollback.addEventListener("click", function () {
+        els.dialog.close();
+        announce(state.rollbackState === "idle"
+          ? "Rollback review canceled. No exercise command was submitted."
+          : "Rollback review closed. The exercise operation state remains available in incident activity.");
+      });
+
+      els.applyRollback.addEventListener("click", function () {
+        var run = ++state.rollbackRun;
+        state.rollbackState = "accepted";
+        els.applyRollback.disabled = true;
+        els.applyRollback.textContent = "Applying…";
+        els.cancelRollback.textContent = "Close";
+        els.rollbackStatus.textContent = "Request accepted by exercise controller.";
+        renderActivity();
+        announce("Rollback request accepted by the exercise controller.");
+
+        window.setTimeout(function () {
+          if (run !== state.rollbackRun) return;
+          state.rollbackState = "applying";
+          els.rollbackStatus.textContent = "Applying · 4 of 12 pods restored to 2026.08.29.7.";
+          renderActivity();
+        }, 250);
+        window.setTimeout(function () {
+          if (run !== state.rollbackRun) return;
+          els.rollbackStatus.textContent = "Applying · 12 of 12 pods restored. Waiting for metric confirmation.";
+        }, 600);
+        window.setTimeout(function () {
+          if (run !== state.rollbackRun) return;
+          state.rollbackState = "completed";
+          els.rollbackStatus.textContent = "Rollback completed in exercise · recovery unverified. INC-2481 remains open.";
+          els.applyRollback.textContent = "Rollback completed";
+          renderActivity();
+          announce("Rollback completed in the exercise. Recovery is unverified and the incident remains open.");
+        }, 1050);
+      });
+
+      els.dialog.addEventListener("cancel", function () {
+        announce(state.rollbackState === "idle"
+          ? "Rollback review canceled. No exercise command was submitted."
+          : "Rollback review closed. The exercise operation continues and recovery remains unverified.");
+      });
+
+      document.getElementById("reset-exercise").addEventListener("click", function () {
+        resetExercise(true);
+      });
+
+      els.themeToggle.addEventListener("click", function () {
+        var next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+        setTheme(next, true);
+        announce(next.charAt(0).toUpperCase() + next.slice(1) + " theme enabled.");
+      });
+
+      var resizeFrame = 0;
+      window.addEventListener("resize", function () {
+        window.cancelAnimationFrame(resizeFrame);
+        resizeFrame = window.requestAnimationFrame(function () {
+          renderChart();
+        });
+      });
+
+      restoreURLScope();
+      var preferred = safeTheme();
+      if (preferred === "dark" || preferred === "light") setTheme(preferred, false);
+      else setTheme("light", false);
+      state.selectedIndex = getSamples().times.length - 1;
+      renderAll();
+    }());
+  </script>
+</body>
+</html>

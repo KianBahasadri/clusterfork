@@ -24,6 +24,10 @@ Regenerates `AGENTS.md` and the `docs/` directory from the current state of the 
 
 Creates a `CLAUDE.md → AGENTS.md` symlink so Claude Code picks up the same instructions. **Do not** add a matching `GEMINI.md` symlink for Google Antigravity: current Antigravity (and Antigravity CLI) reads root `AGENTS.md` natively, in addition to `GEMINI.md` and `.agents/rules/`. Official sources: [changelog](https://antigravity.google/changelog) (“reading rules from AGENTS.md in addition to GEMINI.md”) and [CLI best practices](https://antigravity.google/docs/cli/best-practices) (`GEMINI.md` or `AGENTS.md` at workspace root). Global Antigravity rules still live in `~/.gemini/GEMINI.md`; workspace rule files live under `.agents/rules/`.
 
+## design-guide
+
+Provides one discoverable GUI-design router for web, desktop, and mobile work. It classifies each surface by the user's dominant task and loads a specific guide for editorial reading, operational, analytical, and technical-authoring work, transactional workflows, or promotional and brand-led communication. Hybrid products are composed by bounded task region rather than blended into one universal aesthetic, while cross-cutting truth, disclosure, safety, and commitment rules still apply. The entrypoint owns shared truth, accessibility, scope, platform, review, and revision contracts; `references/evidence.md` maps consequential prescriptions to requirements, invariants, research-supported heuristics, conventions, signature defaults, or explicit hypotheses with transfer limits. `skills/design-guide/assets/blog-reference.html` and `skills/design-guide/assets/dashboard-reference.html` remain optional runnable editorial and operational examples, not canonical templates or evidence sources.
+
 ## ask-claude
 
 Invokes the Claude Code CLI so the agent can get help from Claude on difficult work. The agent chooses how to use the CLI from task context; the user only runs `/ask-claude`. Scope is general — not code-only.

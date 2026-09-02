@@ -1,0 +1,3180 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta name="description" content="A high-capability public essay interface built around quiet defaults, direct manipulation, and progressive mastery.">
+  <title>Power Should Wait Quietly | Signal / Form</title>
+  <style>
+    @import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&display=swap");
+
+    :root {
+      --canvas: #080b0d;
+      --paper: #0d1114;
+      --surface: #11171b;
+      --surface-raised: #151d21;
+      --ink: #dbe3e6;
+      --ink-strong: #f3f6f5;
+      --muted: #849094;
+      --faint: #566166;
+      --line: #263137;
+      --line-strong: #3a4a51;
+      --accent: #62c8d8;
+      --accent-soft: rgba(98, 200, 216, .12);
+      --good: #79c99e;
+      --caution: #d6ad63;
+      --danger: #df7e78;
+      --reader-font: "Newsreader", Georgia, serif;
+      --reader-size: 20px;
+      --reader-weight: 400;
+      --reader-leading: 1.72;
+      --reader-measure: 72ch;
+      --reader-tracking: 0em;
+      --ui: "IBM Plex Sans", sans-serif;
+      --mono: "IBM Plex Mono", monospace;
+      --header-h: 62px;
+      --radius: 6px;
+      --shadow: 0 24px 80px rgba(0, 0, 0, .38);
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+      scroll-padding-top: calc(var(--header-h) + 28px);
+    }
+
+    body {
+      margin: 0;
+      min-width: 300px;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 75% -10%, rgba(98, 200, 216, .055), transparent 32rem),
+        linear-gradient(rgba(255,255,255,.012) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.009) 1px, transparent 1px),
+        var(--canvas);
+      background-size: auto, 48px 48px, 48px 48px, auto;
+      font-family: var(--ui);
+      font-size: 15px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body.focus-reading .toc,
+    body.focus-reading .article-footer,
+    body.focus-reading .related {
+      opacity: .12;
+      pointer-events: none;
+    }
+
+    body.hide-references .cite,
+    body.hide-references .sources {
+      display: none;
+    }
+
+    button, input, select, textarea { font: inherit; }
+    button { color: inherit; }
+    a { color: inherit; }
+
+    button,
+    [role="button"],
+    a {
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    :focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+    }
+
+    ::selection {
+      color: var(--ink-strong);
+      background: color-mix(in srgb, var(--accent) 34%, transparent);
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .topbar {
+      position: fixed;
+      z-index: 50;
+      inset: 0 0 auto;
+      height: var(--header-h);
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      padding: 0 26px;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--canvas) 91%, transparent);
+      backdrop-filter: blur(16px) saturate(120%);
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--ink-strong);
+      text-decoration: none;
+      letter-spacing: -.02em;
+      font-weight: 600;
+    }
+
+    .brand-mark {
+      width: 19px;
+      height: 12px;
+      display: inline-block;
+      border-top: 2px solid var(--accent);
+      border-bottom: 2px solid var(--muted);
+      transform: skewX(-22deg);
+    }
+
+    .brand span:last-child {
+      font-size: 14px;
+    }
+
+    .crumb {
+      min-width: 0;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .top-actions {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tool-button,
+    .quiet-button,
+    .primary-button,
+    .segment-button,
+    .chip,
+    .text-action {
+      border: 1px solid var(--line);
+      background: transparent;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+    }
+
+    .tool-button {
+      min-height: 34px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .tool-button:hover,
+    .quiet-button:hover,
+    .segment-button:hover,
+    .chip:hover,
+    .text-action:hover {
+      color: var(--ink-strong);
+      border-color: var(--line-strong);
+      background: var(--surface);
+    }
+
+    .theme-toggle {
+      width: 34px;
+      padding: 0;
+      justify-content: center;
+    }
+
+    .theme-toggle .moon-icon { display: none; }
+    html[data-theme="light"] .theme-toggle .sun-icon { display: none; }
+    html[data-theme="light"] .theme-toggle .moon-icon { display: block; }
+
+    .tool-button svg,
+    .mobile-action svg {
+      width: 15px;
+      height: 15px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.6;
+      vector-effect: non-scaling-stroke;
+    }
+
+    kbd {
+      padding: 2px 5px;
+      border: 1px solid var(--line);
+      border-bottom-color: var(--line-strong);
+      border-radius: 3px;
+      color: var(--faint);
+      background: var(--paper);
+      font: 10px var(--mono);
+    }
+
+    .reading-progress {
+      position: absolute;
+      inset: auto 0 -1px;
+      height: 2px;
+      overflow: hidden;
+      pointer-events: none;
+    }
+
+    .reading-progress > span {
+      display: block;
+      width: 0%;
+      height: 100%;
+      background: var(--accent);
+      transition: width 80ms linear;
+    }
+
+    .page-shell {
+      width: min(1240px, calc(100% - 48px));
+      margin: 0 auto;
+      padding-top: calc(var(--header-h) + 62px);
+      display: grid;
+      grid-template-columns: 188px minmax(0, 780px);
+      justify-content: center;
+      gap: clamp(54px, 7vw, 104px);
+    }
+
+    .toc {
+      position: sticky;
+      top: calc(var(--header-h) + 48px);
+      align-self: start;
+      transition: opacity 180ms ease;
+    }
+
+    .toc ol {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      border-left: 1px solid var(--line);
+    }
+
+    .toc a {
+      position: relative;
+      display: grid;
+      grid-template-columns: 24px 1fr;
+      gap: 8px;
+      align-items: baseline;
+      padding: 9px 0 9px 16px;
+      color: var(--faint);
+      text-decoration: none;
+      font-size: 12px;
+      line-height: 1.3;
+    }
+
+    .toc a::before {
+      content: "";
+      position: absolute;
+      left: -1px;
+      top: 8px;
+      bottom: 8px;
+      width: 1px;
+      background: transparent;
+    }
+
+    .toc a span:first-child {
+      font: 9px var(--mono);
+      color: var(--faint);
+    }
+
+    .toc a:hover,
+    .toc a.active {
+      color: var(--ink);
+    }
+
+    .toc a.active::before {
+      width: 2px;
+      background: var(--accent);
+    }
+
+    .essay {
+      min-width: 0;
+      padding-bottom: 120px;
+    }
+
+    .article-head {
+      margin-bottom: 48px;
+    }
+
+    .eyebrow {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      color: var(--muted);
+      font: 10px var(--mono);
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow .state {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--good);
+    }
+
+    .eyebrow .state::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border: 1px solid currentColor;
+      border-radius: 50%;
+    }
+
+    h1 {
+      max-width: 760px;
+      margin: 22px 0 20px;
+      color: var(--ink-strong);
+      font: 500 clamp(48px, 7vw, 78px)/.96 var(--reader-font);
+      letter-spacing: -.045em;
+      text-wrap: balance;
+    }
+
+    .standfirst {
+      max-width: 690px;
+      margin: 0;
+      color: color-mix(in srgb, var(--ink) 78%, var(--muted));
+      font: 400 clamp(21px, 2.5vw, 27px)/1.4 var(--reader-font);
+      letter-spacing: -.012em;
+    }
+
+    .byline {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 7px 18px;
+      margin-top: 28px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .byline strong {
+      color: var(--ink);
+      font-weight: 500;
+    }
+
+    .topics {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 22px;
+    }
+
+    .chip {
+      position: relative;
+      padding: 6px 9px;
+      color: var(--muted);
+      font: 10px var(--mono);
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    [data-tip]::after {
+      content: attr(data-tip);
+      position: absolute;
+      z-index: 90;
+      left: 50%;
+      bottom: calc(100% + 8px);
+      width: max-content;
+      max-width: 240px;
+      padding: 7px 9px;
+      color: var(--ink);
+      background: var(--surface-raised);
+      border: 1px solid var(--line-strong);
+      border-radius: 4px;
+      box-shadow: 0 10px 28px rgba(0,0,0,.24);
+      font: 11px/1.35 var(--ui);
+      letter-spacing: 0;
+      text-transform: none;
+      pointer-events: none;
+      opacity: 0;
+      transform: translate(-50%, 4px);
+      transition: opacity 100ms ease, transform 100ms ease;
+    }
+
+    [data-tip]:hover::after,
+    [data-tip]:focus-visible::after {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
+
+    .prose {
+      max-width: var(--reader-measure);
+      color: var(--ink);
+      font: var(--reader-weight) var(--reader-size)/var(--reader-leading) var(--reader-font);
+      letter-spacing: var(--reader-tracking);
+      transition: max-width 160ms ease;
+    }
+
+    .prose section {
+      margin: 0 0 68px;
+    }
+
+    .prose h2 {
+      margin: 0 0 24px;
+      color: var(--ink-strong);
+      font: 500 clamp(30px, 4vw, 43px)/1.12 var(--reader-font);
+      letter-spacing: -.025em;
+      text-wrap: balance;
+    }
+
+    .prose h3 {
+      margin: 36px 0 12px;
+      color: var(--ink-strong);
+      font: 500 22px/1.25 var(--reader-font);
+    }
+
+    .heading-copy {
+      position: relative;
+      display: inline;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      color: inherit;
+      background: transparent;
+      font: inherit;
+      letter-spacing: inherit;
+      text-align: left;
+      cursor: copy;
+    }
+
+    .heading-copy::before {
+      content: "#";
+      position: absolute;
+      right: calc(100% + 10px);
+      top: .18em;
+      color: var(--accent);
+      font: 400 .46em/1 var(--mono);
+      opacity: 0;
+      transition: opacity 100ms ease;
+    }
+
+    .heading-copy:hover::before,
+    .heading-copy:focus-visible::before {
+      opacity: .72;
+    }
+
+    .prose p {
+      margin: 0 0 1.15em;
+    }
+
+    .prose a {
+      color: color-mix(in srgb, var(--accent) 86%, var(--ink));
+      text-decoration-color: color-mix(in srgb, var(--accent) 46%, transparent);
+      text-underline-offset: .16em;
+      text-decoration-thickness: 1px;
+    }
+
+    .concept {
+      position: relative;
+      display: inline;
+      padding: 0;
+      border: 0;
+      border-bottom: 1px dotted var(--accent);
+      color: inherit;
+      background: transparent;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: inherit;
+    }
+
+    .cite {
+      position: relative;
+      top: -.25em;
+      margin-left: 2px;
+      padding: 0 2px;
+      border: 0;
+      color: var(--accent);
+      background: transparent;
+      cursor: pointer;
+      font: 9px var(--mono);
+    }
+
+    .rule {
+      margin: 34px 0;
+      padding: 20px 22px 20px 24px;
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--accent);
+      background: color-mix(in srgb, var(--paper) 80%, transparent);
+    }
+
+    .rule-label {
+      display: block;
+      margin-bottom: 9px;
+      color: var(--accent);
+      font: 9px var(--mono);
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+
+    .rule p {
+      margin: 0;
+      color: var(--ink-strong);
+      font-size: 1.05em;
+    }
+
+    .cycle-stat {
+      display: inline-grid;
+      grid-template-columns: auto auto;
+      gap: 7px;
+      align-items: baseline;
+      padding: 1px 5px;
+      border: 0;
+      border-bottom: 1px solid var(--accent);
+      color: var(--ink-strong);
+      background: var(--accent-soft);
+      cursor: pointer;
+      font: 500 .9em var(--mono);
+    }
+
+    .cycle-stat small {
+      color: var(--muted);
+      font-size: .62em;
+      text-transform: uppercase;
+    }
+
+    .figure {
+      width: 100%;
+      max-width: 100%;
+      margin: 42px 0 24px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: color-mix(in srgb, var(--paper) 93%, var(--canvas));
+    }
+
+    .figure-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 18px 20px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .figure-kicker {
+      margin-bottom: 6px;
+      color: var(--accent);
+      font: 9px var(--mono);
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+
+    .figure h3 {
+      margin: 0;
+      color: var(--ink-strong);
+      font: 500 18px/1.3 var(--ui);
+      letter-spacing: -.01em;
+    }
+
+    .live-state {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      white-space: nowrap;
+      font: 9px var(--mono);
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .live-state::before {
+      content: "";
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--good);
+    }
+
+    .figure-tools {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .segments {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    .segment-button {
+      padding: 6px 9px;
+      color: var(--faint);
+      font: 9px var(--mono);
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    .segment-button.active,
+    .segment-button[aria-pressed="true"] {
+      color: var(--ink-strong);
+      border-color: var(--line-strong);
+      background: var(--surface);
+    }
+
+    .figure-toolset {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .quiet-button,
+    .primary-button {
+      min-height: 34px;
+      padding: 7px 11px;
+      font: 10px var(--mono);
+      letter-spacing: .05em;
+      text-transform: uppercase;
+    }
+
+    .quiet-button { color: var(--muted); }
+
+    .primary-button {
+      color: var(--canvas);
+      border-color: var(--accent);
+      background: var(--accent);
+    }
+
+    .primary-button:hover {
+      color: var(--canvas);
+      background: color-mix(in srgb, var(--accent) 88%, white);
+    }
+
+    .plot-wrap {
+      position: relative;
+      padding: 14px 16px 4px;
+      outline: none;
+    }
+
+    .plot {
+      display: block;
+      width: 100%;
+      height: auto;
+      min-height: 250px;
+      overflow: visible;
+    }
+
+    .plot .grid-line {
+      stroke: var(--line);
+      stroke-width: 1;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .plot .axis-label {
+      fill: var(--faint);
+      font: 9px var(--mono);
+    }
+
+    .plot .series-fill { fill: color-mix(in srgb, var(--accent) 8%, transparent); }
+    .plot .range-fill { fill: color-mix(in srgb, var(--accent) 9%, transparent); }
+    .plot .series-line,
+    .plot .range-line {
+      fill: none;
+      stroke: var(--accent);
+      stroke-width: 2;
+      vector-effect: non-scaling-stroke;
+    }
+    .plot .range-line { stroke-width: 1; stroke-dasharray: 4 5; opacity: .68; }
+    .plot .inspect-line { stroke: var(--line-strong); stroke-width: 1; vector-effect: non-scaling-stroke; }
+    .plot .inspect-dot { fill: var(--paper); stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+
+    .chart-tooltip {
+      position: absolute;
+      z-index: 4;
+      min-width: 135px;
+      padding: 9px 10px;
+      border: 1px solid var(--line-strong);
+      border-radius: 4px;
+      color: var(--ink);
+      background: var(--surface-raised);
+      box-shadow: 0 10px 32px rgba(0,0,0,.25);
+      pointer-events: none;
+      font: 10px/1.5 var(--mono);
+    }
+
+    .chart-tooltip strong {
+      display: block;
+      color: var(--ink-strong);
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .figure-foot {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 12px 18px 15px;
+      color: var(--faint);
+      font: 9px/1.5 var(--mono);
+      letter-spacing: .02em;
+    }
+
+    .legend {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .legend span::before {
+      content: "";
+      display: inline-block;
+      width: 14px;
+      height: 1px;
+      margin: 0 6px 3px 0;
+      background: var(--accent);
+    }
+
+    .legend .threshold::before {
+      background: var(--caution);
+    }
+
+    .caption {
+      margin: 0 0 42px;
+      color: var(--muted);
+      font: 13px/1.55 var(--ui);
+    }
+
+    .comparison {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1px;
+      margin: 34px 0;
+      border: 1px solid var(--line);
+      background: var(--line);
+    }
+
+    .comparison > div {
+      padding: 20px;
+      background: var(--paper);
+    }
+
+    .comparison strong {
+      display: block;
+      margin-bottom: 7px;
+      color: var(--ink-strong);
+      font: 500 14px var(--ui);
+    }
+
+    .comparison p {
+      margin: 0;
+      color: var(--muted);
+      font: 13px/1.55 var(--ui);
+    }
+
+    .sources {
+      padding-top: 34px;
+      border-top: 1px solid var(--line);
+    }
+
+    .sources h2,
+    .related h2 {
+      font: 500 24px/1.2 var(--ui);
+      letter-spacing: -.02em;
+    }
+
+    .source-list {
+      display: grid;
+      gap: 0;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      border-top: 1px solid var(--line);
+    }
+
+    .source-item {
+      display: grid;
+      grid-template-columns: 30px 1fr auto;
+      gap: 14px;
+      align-items: start;
+      padding: 15px 0;
+      border-bottom: 1px solid var(--line);
+      font-family: var(--ui);
+    }
+
+    .source-num {
+      padding-top: 2px;
+      color: var(--accent);
+      font: 9px var(--mono);
+    }
+
+    .source-item strong {
+      display: block;
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .source-item p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font: 12px/1.45 var(--ui);
+    }
+
+    .source-actions {
+      display: flex;
+      gap: 5px;
+    }
+
+    .text-action {
+      padding: 5px 7px;
+      color: var(--muted);
+      font: 9px var(--mono);
+      text-decoration: none;
+      text-transform: uppercase;
+    }
+
+    .related {
+      margin-top: 72px;
+      transition: opacity 180ms ease;
+    }
+
+    .related-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+
+    .related-card {
+      min-height: 150px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      color: inherit;
+      background: var(--paper);
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .related-card:hover {
+      border-color: var(--line-strong);
+      background: var(--surface);
+    }
+
+    .related-card small {
+      display: block;
+      margin-bottom: 30px;
+      color: var(--muted);
+      font: 9px var(--mono);
+      text-transform: uppercase;
+    }
+
+    .related-card strong {
+      display: block;
+      color: var(--ink-strong);
+      font: 500 17px/1.25 var(--reader-font);
+    }
+
+    .article-footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      margin-top: 48px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line);
+      color: var(--faint);
+      font: 10px var(--mono);
+      transition: opacity 180ms ease;
+    }
+
+    dialog {
+      max-width: calc(100vw - 28px);
+      max-height: calc(100dvh - 28px);
+      padding: 0;
+      color: var(--ink);
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+    }
+
+    dialog::backdrop {
+      background: rgba(2, 5, 6, .72);
+      backdrop-filter: blur(4px);
+    }
+
+    dialog[open] {
+      animation: dialog-in 140ms ease-out;
+    }
+
+    @keyframes dialog-in {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .dialog-shell {
+      width: min(920px, calc(100vw - 30px));
+      max-height: calc(100dvh - 30px);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .dialog-shell.narrow {
+      width: min(620px, calc(100vw - 30px));
+    }
+
+    .dialog-head {
+      min-height: 58px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 12px 16px 12px 20px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .dialog-head h2 {
+      margin: 0;
+      color: var(--ink-strong);
+      font: 500 16px var(--ui);
+    }
+
+    .dialog-head p {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .icon-close {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      font-size: 18px;
+    }
+
+    .dialog-body {
+      min-height: 0;
+      overflow: auto;
+      padding: 20px;
+    }
+
+    .search-box {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 17px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .search-box svg {
+      width: 19px;
+      height: 19px;
+      fill: none;
+      stroke: var(--muted);
+      stroke-width: 1.5;
+    }
+
+    .search-box input {
+      width: 100%;
+      padding: 0;
+      border: 0;
+      outline: 0;
+      color: var(--ink-strong);
+      background: transparent;
+      font-size: 19px;
+    }
+
+    .search-box input::placeholder { color: var(--faint); }
+
+    .search-results {
+      max-height: min(62vh, 520px);
+      overflow: auto;
+      padding: 8px;
+    }
+
+    .search-result {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      padding: 11px 12px;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      color: var(--muted);
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .search-result strong {
+      display: block;
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .search-result small {
+      color: var(--faint);
+      font: 9px var(--mono);
+      text-transform: uppercase;
+    }
+
+    .search-result.active,
+    .search-result:hover {
+      border-color: var(--line);
+      background: var(--surface);
+    }
+
+    .empty-state {
+      padding: 38px 14px;
+      color: var(--muted);
+      text-align: center;
+      font-size: 13px;
+    }
+
+    .reader-layout {
+      min-height: 540px;
+      display: grid;
+      grid-template-columns: 150px 1fr;
+    }
+
+    .reader-tabs {
+      padding: 12px 8px;
+      border-right: 1px solid var(--line);
+      background: color-mix(in srgb, var(--canvas) 36%, var(--paper));
+    }
+
+    .reader-tab {
+      width: 100%;
+      padding: 9px 10px;
+      border: 0;
+      border-radius: 4px;
+      color: var(--muted);
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .reader-tab.active {
+      color: var(--ink-strong);
+      background: var(--surface);
+    }
+
+    .reader-panel {
+      display: none;
+      min-width: 0;
+      padding: 22px;
+      overflow: auto;
+    }
+
+    .reader-panel.active { display: block; }
+
+    .reader-panel h3 {
+      margin: 0 0 6px;
+      color: var(--ink-strong);
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .panel-note {
+      margin: 0 0 24px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .control-row {
+      display: grid;
+      grid-template-columns: 122px minmax(100px, 1fr) 76px;
+      gap: 14px;
+      align-items: center;
+      min-height: 48px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .control-row > label {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+
+    input[type="number"],
+    input[type="text"],
+    select,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      color: var(--ink);
+      background: var(--canvas);
+    }
+
+    input[type="number"],
+    input[type="text"],
+    select {
+      min-height: 34px;
+      padding: 6px 8px;
+    }
+
+    textarea {
+      min-height: 110px;
+      padding: 10px;
+      resize: vertical;
+      font: 11px/1.6 var(--mono);
+    }
+
+    .select-row {
+      display: grid;
+      grid-template-columns: 122px 1fr;
+      gap: 14px;
+      align-items: center;
+      min-height: 52px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .select-row label { color: var(--muted); font-size: 11px; }
+
+    .theme-grid,
+    .color-grid,
+    .export-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .preset-button,
+    .export-option {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      color: var(--muted);
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .preset-button:hover,
+    .preset-button.active,
+    .export-option:hover {
+      color: var(--ink);
+      border-color: var(--line-strong);
+      background: var(--surface);
+    }
+
+    .preset-button strong,
+    .export-option strong {
+      display: block;
+      color: var(--ink-strong);
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .preset-button small,
+    .export-option small {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.4;
+    }
+
+    .color-field {
+      display: grid;
+      grid-template-columns: 38px 1fr;
+      gap: 10px;
+      align-items: center;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+    }
+
+    .color-field input[type="color"] {
+      width: 38px;
+      height: 32px;
+      padding: 2px;
+      border: 1px solid var(--line);
+      border-radius: 3px;
+      background: transparent;
+      cursor: pointer;
+    }
+
+    .color-field label {
+      color: var(--ink);
+      font-size: 11px;
+    }
+
+    .color-field span {
+      display: block;
+      color: var(--faint);
+      font: 9px var(--mono);
+    }
+
+    .contrast-readout {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .contrast-readout strong { color: var(--ink-strong); }
+    .contrast-readout.warn { border-color: var(--caution); color: var(--caution); }
+
+    .switch-row {
+      min-height: 52px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .switch-row label {
+      color: var(--ink);
+      font-size: 12px;
+    }
+
+    .switch-row p {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .switch-row input { accent-color: var(--accent); }
+
+    .preset-save {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .saved-presets {
+      display: grid;
+      gap: 7px;
+      margin-bottom: 20px;
+    }
+
+    .saved-preset {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 6px;
+      align-items: center;
+      padding: 8px 8px 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+    }
+
+    .saved-preset span { font-size: 12px; }
+
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 16px;
+    }
+
+    .collection-summary {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 16px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .essay-list {
+      display: grid;
+      gap: 7px;
+    }
+
+    .essay-list-item {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 16px;
+      padding: 15px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      color: var(--ink);
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .essay-list-item:hover { background: var(--surface); border-color: var(--line-strong); }
+    .essay-list-item strong { display: block; color: var(--ink-strong); font-weight: 500; }
+    .essay-list-item p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+    .essay-list-item time { color: var(--faint); font: 9px var(--mono); }
+
+    .collection-detail {
+      margin-top: 14px;
+      padding: 17px;
+      border-left: 2px solid var(--accent);
+      background: var(--surface);
+    }
+
+    .collection-detail h3 { margin: 0 0 7px; font: 500 19px var(--reader-font); }
+    .collection-detail p { color: var(--muted); font-size: 12px; }
+
+    .workbench {
+      width: min(1120px, calc(100vw - 30px));
+    }
+
+    .workbench-grid {
+      min-height: min(680px, calc(100dvh - 110px));
+      display: grid;
+      grid-template-columns: 280px 1fr;
+    }
+
+    .workbench-controls {
+      padding: 18px;
+      overflow: auto;
+      border-right: 1px solid var(--line);
+    }
+
+    .workbench-output {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 14px;
+    }
+
+    .field label,
+    .field legend {
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    fieldset.field {
+      padding: 0;
+      border: 0;
+    }
+
+    .check-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+
+    .check-grid label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--ink);
+      font-size: 10px;
+    }
+
+    .check-grid input { accent-color: var(--accent); }
+
+    .range-pair {
+      display: grid;
+      grid-template-columns: 1fr 70px;
+      gap: 8px;
+    }
+
+    .workbench-tabs {
+      display: flex;
+      gap: 3px;
+      padding: 10px 12px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .workbench-tab {
+      padding: 8px 10px;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      font-size: 11px;
+    }
+
+    .workbench-tab.active {
+      color: var(--ink-strong);
+      border-bottom-color: var(--accent);
+    }
+
+    .workbench-panel {
+      display: none;
+      min-height: 0;
+      overflow: auto;
+      padding: 20px;
+    }
+
+    .workbench-panel.active { display: block; }
+
+    .analysis-summary {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      margin-bottom: 18px;
+      border: 1px solid var(--line);
+      background: var(--line);
+    }
+
+    .analysis-summary div {
+      padding: 13px;
+      background: var(--paper);
+    }
+
+    .analysis-summary span { display: block; color: var(--faint); font: 8px var(--mono); text-transform: uppercase; }
+    .analysis-summary strong { display: block; margin-top: 6px; color: var(--ink-strong); font: 500 19px var(--mono); }
+
+    .analysis-chart {
+      width: 100%;
+      height: auto;
+      border: 1px solid var(--line);
+      background: var(--canvas);
+    }
+
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font: 10px var(--mono);
+    }
+
+    .data-table th,
+    .data-table td {
+      padding: 9px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: right;
+    }
+
+    .data-table th:first-child,
+    .data-table td:first-child { text-align: left; }
+    .data-table th { color: var(--muted); font-weight: 400; }
+
+    .saved-view {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+      align-items: center;
+      padding: 11px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .saved-view strong { font-size: 12px; font-weight: 500; }
+    .saved-view small { display: block; color: var(--muted); }
+
+    .concept-body h3 {
+      margin: 0 0 10px;
+      color: var(--ink-strong);
+      font: 500 25px var(--reader-font);
+    }
+
+    .concept-body p { color: var(--muted); }
+
+    .selection-tools {
+      position: fixed;
+      z-index: 100;
+      display: flex;
+      gap: 3px;
+      padding: 4px;
+      border: 1px solid var(--line-strong);
+      border-radius: 5px;
+      background: var(--surface-raised);
+      box-shadow: 0 14px 40px rgba(0,0,0,.35);
+    }
+
+    .selection-tools button {
+      padding: 6px 8px;
+      border: 0;
+      border-radius: 3px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      font: 9px var(--mono);
+      text-transform: uppercase;
+    }
+
+    .selection-tools button:hover { color: var(--ink-strong); background: var(--surface); }
+
+    mark.reader-highlight {
+      color: inherit;
+      background: color-mix(in srgb, var(--caution) 28%, transparent);
+      border-bottom: 1px solid var(--caution);
+    }
+
+    .toast-region {
+      position: fixed;
+      z-index: 120;
+      right: 18px;
+      bottom: 18px;
+      display: grid;
+      gap: 8px;
+      pointer-events: none;
+    }
+
+    .toast {
+      max-width: 330px;
+      padding: 10px 12px;
+      border: 1px solid var(--line-strong);
+      border-left: 3px solid var(--good);
+      border-radius: 4px;
+      color: var(--ink);
+      background: var(--surface-raised);
+      box-shadow: 0 12px 35px rgba(0,0,0,.28);
+      font-size: 11px;
+    }
+
+    .toast.error { border-left-color: var(--danger); }
+
+    .mobile-dock {
+      display: none;
+    }
+
+    .mobile-toc {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    .mobile-toc a {
+      display: grid;
+      grid-template-columns: 28px 1fr;
+      gap: 10px;
+      padding: 13px 6px;
+      border-bottom: 1px solid var(--line);
+      color: var(--ink);
+      text-decoration: none;
+    }
+
+    .mobile-toc span:first-child { color: var(--accent); font: 9px var(--mono); }
+
+    @media (max-width: 960px) {
+      .page-shell {
+        grid-template-columns: minmax(0, 760px);
+        width: min(760px, calc(100% - 38px));
+      }
+      .toc { display: none; }
+      .related-grid { grid-template-columns: 1fr 1fr; }
+    }
+
+    @media (max-width: 700px) {
+      :root { --header-h: 54px; }
+      body { padding-bottom: 62px; }
+      .topbar { padding: 0 16px; }
+      .brand span:last-child { display: none; }
+      .crumb { font-size: 10px; }
+      .top-actions .tool-button:not(.theme-toggle) { display: none; }
+      .theme-toggle .button-label { display: none; }
+      .theme-toggle kbd { display: none; }
+      .page-shell {
+        width: min(100% - 28px, 680px);
+        padding-top: calc(var(--header-h) + 38px);
+      }
+      h1 { font-size: clamp(43px, 14vw, 64px); }
+      .standfirst { font-size: 21px; }
+      .prose { --reader-size: clamp(18px, var(--reader-size), 96px); }
+      .figure { width: calc(100vw - 28px); margin-left: calc((100% - (100vw - 28px))/2); }
+      .figure-head, .figure-foot { flex-direction: column; }
+      .plot { min-height: 210px; }
+      .comparison { grid-template-columns: 1fr; }
+      .related-grid { grid-template-columns: 1fr; }
+      .article-footer { flex-direction: column; }
+      .reader-layout { grid-template-columns: 1fr; min-height: 0; }
+      .reader-tabs {
+        display: flex;
+        overflow-x: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .reader-tab { width: auto; white-space: nowrap; }
+      .control-row { grid-template-columns: 95px 1fr 68px; gap: 8px; }
+      .select-row { grid-template-columns: 95px 1fr; }
+      .theme-grid, .color-grid, .export-grid { grid-template-columns: 1fr; }
+      .workbench-grid { grid-template-columns: 1fr; overflow: auto; }
+      .workbench-controls { border-right: 0; border-bottom: 1px solid var(--line); overflow: visible; }
+      .workbench-output { overflow: visible; }
+      .analysis-summary { grid-template-columns: 1fr 1fr 1fr; }
+      .source-item { grid-template-columns: 24px 1fr; }
+      .source-actions { grid-column: 2; }
+      .mobile-dock {
+        position: fixed;
+        z-index: 48;
+        inset: auto 0 0;
+        height: 58px;
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        border-top: 1px solid var(--line);
+        background: color-mix(in srgb, var(--canvas) 94%, transparent);
+        backdrop-filter: blur(16px);
+      }
+      .mobile-action {
+        display: grid;
+        place-items: center;
+        align-content: center;
+        gap: 2px;
+        border: 0;
+        color: var(--muted);
+        background: transparent;
+        cursor: pointer;
+        font: 8px var(--mono);
+        text-transform: uppercase;
+      }
+      .toast-region { bottom: 72px; }
+    }
+
+    @media print {
+      :root {
+        --canvas: #fff;
+        --paper: #fff;
+        --ink: #191919;
+        --ink-strong: #000;
+        --muted: #555;
+        --line: #ccc;
+      }
+      body { background: #fff; }
+      .topbar, .toc, .mobile-dock, .topics, .selection-tools, .related, .article-footer,
+      .figure-tools, .figure-head .live-state, .source-actions { display: none !important; }
+      .page-shell { display: block; width: 100%; padding-top: 0; }
+      .essay { max-width: 760px; margin: 0 auto; }
+      .figure { break-inside: avoid; }
+      a { text-decoration: none !important; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        animation-duration: .001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .001ms !important;
+      }
+    }
+
+    @media (forced-colors: active) {
+      .reading-progress > span,
+      .live-state::before { background: Highlight; }
+      .toc a.active::before { background: Highlight; }
+      .primary-button { color: ButtonText; background: ButtonFace; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#top" aria-label="Signal / Form home">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>Signal / Form</span>
+    </a>
+    <div class="crumb">Interface systems</div>
+    <nav class="top-actions" aria-label="Article tools">
+      <button class="tool-button" type="button" data-open="searchDialog">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"></circle><path d="m12.5 12.5 4 4"></path></svg>
+        <span class="button-label">Search</span><kbd>⌘K</kbd>
+      </button>
+      <button class="tool-button" type="button" data-open="readerDialog">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4h14M5 8h10M7 12h6M8 16h4"></path></svg>
+        <span class="button-label">Reader</span>
+      </button>
+      <button class="tool-button" type="button" data-open="exportDialog">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2v10m-4-4 4 4 4-4M3 14v3h14v-3"></path></svg>
+        <span class="button-label">Export</span>
+      </button>
+      <button class="tool-button theme-toggle" type="button" aria-label="Switch to light theme" data-tip="Switch to light theme">
+        <svg class="sun-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.5"></circle><path d="M10 1.5v2M10 16.5v2M1.5 10h2M16.5 10h2M4 4l1.5 1.5M14.5 14.5 16 16M16 4l-1.5 1.5M5.5 14.5 4 16"></path></svg>
+        <svg class="moon-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M15.8 12.9A6.8 6.8 0 0 1 7.1 4.2 6.8 6.8 0 1 0 15.8 12.9Z"></path></svg>
+      </button>
+    </nav>
+    <div class="reading-progress" aria-hidden="true"><span id="readingProgress"></span></div>
+  </header>
+
+  <main class="page-shell">
+    <nav class="toc" aria-label="Table of contents">
+      <ol>
+        <li><a href="#quiet"><span>01</span><span>Quiet is a system state</span></a></li>
+        <li><a href="#density"><span>02</span><span>Density without demand</span></a></li>
+        <li><a href="#interaction"><span>03</span><span>Power through contact</span></a></li>
+        <li><a href="#motion"><span>04</span><span>Motion explains change</span></a></li>
+        <li><a href="#trust"><span>05</span><span>Make trust inspectable</span></a></li>
+        <li><a href="#sources"><span>06</span><span>Sources</span></a></li>
+      </ol>
+    </nav>
+
+    <article class="essay" id="article">
+      <header class="article-head" id="top">
+        <div class="eyebrow">
+          <span>Design systems</span>
+          <span>18 min read</span>
+          <span class="state">Reviewed</span>
+        </div>
+        <h1>Power should wait quietly.</h1>
+        <p class="standfirst">A capable interface does not hide complexity. It keeps that complexity available, legible, and subordinate to the user’s present intent.</p>
+        <div class="byline">
+          <strong>Kian</strong>
+          <time datetime="2026-09-02">September 2, 2026</time>
+          <span>Research notes included</span>
+        </div>
+        <div class="topics" aria-label="Topics">
+          <button class="chip topic-chip" type="button" data-topic="Interface design" data-tip="12 essays">Interface design</button>
+          <button class="chip topic-chip" type="button" data-topic="Human factors" data-tip="8 essays">Human factors</button>
+          <button class="chip topic-chip" type="button" data-topic="Power tools" data-tip="6 essays">Power tools</button>
+          <button class="chip topic-chip" type="button" data-topic="Information systems" data-tip="9 essays">Information systems</button>
+        </div>
+      </header>
+
+      <div class="prose">
+        <section id="quiet">
+          <h2>Quiet is a system state, not a color.</h2>
+          <p>A dark cockpit is quiet when everything is nominal. The operator can see enough to understand the system, yet no element competes for attention merely because it exists. A warning becomes conspicuous because the baseline has been disciplined—not because the interface is empty.</p>
+          <p>Dark presentation can support that goal in dim environments, but polarity is not the principle. Research generally finds positive polarity better for sustained reading and fine visual acuity. A responsible default therefore pairs a subdued dark theme with a complete light alternative, generous type controls, and contrast that can be inspected rather than assumed.<button class="cite" type="button" data-source="1" data-tip="NASA Human Integration Design Handbook: visual display design">1</button></p>
+
+          <aside class="rule">
+            <span class="rule-label">Operational rule</span>
+            <p>When the system is healthy, the interface should look settled. Brightness, saturation, interruption, and motion are a finite attention budget.</p>
+          </aside>
+
+          <p>This is not minimalism. Minimalism reduces what is present. A quiet high-capability interface preserves what is possible while controlling what is demanding. The distinction matters: one constrains the system; the other manages its <button class="concept" type="button" data-concept="attention">attention topology</button>.</p>
+        </section>
+
+        <section id="density">
+          <h2>Density without demand</h2>
+          <p>Information density is not synonymous with clutter. People can scan substantial amounts of information when relationships are stable, groups are coherent, and local competition is low. Trouble begins when every region claims equal importance or when the same fact is encoded twice without a second purpose.</p>
+
+          <div class="comparison" aria-label="Comparison of useful and wasteful redundancy">
+            <div>
+              <strong>Useful redundancy</strong>
+              <p>Color, shape, and text express the same safety state so the signal survives color-vision differences and degraded conditions.</p>
+            </div>
+            <div>
+              <strong>Wasteful duplication</strong>
+              <p>A progress bar and a nearby “position: 56%” statistic repeat one fact, occupy two focal locations, and create no new action.</p>
+            </div>
+          </div>
+
+          <p>A reliable removal test is simple: if an element disappears, what information, action, or orientation is lost? If the answer is “none,” the element is decoration. Decoration is not forbidden, but in an operational interface it must earn the visual energy it consumes.</p>
+
+          <aside class="rule">
+            <span class="rule-label">Operational rule</span>
+            <p>The novice needs a clear path. The expert needs an instrument. They should be looking at the same interface.</p>
+          </aside>
+
+          <p>Defaults should be humane rather than restrictive. This article begins at a conservative measure, but its reader controls permit sizes from 8 to 96 pixels, line measures from 16 to 160 characters, and line heights from 0.8 to 4. The expected range is not the permitted range.</p>
+        </section>
+
+        <section id="interaction">
+          <h2>Power arrives through contact</h2>
+          <p>Progressive disclosure is often implemented as concealment: advanced features are buried until the interface decides the user is ready. A better model is <button class="concept" type="button" data-concept="mastery" data-tip="Immediate usefulness with deeper capability discovered through use">progressive mastery</button>. The primary path works immediately, while direct contact reveals greater depth.</p>
+          <p>Hover should answer “what is this?” or “what will happen?” Activation should do something. A topic label can reveal its collection size on hover and open the collection on activation. A statistic can expose its definition on focus and cycle its aggregation when pressed. This modeled cohort reports <button class="cycle-stat" type="button" aria-live="polite"><span>19.2 s</span><small>average</small></button> to resume after a context switch.</p>
+
+          <figure class="figure" id="interactiveFigure">
+            <div class="figure-head">
+              <div>
+                <div class="figure-kicker">Deterministic model · no reader tracking</div>
+                <h3>Cost of leaving the reading context</h3>
+              </div>
+              <span class="live-state">Model ready</span>
+            </div>
+            <div class="figure-tools">
+              <div class="segments" aria-label="Metric">
+                <button class="segment-button active metric-button" type="button" data-metric="return" aria-pressed="true">Return time</button>
+                <button class="segment-button metric-button" type="button" data-metric="focus" aria-pressed="false">Focus loss</button>
+                <button class="segment-button metric-button" type="button" data-metric="recall" aria-pressed="false">Recall</button>
+              </div>
+              <div class="figure-toolset">
+                <button class="quiet-button" id="aggregateButton" type="button" data-tip="Press to cycle aggregation">Average</button>
+                <select id="chartWindow" aria-label="Chart time window">
+                  <option value="1h">1 hour</option>
+                  <option value="6h" selected>6 hours</option>
+                  <option value="24h">24 hours</option>
+                </select>
+                <button class="primary-button" id="analyzeButton" type="button">Analyze</button>
+              </div>
+            </div>
+            <div class="plot-wrap" id="plotWrap" tabindex="0" aria-label="Interactive chart. Use arrow keys to inspect points and Enter to pin the current point.">
+              <svg class="plot" id="mainChart" viewBox="0 0 800 300" role="img" aria-labelledby="chartTitle chartDesc">
+                <title id="chartTitle">Return time after leaving an article</title>
+                <desc id="chartDesc">A deterministic illustrative series. Inspect points with pointer or keyboard.</desc>
+              </svg>
+              <div class="chart-tooltip" id="chartTooltip" hidden></div>
+            </div>
+            <div class="figure-foot">
+              <div class="legend"><span id="legendMetric">Return time</span><span class="threshold">Context-loss threshold</span></div>
+              <span id="chartStatus" aria-live="polite">14 modeled intervals</span>
+            </div>
+          </figure>
+
+          <p>Deep tools do not need to dominate the initial view. They do need a direct entrance. Reader configuration belongs behind a visible Reader action, not expanded beside the essay. Once opened, it should be a real instrument—not four token choices that imply customization while denying it.</p>
+        </section>
+
+        <section id="motion">
+          <h2>Motion explains change</h2>
+          <p>Animation is valuable when it preserves causality, location, or rate. If a task moves into the background, its transition can show where it went. If values are arriving quickly, cadence can communicate rate. If a critical condition requires intervention, a brief temporal signal can help it break through the nominal field.</p>
+          <p>Decorative motion has the opposite effect. It spends attention without adding state. Continuous pulses falsely imply ongoing activity; springy movement makes stable structures feel unsettled. Motion should stop when the information has been understood, respect reduced-motion preferences, and never become the sole carrier of meaning.<button class="cite" type="button" data-source="4" data-tip="Heer & Robertson: animated transitions in statistical data graphics">4</button></p>
+
+          <aside class="rule">
+            <span class="rule-label">Removal test</span>
+            <p>Describe the state information an animation carries. If the description is only “delight,” remove it from the operational layer.</p>
+          </aside>
+        </section>
+
+        <section id="trust">
+          <h2>Make trust inspectable</h2>
+          <p>Capability without legibility produces automation surprise. Users need to see what the system did, what it inferred, where uncertainty remains, and how to intervene. That means distinguishing observed, derived, simulated, stale, and unavailable data in ways that do not rely on color alone.</p>
+          <p>The same standard applies to interface promises. A key hint must invoke the advertised action. An export control must name its actual formats. A clickable-looking label must lead somewhere. Every false affordance teaches the user that the rest of the system may also be bluffing.</p>
+          <p>Power-user design is therefore not the accumulation of controls. It is the accumulation of trustworthy leverage: broad ranges, reversible operations, inspectable state, composable commands, portable data, and shortcuts that work. The system feels powerful when the user—not the interface—sets the boundary.</p>
+        </section>
+
+        <section class="sources" id="sources">
+          <h2>Sources and further reading</h2>
+          <ol class="source-list">
+            <li class="source-item" id="source-1">
+              <span class="source-num">01</span>
+              <div><strong>NASA Human Integration Design Handbook</strong><p>Display legibility, coding, luminance, visual angle, and human-system integration guidance.</p></div>
+              <div class="source-actions"><a class="text-action" href="https://www.nasa.gov/organizations/ochmo/human-integration-design-handbook/" target="_blank" rel="noreferrer">Open</a><button class="text-action copy-source" type="button">Copy</button></div>
+            </li>
+            <li class="source-item" id="source-2">
+              <span class="source-num">02</span>
+              <div><strong>Carroll & Rosson — The Paradox of the Active User</strong><p>Why people begin acting before studying systems, and how interfaces can support learning through use.</p></div>
+              <div class="source-actions"><a class="text-action" href="https://mitpress.mit.edu/9780262031257/interfacing-thought/" target="_blank" rel="noreferrer">Open</a><button class="text-action copy-source" type="button">Copy</button></div>
+            </li>
+            <li class="source-item" id="source-3">
+              <span class="source-num">03</span>
+              <div><strong>Shneiderman — Direct Manipulation</strong><p>Continuous representation, rapid reversible action, and replacing command syntax with direct contact.</p></div>
+              <div class="source-actions"><a class="text-action" href="https://doi.org/10.1109/MC.1983.1654471" target="_blank" rel="noreferrer">Open</a><button class="text-action copy-source" type="button">Copy</button></div>
+            </li>
+            <li class="source-item" id="source-4">
+              <span class="source-num">04</span>
+              <div><strong>Heer & Robertson — Animated Transitions in Statistical Data Graphics</strong><p>Experimental evidence about how transition design affects change tracking in data visualization.</p></div>
+              <div class="source-actions"><a class="text-action" href="https://doi.org/10.1109/TVCG.2007.70539" target="_blank" rel="noreferrer">Open</a><button class="text-action copy-source" type="button">Copy</button></div>
+            </li>
+            <li class="source-item" id="source-5">
+              <span class="source-num">05</span>
+              <div><strong>Web Content Accessibility Guidelines 2.2</strong><p>Contrast, focus appearance, target size, motion, keyboard access, and non-color requirements.</p></div>
+              <div class="source-actions"><a class="text-action" href="https://www.w3.org/TR/WCAG22/" target="_blank" rel="noreferrer">Open</a><button class="text-action copy-source" type="button">Copy</button></div>
+            </li>
+          </ol>
+        </section>
+      </div>
+
+      <section class="related" aria-labelledby="relatedTitle">
+        <h2 id="relatedTitle">Continue through the system</h2>
+        <div class="related-grid">
+          <button class="related-card topic-chip" type="button" data-topic="Human factors"><small>Human factors · 11 min</small><strong>Alerts are debts against attention</strong></button>
+          <button class="related-card topic-chip" type="button" data-topic="Power tools"><small>Power tools · 16 min</small><strong>Defaults are starting points, not fences</strong></button>
+          <button class="related-card topic-chip" type="button" data-topic="Information systems"><small>Information systems · 9 min</small><strong>Uncertainty needs a visible grammar</strong></button>
+        </div>
+      </section>
+
+      <footer class="article-footer">
+        <span>Text and interface available for personal reference.</span>
+        <span>Last substantive revision: 2026-09-02</span>
+      </footer>
+    </article>
+  </main>
+
+  <nav class="mobile-dock" aria-label="Article tools">
+    <button class="mobile-action" type="button" data-open="contentsDialog"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 5h11M6 10h11M6 15h11M2.5 5h.1M2.5 10h.1M2.5 15h.1"></path></svg><span>Contents</span></button>
+    <button class="mobile-action" type="button" data-open="searchDialog"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"></circle><path d="m12.5 12.5 4 4"></path></svg><span>Search</span></button>
+    <button class="mobile-action" type="button" data-open="readerDialog"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4h14M5 8h10M7 12h6M8 16h4"></path></svg><span>Reader</span></button>
+    <button class="mobile-action" type="button" data-open="exportDialog"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2v10m-4-4 4 4 4-4M3 14v3h14v-3"></path></svg><span>Export</span></button>
+  </nav>
+
+  <dialog id="searchDialog" aria-labelledby="searchTitle">
+    <div class="dialog-shell narrow">
+      <h2 id="searchTitle" class="sr-only">Search</h2>
+      <div class="search-box">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"></circle><path d="m12.5 12.5 4 4"></path></svg>
+        <label class="sr-only" for="searchInput">Search</label>
+        <input id="searchInput" type="search" placeholder="Search" autocomplete="off">
+        <button class="icon-close" type="button" data-close aria-label="Close">×</button>
+      </div>
+      <div class="search-results" id="searchResults"></div>
+    </div>
+  </dialog>
+
+  <dialog id="readerDialog" aria-labelledby="readerTitle">
+    <div class="dialog-shell">
+      <header class="dialog-head">
+        <div><h2 id="readerTitle">Reader</h2><p>Changes apply immediately and remain on this device.</p></div>
+        <button class="icon-close" type="button" data-close aria-label="Close">×</button>
+      </header>
+      <div class="reader-layout">
+        <nav class="reader-tabs" aria-label="Reader settings">
+          <button class="reader-tab active" type="button" data-reader-tab="type">Typography</button>
+          <button class="reader-tab" type="button" data-reader-tab="color">Color</button>
+          <button class="reader-tab" type="button" data-reader-tab="behavior">Behavior</button>
+          <button class="reader-tab" type="button" data-reader-tab="presets">Presets</button>
+        </nav>
+        <section class="reader-panel active" data-reader-panel="type">
+          <h3>Typography</h3>
+          <p class="panel-note">The generous limits are intentional. Set a comfortable default or an extreme temporary view.</p>
+          <div class="select-row"><label for="fontFamily">Reading face</label><select id="fontFamily"><option value='"Newsreader", Georgia, serif'>Newsreader</option><option value='"IBM Plex Sans", sans-serif'>IBM Plex Sans</option><option value='"IBM Plex Mono", monospace'>IBM Plex Mono</option><option value='Georgia, serif'>Georgia</option><option value='"Palatino Linotype", serif'>Palatino</option><option value='sans-serif'>Device sans</option><option value='serif'>Device serif</option></select></div>
+          <div class="control-row"><label for="sizeRange">Type size</label><input id="sizeRange" type="range" min="8" max="96" step="1"><input id="sizeNumber" type="number" min="8" max="96" step="1" aria-label="Type size in pixels"></div>
+          <div class="control-row"><label for="weightRange">Weight</label><input id="weightRange" type="range" min="100" max="900" step="50"><input id="weightNumber" type="number" min="100" max="900" step="50" aria-label="Font weight"></div>
+          <div class="control-row"><label for="leadingRange">Line height</label><input id="leadingRange" type="range" min=".8" max="4" step=".05"><input id="leadingNumber" type="number" min=".8" max="4" step=".05" aria-label="Line height"></div>
+          <div class="control-row"><label for="measureRange">Line measure</label><input id="measureRange" type="range" min="16" max="160" step="1"><input id="measureNumber" type="number" min="16" max="160" step="1" aria-label="Line measure in characters"></div>
+          <div class="control-row"><label for="trackingRange">Letter spacing</label><input id="trackingRange" type="range" min="-.1" max=".3" step=".005"><input id="trackingNumber" type="number" min="-.1" max=".3" step=".005" aria-label="Letter spacing in em"></div>
+        </section>
+        <section class="reader-panel" data-reader-panel="color">
+          <h3>Color and polarity</h3>
+          <p class="panel-note">Start from a calibrated scheme, then tune each channel. Contrast is calculated live.</p>
+          <div class="theme-grid">
+            <button class="preset-button theme-preset active" type="button" data-theme-preset="dark"><strong>Dark cockpit</strong><small>Low-luminance neutral field</small></button>
+            <button class="preset-button theme-preset" type="button" data-theme-preset="light"><strong>Light</strong><small>Positive polarity for sustained reading</small></button>
+            <button class="preset-button theme-preset" type="button" data-theme-preset="paper"><strong>Paper</strong><small>Warm low-glare positive polarity</small></button>
+            <button class="preset-button theme-preset" type="button" data-theme-preset="contrast"><strong>High contrast</strong><small>Maximum separation and focus</small></button>
+          </div>
+          <div class="color-grid" style="margin-top:16px">
+            <div class="color-field"><input id="textColor" type="color"><label for="textColor">Text<span id="textColorValue"></span></label></div>
+            <div class="color-field"><input id="canvasColor" type="color"><label for="canvasColor">Canvas<span id="canvasColorValue"></span></label></div>
+            <div class="color-field"><input id="surfaceColor" type="color"><label for="surfaceColor">Surface<span id="surfaceColorValue"></span></label></div>
+            <div class="color-field"><input id="accentColor" type="color"><label for="accentColor">Action accent<span id="accentColorValue"></span></label></div>
+          </div>
+          <div class="contrast-readout" id="contrastReadout" aria-live="polite"></div>
+        </section>
+        <section class="reader-panel" data-reader-panel="behavior">
+          <h3>Reading behavior</h3>
+          <p class="panel-note">These affect presentation only. The article never tracks reading behavior.</p>
+          <div class="switch-row"><div><label for="focusMode">Focus mode</label><p>Quiet peripheral navigation and related material.</p></div><input id="focusMode" type="checkbox"></div>
+          <div class="switch-row"><div><label for="referenceMarkers">Reference markers</label><p>Show inline citations and the source register.</p></div><input id="referenceMarkers" type="checkbox" checked></div>
+          <div class="switch-row"><div><label for="rememberReader">Remember locally</label><p>Persist reader settings in this browser.</p></div><input id="rememberReader" type="checkbox" checked></div>
+          <div class="button-row"><button class="quiet-button" type="button" id="resetReader">Reset reader</button></div>
+        </section>
+        <section class="reader-panel" data-reader-panel="presets">
+          <h3>Personal presets</h3>
+          <p class="panel-note">Save the complete reader state, or move it between browsers as JSON.</p>
+          <div class="preset-save"><input id="presetName" type="text" placeholder="Preset name" maxlength="40"><button class="primary-button" id="savePreset" type="button">Save current</button></div>
+          <div class="saved-presets" id="savedPresets"></div>
+          <div class="button-row">
+            <button class="quiet-button" id="exportReader" type="button">Export JSON</button>
+            <button class="quiet-button" id="importReader" type="button">Import JSON</button>
+            <input id="readerFile" type="file" accept="application/json,.json" hidden>
+          </div>
+        </section>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="exportDialog" aria-labelledby="exportTitle">
+    <div class="dialog-shell narrow">
+      <header class="dialog-head">
+        <div><h2 id="exportTitle">Export</h2><p>Take the article, its data, or the complete interactive page.</p></div>
+        <button class="icon-close" type="button" data-close aria-label="Close">×</button>
+      </header>
+      <div class="dialog-body">
+        <div class="export-grid">
+          <button class="export-option" type="button" data-export="md"><strong>Markdown</strong><small>Article structure and source links · .md</small></button>
+          <button class="export-option" type="button" data-export="txt"><strong>Plain text</strong><small>Readable content without interface chrome · .txt</small></button>
+          <button class="export-option" type="button" data-export="json"><strong>Structured article</strong><small>Metadata, sections, and sources · .json</small></button>
+          <button class="export-option" type="button" data-export="html"><strong>Interactive HTML</strong><small>This complete standalone page · .html</small></button>
+          <button class="export-option" type="button" data-export="print"><strong>Print / PDF</strong><small>Use the browser’s print destination</small></button>
+          <button class="export-option" type="button" data-export="citation"><strong>Article citation</strong><small>Copy a plain-text citation</small></button>
+          <button class="export-option" type="button" data-export="csv"><strong>Figure data</strong><small>Current metric and aggregation · .csv</small></button>
+          <button class="export-option" type="button" data-export="svg"><strong>Figure graphic</strong><small>Current chart as editable SVG · .svg</small></button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="collectionDialog" aria-labelledby="collectionTitle">
+    <div class="dialog-shell narrow">
+      <header class="dialog-head">
+        <div><h2 id="collectionTitle">Collection</h2><p id="collectionSubtitle"></p></div>
+        <button class="icon-close" type="button" data-close aria-label="Close">×</button>
+      </header>
+      <div class="dialog-body">
+        <div class="collection-summary"><span id="collectionCount"></span><button class="text-action" id="copyCollection" type="button">Copy collection link</button></div>
+        <div class="essay-list" id="essayList"></div>
+        <div class="collection-detail" id="collectionDetail" hidden></div>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="conceptDialog" aria-labelledby="conceptTitle">
+    <div class="dialog-shell narrow">
+      <header class="dialog-head">
+        <h2 id="conceptTitle">Concept</h2>
+        <button class="icon-close" type="button" data-close aria-label="Close">×</button>
+      </header>
+      <div class="dialog-body concept-body" id="conceptBody"></div>
+    </div>
+  </dialog>
+
+  <dialog id="contentsDialog" aria-label="Table of contents">
+    <div class="dialog-shell narrow">
+      <header class="dialog-head">
+        <span aria-hidden="true"></span>
+        <button class="icon-close" type="button" data-close aria-label="Close">×</button>
+      </header>
+      <div class="dialog-body">
+        <ol class="mobile-toc">
+          <li><a href="#quiet" data-close><span>01</span><span>Quiet is a system state</span></a></li>
+          <li><a href="#density" data-close><span>02</span><span>Density without demand</span></a></li>
+          <li><a href="#interaction" data-close><span>03</span><span>Power through contact</span></a></li>
+          <li><a href="#motion" data-close><span>04</span><span>Motion explains change</span></a></li>
+          <li><a href="#trust" data-close><span>05</span><span>Make trust inspectable</span></a></li>
+          <li><a href="#sources" data-close><span>06</span><span>Sources</span></a></li>
+        </ol>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="workbenchDialog" aria-labelledby="workbenchTitle">
+    <div class="dialog-shell workbench">
+      <header class="dialog-head">
+        <div><h2 id="workbenchTitle">Figure analysis</h2><p>Construct, inspect, save, and export a view of the deterministic model.</p></div>
+        <button class="icon-close" type="button" data-close aria-label="Close">×</button>
+      </header>
+      <div class="workbench-grid">
+        <aside class="workbench-controls">
+          <div class="field"><label for="wbMetric">Metric</label><select id="wbMetric"><option value="return">Return time</option><option value="focus">Focus loss</option><option value="recall">Recall</option></select></div>
+          <div class="field"><label for="wbAggregate">Aggregation</label><select id="wbAggregate"><option value="Average">Average</option><option value="Median">Median</option><option value="P90">P90</option><option value="Min–max">Min–max</option></select></div>
+          <div class="field"><label for="wbWindow">Time window</label><select id="wbWindow"><option value="1h">1 hour</option><option value="6h">6 hours</option><option value="24h">24 hours</option></select></div>
+          <div class="field"><label for="wbCohort">Cohort</label><select id="wbCohort"><option value="all">All readers</option><option value="new">First visit</option><option value="returning">Returning</option><option value="research">Research workflow</option></select></div>
+          <div class="field"><label for="sampleRange">Modeled samples</label><div class="range-pair"><input id="sampleRange" type="range" min="8" max="500" value="120"><input id="sampleNumber" type="number" min="8" max="500" value="120"></div></div>
+          <fieldset class="field"><legend>Layers</legend><div class="check-grid"><label><input id="wbCompare" type="checkbox" checked> Comparison</label><label><input id="wbThreshold" type="checkbox" checked> Threshold</label><label><input id="wbBand" type="checkbox"> Range band</label><label><input id="wbPoints" type="checkbox"> Points</label></div></fieldset>
+          <div class="field"><label for="queryInput">Query</label><textarea id="queryInput" spellcheck="false">metric:return aggregate:average window:6h cohort:all samples:120 compare:on threshold:on</textarea></div>
+          <div class="button-row"><button class="primary-button" id="runAnalysis" type="button">Run</button><button class="quiet-button" id="applyQuery" type="button">Apply query</button></div>
+          <div class="button-row"><button class="quiet-button" id="copyQueryLink" type="button">Copy link</button><button class="quiet-button" id="downloadAnalysisCsv" type="button">CSV</button></div>
+        </aside>
+        <div class="workbench-output">
+          <nav class="workbench-tabs" aria-label="Analysis output">
+            <button class="workbench-tab active" type="button" data-workbench-tab="visual">Visual</button>
+            <button class="workbench-tab" type="button" data-workbench-tab="data">Data</button>
+            <button class="workbench-tab" type="button" data-workbench-tab="saved">Saved views</button>
+          </nav>
+          <section class="workbench-panel active" data-workbench-panel="visual">
+            <div class="analysis-summary"><div><span>Selected</span><strong id="summaryValue">—</strong></div><div><span>Change</span><strong id="summaryChange">—</strong></div><div><span>Samples</span><strong id="summarySamples">—</strong></div></div>
+            <svg class="analysis-chart" id="analysisChart" viewBox="0 0 760 360" role="img" aria-label="Analysis preview"></svg>
+            <div class="button-row"><input id="viewName" type="text" placeholder="View name" style="max-width:240px"><button class="primary-button" id="saveView" type="button">Save view</button></div>
+          </section>
+          <section class="workbench-panel" data-workbench-panel="data"><table class="data-table"><thead><tr><th>Interval</th><th>Value</th><th>Comparison</th><th>Delta</th></tr></thead><tbody id="analysisTable"></tbody></table></section>
+          <section class="workbench-panel" data-workbench-panel="saved"><div id="savedViews"></div></section>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <div class="selection-tools" id="selectionTools" hidden>
+    <button type="button" data-selection="copy">Copy</button>
+    <button type="button" data-selection="quote">Quote</button>
+    <button type="button" data-selection="link">Link</button>
+    <button type="button" data-selection="highlight">Highlight</button>
+  </div>
+  <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
+
+  <script>
+    (function () {
+      "use strict";
+
+      var $ = function (selector, root) { return (root || document).querySelector(selector); };
+      var $$ = function (selector, root) { return Array.from((root || document).querySelectorAll(selector)); };
+      var storageOK = true;
+
+      function toast(message, isError) {
+        var node = document.createElement("div");
+        node.className = "toast" + (isError ? " error" : "");
+        node.textContent = message;
+        $("#toastRegion").appendChild(node);
+        window.setTimeout(function () { node.remove(); }, 3200);
+      }
+
+      function getStored(key, fallback) {
+        try {
+          var value = localStorage.getItem(key);
+          return value ? JSON.parse(value) : fallback;
+        } catch (error) {
+          storageOK = false;
+          return fallback;
+        }
+      }
+
+      function setStored(key, value) {
+        try {
+          localStorage.setItem(key, JSON.stringify(value));
+          return true;
+        } catch (error) {
+          storageOK = false;
+          toast("Local storage is unavailable; this change will not persist.", true);
+          return false;
+        }
+      }
+
+      function copyText(text, message) {
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(text).then(function () {
+            toast(message || "Copied.");
+          }).catch(function () { fallbackCopy(text, message); });
+        } else {
+          fallbackCopy(text, message);
+        }
+      }
+
+      function fallbackCopy(text, message) {
+        var area = document.createElement("textarea");
+        area.value = text;
+        area.style.position = "fixed";
+        area.style.opacity = "0";
+        document.body.appendChild(area);
+        area.select();
+        try {
+          document.execCommand("copy");
+          toast(message || "Copied.");
+        } catch (error) {
+          toast("Copy was blocked by the browser.", true);
+        }
+        area.remove();
+      }
+
+      function downloadFile(name, content, type) {
+        var blob = new Blob([content], { type: type || "text/plain;charset=utf-8" });
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement("a");
+        link.href = url;
+        link.download = name;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(function () { URL.revokeObjectURL(url); }, 500);
+      }
+
+      function openDialog(id) {
+        var dialog = typeof id === "string" ? document.getElementById(id) : id;
+        if (!dialog) return;
+        if (!dialog.open) dialog.showModal();
+        if (dialog.id === "searchDialog") {
+          window.setTimeout(function () { $("#searchInput").focus(); $("#searchInput").select(); }, 0);
+          renderSearch("");
+        }
+      }
+
+      function closeDialog(dialog) {
+        var target = dialog && dialog.closest ? dialog.closest("dialog") : dialog;
+        if (target && target.open) target.close();
+      }
+
+      $$("[data-open]").forEach(function (button) {
+        button.addEventListener("click", function () { openDialog(button.dataset.open); });
+      });
+
+      $$("[data-close]").forEach(function (button) {
+        button.addEventListener("click", function () { closeDialog(button); });
+      });
+
+      $$("dialog").forEach(function (dialog) {
+        dialog.addEventListener("click", function (event) {
+          if (event.target === dialog) dialog.close();
+        });
+      });
+
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape") {
+          var open = $("dialog[open]");
+          if (open) open.close();
+        }
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+          event.preventDefault();
+          openDialog("searchDialog");
+        }
+      });
+
+      function updateProgress() {
+        var article = $("#article");
+        var rect = article.getBoundingClientRect();
+        var total = Math.max(1, article.offsetHeight - window.innerHeight);
+        var traveled = Math.min(total, Math.max(0, -rect.top + 100));
+        $("#readingProgress").style.width = (traveled / total * 100).toFixed(2) + "%";
+      }
+
+      window.addEventListener("scroll", updateProgress, { passive: true });
+      window.addEventListener("resize", updateProgress);
+      updateProgress();
+
+      var sections = $$(".prose > section[id]");
+      var tocLinks = $$(".toc a");
+      var sectionObserver = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          tocLinks.forEach(function (link) {
+            link.classList.toggle("active", link.getAttribute("href") === "#" + entry.target.id);
+          });
+        });
+      }, { rootMargin: "-18% 0px -68% 0px" });
+      sections.forEach(function (section) { sectionObserver.observe(section); });
+
+      $$("#article h1, #article h2, #article h3").forEach(function (heading) {
+        var owner = heading.closest("section[id], figure[id], header[id]");
+        var anchor = owner ? owner.id : heading.textContent.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+        if (!owner) heading.id = anchor;
+        var label = heading.textContent.trim();
+        var markdownLink = "[" + label + "](#" + anchor + ")";
+        var button = document.createElement("button");
+        button.type = "button";
+        button.className = "heading-copy";
+        button.dataset.tip = "Copy " + markdownLink;
+        button.setAttribute("aria-label", "Copy Markdown link to “" + label + "”");
+        while (heading.firstChild) button.appendChild(heading.firstChild);
+        heading.appendChild(button);
+        button.addEventListener("click", function () {
+          copyText(markdownLink, "Markdown anchor copied.");
+        });
+      });
+
+      var themeSets = {
+        dark: { canvas: "#080b0d", paper: "#0d1114", surface: "#11171b", text: "#dbe3e6", strong: "#f3f6f5", muted: "#849094", faint: "#566166", line: "#263137", lineStrong: "#3a4a51", accent: "#62c8d8" },
+        light: { canvas: "#edf0ed", paper: "#f8faf7", surface: "#ffffff", text: "#253033", strong: "#111719", muted: "#5d696c", faint: "#778285", line: "#ccd3d1", lineStrong: "#9ca8a6", accent: "#087c91" },
+        paper: { canvas: "#ded6c6", paper: "#eee8da", surface: "#f5f0e5", text: "#38352f", strong: "#1f1d19", muted: "#6e675c", faint: "#898174", line: "#c6bcaa", lineStrong: "#a99d89", accent: "#176f78" },
+        contrast: { canvas: "#000000", paper: "#050505", surface: "#101010", text: "#ffffff", strong: "#ffffff", muted: "#d0d0d0", faint: "#aaaaaa", line: "#777777", lineStrong: "#ffffff", accent: "#55ddff" }
+      };
+
+      var readerDefaults = {
+        theme: "dark",
+        family: '"Newsreader", Georgia, serif',
+        size: 20,
+        weight: 400,
+        leading: 1.72,
+        measure: 72,
+        tracking: 0,
+        colors: themeSets.dark,
+        focus: false,
+        references: true,
+        remember: true
+      };
+
+      var readerState = Object.assign({}, readerDefaults, getStored("signal-form-reader", {}));
+      readerState.colors = Object.assign({}, themeSets[readerState.theme] || themeSets.dark, readerState.colors || {});
+      var pairConfig = [
+        ["size", "sizeRange", "sizeNumber", "--reader-size", "px"],
+        ["weight", "weightRange", "weightNumber", "--reader-weight", ""],
+        ["leading", "leadingRange", "leadingNumber", "--reader-leading", ""],
+        ["measure", "measureRange", "measureNumber", "--reader-measure", "ch"],
+        ["tracking", "trackingRange", "trackingNumber", "--reader-tracking", "em"]
+      ];
+
+      function applyReader(save) {
+        var root = document.documentElement;
+        var c = readerState.colors;
+        root.dataset.theme = readerState.theme === "light" || readerState.theme === "paper" ? "light" : "dark";
+        root.style.setProperty("--canvas", c.canvas);
+        root.style.setProperty("--paper", c.paper);
+        root.style.setProperty("--surface", c.surface);
+        root.style.setProperty("--surface-raised", c.surface);
+        root.style.setProperty("--ink", c.text);
+        root.style.setProperty("--ink-strong", c.strong);
+        root.style.setProperty("--muted", c.muted);
+        root.style.setProperty("--faint", c.faint);
+        root.style.setProperty("--line", c.line);
+        root.style.setProperty("--line-strong", c.lineStrong);
+        root.style.setProperty("--accent", c.accent);
+        root.style.setProperty("--reader-font", readerState.family);
+        root.style.setProperty("--reader-size", readerState.size + "px");
+        root.style.setProperty("--reader-weight", readerState.weight);
+        root.style.setProperty("--reader-leading", readerState.leading);
+        root.style.setProperty("--reader-measure", readerState.measure + "ch");
+        root.style.setProperty("--reader-tracking", readerState.tracking + "em");
+        document.body.classList.toggle("focus-reading", !!readerState.focus);
+        document.body.classList.toggle("hide-references", !readerState.references);
+        var themeAction = root.dataset.theme === "dark" ? "Switch to light theme" : "Switch to dark theme";
+        $(".theme-toggle").setAttribute("aria-label", themeAction);
+        $(".theme-toggle").dataset.tip = themeAction;
+        syncReaderControls();
+        if (save && readerState.remember) setStored("signal-form-reader", readerState);
+      }
+
+      function syncReaderControls() {
+        $("#fontFamily").value = readerState.family;
+        pairConfig.forEach(function (config) {
+          $("#" + config[1]).value = readerState[config[0]];
+          $("#" + config[2]).value = readerState[config[0]];
+        });
+        $("#focusMode").checked = !!readerState.focus;
+        $("#referenceMarkers").checked = !!readerState.references;
+        $("#rememberReader").checked = !!readerState.remember;
+        var colorMap = [["textColor", "text"], ["canvasColor", "canvas"], ["surfaceColor", "surface"], ["accentColor", "accent"]];
+        colorMap.forEach(function (item) {
+          $("#" + item[0]).value = readerState.colors[item[1]];
+          $("#" + item[0] + "Value").textContent = readerState.colors[item[1]].toUpperCase();
+        });
+        $$(".theme-preset").forEach(function (button) {
+          button.classList.toggle("active", button.dataset.themePreset === readerState.theme);
+        });
+        updateContrast();
+      }
+
+      pairConfig.forEach(function (config) {
+        [$("#" + config[1]), $("#" + config[2])].forEach(function (control) {
+          control.addEventListener("input", function () {
+            var min = Number(control.min);
+            var max = Number(control.max);
+            var value = Math.min(max, Math.max(min, Number(control.value)));
+            readerState[config[0]] = value;
+            applyReader(true);
+          });
+        });
+      });
+
+      $("#fontFamily").addEventListener("change", function (event) {
+        readerState.family = event.target.value;
+        applyReader(true);
+      });
+
+      $$(".reader-tab").forEach(function (tab) {
+        tab.addEventListener("click", function () {
+          $$(".reader-tab").forEach(function (item) { item.classList.toggle("active", item === tab); });
+          $$(".reader-panel").forEach(function (panel) { panel.classList.toggle("active", panel.dataset.readerPanel === tab.dataset.readerTab); });
+        });
+      });
+
+      $$(".theme-preset").forEach(function (button) {
+        button.addEventListener("click", function () {
+          readerState.theme = button.dataset.themePreset;
+          readerState.colors = Object.assign({}, themeSets[readerState.theme]);
+          applyReader(true);
+        });
+      });
+
+      $(".theme-toggle").addEventListener("click", function () {
+        readerState.theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+        readerState.colors = Object.assign({}, themeSets[readerState.theme]);
+        applyReader(true);
+      });
+
+      [["textColor", "text"], ["canvasColor", "canvas"], ["surfaceColor", "surface"], ["accentColor", "accent"]].forEach(function (item) {
+        $("#" + item[0]).addEventListener("input", function (event) {
+          readerState.colors[item[1]] = event.target.value;
+          readerState.theme = "custom";
+          applyReader(true);
+        });
+      });
+
+      $("#focusMode").addEventListener("change", function (event) { readerState.focus = event.target.checked; applyReader(true); });
+      $("#referenceMarkers").addEventListener("change", function (event) { readerState.references = event.target.checked; applyReader(true); });
+      $("#rememberReader").addEventListener("change", function (event) {
+        readerState.remember = event.target.checked;
+        if (readerState.remember) setStored("signal-form-reader", readerState);
+        else {
+          try { localStorage.removeItem("signal-form-reader"); } catch (error) { toast("Local storage is unavailable.", true); }
+        }
+      });
+
+      function relativeLuminance(hex) {
+        var parts = [hex.slice(1,3), hex.slice(3,5), hex.slice(5,7)].map(function (part) {
+          var value = parseInt(part, 16) / 255;
+          return value <= .03928 ? value / 12.92 : Math.pow((value + .055) / 1.055, 2.4);
+        });
+        return .2126 * parts[0] + .7152 * parts[1] + .0722 * parts[2];
+      }
+
+      function updateContrast() {
+        var l1 = relativeLuminance(readerState.colors.text);
+        var l2 = relativeLuminance(readerState.colors.paper);
+        var ratio = (Math.max(l1, l2) + .05) / (Math.min(l1, l2) + .05);
+        var box = $("#contrastReadout");
+        box.classList.toggle("warn", ratio < 4.5);
+        box.innerHTML = "<strong>" + ratio.toFixed(2) + ":1</strong> text-to-reading-surface contrast. " + (ratio >= 7 ? "Passes WCAG AAA for normal text." : ratio >= 4.5 ? "Passes WCAG AA for normal text." : "Below WCAG AA for normal text.");
+      }
+
+      $("#resetReader").addEventListener("click", function () {
+        readerState = Object.assign({}, readerDefaults, { colors: Object.assign({}, themeSets.dark) });
+        applyReader(true);
+        toast("Reader settings reset.");
+      });
+
+      var personalPresets = getStored("signal-form-presets", []);
+
+      function renderPresets() {
+        var root = $("#savedPresets");
+        root.innerHTML = "";
+        if (!personalPresets.length) {
+          root.innerHTML = '<div class="empty-state">No personal presets yet.</div>';
+          return;
+        }
+        personalPresets.forEach(function (preset, index) {
+          var row = document.createElement("div");
+          row.className = "saved-preset";
+          var name = document.createElement("span");
+          name.textContent = preset.name;
+          var apply = document.createElement("button");
+          apply.className = "text-action";
+          apply.type = "button";
+          apply.textContent = "Apply";
+          apply.addEventListener("click", function () {
+            readerState = Object.assign({}, preset.state);
+            readerState.colors = Object.assign({}, preset.state.colors);
+            applyReader(true);
+            toast("Applied “" + preset.name + "”.");
+          });
+          var remove = document.createElement("button");
+          remove.className = "text-action";
+          remove.type = "button";
+          remove.textContent = "Delete";
+          remove.addEventListener("click", function () {
+            personalPresets.splice(index, 1);
+            setStored("signal-form-presets", personalPresets);
+            renderPresets();
+          });
+          row.append(name, apply, remove);
+          root.appendChild(row);
+        });
+      }
+
+      $("#savePreset").addEventListener("click", function () {
+        var name = $("#presetName").value.trim();
+        if (!name) { toast("Name the preset before saving.", true); return; }
+        personalPresets.push({ name: name, state: JSON.parse(JSON.stringify(readerState)) });
+        setStored("signal-form-presets", personalPresets);
+        $("#presetName").value = "";
+        renderPresets();
+        toast("Reader preset saved.");
+      });
+
+      $("#exportReader").addEventListener("click", function () {
+        downloadFile("signal-form-reader.json", JSON.stringify({ reader: readerState, presets: personalPresets }, null, 2), "application/json");
+      });
+
+      $("#importReader").addEventListener("click", function () { $("#readerFile").click(); });
+      $("#readerFile").addEventListener("change", function (event) {
+        var file = event.target.files[0];
+        if (!file) return;
+        var reader = new FileReader();
+        reader.onload = function () {
+          try {
+            var value = JSON.parse(reader.result);
+            if (!value.reader || !value.reader.colors) throw new Error("Invalid reader file");
+            readerState = value.reader;
+            personalPresets = Array.isArray(value.presets) ? value.presets : personalPresets;
+            applyReader(true);
+            setStored("signal-form-presets", personalPresets);
+            renderPresets();
+            toast("Reader configuration imported.");
+          } catch (error) {
+            toast("That file is not a valid reader configuration.", true);
+          }
+        };
+        reader.readAsText(file);
+        event.target.value = "";
+      });
+
+      applyReader(false);
+      renderPresets();
+      if (!storageOK) toast("Local storage is unavailable; settings will last for this tab only.", true);
+
+      var collectionData = {
+        "Interface design": [
+          ["Power should wait quietly", "A capable interface keeps complexity available but subordinate to present intent.", "Current"],
+          ["The interface is an instrument", "Why direct manipulation should deepen rather than merely decorate information.", "Aug 2026"],
+          ["A grammar for operational calm", "Building stable hierarchy without withholding capability.", "Jun 2026"],
+          ["Every affordance makes a promise", "How false interactivity destroys trust in the rest of a system.", "Apr 2026"]
+        ],
+        "Human factors": [
+          ["Alerts are debts against attention", "A practical account of salience, interruption, and alarm fatigue.", "Jul 2026"],
+          ["Glanceable is not simplistic", "What scan performance asks from structure, type, and redundancy.", "May 2026"],
+          ["Modes must leave tracks", "Preventing automation surprise through inspectable state change.", "Feb 2026"]
+        ],
+        "Power tools": [
+          ["Defaults are starting points, not fences", "Designing broad, reversible configuration for unexpected users.", "Aug 2026"],
+          ["Progressive mastery over progressive concealment", "Learning through use without weakening the expert surface.", "Mar 2026"],
+          ["Export is part of ownership", "Why capable software lets information leave in useful forms.", "Jan 2026"]
+        ],
+        "Information systems": [
+          ["Uncertainty needs a visible grammar", "Encoding provenance and confidence without color dependence.", "Jul 2026"],
+          ["One fact, one home", "How duplication quietly damages dense operational displays.", "May 2026"],
+          ["Local density is the real constraint", "Separating total capability from focal competition.", "Dec 2025"]
+        ]
+      };
+
+      var activeCollection = "";
+
+      function openCollection(topic) {
+        activeCollection = topic;
+        var entries = collectionData[topic] || [];
+        $("#collectionTitle").textContent = topic;
+        $("#collectionSubtitle").textContent = "Essays in this collection";
+        $("#collectionCount").textContent = entries.length + " available in this reference";
+        $("#collectionDetail").hidden = true;
+        var list = $("#essayList");
+        list.innerHTML = "";
+        entries.forEach(function (entry) {
+          var button = document.createElement("button");
+          button.type = "button";
+          button.className = "essay-list-item";
+          var text = document.createElement("div");
+          var title = document.createElement("strong");
+          title.textContent = entry[0];
+          var summary = document.createElement("p");
+          summary.textContent = entry[1];
+          text.append(title, summary);
+          var time = document.createElement("time");
+          time.textContent = entry[2];
+          button.append(text, time);
+          button.addEventListener("click", function () {
+            var detail = $("#collectionDetail");
+            detail.innerHTML = "";
+            var h = document.createElement("h3");
+            h.textContent = entry[0];
+            var p = document.createElement("p");
+            p.textContent = entry[1] + " This reference entry demonstrates collection navigation without pretending an unpublished page exists.";
+            var action = document.createElement("button");
+            action.className = "quiet-button";
+            action.type = "button";
+            action.textContent = entry[0] === "Power should wait quietly" ? "Return to article" : "Copy reading-list entry";
+            action.addEventListener("click", function () {
+              if (entry[0] === "Power should wait quietly") {
+                closeDialog(detail);
+                location.hash = "#top";
+              } else {
+                copyText(entry[0] + " — " + entry[1], "Reading-list entry copied.");
+              }
+            });
+            detail.append(h, p, action);
+            detail.hidden = false;
+          });
+          list.appendChild(button);
+        });
+        history.replaceState(null, "", "#collection=" + encodeURIComponent(topic));
+        openDialog("collectionDialog");
+      }
+
+      $$(".topic-chip").forEach(function (button) {
+        button.addEventListener("click", function () { openCollection(button.dataset.topic); });
+      });
+
+      $("#copyCollection").addEventListener("click", function () {
+        copyText(location.href.split("#")[0] + "#collection=" + encodeURIComponent(activeCollection), "Collection link copied.");
+      });
+
+      var concepts = {
+        attention: {
+          title: "Attention topology",
+          body: "The distribution of visual demand across an interface: where the eye is likely to land, what competes locally, and how an anomaly changes that field.",
+          action: "Open the Human factors collection",
+          topic: "Human factors"
+        },
+        mastery: {
+          title: "Progressive mastery",
+          body: "A learning model in which the useful default path is immediate, deeper capability is discoverable through meaningful contact, and expert actions remain close rather than being permanently hidden.",
+          action: "Open the Power tools collection",
+          topic: "Power tools"
+        }
+      };
+
+      $$(".concept").forEach(function (button) {
+        button.addEventListener("click", function () {
+          var concept = concepts[button.dataset.concept];
+          if (button.dataset.concept === "mastery") {
+            openCollection(concept.topic);
+            return;
+          }
+          $("#conceptTitle").textContent = concept.title;
+          var body = $("#conceptBody");
+          body.innerHTML = "";
+          var h = document.createElement("h3");
+          h.textContent = concept.title;
+          var p = document.createElement("p");
+          p.textContent = concept.body;
+          var action = document.createElement("button");
+          action.className = "primary-button";
+          action.type = "button";
+          action.textContent = concept.action;
+          action.addEventListener("click", function () {
+            closeDialog(action);
+            openCollection(concept.topic);
+          });
+          body.append(h, p, action);
+          openDialog("conceptDialog");
+        });
+      });
+
+      $$(".cite").forEach(function (button) {
+        button.addEventListener("click", function () {
+          var target = $("#source-" + button.dataset.source);
+          if (target) target.scrollIntoView({ behavior: "smooth", block: "center" });
+        });
+      });
+
+      $$(".copy-source").forEach(function (button) {
+        button.addEventListener("click", function () {
+          var item = button.closest(".source-item");
+          copyText(item.querySelector("strong").textContent + ". " + item.querySelector("p").textContent, "Source copied.");
+        });
+      });
+
+      var cycleValues = [
+        ["19.2 s", "average"],
+        ["17.8 s", "median"],
+        ["31.4 s", "p90"],
+        ["8.1–42.6 s", "min–max"]
+      ];
+      var cycleIndex = 0;
+      $(".cycle-stat").addEventListener("click", function (event) {
+        cycleIndex = (cycleIndex + 1) % cycleValues.length;
+        event.currentTarget.querySelector("span").textContent = cycleValues[cycleIndex][0];
+        event.currentTarget.querySelector("small").textContent = cycleValues[cycleIndex][1];
+      });
+
+      var metrics = {
+        return: { label: "Return time", unit: "s", threshold: 24, values: [14, 18, 23, 20, 16, 19, 27, 25, 21, 17, 19, 15, 13, 18] },
+        focus: { label: "Focus loss", unit: "%", threshold: 35, values: [18, 21, 29, 25, 31, 34, 42, 38, 30, 27, 32, 24, 22, 26] },
+        recall: { label: "Recall", unit: "%", threshold: 62, values: [82, 78, 73, 77, 70, 68, 61, 65, 71, 74, 69, 76, 81, 79] }
+      };
+      var aggregateOrder = ["Average", "Median", "P90", "Min–max"];
+      var chartState = { metric: "return", aggregate: "Average", window: "6h", inspected: 5, pinned: false };
+
+      function visibleData(state) {
+        var all = metrics[state.metric].values.slice();
+        var length = state.window === "1h" ? 6 : state.window === "6h" ? 10 : 14;
+        var values = all.slice(all.length - length);
+        if (state.aggregate === "Median") values = values.map(function (v, i) { return +(v * .92 + (i % 2 ? .8 : -.4)).toFixed(1); });
+        if (state.aggregate === "P90") values = values.map(function (v, i) { return +(v * 1.24 + (i % 3)).toFixed(1); });
+        return values;
+      }
+
+      function chartGeometry(values, width, height, padding) {
+        var max = Math.max.apply(null, values) * 1.18;
+        var min = Math.min.apply(null, values) * .72;
+        if (max === min) max += 1;
+        var x = function (i) { return padding + i * ((width - padding * 2) / Math.max(1, values.length - 1)); };
+        var y = function (v) { return height - padding - ((v - min) / (max - min)) * (height - padding * 2); };
+        return { max: max, min: min, x: x, y: y };
+      }
+
+      function renderMainChart() {
+        var svg = $("#mainChart");
+        var metric = metrics[chartState.metric];
+        var values = visibleData(chartState);
+        chartState.inspected = Math.min(values.length - 1, Math.max(0, chartState.inspected));
+        var g = chartGeometry(values.concat([metric.threshold]), 800, 300, 42);
+        var html = '<title id="chartTitle">' + metric.label + ' after leaving an article</title><desc id="chartDesc">Deterministic illustrative series.</desc>';
+        for (var i = 0; i < 4; i++) {
+          var gy = 42 + i * 72;
+          var labelValue = g.max - i * ((g.max - g.min) / 3);
+          html += '<line class="grid-line" x1="42" y1="' + gy + '" x2="758" y2="' + gy + '"></line>';
+          html += '<text class="axis-label" x="2" y="' + (gy + 3) + '">' + labelValue.toFixed(0) + metric.unit + '</text>';
+        }
+        var points = values.map(function (v, index) { return g.x(index).toFixed(1) + "," + g.y(v).toFixed(1); });
+        var area = "M " + g.x(0).toFixed(1) + " 258 L " + points.join(" L ") + " L " + g.x(values.length - 1).toFixed(1) + " 258 Z";
+        html += '<path class="series-fill" d="' + area + '"></path>';
+        if (chartState.aggregate === "Min–max") {
+          var upper = values.map(function (v, index) { return g.x(index).toFixed(1) + "," + g.y(v * 1.18).toFixed(1); });
+          var lower = values.map(function (v, index) { return g.x(index).toFixed(1) + "," + g.y(v * .82).toFixed(1); }).reverse();
+          html += '<path class="range-fill" d="M ' + upper.join(" L ") + ' L ' + lower.join(" L ") + ' Z"></path>';
+          html += '<polyline class="range-line" points="' + upper.join(" ") + '"></polyline>';
+          html += '<polyline class="range-line" points="' + lower.reverse().join(" ") + '"></polyline>';
+        }
+        html += '<polyline class="series-line" points="' + points.join(" ") + '"></polyline>';
+        var thresholdY = g.y(metric.threshold);
+        html += '<line x1="42" y1="' + thresholdY + '" x2="758" y2="' + thresholdY + '" stroke="var(--caution)" stroke-width="1" stroke-dasharray="5 6"></line>';
+        var index = chartState.inspected;
+        html += '<line class="inspect-line" x1="' + g.x(index) + '" y1="42" x2="' + g.x(index) + '" y2="258"></line>';
+        html += '<circle class="inspect-dot" cx="' + g.x(index) + '" cy="' + g.y(values[index]) + '" r="4"></circle>';
+        svg.innerHTML = html;
+        $("#legendMetric").textContent = metric.label;
+        $("#chartStatus").textContent = values.length + " modeled intervals · " + chartState.aggregate.toLowerCase();
+        $("#aggregateButton").textContent = chartState.aggregate;
+        $("#chartWindow").value = chartState.window;
+        $$(".metric-button").forEach(function (button) {
+          var active = button.dataset.metric === chartState.metric;
+          button.classList.toggle("active", active);
+          button.setAttribute("aria-pressed", active ? "true" : "false");
+        });
+        showChartTooltip(chartState.inspected, chartState.pinned);
+      }
+
+      function showChartTooltip(index, force) {
+        var values = visibleData(chartState);
+        var tooltip = $("#chartTooltip");
+        if (!force && !$("#plotWrap").matches(":hover") && document.activeElement !== $("#plotWrap")) {
+          tooltip.hidden = true;
+          return;
+        }
+        var metric = metrics[chartState.metric];
+        var g = chartGeometry(values.concat([metric.threshold]), 800, 300, 42);
+        tooltip.innerHTML = '<span>' + (values.length - index - 1) + ' intervals ago</span><strong>' + metric.label + ': ' + values[index].toFixed(1) + metric.unit + '</strong><span>' + chartState.aggregate + (chartState.pinned ? ' · pinned' : '') + '</span>';
+        tooltip.style.left = Math.min(78, Math.max(4, g.x(index) / 8)) + "%";
+        tooltip.style.top = Math.max(22, g.y(values[index]) / 3) + "px";
+        tooltip.hidden = false;
+      }
+
+      $$(".metric-button").forEach(function (button) {
+        button.addEventListener("click", function () {
+          chartState.metric = button.dataset.metric;
+          chartState.pinned = false;
+          renderMainChart();
+        });
+      });
+
+      $("#aggregateButton").addEventListener("click", function () {
+        chartState.aggregate = aggregateOrder[(aggregateOrder.indexOf(chartState.aggregate) + 1) % aggregateOrder.length];
+        renderMainChart();
+      });
+
+      $("#chartWindow").addEventListener("change", function (event) {
+        chartState.window = event.target.value;
+        chartState.inspected = 0;
+        renderMainChart();
+      });
+
+      $("#plotWrap").addEventListener("pointermove", function (event) {
+        if (chartState.pinned) return;
+        var rect = event.currentTarget.getBoundingClientRect();
+        var values = visibleData(chartState);
+        var ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+        chartState.inspected = Math.round(ratio * (values.length - 1));
+        renderMainChart();
+      });
+
+      $("#plotWrap").addEventListener("pointerleave", function () {
+        if (!chartState.pinned) $("#chartTooltip").hidden = true;
+      });
+
+      $("#plotWrap").addEventListener("click", function () {
+        chartState.pinned = !chartState.pinned;
+        renderMainChart();
+      });
+
+      $("#plotWrap").addEventListener("keydown", function (event) {
+        var values = visibleData(chartState);
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Home" || event.key === "End") {
+          event.preventDefault();
+          if (event.key === "ArrowLeft") chartState.inspected = Math.max(0, chartState.inspected - 1);
+          if (event.key === "ArrowRight") chartState.inspected = Math.min(values.length - 1, chartState.inspected + 1);
+          if (event.key === "Home") chartState.inspected = 0;
+          if (event.key === "End") chartState.inspected = values.length - 1;
+          renderMainChart();
+        }
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          chartState.pinned = !chartState.pinned;
+          renderMainChart();
+        }
+      });
+
+      renderMainChart();
+
+      function syncWorkbenchFromChart() {
+        $("#wbMetric").value = chartState.metric;
+        $("#wbAggregate").value = chartState.aggregate;
+        $("#wbWindow").value = chartState.window;
+        $("#queryInput").value = "metric:" + chartState.metric + " aggregate:" + chartState.aggregate.toLowerCase().replace("–", "-") + " window:" + chartState.window + " cohort:" + $("#wbCohort").value + " samples:" + $("#sampleNumber").value + " compare:" + ($("#wbCompare").checked ? "on" : "off") + " threshold:" + ($("#wbThreshold").checked ? "on" : "off");
+      }
+
+      $("#analyzeButton").addEventListener("click", function () {
+        syncWorkbenchFromChart();
+        runAnalysis();
+        openDialog("workbenchDialog");
+      });
+
+      function workbenchState() {
+        return {
+          metric: $("#wbMetric").value,
+          aggregate: $("#wbAggregate").value,
+          window: $("#wbWindow").value,
+          cohort: $("#wbCohort").value,
+          samples: Number($("#sampleNumber").value),
+          compare: $("#wbCompare").checked,
+          threshold: $("#wbThreshold").checked,
+          band: $("#wbBand").checked,
+          points: $("#wbPoints").checked
+        };
+      }
+
+      function cohortFactor(cohort) {
+        return cohort === "new" ? 1.18 : cohort === "returning" ? .88 : cohort === "research" ? 1.08 : 1;
+      }
+
+      function analysisValues(state) {
+        var base = metrics[state.metric].values.slice(state.window === "1h" ? -6 : state.window === "6h" ? -10 : -14);
+        var factor = cohortFactor(state.cohort);
+        if (state.aggregate === "Median") factor *= .92;
+        if (state.aggregate === "P90") factor *= 1.24;
+        return base.map(function (value, index) { return +(value * factor + ((state.samples + index) % 5) * .16).toFixed(2); });
+      }
+
+      function runAnalysis() {
+        var state = workbenchState();
+        var values = analysisValues(state);
+        var comparison = values.map(function (v, i) { return +(v * .91 + (i % 2 ? .6 : -.3)).toFixed(2); });
+        var selected = values[values.length - 1];
+        var change = (selected - values[0]) / values[0] * 100;
+        var unit = metrics[state.metric].unit;
+        $("#summaryValue").textContent = selected.toFixed(1) + unit;
+        $("#summaryChange").textContent = (change >= 0 ? "+" : "") + change.toFixed(1) + "%";
+        $("#summarySamples").textContent = state.samples;
+        renderAnalysisChart(state, values, comparison);
+        renderAnalysisTable(state, values, comparison);
+        syncWorkbenchQuery(state);
+      }
+
+      function renderAnalysisChart(state, values, comparison) {
+        var svg = $("#analysisChart");
+        var metric = metrics[state.metric];
+        var all = values.concat(state.compare ? comparison : []).concat(state.threshold ? [metric.threshold] : []);
+        var g = chartGeometry(all, 760, 360, 48);
+        var html = "";
+        for (var i = 0; i < 5; i++) {
+          var y = 48 + i * 66;
+          html += '<line x1="48" y1="' + y + '" x2="712" y2="' + y + '" stroke="var(--line)" stroke-width="1"></line>';
+        }
+        var mainPoints = values.map(function (v, index) { return g.x(index) + "," + g.y(v); });
+        if (state.band || state.aggregate === "Min–max") {
+          var upper = values.map(function (v, index) { return g.x(index) + "," + g.y(v * 1.14); });
+          var lower = values.map(function (v, index) { return g.x(index) + "," + g.y(v * .86); }).reverse();
+          html += '<path d="M ' + upper.join(" L ") + ' L ' + lower.join(" L ") + ' Z" fill="color-mix(in srgb, var(--accent) 12%, transparent)"></path>';
+        }
+        if (state.compare) {
+          var comparePoints = comparison.map(function (v, index) { return g.x(index) + "," + g.y(v); });
+          html += '<polyline points="' + comparePoints.join(" ") + '" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 5"></polyline>';
+        }
+        if (state.threshold) {
+          html += '<line x1="48" y1="' + g.y(metric.threshold) + '" x2="712" y2="' + g.y(metric.threshold) + '" stroke="var(--caution)" stroke-width="1" stroke-dasharray="5 5"></line>';
+        }
+        html += '<polyline points="' + mainPoints.join(" ") + '" fill="none" stroke="var(--accent)" stroke-width="2"></polyline>';
+        if (state.points) {
+          values.forEach(function (v, index) { html += '<circle cx="' + g.x(index) + '" cy="' + g.y(v) + '" r="3" fill="var(--paper)" stroke="var(--accent)" stroke-width="1.5"></circle>'; });
+        }
+        svg.innerHTML = html;
+      }
+
+      function renderAnalysisTable(state, values, comparison) {
+        var body = $("#analysisTable");
+        body.innerHTML = "";
+        values.forEach(function (value, index) {
+          var row = document.createElement("tr");
+          [String(index + 1), value.toFixed(2) + metrics[state.metric].unit, comparison[index].toFixed(2) + metrics[state.metric].unit, (value - comparison[index]).toFixed(2)].forEach(function (text) {
+            var cell = document.createElement("td");
+            cell.textContent = text;
+            row.appendChild(cell);
+          });
+          body.appendChild(row);
+        });
+      }
+
+      function syncWorkbenchQuery(state) {
+        $("#queryInput").value = "metric:" + state.metric + " aggregate:" + state.aggregate.toLowerCase().replace("–", "-") + " window:" + state.window + " cohort:" + state.cohort + " samples:" + state.samples + " compare:" + (state.compare ? "on" : "off") + " threshold:" + (state.threshold ? "on" : "off");
+      }
+
+      ["wbMetric", "wbAggregate", "wbWindow", "wbCohort", "wbCompare", "wbThreshold", "wbBand", "wbPoints"].forEach(function (id) {
+        $("#" + id).addEventListener("change", runAnalysis);
+      });
+
+      [$("#sampleRange"), $("#sampleNumber")].forEach(function (input) {
+        input.addEventListener("input", function () {
+          var value = Math.min(500, Math.max(8, Number(input.value)));
+          $("#sampleRange").value = value;
+          $("#sampleNumber").value = value;
+          runAnalysis();
+        });
+      });
+
+      $("#runAnalysis").addEventListener("click", runAnalysis);
+      $("#applyQuery").addEventListener("click", function () {
+        var tokens = $("#queryInput").value.trim().split(/\s+/);
+        var parsed = {};
+        tokens.forEach(function (token) {
+          var split = token.indexOf(":");
+          if (split > 0) parsed[token.slice(0, split).toLowerCase()] = token.slice(split + 1);
+        });
+        var metric = parsed.metric;
+        var aggregate = (parsed.aggregate || "").toLowerCase();
+        var aggregateMap = { average: "Average", median: "Median", p90: "P90", "min-max": "Min–max", "min–max": "Min–max" };
+        if (metric && metrics[metric]) $("#wbMetric").value = metric;
+        if (aggregateMap[aggregate]) $("#wbAggregate").value = aggregateMap[aggregate];
+        if (["1h","6h","24h"].includes(parsed.window)) $("#wbWindow").value = parsed.window;
+        if (["all","new","returning","research"].includes(parsed.cohort)) $("#wbCohort").value = parsed.cohort;
+        if (parsed.samples && !isNaN(Number(parsed.samples))) {
+          var sample = Math.min(500, Math.max(8, Number(parsed.samples)));
+          $("#sampleRange").value = sample;
+          $("#sampleNumber").value = sample;
+        }
+        if (parsed.compare) $("#wbCompare").checked = parsed.compare === "on";
+        if (parsed.threshold) $("#wbThreshold").checked = parsed.threshold === "on";
+        runAnalysis();
+        toast("Query applied.");
+      });
+
+      $$(".workbench-tab").forEach(function (tab) {
+        tab.addEventListener("click", function () {
+          $$(".workbench-tab").forEach(function (item) { item.classList.toggle("active", item === tab); });
+          $$(".workbench-panel").forEach(function (panel) { panel.classList.toggle("active", panel.dataset.workbenchPanel === tab.dataset.workbenchTab); });
+        });
+      });
+
+      var savedViews = getStored("signal-form-views", []);
+
+      function renderSavedViews() {
+        var root = $("#savedViews");
+        root.innerHTML = "";
+        if (!savedViews.length) {
+          root.innerHTML = '<div class="empty-state">No analysis views saved.</div>';
+          return;
+        }
+        savedViews.forEach(function (view, index) {
+          var row = document.createElement("div");
+          row.className = "saved-view";
+          var label = document.createElement("div");
+          var strong = document.createElement("strong");
+          strong.textContent = view.name;
+          var small = document.createElement("small");
+          small.textContent = view.state.metric + " · " + view.state.aggregate + " · " + view.state.window;
+          label.append(strong, small);
+          var restore = document.createElement("button");
+          restore.className = "text-action";
+          restore.type = "button";
+          restore.textContent = "Restore";
+          restore.addEventListener("click", function () {
+            Object.keys(view.state).forEach(function (key) {
+              var map = { metric: "wbMetric", aggregate: "wbAggregate", window: "wbWindow", cohort: "wbCohort", samples: "sampleNumber", compare: "wbCompare", threshold: "wbThreshold", band: "wbBand", points: "wbPoints" };
+              var control = $("#" + map[key]);
+              if (!control) return;
+              if (control.type === "checkbox") control.checked = view.state[key];
+              else control.value = view.state[key];
+            });
+            $("#sampleRange").value = view.state.samples;
+            runAnalysis();
+            $$(".workbench-tab")[0].click();
+          });
+          var remove = document.createElement("button");
+          remove.className = "text-action";
+          remove.type = "button";
+          remove.textContent = "Delete";
+          remove.addEventListener("click", function () {
+            savedViews.splice(index, 1);
+            setStored("signal-form-views", savedViews);
+            renderSavedViews();
+          });
+          row.append(label, restore, remove);
+          root.appendChild(row);
+        });
+      }
+
+      $("#saveView").addEventListener("click", function () {
+        var name = $("#viewName").value.trim() || metrics[$("#wbMetric").value].label + " view";
+        savedViews.push({ name: name, state: workbenchState() });
+        setStored("signal-form-views", savedViews);
+        $("#viewName").value = "";
+        renderSavedViews();
+        toast("Analysis view saved.");
+      });
+
+      $("#copyQueryLink").addEventListener("click", function () {
+        copyText(location.href.split("#")[0] + "#analysis=" + encodeURIComponent($("#queryInput").value), "Restorable analysis link copied.");
+      });
+
+      function currentAnalysisCsv() {
+        var state = workbenchState();
+        var values = analysisValues(state);
+        var comparison = values.map(function (v, i) { return +(v * .91 + (i % 2 ? .6 : -.3)).toFixed(2); });
+        var rows = ["interval,value,comparison,delta"];
+        values.forEach(function (value, index) { rows.push([index + 1, value, comparison[index], (value - comparison[index]).toFixed(2)].join(",")); });
+        return rows.join("\n");
+      }
+
+      $("#downloadAnalysisCsv").addEventListener("click", function () {
+        downloadFile("figure-analysis.csv", currentAnalysisCsv(), "text/csv;charset=utf-8");
+      });
+
+      renderSavedViews();
+
+      var commands = [
+        { title: "Open reader settings", type: "Action", keywords: "font color type measure theme", run: function () { closeDialog($("#searchDialog")); openDialog("readerDialog"); } },
+        { title: "Export article or data", type: "Action", keywords: "markdown text json html pdf csv svg", run: function () { closeDialog($("#searchDialog")); openDialog("exportDialog"); } },
+        { title: "Analyze modeled figure", type: "Action", keywords: "chart query cohort data", run: function () { closeDialog($("#searchDialog")); $("#analyzeButton").click(); } },
+        { title: "Switch light / dark theme", type: "Action", keywords: "appearance polarity", run: function () { $(".theme-toggle").click(); closeDialog($("#searchDialog")); } },
+        { title: "Browse Interface design", type: "Collection", keywords: "essays topics", run: function () { closeDialog($("#searchDialog")); openCollection("Interface design"); } },
+        { title: "Browse Human factors", type: "Collection", keywords: "essays topics", run: function () { closeDialog($("#searchDialog")); openCollection("Human factors"); } },
+        { title: "Copy article citation", type: "Action", keywords: "reference bibliography", run: function () { copyText(articleCitation(), "Citation copied."); closeDialog($("#searchDialog")); } }
+      ];
+
+      sections.forEach(function (section) {
+        var heading = $("h2", section);
+        if (!heading) return;
+        commands.push({
+          title: heading.textContent,
+          type: "Section",
+          keywords: section.textContent.slice(0, 240),
+          run: function () { closeDialog($("#searchDialog")); section.scrollIntoView({ behavior: "smooth" }); }
+        });
+      });
+
+      var searchMatches = [];
+      var searchIndex = 0;
+
+      function renderSearch(query) {
+        var value = query.trim().toLowerCase();
+        searchMatches = commands.filter(function (command) {
+          return !value || (command.title + " " + command.type + " " + command.keywords).toLowerCase().includes(value);
+        });
+        searchIndex = 0;
+        var root = $("#searchResults");
+        root.innerHTML = "";
+        if (!searchMatches.length) {
+          root.innerHTML = '<div class="empty-state">No matching sections, collections, or actions.</div>';
+          return;
+        }
+        searchMatches.forEach(function (command, index) {
+          var button = document.createElement("button");
+          button.type = "button";
+          button.className = "search-result" + (index === 0 ? " active" : "");
+          var label = document.createElement("strong");
+          label.textContent = command.title;
+          var type = document.createElement("small");
+          type.textContent = command.type;
+          button.append(label, type);
+          button.addEventListener("mouseenter", function () { searchIndex = index; updateSearchSelection(); });
+          button.addEventListener("click", command.run);
+          root.appendChild(button);
+        });
+      }
+
+      function updateSearchSelection() {
+        $$(".search-result", $("#searchResults")).forEach(function (button, index) {
+          button.classList.toggle("active", index === searchIndex);
+          if (index === searchIndex) button.scrollIntoView({ block: "nearest" });
+        });
+      }
+
+      $("#searchInput").addEventListener("input", function (event) { renderSearch(event.target.value); });
+      $("#searchInput").addEventListener("keydown", function (event) {
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          searchIndex = (searchIndex + (event.key === "ArrowDown" ? 1 : -1) + searchMatches.length) % searchMatches.length;
+          updateSearchSelection();
+        }
+        if (event.key === "Enter" && searchMatches[searchIndex]) {
+          event.preventDefault();
+          searchMatches[searchIndex].run();
+        }
+      });
+
+      function articleCitation() {
+        return "Kian. “Power Should Wait Quietly.” Signal / Form, September 2, 2026. " + location.href.split("#")[0];
+      }
+
+      function articleData() {
+        return {
+          title: "Power Should Wait Quietly",
+          author: "Kian",
+          published: "2026-09-02",
+          description: $(".standfirst").textContent,
+          topics: $$(".topic-chip", $(".topics")).map(function (button) { return button.textContent; }),
+          sections: sections.filter(function (section) { return section.id !== "sources"; }).map(function (section) {
+            return { id: section.id, title: $("h2", section).textContent, text: $$("p", section).map(function (p) { return p.textContent.trim(); }).join("\n\n") };
+          }),
+          sources: $$(".source-item").map(function (item) {
+            return { title: $("strong", item).textContent, note: $("p", item).textContent, url: $("a", item).href };
+          })
+        };
+      }
+
+      function articleMarkdown() {
+        var data = articleData();
+        var output = ["# " + data.title, "", data.description, "", "By " + data.author + " · " + data.published, ""];
+        data.sections.forEach(function (section) { output.push("## " + section.title, "", section.text, ""); });
+        output.push("## Sources", "");
+        data.sources.forEach(function (source, index) { output.push((index + 1) + ". [" + source.title + "](" + source.url + ") — " + source.note); });
+        return output.join("\n");
+      }
+
+      function currentChartCsv() {
+        var values = visibleData(chartState);
+        var rows = ["interval,metric,aggregation,value,unit"];
+        values.forEach(function (value, index) { rows.push([index + 1, chartState.metric, chartState.aggregate, value, metrics[chartState.metric].unit].join(",")); });
+        return rows.join("\n");
+      }
+
+      $$("[data-export]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          var format = button.dataset.export;
+          if (format === "md") downloadFile("power-should-wait-quietly.md", articleMarkdown(), "text/markdown;charset=utf-8");
+          if (format === "txt") downloadFile("power-should-wait-quietly.txt", $("#article").innerText, "text/plain;charset=utf-8");
+          if (format === "json") downloadFile("power-should-wait-quietly.json", JSON.stringify(articleData(), null, 2), "application/json");
+          if (format === "html") downloadFile("power-should-wait-quietly.html", "<!doctype html>\n" + document.documentElement.outerHTML, "text/html;charset=utf-8");
+          if (format === "print") { closeDialog(button); window.setTimeout(function () { window.print(); }, 80); }
+          if (format === "citation") copyText(articleCitation(), "Citation copied.");
+          if (format === "csv") downloadFile("context-return-model.csv", currentChartCsv(), "text/csv;charset=utf-8");
+          if (format === "svg") {
+            var svg = $("#mainChart").cloneNode(true);
+            svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+            downloadFile("context-return-model.svg", new XMLSerializer().serializeToString(svg), "image/svg+xml");
+          }
+        });
+      });
+
+      var selectedRange = null;
+      var selectionText = "";
+
+      document.addEventListener("selectionchange", function () {
+        var selection = window.getSelection();
+        if (!selection || selection.isCollapsed || !selection.rangeCount || !$("#article").contains(selection.anchorNode)) {
+          if (!$("#selectionTools").matches(":hover")) $("#selectionTools").hidden = true;
+          return;
+        }
+        selectionText = selection.toString().trim();
+        if (!selectionText) return;
+        selectedRange = selection.getRangeAt(0).cloneRange();
+        var rect = selectedRange.getBoundingClientRect();
+        var tools = $("#selectionTools");
+        tools.hidden = false;
+        var left = Math.min(window.innerWidth - tools.offsetWidth - 10, Math.max(10, rect.left + rect.width / 2 - tools.offsetWidth / 2));
+        var top = Math.max(10, rect.top - tools.offsetHeight - 9);
+        tools.style.left = left + "px";
+        tools.style.top = top + "px";
+      });
+
+      $$("[data-selection]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          if (!selectionText) return;
+          var action = button.dataset.selection;
+          if (action === "copy") copyText(selectionText, "Selection copied.");
+          if (action === "quote") copyText("> " + selectionText.replace(/\n/g, "\n> ") + "\n\n— " + articleCitation(), "Markdown quote copied.");
+          if (action === "link") {
+            var section = selectedRange.commonAncestorContainer.nodeType === 1 ? selectedRange.commonAncestorContainer.closest("section[id]") : selectedRange.commonAncestorContainer.parentElement.closest("section[id]");
+            copyText(location.href.split("#")[0] + "#" + (section ? section.id : "top"), "Section link copied.");
+          }
+          if (action === "highlight") {
+            try {
+              var mark = document.createElement("mark");
+              mark.className = "reader-highlight";
+              selectedRange.surroundContents(mark);
+              toast("Selection highlighted for this session.");
+            } catch (error) {
+              toast("Select within one paragraph to highlight.", true);
+            }
+          }
+          window.getSelection().removeAllRanges();
+          $("#selectionTools").hidden = true;
+        });
+      });
+
+      var hash = location.hash;
+      if (hash.indexOf("#collection=") === 0) {
+        var topic = decodeURIComponent(hash.slice(12));
+        if (collectionData[topic]) openCollection(topic);
+      }
+      if (hash.indexOf("#analysis=") === 0) {
+        $("#queryInput").value = decodeURIComponent(hash.slice(10));
+        $("#applyQuery").click();
+        openDialog("workbenchDialog");
+      }
+    })();
+  </script>
+</body>
+</html>
