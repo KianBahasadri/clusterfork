@@ -1,0 +1,1835 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta name="description" content="Component specifications and interactive catalog for the design-guide skill.">
+  <title>Component Reference & System Catalog | Design Guide</title>
+  <style>
+    @import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap");
+
+    :root {
+      /* Dark theme defaults */
+      --canvas: #080b0d;
+      --surface: #11171b;
+      --surface-raised: #151d21;
+      --ink: #dbe3e6;
+      --ink-strong: #f3f6f5;
+      --muted: #849094;
+      --faint: #566166;
+      --line: #263137;
+      --line-strong: #3a4a51;
+      --accent: #62c8d8;
+      --accent-soft: rgba(98, 200, 216, 0.12);
+      --focus: #9cc8ff;
+      --good: #79c99e;
+      --good-soft: rgba(121, 201, 158, 0.14);
+      --caution: #d6ad63;
+      --caution-soft: rgba(214, 173, 99, 0.14);
+      --danger: #df7e78;
+      --danger-soft: rgba(223, 126, 120, 0.14);
+      --derived: #b9aaef;
+      --derived-soft: rgba(185, 170, 239, 0.14);
+
+      --ui: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "IBM Plex Mono", Consolas, monospace;
+      --radius: 6px;
+      --radius-sm: 4px;
+      --radius-pill: 9999px;
+      --shadow: 0 16px 40px rgba(0, 0, 0, 0.42);
+      --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.25);
+    }
+
+    [data-theme="light"] {
+      --canvas: #ecefec;
+      --surface: #f7f8f5;
+      --surface-raised: #ffffff;
+      --ink: #172027;
+      --ink-strong: #0a0d0f;
+      --muted: #536168;
+      --faint: #778287;
+      --line: #c8d1d0;
+      --line-strong: #9dacab;
+      --accent: #006f7c;
+      --accent-soft: rgba(0, 111, 124, 0.10);
+      --focus: #005fcc;
+      --good: #1d6846;
+      --good-soft: rgba(29, 104, 70, 0.12);
+      --caution: #805600;
+      --caution-soft: rgba(128, 86, 0, 0.12);
+      --danger: #9a332f;
+      --danger-soft: rgba(154, 51, 47, 0.12);
+      --derived: #63559b;
+      --derived-soft: rgba(99, 85, 155, 0.12);
+      --shadow: 0 16px 36px rgba(23, 32, 39, 0.12);
+      --shadow-sm: 0 2px 6px rgba(23, 32, 39, 0.08);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html {
+      scroll-behavior: smooth;
+      scroll-padding-top: 24px;
+    }
+
+    body {
+      font-family: var(--ui);
+      font-size: 15px;
+      line-height: 1.5;
+      color: var(--ink);
+      background-color: var(--canvas);
+      -webkit-font-smoothing: antialiased;
+      min-width: 320px;
+    }
+
+    button, input, select, textarea { font: inherit; color: inherit; }
+    button { cursor: pointer; background: transparent; border: none; }
+    a { color: inherit; text-decoration: none; }
+
+    :focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 2px;
+    }
+
+    /* Floating theme toggle button */
+    .theme-toggle {
+      position: fixed;
+      top: 20px;
+      right: 24px;
+      z-index: 100;
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--ink);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      box-shadow: var(--shadow-sm);
+      transition: background 120ms ease, border-color 120ms ease, transform 80ms ease;
+    }
+    .theme-toggle:hover {
+      background: var(--surface-raised);
+      border-color: var(--line-strong);
+    }
+    .theme-toggle:active {
+      transform: scale(0.96);
+    }
+
+    /* Layout */
+    .layout-container {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 32px 24px 80px;
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      gap: 40px;
+    }
+
+    @media (max-width: 900px) {
+      .layout-container {
+        grid-template-columns: 1fr;
+      }
+      .toc-sidebar {
+        display: none;
+      }
+    }
+
+    /* Table of contents sidebar */
+    .toc-sidebar {
+      position: sticky;
+      top: 32px;
+      max-height: calc(100vh - 64px);
+      overflow-y: auto;
+      padding-right: 12px;
+    }
+
+    .toc-title {
+      font-size: 11px;
+      font-family: var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+
+    .toc-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .toc-link {
+      display: block;
+      font-size: 13.5px;
+      color: var(--muted);
+      padding: 5px 8px;
+      border-radius: var(--radius-sm);
+      transition: color 120ms ease, background 120ms ease;
+    }
+    .toc-link:hover {
+      color: var(--ink-strong);
+      background: var(--surface);
+    }
+    .toc-link.active {
+      color: var(--ink-strong);
+      background: var(--surface-raised);
+      border-left: 2px solid var(--ink-strong);
+      font-weight: 600;
+    }
+
+    /* Component Sections */
+    .spec-content {
+      display: flex;
+      flex-direction: column;
+      gap: 56px;
+    }
+
+    .component-section {
+      scroll-margin-top: 24px;
+    }
+
+    .section-header {
+      margin-bottom: 20px;
+    }
+
+    .section-index {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 400;
+      color: var(--muted);
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .section-title {
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--ink-strong);
+      letter-spacing: -0.015em;
+    }
+
+    .section-desc {
+      font-size: 14px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    /* Showcase grid */
+    .showcase-card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .showcase-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .showcase-group-title {
+      font-size: 12px;
+      font-family: var(--mono);
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .row-wrap {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+    }
+
+    /* -------------------------------------------------------------
+       COMPONENT 1: Buttons
+       ------------------------------------------------------------- */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 1;
+      padding: 9px 16px;
+      border-radius: var(--radius);
+      border: 1px solid transparent;
+      transition: background 120ms ease, border-color 120ms ease, transform 80ms ease, opacity 120ms ease;
+      white-space: nowrap;
+      user-select: none;
+    }
+    .btn:active:not(:disabled) {
+      transform: scale(0.98);
+    }
+    .btn:disabled, .btn[aria-disabled="true"] {
+      opacity: 0.45;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
+    .btn-primary {
+      background: var(--ink-strong);
+      color: var(--canvas);
+      font-weight: 600;
+    }
+    .btn-primary:hover:not(:disabled) {
+      opacity: 0.88;
+    }
+
+    .btn-secondary {
+      background: transparent;
+      border-color: var(--line);
+      color: var(--ink);
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background: var(--surface-raised);
+      border-color: var(--line-strong);
+    }
+
+    .btn-quiet {
+      background: transparent;
+      color: var(--muted);
+    }
+    .btn-quiet:hover:not(:disabled) {
+      color: var(--ink-strong);
+      background: var(--surface-raised);
+    }
+
+    .btn-danger {
+      background: var(--danger-soft);
+      border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+      color: var(--danger);
+    }
+    .btn-danger:hover:not(:disabled) {
+      background: var(--danger);
+      color: #ffffff;
+    }
+
+    .btn-icon {
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      border-radius: var(--radius);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--line);
+      color: var(--muted);
+    }
+    .btn-icon:hover:not(:disabled) {
+      background: var(--surface-raised);
+      color: var(--ink-strong);
+      border-color: var(--line-strong);
+    }
+
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid currentColor;
+      border-right-color: transparent;
+      border-radius: 50%;
+      animation: spin 700ms linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* -------------------------------------------------------------
+       COMPONENT 2: Dropdowns & Menus
+       ------------------------------------------------------------- */
+    .dropdown-container {
+      position: relative;
+      display: inline-block;
+    }
+
+    .native-select {
+      appearance: none;
+      -webkit-appearance: none;
+      background: var(--surface);
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 9px 36px 9px 14px;
+      font-size: 14px;
+      cursor: pointer;
+      background-image: url('data:image/svg+xml;utf8,<svg fill="%23849094" height="12" viewBox="0 0 24 24" width="12" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      transition: border-color 120ms ease;
+    }
+    .native-select:hover {
+      border-color: var(--line-strong);
+    }
+    .native-select:focus-visible {
+      border-color: var(--line-strong);
+    }
+
+    .custom-dropdown-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 9px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--ink);
+      font-size: 14px;
+      min-width: 180px;
+      transition: border-color 120ms ease;
+    }
+    .custom-dropdown-btn:hover {
+      border-color: var(--line-strong);
+    }
+    .custom-dropdown-btn .chevron {
+      transition: transform 150ms ease;
+      color: var(--muted);
+      font-size: 10px;
+    }
+    .custom-dropdown-btn[aria-expanded="true"] .chevron {
+      transform: rotate(180deg);
+    }
+
+    .dropdown-menu {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      z-index: 40;
+      min-width: 200px;
+      max-height: 240px;
+      overflow-y: auto;
+      background: var(--surface-raised);
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 4px;
+      list-style: none;
+      display: none;
+    }
+    .dropdown-menu.open {
+      display: block;
+    }
+
+    .dropdown-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      font-size: 13.5px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      color: var(--ink);
+      transition: background 100ms ease;
+    }
+    .dropdown-item:hover, .dropdown-item:focus {
+      background: var(--surface);
+      color: var(--ink-strong);
+      outline: none;
+    }
+    .dropdown-item.selected {
+      color: var(--ink-strong);
+      font-weight: 600;
+    }
+
+    /* -------------------------------------------------------------
+       COMPONENT 3: Inputs & Textareas
+       ------------------------------------------------------------- */
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-width: 320px;
+      width: 100%;
+    }
+
+    .form-label {
+      font-size: 13.5px;
+      font-weight: 500;
+      color: var(--ink-strong);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .form-label .required-star {
+      color: var(--danger);
+      font-weight: 600;
+    }
+
+    .input-field {
+      width: 100%;
+      background: var(--surface);
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 9px 12px;
+      font-size: 14px;
+      transition: border-color 120ms ease, box-shadow 120ms ease;
+    }
+    .input-field:hover:not(:disabled) {
+      border-color: var(--line-strong);
+    }
+    .input-field:focus {
+      outline: none;
+      border-color: var(--line-strong);
+      box-shadow: 0 0 0 2px var(--focus);
+    }
+    .input-field:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      background: var(--canvas);
+    }
+    .input-field.mono {
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+    .input-field.is-invalid {
+      border-color: var(--danger);
+    }
+
+    .input-hint {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .input-error {
+      font-size: 12px;
+      color: var(--danger);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .input-with-action {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .input-with-action .input-field {
+      padding-right: 36px;
+    }
+    .input-clear-btn {
+      position: absolute;
+      right: 10px;
+      color: var(--muted);
+      font-size: 14px;
+      width: 20px;
+      height: 20px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+    }
+    .input-clear-btn:hover {
+      color: var(--ink-strong);
+      background: var(--line);
+    }
+
+    /* -------------------------------------------------------------
+       COMPONENT 4: Selection Controls (Check, Radio, Switch)
+       ------------------------------------------------------------- */
+    .control-row {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      user-select: none;
+      font-size: 14px;
+    }
+
+    .custom-checkbox {
+      width: 18px;
+      height: 18px;
+      border: 1px solid var(--line-strong);
+      border-radius: 4px;
+      background: var(--surface);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+    .control-row:hover .custom-checkbox {
+      border-color: var(--ink-strong);
+    }
+    input[type="checkbox"]:checked + .custom-checkbox {
+      background: var(--ink-strong);
+      border-color: var(--ink-strong);
+      color: var(--canvas);
+    }
+    input[type="checkbox"]:indeterminate + .custom-checkbox {
+      background: var(--ink-strong);
+      border-color: var(--ink-strong);
+      color: var(--canvas);
+    }
+
+    .custom-radio {
+      width: 18px;
+      height: 18px;
+      border: 1px solid var(--line-strong);
+      border-radius: 50%;
+      background: var(--surface);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: border-color 120ms ease;
+    }
+    .control-row:hover .custom-radio {
+      border-color: var(--ink-strong);
+    }
+    input[type="radio"]:checked + .custom-radio {
+      border-color: var(--ink-strong);
+    }
+    input[type="radio"]:checked + .custom-radio::after {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--ink-strong);
+    }
+
+    /* Switch */
+    .switch-track {
+      width: 38px;
+      height: 22px;
+      border-radius: var(--radius-pill);
+      background: var(--line);
+      position: relative;
+      transition: background 150ms ease;
+      cursor: pointer;
+    }
+    .switch-thumb {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--ink-strong);
+      transition: transform 150ms ease, background 150ms ease;
+    }
+    input[type="checkbox"].switch-input:checked + .switch-track {
+      background: var(--ink-strong);
+    }
+    input[type="checkbox"].switch-input:checked + .switch-track .switch-thumb {
+      transform: translateX(16px);
+      background: var(--canvas);
+    }
+
+    /* -------------------------------------------------------------
+       COMPONENT 5: Labels, Badges & Metadata
+       ------------------------------------------------------------- */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 3px 8px;
+      border-radius: var(--radius-pill);
+      line-height: 1.2;
+      letter-spacing: 0.02em;
+    }
+    .badge-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .badge-nominal {
+      background: var(--surface-raised);
+      color: var(--muted);
+      border: 1px solid var(--line);
+    }
+    .badge-good {
+      background: var(--good-soft);
+      color: var(--good);
+      border: 1px solid color-mix(in srgb, var(--good) 30%, transparent);
+    }
+    .badge-caution {
+      background: var(--caution-soft);
+      color: var(--caution);
+      border: 1px solid color-mix(in srgb, var(--caution) 30%, transparent);
+    }
+    .badge-danger {
+      background: var(--danger-soft);
+      color: var(--danger);
+      border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+    }
+    .badge-derived {
+      background: var(--derived-soft);
+      color: var(--derived);
+      border: 1px solid color-mix(in srgb, var(--derived) 30%, transparent);
+    }
+
+    .meta-tag {
+      font-family: var(--mono);
+      font-size: 12px;
+      padding: 2px 6px;
+      border-radius: var(--radius-sm);
+      background: var(--surface-raised);
+      color: var(--muted);
+      border: 1px solid var(--line);
+    }
+
+    kbd {
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: var(--surface-raised);
+      border: 1px solid var(--line-strong);
+      color: var(--ink);
+      box-shadow: 0 1px 0 var(--line-strong);
+    }
+
+    /* -------------------------------------------------------------
+       COMPONENT 6: Tables & Data Grids
+       ------------------------------------------------------------- */
+    .table-container {
+      width: 100%;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 13.5px;
+    }
+
+    .data-table th {
+      padding: 10px 14px;
+      background: var(--surface-raised);
+      border-bottom: 1px solid var(--line-strong);
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .data-table th.num, .data-table td.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      font-family: var(--mono);
+    }
+
+    .sort-th-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font: inherit;
+      color: inherit;
+      text-transform: inherit;
+    }
+    .sort-th-btn:hover {
+      color: var(--ink-strong);
+    }
+
+    .data-table td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      color: var(--ink);
+      transition: background 80ms ease;
+    }
+
+    .data-table tbody tr:hover {
+      background: var(--surface-raised);
+    }
+
+    .data-table tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    /* -------------------------------------------------------------
+       COMPONENT 7: Charts & Data Graphics
+       ------------------------------------------------------------- */
+    .chart-box {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 20px;
+      position: relative;
+    }
+
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .chart-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--ink-strong);
+    }
+
+    .chart-legend {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .legend-line {
+      width: 16px;
+      height: 2px;
+      background: currentColor;
+    }
+    .legend-line.dashed {
+      border-top: 2px dashed currentColor;
+      background: transparent;
+      height: 0;
+    }
+
+    .chart-svg {
+      width: 100%;
+      height: 200px;
+      overflow: visible;
+      display: block;
+    }
+
+    .chart-grid-line {
+      stroke: var(--line);
+      stroke-dasharray: 2 4;
+    }
+
+    .chart-axis-text {
+      fill: var(--muted);
+      font-size: 11px;
+      font-family: var(--mono);
+    }
+
+    /* -------------------------------------------------------------
+       COMPONENT 8: Dialogs & Modals
+       ------------------------------------------------------------- */
+    dialog.modal-dialog {
+      position: fixed;
+      inset: 0;
+      margin: auto;
+      background: var(--surface-raised);
+      color: var(--ink);
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 24px;
+      max-width: 480px;
+      width: 90%;
+      z-index: 100;
+    }
+
+    dialog.modal-dialog::backdrop {
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .modal-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--ink-strong);
+    }
+
+    .modal-body {
+      font-size: 14px;
+      color: var(--muted);
+      line-height: 1.6;
+      margin-bottom: 24px;
+    }
+
+    .modal-footer {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 12px;
+    }
+
+    /* -------------------------------------------------------------
+       COMPONENT 9: Tooltips & Popovers
+       ------------------------------------------------------------- */
+    .tooltip-wrapper {
+      position: relative;
+      display: inline-block;
+    }
+
+    .tooltip-bubble {
+      position: absolute;
+      bottom: calc(100% + 8px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--surface-raised);
+      color: var(--ink-strong);
+      border: 1px solid var(--line-strong);
+      padding: 5px 10px;
+      font-size: 12px;
+      border-radius: var(--radius-sm);
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 120ms ease, visibility 120ms ease;
+      box-shadow: var(--shadow-sm);
+      z-index: 30;
+    }
+
+    .tooltip-wrapper:hover .tooltip-bubble,
+    .tooltip-wrapper:focus-within .tooltip-bubble {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    /* -------------------------------------------------------------
+       COMPONENT 10: Navigation & Tabs
+       ------------------------------------------------------------- */
+    .tab-nav {
+      display: flex;
+      border-bottom: 1px solid var(--line);
+      gap: 20px;
+    }
+
+    .tab-btn {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--muted);
+      padding: 10px 4px;
+      position: relative;
+      transition: color 120ms ease;
+    }
+    .tab-btn:hover {
+      color: var(--ink-strong);
+    }
+    .tab-btn[aria-selected="true"] {
+      color: var(--ink-strong);
+      font-weight: 600;
+    }
+    .tab-btn[aria-selected="true"]::after {
+      content: "";
+      position: absolute;
+      bottom: -1px;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--ink-strong);
+    }
+
+    .tab-panel {
+      padding: 16px 0;
+      display: none;
+    }
+    .tab-panel.active {
+      display: block;
+    }
+
+    /* Breadcrumbs */
+    .breadcrumb-nav {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .breadcrumb-sep {
+      color: var(--faint);
+    }
+    .breadcrumb-cur {
+      color: var(--ink-strong);
+      font-weight: 500;
+    }
+
+    /* -------------------------------------------------------------
+       COMPONENT 11: Cards & Panels
+       ------------------------------------------------------------- */
+    .metric-card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 200px;
+    }
+    .metric-label {
+      font-size: 12px;
+      font-family: var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+    .metric-num {
+      font-size: 26px;
+      font-weight: 700;
+      color: var(--ink-strong);
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+    }
+    .metric-sub {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    /* -------------------------------------------------------------
+       COMPONENT 12: Alerts & Toasts
+       ------------------------------------------------------------- */
+    .callout {
+      padding: 14px 16px;
+      border-radius: var(--radius);
+      font-size: 13.5px;
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      line-height: 1.5;
+    }
+    .callout-icon {
+      font-size: 16px;
+      line-height: 1.2;
+    }
+    .callout-info {
+      background: var(--surface-raised);
+      border: 1px solid var(--line-strong);
+      color: var(--ink);
+    }
+    .callout-info .callout-icon { color: var(--muted); }
+
+    .callout-caution {
+      background: var(--caution-soft);
+      border: 1px solid color-mix(in srgb, var(--caution) 35%, transparent);
+      color: var(--ink);
+    }
+    .callout-caution .callout-icon { color: var(--caution); }
+
+    .callout-danger {
+      background: var(--danger-soft);
+      border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+      color: var(--ink);
+    }
+    .callout-danger .callout-icon { color: var(--danger); }
+
+    /* Toast Container */
+    .toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 90;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      pointer-events: none;
+    }
+
+    .toast {
+      pointer-events: auto;
+      background: var(--surface-raised);
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      box-shadow: var(--shadow);
+      font-size: 13.5px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 280px;
+      max-width: 360px;
+      animation: slideIn 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes slideIn {
+      from { transform: translateY(16px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+    .toast-msg {
+      flex: 1;
+      color: var(--ink-strong);
+    }
+    .toast-undo {
+      color: var(--ink-strong);
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .toast-undo:hover {
+      text-decoration: underline;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Floating theme toggle -->
+  <button class="theme-toggle" id="themeToggleBtn" type="button" aria-label="Switch to light theme" title="Toggle theme">
+    <span id="themeIcon" aria-hidden="true">☀</span>
+  </button>
+
+  <div class="layout-container">
+    <!-- Sidebar Navigation -->
+    <aside class="toc-sidebar" aria-label="Component index">
+      <div class="toc-title">Components</div>
+      <nav>
+        <ul class="toc-list">
+          <li><a class="toc-link" href="#buttons">1. Buttons & Actions</a></li>
+          <li><a class="toc-link" href="#dropdowns">2. Dropdowns & Menus</a></li>
+          <li><a class="toc-link" href="#inputs">3. Form Inputs</a></li>
+          <li><a class="toc-link" href="#selection">4. Selection Controls</a></li>
+          <li><a class="toc-link" href="#labels">5. Labels & Badges</a></li>
+          <li><a class="toc-link" href="#tables">6. Tables & Data</a></li>
+          <li><a class="toc-link" href="#charts">7. Charts & Graphics</a></li>
+          <li><a class="toc-link" href="#dialogs">8. Dialogs & Modals</a></li>
+          <li><a class="toc-link" href="#tooltips">9. Tooltips & Popovers</a></li>
+          <li><a class="toc-link" href="#navigation">10. Tabs & Breadcrumbs</a></li>
+          <li><a class="toc-link" href="#cards">11. Cards & Panels</a></li>
+          <li><a class="toc-link" href="#alerts">12. Alerts & Toasts</a></li>
+        </ul>
+      </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="spec-content">
+
+      <!-- SECTION 1: Buttons -->
+      <section class="component-section" id="buttons" aria-labelledby="heading-buttons">
+        <header class="section-header">
+          <h2 class="section-index" id="heading-buttons">01 / Buttons &amp; Actions</h2>
+        </header>
+        <div class="showcase-card">
+          <div class="showcase-group">
+            <div class="row-wrap">
+              <button class="btn btn-primary" type="button">Primary Action</button>
+              <button class="btn btn-secondary" type="button">Secondary Button</button>
+              <button class="btn btn-quiet" type="button">Quiet Ghost</button>
+              <button class="btn btn-danger" type="button">Destructive Action</button>
+              <button class="btn btn-icon" type="button" aria-label="Search items" title="Search">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              </button>
+            </div>
+          </div>
+          <div class="showcase-group">
+            <div class="row-wrap">
+              <button class="btn btn-primary" type="button" disabled>Primary Disabled</button>
+              <button class="btn btn-secondary" type="button" disabled>Secondary Disabled</button>
+              <button class="btn btn-primary" type="button" id="btnLoadingDemo" aria-busy="false">
+                <span id="btnLoadingText">Click for Loading</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION 2: Dropdowns -->
+      <section class="component-section" id="dropdowns" aria-labelledby="heading-dropdowns">
+        <header class="section-header">
+          <div class="section-index">02 / Specification</div>
+          <h2 class="section-title" id="heading-dropdowns">Dropdowns & Menus</h2>
+          <p class="section-desc">Native form selects alongside accessible custom popover menus with keyboard navigation.</p>
+        </header>
+        <div class="showcase-card">
+          <div class="showcase-group">
+            <span class="showcase-group-title">Native Select & Custom Accessible Popover</span>
+            <div class="row-wrap">
+              <div class="dropdown-container">
+                <label class="sr-only" for="demoNativeSelect">Environment</label>
+                <select class="native-select" id="demoNativeSelect">
+                  <option value="prod">Production (us-east-1)</option>
+                  <option value="staging">Staging (eu-central-1)</option>
+                  <option value="dev">Development (local)</option>
+                </select>
+              </div>
+
+              <!-- Custom Dropdown -->
+              <div class="dropdown-container" id="customDropdown">
+                <button class="custom-dropdown-btn" id="customDropdownTrigger" type="button" aria-haspopup="listbox" aria-expanded="false">
+                  <span id="customSelectedLabel">Select role...</span>
+                  <span class="chevron" aria-hidden="true">▼</span>
+                </button>
+                <ul class="dropdown-menu" id="customDropdownMenu" role="listbox" tabindex="-1">
+                  <li class="dropdown-item" role="option" data-value="admin" tabindex="0">Administrator</li>
+                  <li class="dropdown-item" role="option" data-value="editor" tabindex="0">Technical Editor</li>
+                  <li class="dropdown-item" role="option" data-value="viewer" tabindex="0">Auditor (View-only)</li>
+                  <li class="dropdown-item" role="option" data-value="billing" tabindex="0">Billing Manager</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION 3: Inputs -->
+      <section class="component-section" id="inputs" aria-labelledby="heading-inputs">
+        <header class="section-header">
+          <div class="section-index">03 / Specification</div>
+          <h2 class="section-title" id="heading-inputs">Form Inputs & Textareas</h2>
+          <p class="section-desc">Persistent labels, monospaced tokens, clearable search, and inline accessible validation.</p>
+        </header>
+        <div class="showcase-card">
+          <div class="row-wrap" style="align-items: flex-start; gap: 24px;">
+            <!-- Text Input -->
+            <div class="form-group">
+              <label class="form-label" for="inputName">Workspace Name <span class="required-star" aria-hidden="true">*</span></label>
+              <input class="input-field" id="inputName" type="text" placeholder="e.g. clusterfork" value="clusterfork">
+              <span class="input-hint">Unique identifier within your organization.</span>
+            </div>
+
+            <!-- Monospaced API token -->
+            <div class="form-group">
+              <label class="form-label" for="inputToken">API Secret Key</label>
+              <input class="input-field mono" id="inputToken" type="text" value="cf_live_9a7d83f1240c" readonly>
+              <span class="input-hint">Read-only live credentials token.</span>
+            </div>
+
+            <!-- Clearable search input -->
+            <div class="form-group">
+              <label class="form-label" for="inputSearch">Clearable Search</label>
+              <div class="input-with-action">
+                <input class="input-field" id="inputSearch" type="text" placeholder="Filter resources..." value="telemetry">
+                <button class="input-clear-btn" id="btnClearSearch" type="button" aria-label="Clear search input">×</button>
+              </div>
+            </div>
+
+            <!-- Error State -->
+            <div class="form-group">
+              <label class="form-label" for="inputEmail">Billing Email <span class="required-star" aria-hidden="true">*</span></label>
+              <input class="input-field is-invalid" id="inputEmail" type="email" value="invalid-address" aria-describedby="email-error">
+              <span class="input-error" id="email-error" role="alert">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                Enter a valid email address containing “@”.
+              </span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION 4: Selection Controls -->
+      <section class="component-section" id="selection" aria-labelledby="heading-selection">
+        <header class="section-header">
+          <div class="section-index">04 / Specification</div>
+          <h2 class="section-title" id="heading-selection">Selection Controls</h2>
+          <p class="section-desc">Checkboxes with indeterminate support, grouped radio buttons, and toggle switches for immediate preferences.</p>
+        </header>
+        <div class="showcase-card">
+          <div class="row-wrap" style="align-items: flex-start; gap: 36px;">
+            <!-- Checkboxes -->
+            <div class="showcase-group">
+              <span class="showcase-group-title">Checkboxes</span>
+              <label class="control-row">
+                <input class="sr-only" type="checkbox" checked>
+                <span class="custom-checkbox" aria-hidden="true">✓</span>
+                <span>Telemetry logging enabled</span>
+              </label>
+              <label class="control-row">
+                <input class="sr-only" type="checkbox" id="indeterminateBox">
+                <span class="custom-checkbox" aria-hidden="true" id="indeterminateMark">–</span>
+                <span>Mixed regional sync</span>
+              </label>
+              <label class="control-row">
+                <input class="sr-only" type="checkbox">
+                <span class="custom-checkbox" aria-hidden="true">✓</span>
+                <span>Strict TLS pinning</span>
+              </label>
+            </div>
+
+            <!-- Radios -->
+            <fieldset class="showcase-group" style="border: none; padding: 0;">
+              <legend class="showcase-group-title" style="margin-bottom: 8px;">Update Cadence</legend>
+              <label class="control-row">
+                <input class="sr-only" type="radio" name="cadence" value="continuous" checked>
+                <span class="custom-radio" aria-hidden="true"></span>
+                <span>Continuous streaming</span>
+              </label>
+              <label class="control-row">
+                <input class="sr-only" type="radio" name="cadence" value="batch">
+                <span class="custom-radio" aria-hidden="true"></span>
+                <span>15-minute batch</span>
+              </label>
+              <label class="control-row">
+                <input class="sr-only" type="radio" name="cadence" value="manual">
+                <span class="custom-radio" aria-hidden="true"></span>
+                <span>Manual verification only</span>
+              </label>
+            </fieldset>
+
+            <!-- Toggle Switch -->
+            <div class="showcase-group">
+              <span class="showcase-group-title">Switches</span>
+              <label class="control-row">
+                <input class="sr-only switch-input" type="checkbox" role="switch" aria-checked="true" checked>
+                <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+                <span>Live stream telemetry</span>
+              </label>
+              <label class="control-row">
+                <input class="sr-only switch-input" type="checkbox" role="switch" aria-checked="false">
+                <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+                <span>Debug verbose trace</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION 5: Labels & Badges -->
+      <section class="component-section" id="labels" aria-labelledby="heading-labels">
+        <header class="section-header">
+          <div class="section-index">05 / Specification</div>
+          <h2 class="section-title" id="heading-labels">Labels, Badges, Tags & Metadata</h2>
+          <p class="section-desc">Protected status families with non-color redundancy, monospaced metadata tokens, and keyboard hints.</p>
+        </header>
+        <div class="showcase-card">
+          <div class="showcase-group">
+            <span class="showcase-group-title">Protected Status Families</span>
+            <div class="row-wrap">
+              <span class="badge badge-nominal"><span class="badge-dot" aria-hidden="true"></span>Nominal</span>
+              <span class="badge badge-good"><span class="badge-dot" aria-hidden="true"></span>Healthy (200 OK)</span>
+              <span class="badge badge-caution"><span class="badge-dot" aria-hidden="true"></span>Degraded Latency</span>
+              <span class="badge badge-danger"><span class="badge-dot" aria-hidden="true"></span>Critical Outage</span>
+              <span class="badge badge-derived"><span class="badge-dot" aria-hidden="true"></span>Modeled / Forecast</span>
+            </div>
+          </div>
+
+          <div class="showcase-group">
+            <span class="showcase-group-title">Technical Metadata & Keyboard Hints</span>
+            <div class="row-wrap">
+              <span class="meta-tag">commit:72f4fb4</span>
+              <span class="meta-tag">v2.14.0-rc</span>
+              <span class="meta-tag">192.168.1.104</span>
+              <span>Focus search: <kbd>/</kbd></span>
+              <span>Quick command: <kbd>Ctrl</kbd> + <kbd>K</kbd></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION 6: Tables -->
+      <section class="component-section" id="tables" aria-labelledby="heading-tables">
+        <header class="section-header">
+          <div class="section-index">06 / Specification</div>
+          <h2 class="section-title" id="heading-tables">Tables & Data Grids</h2>
+          <p class="section-desc">Sortable headers, tabular numbers right-aligned, status badges, row hover, and interactive filter controls.</p>
+        </header>
+        <div class="showcase-card" style="padding: 0; overflow: hidden;">
+          <div class="table-container">
+            <table class="data-table" id="sampleTable">
+              <thead>
+                <tr>
+                  <th scope="col"><button class="sort-th-btn" type="button" data-sort="service">Service <span>↕</span></button></th>
+                  <th scope="col">Status</th>
+                  <th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="rpm">RPM <span>↕</span></button></th>
+                  <th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="latency">p95 Latency <span>↕</span></button></th>
+                  <th class="num" scope="col">Error Rate</th>
+                  <th scope="col" style="text-align: right;">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style="font-weight: 500;">auth-gateway</td>
+                  <td><span class="badge badge-good"><span class="badge-dot" aria-hidden="true"></span>Operational</span></td>
+                  <td class="num">14,280</td>
+                  <td class="num">42 ms</td>
+                  <td class="num">0.01%</td>
+                  <td style="text-align: right;"><button class="btn btn-quiet" style="padding: 4px 8px; font-size: 12px;">Inspect</button></td>
+                </tr>
+                <tr>
+                  <td style="font-weight: 500;">checkout-api</td>
+                  <td><span class="badge badge-caution"><span class="badge-dot" aria-hidden="true"></span>Degraded</span></td>
+                  <td class="num">8,190</td>
+                  <td class="num">1,326 ms</td>
+                  <td class="num">1.94%</td>
+                  <td style="text-align: right;"><button class="btn btn-quiet" style="padding: 4px 8px; font-size: 12px;">Inspect</button></td>
+                </tr>
+                <tr>
+                  <td style="font-weight: 500;">order-queue</td>
+                  <td><span class="badge badge-danger"><span class="badge-dot" aria-hidden="true"></span>Worker Backlog</span></td>
+                  <td class="num">2,410</td>
+                  <td class="num">4,812 ms</td>
+                  <td class="num">6.20%</td>
+                  <td style="text-align: right;"><button class="btn btn-quiet" style="padding: 4px 8px; font-size: 12px;">Inspect</button></td>
+                </tr>
+                <tr>
+                  <td style="font-weight: 500;">prediction-engine</td>
+                  <td><span class="badge badge-derived"><span class="badge-dot" aria-hidden="true"></span>Simulated</span></td>
+                  <td class="num">560</td>
+                  <td class="num">180 ms</td>
+                  <td class="num">0.00%</td>
+                  <td style="text-align: right;"><button class="btn btn-quiet" style="padding: 4px 8px; font-size: 12px;">Inspect</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION 7: Charts -->
+      <section class="component-section" id="charts" aria-labelledby="heading-charts">
+        <header class="section-header">
+          <div class="section-index">07 / Specification</div>
+          <h2 class="section-title" id="heading-charts">Charts & Data Graphics</h2>
+          <p class="section-desc">Vector SVG charts with explicit axes, multi-series differentiation, hover inspection, and accessible tabular fallback.</p>
+        </header>
+        <div class="chart-box">
+          <div class="chart-header">
+            <span class="chart-title">Observed vs Projected Latency (p95 ms)</span>
+            <div class="chart-legend">
+              <div class="legend-item"><span class="legend-line" style="background: var(--accent);"></span> Observed telemetry</div>
+              <div class="legend-item"><span class="legend-line dashed" style="color: var(--derived);"></span> Derived forecast</div>
+            </div>
+          </div>
+
+          <!-- SVG Chart -->
+          <svg class="chart-svg" id="demoChart" viewBox="0 0 600 200" preserveAspectRatio="none">
+            <!-- Grid lines -->
+            <line class="chart-grid-line" x1="40" y1="20" x2="580" y2="20"></line>
+            <line class="chart-grid-line" x1="40" y1="70" x2="580" y2="70"></line>
+            <line class="chart-grid-line" x1="40" y1="120" x2="580" y2="120"></line>
+            <line class="chart-grid-line" x1="40" y1="170" x2="580" y2="170"></line>
+
+            <!-- Y Axis labels -->
+            <text class="chart-axis-text" x="30" y="24" text-anchor="end">1,500</text>
+            <text class="chart-axis-text" x="30" y="74" text-anchor="end">1,000</text>
+            <text class="chart-axis-text" x="30" y="124" text-anchor="end">500</text>
+            <text class="chart-axis-text" x="30" y="174" text-anchor="end">0</text>
+
+            <!-- X Axis labels -->
+            <text class="chart-axis-text" x="50" y="192" text-anchor="middle">14:00</text>
+            <text class="chart-axis-text" x="180" y="192" text-anchor="middle">14:15</text>
+            <text class="chart-axis-text" x="310" y="192" text-anchor="middle">14:30</text>
+            <text class="chart-axis-text" x="440" y="192" text-anchor="middle">14:45</text>
+            <text class="chart-axis-text" x="570" y="192" text-anchor="middle">15:00</text>
+
+            <!-- Series 1: Observed (solid cyan) -->
+            <polyline fill="none" stroke="var(--accent)" stroke-width="2.5" points="50,150 115,145 180,140 245,110 310,65 375,75 440,82 505,80 570,85"></polyline>
+
+            <!-- Series 2: Derived / Forecast (dashed purple) -->
+            <polyline fill="none" stroke="var(--derived)" stroke-width="2" stroke-dasharray="4 4" points="310,65 375,90 440,115 505,130 570,140"></polyline>
+          </svg>
+
+          <!-- Accessible Fallback -->
+          <details style="margin-top: 16px; font-size: 13px; color: var(--muted);">
+            <summary style="cursor: pointer; font-weight: 500;">Show exact plotted data table</summary>
+            <table class="data-table" style="margin-top: 12px;">
+              <thead>
+                <tr><th>Time</th><th class="num">Observed (ms)</th><th class="num">Forecast (ms)</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>14:00</td><td class="num">180</td><td class="num">—</td></tr>
+                <tr><td>14:15</td><td class="num">260</td><td class="num">—</td></tr>
+                <tr><td>14:30</td><td class="num">1,050</td><td class="num">1,050</td></tr>
+                <tr><td>14:45</td><td class="num">920</td><td class="num">620</td></tr>
+                <tr><td>15:00</td><td class="num">880</td><td class="num">350</td></tr>
+              </tbody>
+            </table>
+          </details>
+        </div>
+      </section>
+
+      <!-- SECTION 8: Dialogs & Modals -->
+      <section class="component-section" id="dialogs" aria-labelledby="heading-dialogs">
+        <header class="section-header">
+          <div class="section-index">08 / Specification</div>
+          <h2 class="section-title" id="heading-dialogs">Dialogs & Modals</h2>
+          <p class="section-desc">Accessible modal with focus trapping, backdrop dimming, Escape key dismissal, and explicit action buttons.</p>
+        </header>
+        <div class="showcase-card">
+          <div class="row-wrap">
+            <button class="btn btn-secondary" id="btnOpenModal" type="button">Open Confirmation Dialog</button>
+          </div>
+
+          <!-- Dialog Modal -->
+          <dialog class="modal-dialog" id="demoDialog" aria-labelledby="dialogTitle">
+            <div class="modal-header">
+              <h3 class="modal-title" id="dialogTitle">Rollback Traffic Allocation?</h3>
+              <button class="btn-icon" id="btnCloseModal" type="button" aria-label="Close dialog">×</button>
+            </div>
+            <div class="modal-body">
+              This will route all pending traffic from canary instance <strong>canary-9b</strong> back to the stable release cluster. The operation takes approximately 15 seconds to propagate across all edge regions.
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" id="btnCancelModal" type="button">Cancel</button>
+              <button class="btn btn-danger" id="btnConfirmModal" type="button">Confirm Rollback</button>
+            </div>
+          </dialog>
+        </div>
+      </section>
+
+      <!-- SECTION 9: Tooltips & Popovers -->
+      <section class="component-section" id="tooltips" aria-labelledby="heading-tooltips">
+        <header class="section-header">
+          <div class="section-index">09 / Specification</div>
+          <h2 class="section-title" id="heading-tooltips">Tooltips & Popovers</h2>
+          <p class="section-desc">Non-interactive hover/focus tooltips for icon buttons and brief explanations.</p>
+        </header>
+        <div class="showcase-card">
+          <div class="row-wrap" style="gap: 24px;">
+            <div class="tooltip-wrapper">
+              <button class="btn btn-icon" type="button" aria-label="Refresh telemetry data">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+              </button>
+              <div class="tooltip-bubble" role="tooltip">Refresh telemetry data (R)</div>
+            </div>
+
+            <div class="tooltip-wrapper">
+              <button class="btn btn-secondary" type="button">Hover or Focus Me</button>
+              <div class="tooltip-bubble" role="tooltip">Explains button context without cluttering UI</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION 10: Tabs & Breadcrumbs -->
+      <section class="component-section" id="navigation" aria-labelledby="heading-navigation">
+        <header class="section-header">
+          <div class="section-index">10 / Specification</div>
+          <h2 class="section-title" id="heading-navigation">Navigation, Tabs & Breadcrumbs</h2>
+          <p class="section-desc">ARIA tablist with keyboard arrow navigation and structured breadcrumbs.</p>
+        </header>
+        <div class="showcase-card">
+          <!-- Breadcrumb -->
+          <nav class="breadcrumb-nav" aria-label="Breadcrumb">
+            <a href="#">Clusters</a>
+            <span class="breadcrumb-sep" aria-hidden="true">/</span>
+            <a href="#">us-east-1</a>
+            <span class="breadcrumb-sep" aria-hidden="true">/</span>
+            <span class="breadcrumb-cur" aria-current="page">checkout-api</span>
+          </nav>
+
+          <!-- Tabs -->
+          <div style="margin-top: 12px;">
+            <div class="tab-nav" role="tablist" aria-label="Component tabs demo">
+              <button class="tab-btn" id="tab-overview" role="tab" aria-selected="true" aria-controls="panel-overview" tabindex="0">Overview</button>
+              <button class="tab-btn" id="tab-metrics" role="tab" aria-selected="false" aria-controls="panel-metrics" tabindex="-1">Metrics</button>
+              <button class="tab-btn" id="tab-deployments" role="tab" aria-selected="false" aria-controls="panel-deployments" tabindex="-1">Deployments</button>
+            </div>
+            <div class="tab-panel active" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
+              <p style="font-size: 14px; color: var(--muted);">Overview summary: cluster is running 34 active tasks across 3 availability zones with 99.98% uptime over the past 30 days.</p>
+            </div>
+            <div class="tab-panel" id="panel-metrics" role="tabpanel" aria-labelledby="tab-metrics">
+              <p style="font-size: 14px; color: var(--muted);">Metrics panel: real-time memory usage is at 42% and CPU utilization is at 28% across all container instances.</p>
+            </div>
+            <div class="tab-panel" id="panel-deployments" role="tabpanel" aria-labelledby="tab-deployments">
+              <p style="font-size: 14px; color: var(--muted);">Deployments history: last revision #104 deployed 3 hours ago by deployment-bot with zero rollbacks.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION 11: Cards & Panels -->
+      <section class="component-section" id="cards" aria-labelledby="heading-cards">
+        <header class="section-header">
+          <div class="section-index">11 / Specification</div>
+          <h2 class="section-title" id="heading-cards">Cards & Panels</h2>
+          <p class="section-desc">Key-metric summary cards, structured surface containers, and compact operational cockpits.</p>
+        </header>
+        <div class="row-wrap" style="align-items: stretch;">
+          <div class="metric-card">
+            <span class="metric-label">Request Rate</span>
+            <span class="metric-num">14,280</span>
+            <span class="metric-sub"><span style="color: var(--good);">+4.2%</span> vs last hour</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">p95 Latency</span>
+            <span class="metric-num">42 ms</span>
+            <span class="metric-sub"><span style="color: var(--good);">Stable</span> within bounds</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Active Incidents</span>
+            <span class="metric-num">0</span>
+            <span class="metric-sub">All systems nominal</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION 12: Alerts & Toasts -->
+      <section class="component-section" id="alerts" aria-labelledby="heading-alerts">
+        <header class="section-header">
+          <div class="section-index">12 / Specification</div>
+          <h2 class="section-title" id="heading-alerts">Alerts, Callouts & Toast Notifications</h2>
+          <p class="section-desc">Inline semantic callouts and transient operational toast notifications with undo capability.</p>
+        </header>
+        <div class="showcase-card">
+          <div class="showcase-group">
+            <span class="showcase-group-title">Inline Callouts</span>
+            <div class="callout callout-info">
+              <span class="callout-icon" aria-hidden="true">ℹ</span>
+              <div><strong>Scheduled Maintenance:</strong> Global database schema migration is scheduled for Sunday 02:00 UTC. No downtime expected.</div>
+            </div>
+            <div class="callout callout-caution">
+              <span class="callout-icon" aria-hidden="true">⚠</span>
+              <div><strong>Telemetry Delay:</strong> Regional metrics from eu-west-1 are trailing by approximately 180 seconds due to network throttling.</div>
+            </div>
+            <div class="callout callout-danger">
+              <span class="callout-icon" aria-hidden="true">✖</span>
+              <div><strong>Outage Detected:</strong> Connection pool exhaustion on payment-db-primary. Automated failover initiated.</div>
+            </div>
+          </div>
+
+          <div class="showcase-group">
+            <span class="showcase-group-title">Toast Feedback Demo</span>
+            <div class="row-wrap">
+              <button class="btn btn-secondary" id="btnSpawnToast" type="button">Trigger Toast Notification</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toastContainer" aria-live="polite"></div>
+
+  <!-- JavaScript Interaction Logic -->
+  <script>
+    (function () {
+      // 1. Theme toggle
+      var html = document.documentElement;
+      var themeToggle = document.getElementById("themeToggleBtn");
+      var themeIcon = document.getElementById("themeIcon");
+
+      function updateTheme(theme) {
+        html.dataset.theme = theme;
+        if (theme === "light") {
+          themeIcon.textContent = "☾";
+          themeToggle.setAttribute("aria-label", "Switch to dark theme");
+          themeToggle.setAttribute("title", "Switch to dark theme");
+        } else {
+          themeIcon.textContent = "☀";
+          themeToggle.setAttribute("aria-label", "Switch to light theme");
+          themeToggle.setAttribute("title", "Switch to light theme");
+        }
+      }
+
+      themeToggle.addEventListener("click", function () {
+        var next = html.dataset.theme === "dark" ? "light" : "dark";
+        updateTheme(next);
+      });
+
+      // 2. Loading button demo
+      var btnLoading = document.getElementById("btnLoadingDemo");
+      var btnLoadingText = document.getElementById("btnLoadingText");
+      btnLoading.addEventListener("click", function () {
+        btnLoading.disabled = true;
+        btnLoading.setAttribute("aria-busy", "true");
+        btnLoading.innerHTML = '<span class="spinner" aria-hidden="true"></span> Saving...';
+        setTimeout(function () {
+          btnLoading.disabled = false;
+          btnLoading.setAttribute("aria-busy", "false");
+          btnLoading.innerHTML = 'Saved ✓';
+          setTimeout(function () {
+            btnLoading.innerHTML = 'Click for Loading';
+          }, 1500);
+        }, 1200);
+      });
+
+      // 3. Custom accessible dropdown
+      var dropdown = document.getElementById("customDropdown");
+      var trigger = document.getElementById("customDropdownTrigger");
+      var menu = document.getElementById("customDropdownMenu");
+      var label = document.getElementById("customSelectedLabel");
+      var items = menu.querySelectorAll(".dropdown-item");
+
+      trigger.addEventListener("click", function () {
+        var isOpen = menu.classList.contains("open");
+        if (isOpen) {
+          closeDropdown();
+        } else {
+          openDropdown();
+        }
+      });
+
+      function openDropdown() {
+        menu.classList.add("open");
+        trigger.setAttribute("aria-expanded", "true");
+        items[0].focus();
+      }
+
+      function closeDropdown() {
+        menu.classList.remove("open");
+        trigger.setAttribute("aria-expanded", "false");
+        trigger.focus();
+      }
+
+      items.forEach(function (item, index) {
+        item.addEventListener("click", function () {
+          label.textContent = item.textContent;
+          items.forEach(function (i) { i.classList.remove("selected"); });
+          item.classList.add("selected");
+          closeDropdown();
+        });
+
+        item.addEventListener("keydown", function (e) {
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            var next = items[(index + 1) % items.length];
+            next.focus();
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            var prev = items[(index - 1 + items.length) % items.length];
+            prev.focus();
+          } else if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            item.click();
+          } else if (e.key === "Escape") {
+            closeDropdown();
+          }
+        });
+      });
+
+      document.addEventListener("click", function (e) {
+        if (!dropdown.contains(e.target)) {
+          menu.classList.remove("open");
+          trigger.setAttribute("aria-expanded", "false");
+        }
+      });
+
+      // 4. Clear search button
+      var searchInput = document.getElementById("inputSearch");
+      var clearBtn = document.getElementById("btnClearSearch");
+      clearBtn.addEventListener("click", function () {
+        searchInput.value = "";
+        searchInput.focus();
+      });
+
+      // 5. Indeterminate checkbox demo
+      var indeterminateBox = document.getElementById("indeterminateBox");
+      if (indeterminateBox) indeterminateBox.indeterminate = true;
+
+      // 6. Table sorting
+      var table = document.getElementById("sampleTable");
+      var sortBtns = table.querySelectorAll(".sort-th-btn");
+      sortBtns.forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var tbody = table.querySelector("tbody");
+          var rows = Array.from(tbody.querySelectorAll("tr"));
+          var key = btn.dataset.sort;
+          var ascending = btn.dataset.asc !== "true";
+          btn.dataset.asc = ascending ? "true" : "false";
+
+          rows.sort(function (a, b) {
+            var cellA = key === "service" ? a.children[0].textContent : parseInt(a.children[2].textContent.replace(/,/g, ""), 10);
+            var cellB = key === "service" ? b.children[0].textContent : parseInt(b.children[2].textContent.replace(/,/g, ""), 10);
+            if (cellA < cellB) return ascending ? -1 : 1;
+            if (cellA > cellB) return ascending ? 1 : -1;
+            return 0;
+          });
+
+          rows.forEach(function (r) { tbody.appendChild(r); });
+        });
+      });
+
+      // 7. Modal dialog
+      var dialog = document.getElementById("demoDialog");
+      var openModalBtn = document.getElementById("btnOpenModal");
+      var closeModalBtn = document.getElementById("btnCloseModal");
+      var cancelModalBtn = document.getElementById("btnCancelModal");
+      var confirmModalBtn = document.getElementById("btnConfirmModal");
+
+      if (openModalBtn && dialog) {
+        openModalBtn.addEventListener("click", function () {
+          dialog.showModal();
+        });
+        closeModalBtn.addEventListener("click", function () { dialog.close(); });
+        cancelModalBtn.addEventListener("click", function () { dialog.close(); });
+        confirmModalBtn.addEventListener("click", function () {
+          dialog.close();
+          spawnToast("Traffic successfully redirected to stable cluster.");
+        });
+      }
+
+      // 8. Tabs
+      var tabBtns = document.querySelectorAll(".tab-btn");
+      var tabPanels = document.querySelectorAll(".tab-panel");
+      tabBtns.forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          tabBtns.forEach(function (b) {
+            b.setAttribute("aria-selected", "false");
+            b.setAttribute("tabindex", "-1");
+          });
+          tabPanels.forEach(function (p) { p.classList.remove("active"); });
+
+          btn.setAttribute("aria-selected", "true");
+          btn.setAttribute("tabindex", "0");
+          var targetId = btn.getAttribute("aria-controls");
+          document.getElementById(targetId).classList.add("active");
+        });
+      });
+
+      // 9. Toast notification
+      var spawnToastBtn = document.getElementById("btnSpawnToast");
+      var toastContainer = document.getElementById("toastContainer");
+
+      function spawnToast(msg) {
+        var toast = document.createElement("div");
+        toast.className = "toast";
+        toast.innerHTML = '<span class="toast-msg">' + (msg || "Preferences updated successfully.") + '</span><button class="toast-undo" type="button">Undo</button>';
+        toastContainer.appendChild(toast);
+
+        var undoBtn = toast.querySelector(".toast-undo");
+        undoBtn.addEventListener("click", function () {
+          toast.remove();
+        });
+
+        setTimeout(function () {
+          if (toast.parentNode) toast.remove();
+        }, 4500);
+      }
+
+      if (spawnToastBtn) {
+        spawnToastBtn.addEventListener("click", function () {
+          spawnToast("Cluster configuration snapshot saved.");
+        });
+      }
+
+      // 10. Sidebar scroll spy
+      var sections = document.querySelectorAll(".component-section");
+      var tocLinks = document.querySelectorAll(".toc-link");
+
+      window.addEventListener("scroll", function () {
+        var scrollPos = window.scrollY + 120;
+        sections.forEach(function (sec) {
+          var top = sec.offsetTop;
+          var height = sec.offsetHeight;
+          if (scrollPos >= top && scrollPos < top + height) {
+            tocLinks.forEach(function (l) {
+              l.classList.toggle("active", l.getAttribute("href") === "#" + sec.id);
+            });
+          }
+        });
+      });
+
+    }());
+  </script>
+</body>
+</html>

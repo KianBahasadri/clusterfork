@@ -1,98 +1,201 @@
 ---
 name: design-guide
-description: Design, implement, review, audit, or revise user-facing GUIs in Kian's evidence-calibrated style by routing each surface to a guide for editorial reading, operational and analytical work, transactional workflows, or promotional and brand communication across web, desktop, and mobile.
+description: Concrete component specifications, design tokens, and core design principles for building clean, accessible, high-craft GUIs across web, desktop, and mobile.
 metadata:
-  short-description: Route GUI work to a situation-specific guide
+  short-description: UI component specifications and design tokens
 ---
 
-# Situation-Specific GUI Design
+# Design Guide & Component Specifications
 
-Classify the interface before styling it. A product can contain several interface situations; apply a guide to the current surface or region rather than forcing one visual system over the whole product.
+Build interfaces with quiet defaults, direct manipulation, and progressive mastery. Rather than applying decorative treatments across an entire surface, design interfaces from consistent structural tokens and concrete, accessible component rules.
 
-## Authority
+## Core Principles & Authority
 
-Resolve design conflicts in this order:
+1. **Color Exclusively Conveys Information (`[INV]`):** Colors (hues) are strictly reserved for communicating meaning, state, and data. They must **never** be used for decoration, aesthetic flair, brand styling, or general interface chrome. The entire structural foundation—canvas, cards, text, dividers, borders, nominal buttons, tabs, selection controls, and focus indicators—is strictly neutral and monochromatic.
+2. **Non-Color Meaning (`[REQ]`):** Color must never be the sole carrier of status or action (WCAG 2.2 SC 1.4.1). Whenever a color communicates an informational state (such as an alert, success, or error), it must be accompanied by text, shape, iconography, or position.
+3. **Quiet Nominal Default (`[SIG]`):** Healthy, routine state should look settled and neutral. Reserve brightness, saturation, and motion for changes, active user focus, or genuine exceptions.
+4. **Truthful State (`[INV]`):** Displayed values, capability, and progress must reflect the real system. Never show unverified external success or collapse simulated/derived data into observed ground truth.
+5. **Platform Conventions (`[CONV]`):** Default to native controls, selection, scrolling, focus order, and keyboard shortcuts. Replace them only when the replacement preserves expected behavior and adds measurable capability.
 
-1. Truthful system behavior and applicable safety, accessibility, privacy, and legal requirements.
-2. The user's stated outcome and scope, including existing product contracts, brand, design system, and public interfaces.
-3. Native platform and input conventions.
-4. Findings that transfer to the actual users, task, environment, and consequences.
-5. The selected guide's signature defaults.
-6. Explicitly identified experiments.
+---
 
-Do not use this skill to expand the assignment. Preserve an established design system unless the user asks to change it. Report adjacent defects instead of fixing them unless they block the requested work.
+## Design Tokens
 
-## Evidence Language
+### Monochromatic Structural Tokens (Chrome, Structure & Typography)
+Surfaces, borders, typography, and nominal controls use exclusively monochromatic tokens:
 
-The guides label prescriptions so unlike claims do not acquire equal authority:
+* `--canvas`: Base viewport background (`#080b0d` dark / `#ecefec` light).
+* `--surface`: Content containers, panels, cards (`#11171b` dark / `#f7f8f5` light).
+* `--surface-raised`: Elevated overlays, dialogs, popovers, dropdowns (`#151d21` dark / `#ffffff` light).
+* `--ink`: Standard body text, prose, data values (`#dbe3e6` dark / `#172027` light).
+* `--ink-strong`: High-contrast headings, primary metrics, active labels, primary action fills (`#f3f6f5` dark / `#0a0d0f` light).
+* `--muted`: Secondary metadata, captions, timestamps, unit labels (`#849094` dark / `#536168` light).
+* `--faint`: Tertiary borders, inactive icons, placeholder hints (`#566166` dark / `#778287` light).
+* `--line`: Standard structural borders, table row dividers (`#263137` dark / `#c8d1d0` light).
+* `--line-strong`: High-contrast dividers, active borders, active tab underlines (`#3a4a51` dark / `#9dacab` light).
+* `--focus`: High-contrast keyboard navigation focus ring (`#9cc8ff` dark / `#005fcc` light).
 
-- `[REQ]` — an external requirement. A situational-guide tag flags a potentially applicable requirement family; before calling it mandatory or reporting nonconformance, resolve the exact standard, version, criterion, scope, and conformance level.
-- `[INV]` — a non-negotiable truth, integrity, or task-correctness constraint derived from the product, content, domain, or selected situation; never merely a visual preference.
-- `[EVID]` — an empirical or research-supported heuristic. The tag does not encode evidence strength; inspect source type, convergence, and limits, then apply only within the studied or defensibly transferred scope.
-- `[CONV]` — an established platform or domain convention. Depart deliberately and preserve expected operation.
-- `[SIG]` — Kian's signature design judgment or default. Use after higher-authority constraints are satisfied.
-- `[HYP]` — a hypothesis to validate locally rather than present as settled guidance.
+### Informational Color Tokens (Strictly Reserved for Meaning & State)
+Hues are applied **only** when directly communicating system state, errors, or discrete data series:
 
-Reserve absolute language such as *must* and *never* for `[REQ]` and `[INV]`. Prefer *start with*, *usually*, *consider*, or *test* for the other classes.
+* `--good`: Confirmed success, healthy state (`#79c99e` dark / `#1d6846` light).
+* `--caution`: Degraded condition, warning, impending threshold (`#d6ad63` dark / `#805600` light).
+* `--danger`: Critical error, destructive action, hard failure (`#df7e78` dark / `#9a332f` light).
+* `--derived`: Estimated, modeled, or synthetic data distinguished from ground truth (`#b9aaef` dark / `#63559b` light).
+* *Rule:* Never apply these colors to nominal buttons, background headers, navigational chrome, or decorative accents.
 
-Read [references/evidence.md](references/evidence.md) before asserting `[REQ]` or `[EVID]`, making a consequential tradeoff, or checking whether a finding transfers. A citation supports only the claim and context recorded there; it does not convert adjacent design preferences into evidence.
+---
 
-## Route by the Dominant User Task
+## Component Specifications
 
-- **Read or understand a sustained body of text** — use [references/editorial.md](references/editorial.md) for articles, essays, blogs, documentation, publications, and reading views.
-- **Monitor, analyze, compare, or control a system, or repeatedly create or edit domain artifacts in a working tool** — use [references/operational.md](references/operational.md) for dashboards, developer tools, data products, editors, consoles, and technical desktop or mobile software.
-- **Complete a structured goal and commit information or value** — use [references/transactional.md](references/transactional.md) for forms, checkout, onboarding, booking, account setup, and stepwise workflows.
-- **Understand a proposition, experience a brand, or choose a next step** — use [references/promotional.md](references/promotional.md) for landing pages, launches, portfolios, campaigns, and product marketing.
+### 1. Buttons & Action Triggers
+* **Variants:**
+  * *Primary:* Solid neutral high-contrast fill (`--ink-strong`) with inverted text (`--canvas`). Never a colored accent button. Use once per primary action on a surface.
+  * *Secondary / Outline:* Transparent fill, 1px `--line` border, `--ink` text. On hover: `--surface-raised` background and `--line-strong` border.
+  * *Quiet / Ghost:* Transparent fill, no border, `--muted` text. On hover: `--ink-strong` text and subtle neutral background tint.
+  * *Danger:* Red fill or border (`--danger`). The **only** colored button variant, permitted because it conveys critical risk and destructive consequences.
+  * *Icon Button:* Square/circular target (minimum 36×36px visual, 44×44px touch area) with neutral border and icon. Must have an accessible label via `aria-label` or `title` plus a tooltip.
+* **States:**
+  * *Hover:* Shift background brightness by 8–12% neutrally.
+  * *Active:* Slight downscale (`transform: scale(0.98)`).
+  * *Focus-Visible:* 2px solid `--focus` ring with 2px offset.
+  * *Disabled:* `opacity: 0.45`, `cursor: not-allowed`, `aria-disabled="true"`.
+  * *Loading / Busy:* Retain fixed button width to prevent layout jump; show inline neutral spinner; set `aria-busy="true"` and disable repeated clicks.
 
-“Dark,” “minimal,” “dense,” and “flashy” are treatments, not routes. A landing page may be restrained; a reading experience may be expressive; a dashboard may be light. Route by the user's job and attention mode.
+### 2. Dropdowns & Menus
+* **Trigger:**
+  * Button displaying current selected value with a right-aligned chevron icon (`▾` or SVG). Neutral background and border.
+  * Set `aria-haspopup="listbox"` (or `"menu"`) and `aria-expanded="true/false"`.
+* **Menu Surface:**
+  * Elevated container (`--surface-raised`), 1px `--line-strong` border, neutral box shadow.
+  * Constrained height (`max-height: 280px; overflow-y: auto`).
+  * Options: 32–36px row height, comfortable padding (8px 12px). Selected option indicated by a checkmark (`✓`) and bold `--ink-strong`, not a colored fill.
+* **Keyboard & Dismissal:**
+  * `Down Arrow` opens menu and focuses first option.
+  * `Up/Down Arrows` navigate options; `Enter` or `Space` selects; `Escape` closes and restores focus to trigger.
+  * Dismisses on click outside or viewport blur.
 
-For a hybrid product, assign one primary guide per surface or bounded region. A secondary guide's style and workflow defaults are warranted only when a region has a distinct user goal and interaction or state lifecycle; a search field or navigation control alone does not make a page hybrid. Cross-cutting truth, disclosure, safety, and commitment rules still apply wherever relevant. For example, a product home page may be promotional, its documentation editorial, its signup transactional, and its console operational. Apply shared contracts everywhere. When same-authority defaults conflict, the guide for the active local task wins inside its region. Do not average guide defaults into an incoherent compromise. If no guide fits, use the shared contracts, study the actual context, and treat new prescriptions as hypotheses.
+### 3. Form Inputs & Textareas
+* **Structure & Labeling:**
+  * Always pair inputs with a visible `<label for="id">`. Never use placeholder text as a substitute for a label.
+  * Optional help text placed below label or input, linked via `aria-describedby`.
+* **Field Styling:**
+  * Background: `--surface` or `--canvas`.
+  * Border: 1px solid `--line`, border-radius 4–6px, padding 8px 12px.
+  * Font: Proportional `--ui` for text, `--mono` for code/tokens/API keys.
+* **States:**
+  * *Hover:* Border becomes `--line-strong`.
+  * *Focus:* Border becomes `--ink-strong` with 2px `--focus` ring.
+  * *Invalid / Error:* Border becomes `--danger`. Render an inline error message beneath the field with `role="alert"`, an error icon, and clear instructions to fix the error. This is where color is permitted, because it conveys an error state.
+  * *Search / Clearable:* Magnifier icon on left; clear ("×") button on right appearing only when input has a value.
 
-Length alone does not make persuasive copy editorial. For advertorial, sponsored, affiliate, or branded editorial, route the reading experience by its dominant task while also applying promotional claim and disclosure constraints and transactional commitment constraints where they govern the same content or action.
+### 4. Selection Controls (Checkboxes, Radios, Switches)
+* **Checkboxes:**
+  * 16×16px or 18×18px square, 3px border radius.
+  * Checked: Solid `--ink-strong` fill with contrasting inverted checkmark (`--canvas`). Supports indeterminate dash state. No decorative color.
+* **Radio Buttons:**
+  * 16×16px or 18×18px circle. Checked: Outer border and centered solid dot in `--ink-strong`.
+  * Always group related radio buttons inside `<fieldset>` with `<legend>`.
+* **Toggle Switches:**
+  * Pill track (36×20px), sliding circle thumb (16×16px).
+  * State transition: Track shifts from neutral `--line` (off) to neutral `--ink-strong` (on).
+  * Set `role="switch"` and `aria-checked="true/false"`.
+* **Target & Label:** Clicking label toggles the control. Minimum 44px clickable touch row.
 
-Inspect only the situational guides relevant to the task.
+### 5. Labels, Badges, Tags & Metadata
+* **Form Labels:** 13–14px, weight 500/600, `--ink` or `--ink-strong`. Mark required fields with text `(required)` or an accessible symbol with `aria-hidden="true"`.
+* **Status Badges / Pills (Informational Color):**
+  * Used **specifically** to communicate health, condition, and telemetry state.
+  * Compact padding (2px 8px), border-radius 4px or 999px (pill).
+  * Composed of a soft background tint + crisp text + 6px indicator dot.
+  * *Nominal:* Neutral tint, `--muted` text.
+  * *Good:* `--good-soft` tint, `--good` text.
+  * *Caution:* `--caution-soft` tint, `--caution` text.
+  * *Danger:* `--danger-soft` tint, `--danger` text.
+  * *Derived:* `--derived-soft` tint, `--derived` text.
+  * *Never use a bare colored dot without text.*
+* **Metadata Tags & Keyboard Shortcuts:** Non-status tags, commit hashes, versions, and keyboard hints (`<kbd>`) are strictly neutral (`--surface-raised`, `--line`, `--muted`).
 
-## Shared Contracts
+### 6. Tables & Data Grids
+* **Alignment Rules:**
+  * Text and descriptions: Left-aligned.
+  * Numbers, timestamps, metrics, currency: Right-aligned with tabular figures (`font-variant-numeric: tabular-nums`).
+  * Status badges: Centered or left-aligned with headers.
+  * Action menus / buttons: Right-aligned in final column.
+* **Headers & Borders:**
+  * Neutral sticky headers (`position: sticky; top: 0; background: var(--surface)`).
+  * 1px bottom border `--line` per row. Neutral row hover highlight (`--surface-raised`).
+  * Color appears **only** inside status badges or threshold-breaching values (e.g. error rate in `--danger`).
+* **Empty & Loading States:**
+  * Empty table displays an explicit neutral message explaining why no records exist and an action button to reset filters.
 
-- `[INV]` Derive displayed state, progress, capability, and results from the real system. Identify simulated, estimated, forecast, cached, stale, partial, unavailable, or unverified information.
-- `[INV]` Activation performs the advertised action. Feedback confirms an operation; a toast, animation, count, or explanation does not substitute for it.
-- `[INV]` Distinguish only lifecycle states the system can actually observe, and do not report external success before confirmation.
-- `[REQ A11Y-1]` On the web, preserve applicable semantics, reading and focus order, keyboard operation, target access, text scaling, contrast, non-color meaning, and equivalent paths across supported inputs and assistive technologies.
-- `[EVID A11Y-2]` For native software, use WCAG2ICT only as translation guidance and follow the platform's actual accessibility requirements and conventions.
-- `[CONV]` Prefer native controls, selection, scrolling, navigation, focus, shortcuts, and context menus. Replace them only when the replacement preserves expected paths and adds relevant capability.
-- `[SIG]` Spend salience deliberately. Brightness, saturation, scale, contrast, motion, sound, and interruption should reflect importance or intentional identity rather than mere availability.
-- `[EVID LEARN-1 NAV-1]` Give the primary path a perceivable, meaningful entry so users can act without first studying the complete system and can predict where deeper paths lead.
-- `[SIG]` Layer deeper capability near its point of relevance without making every pixel reactive; treat the particular layering as a design judgment to test.
-- `[SIG]` Give visual differences a reason: role, state, hierarchy, relationship, affordance, or intentional identity.
-- `[EVID ICON-1 ICON-2]` Label ambiguous, unfamiliar, rare, and consequential icons until intended users demonstrate comprehension.
-- `[INV]` Define bounds, overflow, and stacking for persistent regions, expanding content, and overlays. Unrelated readable or interactive surfaces cannot occupy the same space.
-- `[CONV]` Honor supported platform and user settings such as zoom, text scaling, high contrast, reduced motion, color preferences, and input alternatives. When an adopted accessibility target governs the behavior, record the exact `[REQ]` criterion.
+### 7. Charts & Data Graphics (Informational Color)
+* **Rendering & Axes:**
+  * Clean vector SVG with neutral gridlines (`--line`) and neutral axis typography (`--muted`).
+  * Explicit units (e.g., "ms", "req/s", "%") on axes.
+* **Series Differentiation:**
+  * Color is permitted exclusively to differentiate discrete data series.
+  * Series colors must be paired with stroke patterns (solid, dashed, dotted) or markers so non-color users can distinguish series.
+* **Inspection & Fallback:**
+  * Hover crosshair with floating neutral tooltip displaying the exact date/time and values.
+  * Mandatory accessible fallback: an expandable `<details>` table displaying the exact plotted values.
 
-## Work Modes
+### 8. Dialogs & Modals
+* **Container & Backdrop:** Neutral surface (`--surface-raised`), 1px `--line-strong` border, dimmed neutral backdrop (`rgba(0,0,0,0.65)`).
+* **Focus Management:**
+  * Move focus to first interactive element on open.
+  * Trap focus within dialog while active; `Escape` closes dialog; return focus to trigger on close.
+* **Actions Footer:**
+  * Cancel (quiet / secondary neutral) aligned left.
+  * Primary confirm on right. Destructive actions use Danger button (`--danger`).
 
-### Design or implementation
+### 9. Tooltips & Popovers
+* **Tooltips:**
+  * Purely informative, neutral text hints for icon buttons or truncated strings.
+  * Triggered on hover and keyboard focus after short delay (~150ms).
+  * *Never contain interactive controls or links.*
+* **Popovers:** Neutral floating card for interactive options (filters, menus).
 
-1. Inspect the existing product, content, state model, design tokens, platform, and requested scope before proposing a visual direction.
-2. State the dominant user task, selected guide, important constraints, and any assumptions that affect the design.
-3. Apply the shared contracts and the selected situational guide. Add only capabilities required by the task.
-4. Validate behavior and presentation in proportion to risk. Use real content and state where available; label fixtures and simulations.
+### 10. Navigation, Tabs & Breadcrumbs
+* **Tabs:**
+  * Container has `role="tablist"`, each tab has `role="tab"` and `aria-selected="true|false"`.
+  * Active tab has strong text (`--ink-strong`) and an active neutral underline (`--ink-strong` or `--line-strong`). No colored accent line.
+  * Supports keyboard arrow navigation (`Left`/`Right` arrow keys cycle active tabs).
+* **Breadcrumbs:**
+  * Neutral `<nav aria-label="Breadcrumb">` with `<ol>`, neutral separators (`/`), and current page marked with `aria-current="page"`.
 
-### Review
+### 11. Cards & Panels
+* **Container:** Purely neutral `--surface` background, 1px `--line` border, 6px border-radius, subtle neutral shadow.
+* **Header & Action:** Bold neutral title, optional subtitle, right-aligned action.
 
-Stay read-only unless the user also requests changes. For every finding, report the observable issue, reproduction or evidence, affected user or task, severity, evidence class, recommendation, and material unknowns. Mark behavior that cannot be exercised as *unverified*, not broken. Do not grade signature preferences as compliance failures when higher-authority constraints permit another choice.
+### 12. Alerts, Callouts & Toasts (Informational Color)
+* **Inline Callouts:**
+  * Permitted to use status colors because they communicate abnormal or consequential conditions:
+    * *Info / System:* Neutral or faint tint.
+    * *Caution:* `--caution` icon, border, and text.
+    * *Danger / Outage:* `--danger` icon, border, and text.
+    * *Success:* `--good` icon, border, and text.
+* **Toast Notifications:**
+  * Neutral floating container (`--surface-raised`, `--line-strong`) with status icon, operation message, and neutral "Undo" action button.
+  * Auto-dismisses after 4–6 seconds; pauses countdown when hovered or focused.
+  * Announced via `role="status"` or `aria-live="polite"`.
 
-### Revision
+---
 
-Keep remediation inside the requested surface and dependencies. Prioritize truth and behavioral contracts; applicable access and safety; spatial integrity; semantic clarity; task efficiency; then expression and polish. Preserve intentional redundancy when it supports orientation, comparison, access, or consequential confirmation. Remove superseded behavior rather than layering a second owner for the same state or interaction.
+## Layout & Section Architecture
 
-## Validation
+### Component Sections Must Identify Themselves
 
-Choose checks from the selected guide, then cover the shared risks that apply:
+* **Include:** One compact heading containing the ordinal and specific component name, such as `01 / Buttons & Actions`.
+* **Include:** A semantic heading (`h2` at the top section level) connected to its section with `aria-labelledby`.
+* **Include:** The rendered component immediately after the heading, with visible control labels, familiar affordances, and states that identify themselves.
+* **Do not include:** A description, subtitle, or summary sentence explaining the component. `[INV]` A viewer must be able to identify it from its visible name, rendered content, and boundary.
+* **Do not include:** A generic heading such as `01 / Specification`, a second larger title that repeats the component name, or a horizontal rule beneath the heading.
+* **Do not include:** Self-evident showcase taxonomy such as `Variants` or `States: Disabled & Loading`. If those labels seem necessary, strengthen the examples' visible labels and states instead.
+* **Boundary:** Use whitespace and the component container to distinguish the section; avoid extra separators or labels that describe the layout rather than the interface being demonstrated.
 
-- representative tasks with realistic content, empty and maximum content, waiting, partial, denied, failure, recovery, and repeated use;
-- narrow and wide viewports, zoom and text scaling, localization, long labels, right-to-left content where supported, and user-selected extremes;
-- keyboard-only, touch-only, pointer, screen reader, high-contrast or forced-colors mode, and reduced motion;
-- focus restoration, history and addressable state, cancellation and retry, destructive operations, and external side effects;
-- light and dark themes when both are supported, without assuming either polarity is universally superior.
+---
 
-`[EVID HCD-1 HCD-2]` Automated checks supplement rather than replace representative-user evaluation. Define effectiveness, efficiency, comprehension, error, and satisfaction measures from the task instead of treating checklist completion as proof of usability.
+## Reference Asset
+
+Inspect [skills/design-guide/assets/component-reference.html](assets/component-reference.html) for a runnable, interactive catalog implementing every component specified above in dark and light modes.
