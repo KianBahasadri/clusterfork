@@ -92,14 +92,100 @@
       outline-offset: 2px;
     }
 
-    /* Floating theme toggle button */
-    .theme-toggle {
+    /* Persistent page utilities */
+    .page-tools {
       position: fixed;
       top: 20px;
       right: 24px;
       z-index: 100;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+    }
+
+    .page-search {
+      position: relative;
+      width: 220px;
+    }
+
+    .page-search-field {
+      position: relative;
+    }
+
+    .page-search-icon {
+      position: absolute;
+      top: 50%;
+      left: 10px;
+      width: 14px;
+      height: 14px;
+      color: var(--faint);
+      transform: translateY(-50%);
+      pointer-events: none;
+    }
+
+    .page-search-input {
+      width: 100%;
+      height: 36px;
+      padding: 0 10px 0 32px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--ink);
+      font-size: 13px;
+      outline: none;
+      transition: border-color 120ms ease;
+    }
+    .page-search-input::placeholder { color: var(--muted); }
+    .page-search-input:hover,
+    .page-search-input:focus { border-color: var(--line-strong); }
+    .page-search-input:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 2px;
+    }
+    .page-search-input::-webkit-search-cancel-button { display: none; }
+
+    .page-search-results {
+      position: absolute;
+      top: calc(100% + 6px);
+      right: 0;
+      width: 260px;
+      max-height: min(360px, calc(100vh - 80px));
+      overflow-y: auto;
+      list-style: none;
+      padding: 4px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--surface-raised);
+      box-shadow: var(--shadow);
+    }
+    .page-search-results[hidden],
+    .page-search-option[hidden],
+    .page-search-empty[hidden] { display: none; }
+
+    .page-search-option,
+    .page-search-empty {
+      padding: 6px 8px;
+      color: var(--ink);
+      font-size: 13px;
+      line-height: 1.35;
+      overflow-wrap: break-word;
+    }
+    .page-search-option {
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+    }
+    .page-search-option:hover,
+    .page-search-option.active {
+      color: var(--ink-strong);
+      background: var(--surface);
+      font-weight: 600;
+    }
+    .page-search-empty { color: var(--muted); }
+
+    .theme-toggle {
       width: 36px;
       height: 36px;
+      flex: 0 0 36px;
       padding: 0;
       border-radius: var(--radius);
       color: var(--muted);
@@ -132,6 +218,22 @@
       }
       .toc-sidebar {
         display: none;
+      }
+    }
+
+    @media (max-width: 600px) {
+      .page-tools {
+        top: 12px;
+        right: 12px;
+      }
+      .page-search {
+        width: min(210px, calc(100vw - 76px));
+      }
+      .page-search-results {
+        width: min(280px, calc(100vw - 24px));
+      }
+      .layout-container {
+        padding-top: 68px;
       }
     }
 
@@ -661,15 +763,21 @@
     }
 
     .badge-flash {
-      animation-name: badgeFlash;
-      animation-timing-function: steps(1, end);
       animation-iteration-count: infinite;
     }
     .badge-flash-slow {
+      animation-name: badgePulse;
       animation-duration: 1600ms;
+      animation-timing-function: ease-in-out;
     }
     .badge-flash-fast {
+      animation-name: badgeFlash;
       animation-duration: 600ms;
+      animation-timing-function: steps(1, end);
+    }
+    @keyframes badgePulse {
+      0%, 100% { background-color: var(--badge-flash-base); }
+      50% { background-color: color-mix(in srgb, currentColor 28%, transparent); }
     }
     @keyframes badgeFlash {
       0%, 49% { background-color: var(--badge-flash-base); }
@@ -879,6 +987,42 @@
       align-items: center;
       justify-content: flex-end;
       gap: 12px;
+    }
+
+    .shortcut-dialog {
+      max-width: 420px;
+    }
+    .shortcut-dialog .modal-body {
+      margin-bottom: 0;
+    }
+    .shortcut-list {
+      display: grid;
+      gap: 0;
+    }
+    .shortcut-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .shortcut-row:first-child { padding-top: 0; }
+    .shortcut-row:last-child {
+      padding-bottom: 0;
+      border-bottom: 0;
+    }
+    .shortcut-row dt {
+      color: var(--ink);
+      font-weight: 500;
+    }
+    .shortcut-row dd {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 4px;
+      color: var(--muted);
+      white-space: nowrap;
     }
 
     /* -------------------------------------------------------------
@@ -1103,10 +1247,37 @@
 </head>
 <body>
 
-  <!-- Floating theme toggle -->
-  <button class="theme-toggle" id="themeToggleBtn" type="button" aria-label="Switch to light theme" title="Toggle theme">
-    <span id="themeIcon" aria-hidden="true">☀</span>
-  </button>
+  <!-- Persistent page utilities -->
+  <div class="page-tools">
+    <div class="page-search" id="pageSearch">
+      <label class="sr-only" for="pageSearchInput">Search page and actions</label>
+      <div class="page-search-field">
+        <svg class="page-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        <input class="page-search-input" id="pageSearchInput" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="pageSearchResults" aria-keyshortcuts="Control+K Meta+K" autocomplete="off" spellcheck="false" placeholder="Search page">
+      </div>
+      <ul class="page-search-results" id="pageSearchResults" role="listbox" aria-label="Page destinations and actions" hidden>
+        <li class="page-search-option" id="pageSearchShortcuts" role="option" aria-selected="false" data-page-search-action="shortcuts" data-search="keyboard shortcuts keys commands help">Keyboard shortcuts</li>
+        <li class="page-search-option" id="pageSearchButtons" role="option" aria-selected="false" data-page-search-target="#buttons" data-search="buttons actions triggers">01 Buttons &amp; Actions</li>
+        <li class="page-search-option" id="pageSearchDropdowns" role="option" aria-selected="false" data-page-search-target="#dropdowns" data-search="dropdowns menus comboboxes">02 Dropdowns &amp; Menus</li>
+        <li class="page-search-option" id="pageSearchInputs" role="option" aria-selected="false" data-page-search-target="#inputs" data-search="form inputs textareas validation">03 Form Inputs &amp; Textareas</li>
+        <li class="page-search-option" id="pageSearchSelection" role="option" aria-selected="false" data-page-search-target="#selection" data-search="selection controls checkboxes radios switches">04 Selection Controls</li>
+        <li class="page-search-option" id="pageSearchLabels" role="option" aria-selected="false" data-page-search-target="#labels" data-search="labels badges tags metadata">05 Labels, Badges &amp; Metadata</li>
+        <li class="page-search-option" id="pageSearchTables" role="option" aria-selected="false" data-page-search-target="#tables" data-search="tables data grids sorting">06 Tables &amp; Data Grids</li>
+        <li class="page-search-option" id="pageSearchCharts" role="option" aria-selected="false" data-page-search-target="#charts" data-search="charts graphics data visualization">07 Charts &amp; Graphics</li>
+        <li class="page-search-option" id="pageSearchDialogs" role="option" aria-selected="false" data-page-search-target="#dialogs" data-search="dialogs modals confirmation">08 Dialogs &amp; Modals</li>
+        <li class="page-search-option" id="pageSearchTooltips" role="option" aria-selected="false" data-page-search-target="#tooltips" data-search="tooltips popovers contextual help">09 Tooltips &amp; Popovers</li>
+        <li class="page-search-option" id="pageSearchNavigation" role="option" aria-selected="false" data-page-search-target="#navigation" data-search="navigation tabs breadcrumbs">10 Navigation, Tabs &amp; Breadcrumbs</li>
+        <li class="page-search-option" id="pageSearchCards" role="option" aria-selected="false" data-page-search-target="#cards" data-search="cards panels metrics">11 Cards &amp; Panels</li>
+        <li class="page-search-option" id="pageSearchAlerts" role="option" aria-selected="false" data-page-search-target="#alerts" data-search="alerts toasts callouts notifications">12 Alerts &amp; Toasts</li>
+        <li class="page-search-empty" id="pageSearchEmpty" role="presentation" hidden>No matching destinations or actions</li>
+      </ul>
+      <span class="sr-only" id="pageSearchStatus" aria-live="polite"></span>
+    </div>
+
+    <button class="theme-toggle" id="themeToggleBtn" type="button" aria-label="Switch to light theme" title="Toggle theme">
+      <span id="themeIcon" aria-hidden="true">☀</span>
+    </button>
+  </div>
 
   <div class="layout-container">
     <!-- Sidebar Navigation -->
@@ -1287,7 +1458,7 @@
             <div class="form-group">
               <label class="form-label" for="inputEmail">Billing Email <span class="required-star" aria-hidden="true">*</span></label>
               <input class="input-field is-invalid" id="inputEmail" type="email" value="invalid-address" aria-describedby="email-error">
-              <span class="input-error" id="email-error" role="alert">Enter a valid email address containing “@”</span>
+              <span class="input-error" id="email-error" role="alert">Enter a valid email address</span>
             </div>
           </div>
         </div>
@@ -1379,8 +1550,6 @@
               <span class="meta-tag">commit:72f4fb4</span>
               <span class="meta-tag">v2.14.0-rc</span>
               <span class="meta-tag">192.168.1.104</span>
-              <span>Focus search: <kbd>/</kbd></span>
-              <span>Quick command: <kbd>Ctrl</kbd> + <kbd>K</kbd></span>
             </div>
           </div>
         </div>
@@ -1542,7 +1711,7 @@
               <button class="btn btn-icon" type="button" aria-label="Refresh telemetry data">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
               </button>
-              <div class="tooltip-bubble" role="tooltip">Refresh telemetry data (R)</div>
+              <div class="tooltip-bubble" role="tooltip">Refresh telemetry data</div>
             </div>
 
             <div class="tooltip-wrapper">
@@ -1644,6 +1813,33 @@
     </main>
   </div>
 
+  <dialog class="modal-dialog shortcut-dialog" id="shortcutDialog" aria-labelledby="shortcutDialogTitle">
+    <div class="modal-header">
+      <h2 class="modal-title" id="shortcutDialogTitle">Keyboard shortcuts</h2>
+      <button class="btn-icon" id="btnCloseShortcuts" type="button" aria-label="Close keyboard shortcuts">×</button>
+    </div>
+    <div class="modal-body">
+      <dl class="shortcut-list">
+        <div class="shortcut-row">
+          <dt>Open search</dt>
+          <dd><kbd>Ctrl</kbd><span aria-hidden="true">+</span><kbd>K</kbd><span aria-hidden="true">/</span><kbd>⌘</kbd><span aria-hidden="true">+</span><kbd>K</kbd></dd>
+        </div>
+        <div class="shortcut-row">
+          <dt>Move through search results</dt>
+          <dd><kbd>↑</kbd><kbd>↓</kbd></dd>
+        </div>
+        <div class="shortcut-row">
+          <dt>Open selected result</dt>
+          <dd><kbd>Enter</kbd></dd>
+        </div>
+        <div class="shortcut-row">
+          <dt>Close the current overlay</dt>
+          <dd><kbd>Esc</kbd></dd>
+        </div>
+      </dl>
+    </div>
+  </dialog>
+
   <!-- Toast Notification Container -->
   <div class="toast-container" id="toastContainer" aria-live="polite"></div>
 
@@ -1673,7 +1869,135 @@
         updateTheme(next);
       });
 
-      // 2. Loading button demo
+      // 2. Persistent page search and action launcher
+      var pageSearch = document.getElementById("pageSearch");
+      var pageSearchInput = document.getElementById("pageSearchInput");
+      var pageSearchResults = document.getElementById("pageSearchResults");
+      var pageSearchOptions = Array.from(pageSearchResults.querySelectorAll(".page-search-option"));
+      var pageSearchEmpty = document.getElementById("pageSearchEmpty");
+      var pageSearchStatus = document.getElementById("pageSearchStatus");
+      var shortcutDialog = document.getElementById("shortcutDialog");
+      var closeShortcutsBtn = document.getElementById("btnCloseShortcuts");
+
+      function visiblePageSearchOptions() {
+        return pageSearchOptions.filter(function (option) { return !option.hidden; });
+      }
+
+      function setActivePageSearchOption(option) {
+        pageSearchOptions.forEach(function (candidate) {
+          var active = candidate === option;
+          candidate.classList.toggle("active", active);
+          candidate.setAttribute("aria-selected", active ? "true" : "false");
+        });
+
+        if (option) {
+          pageSearchInput.setAttribute("aria-activedescendant", option.id);
+          option.scrollIntoView({ block: "nearest" });
+        } else {
+          pageSearchInput.removeAttribute("aria-activedescendant");
+        }
+      }
+
+      function openPageSearch() {
+        pageSearchResults.hidden = false;
+        pageSearchInput.setAttribute("aria-expanded", "true");
+      }
+
+      function closePageSearch(clearQuery) {
+        pageSearchResults.hidden = true;
+        pageSearchInput.setAttribute("aria-expanded", "false");
+        setActivePageSearchOption(null);
+        if (clearQuery) pageSearchInput.value = "";
+      }
+
+      function filterPageSearch() {
+        var query = pageSearchInput.value.trim().toLocaleLowerCase();
+        var matches = [];
+
+        pageSearchOptions.forEach(function (option) {
+          var searchableText = (option.textContent + " " + (option.dataset.search || "")).toLocaleLowerCase();
+          option.hidden = query !== "" && !searchableText.includes(query);
+          if (!option.hidden) matches.push(option);
+        });
+
+        pageSearchEmpty.hidden = matches.length !== 0;
+        pageSearchStatus.textContent = matches.length === 1 ? "1 result available" : matches.length + " results available";
+        openPageSearch();
+        setActivePageSearchOption(matches[0] || null);
+      }
+
+      function activatePageSearchOption(option) {
+        if (!option) return;
+
+        if (option.dataset.pageSearchAction === "shortcuts") {
+          closePageSearch(true);
+          pageSearchInput.blur();
+          shortcutDialog.showModal();
+          return;
+        }
+
+        var selector = option.dataset.pageSearchTarget;
+        var target = selector ? document.querySelector(selector) : null;
+        if (!target) return;
+
+        closePageSearch(true);
+        pageSearchInput.blur();
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+        if (window.history && window.history.replaceState) {
+          window.history.replaceState(null, "", selector);
+        }
+      }
+
+      pageSearchInput.addEventListener("focus", filterPageSearch);
+      pageSearchInput.addEventListener("input", filterPageSearch);
+      pageSearchInput.addEventListener("keydown", function (event) {
+        var options = visiblePageSearchOptions();
+        var active = pageSearchResults.querySelector(".page-search-option.active");
+        var activeIndex = options.indexOf(active);
+
+        if (event.key === "ArrowDown" && options.length) {
+          event.preventDefault();
+          setActivePageSearchOption(options[(activeIndex + 1 + options.length) % options.length]);
+        } else if (event.key === "ArrowUp" && options.length) {
+          event.preventDefault();
+          setActivePageSearchOption(options[(activeIndex - 1 + options.length) % options.length]);
+        } else if (event.key === "Enter" && active) {
+          event.preventDefault();
+          activatePageSearchOption(active);
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          closePageSearch(true);
+          pageSearchInput.blur();
+        }
+      });
+
+      pageSearchOptions.forEach(function (option) {
+        option.addEventListener("mousedown", function (event) { event.preventDefault(); });
+        option.addEventListener("mousemove", function () { setActivePageSearchOption(option); });
+        option.addEventListener("click", function () { activatePageSearchOption(option); });
+      });
+
+      document.addEventListener("keydown", function (event) {
+        if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLocaleLowerCase() === "k") {
+          event.preventDefault();
+          if (shortcutDialog.open) shortcutDialog.close();
+          pageSearchInput.focus();
+          pageSearchInput.select();
+          filterPageSearch();
+        }
+      });
+
+      document.addEventListener("click", function (event) {
+        if (!pageSearch.contains(event.target)) closePageSearch(false);
+      });
+
+      closeShortcutsBtn.addEventListener("click", function () { shortcutDialog.close(); });
+      shortcutDialog.addEventListener("close", function () {
+        pageSearchInput.focus({ preventScroll: true });
+        closePageSearch(true);
+      });
+
+      // 3. Loading button demo
       var btnLoading = document.getElementById("btnLoadingDemo");
       var btnLoadingText = document.getElementById("btnLoadingText");
       btnLoading.addEventListener("click", function () {
@@ -1690,7 +2014,7 @@
         }, 1200);
       });
 
-      // 3. Searchable accessible comboboxes
+      // 4. Searchable accessible comboboxes
       var dropdowns = document.querySelectorAll("[data-custom-dropdown]");
       var dropdownStates = new WeakMap();
 
@@ -1978,7 +2302,7 @@
         });
       });
 
-      // 4. Clear search button
+      // 5. Clear search button
       var searchInput = document.getElementById("inputSearch");
       var clearBtn = document.getElementById("btnClearSearch");
       clearBtn.addEventListener("click", function () {
@@ -1986,11 +2310,11 @@
         searchInput.focus();
       });
 
-      // 5. Indeterminate checkbox demo
+      // 6. Indeterminate checkbox demo
       var indeterminateBox = document.getElementById("indeterminateBox");
       if (indeterminateBox) indeterminateBox.indeterminate = true;
 
-      // 6. Table sorting
+      // 7. Table sorting
       var table = document.getElementById("sampleTable");
       var sortBtns = table.querySelectorAll(".sort-th-btn");
       sortBtns.forEach(function (btn) {
@@ -2013,7 +2337,7 @@
         });
       });
 
-      // 7. Modal dialog
+      // 8. Modal dialog
       var dialog = document.getElementById("demoDialog");
       var openModalBtn = document.getElementById("btnOpenModal");
       var closeModalBtn = document.getElementById("btnCloseModal");
@@ -2032,7 +2356,7 @@
         });
       }
 
-      // 8. Tabs
+      // 9. Tabs
       var tabBtns = document.querySelectorAll(".tab-btn");
       var tabPanels = document.querySelectorAll(".tab-panel");
       tabBtns.forEach(function (btn) {
@@ -2050,7 +2374,7 @@
         });
       });
 
-      // 9. Toast notification
+      // 10. Toast notification
       var spawnToastBtn = document.getElementById("btnSpawnToast");
       var toastContainer = document.getElementById("toastContainer");
 
@@ -2076,7 +2400,7 @@
         });
       }
 
-      // 10. Sidebar scroll spy
+      // 11. Sidebar scroll spy
       var sections = document.querySelectorAll(".component-section");
       var tocLinks = document.querySelectorAll(".toc-link");
 

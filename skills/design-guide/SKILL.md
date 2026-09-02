@@ -91,7 +91,7 @@ Hues are applied **only** when directly communicating system state, errors, or d
 * **States:**
   * *Hover:* Border becomes `--line-strong`.
   * *Focus:* Border becomes `--ink-strong` with 2px `--focus` ring.
-  * *Invalid / Error:* Border becomes `--danger` and corners become sharp. Render concise inline text beneath the field with `role="alert"` and clear instructions to fix the error. Do not prepend a status icon when the field treatment and message already identify the error. Omit a trailing period from a short, one-line corrective message. This is where color is permitted, because it conveys an error state.
+  * *Invalid / Error:* Border becomes `--danger` and corners become sharp. Render concise inline text beneath the field with `role="alert"` and the shortest complete instruction needed to fix the error. When the label and field type already make the expected format obvious, use direct copy such as `Enter a valid email address` instead of explaining basic syntax. Do not prepend a status icon when the field treatment and message already identify the error. Omit a trailing period from a short, one-line corrective message. This is where color is permitted, because it conveys an error state.
   * *Search / Clearable:* Magnifier icon on left; clear ("×") button on right appearing only when input has a value.
 
 ### 4. Selection Controls (Checkboxes, Radios, Switches)
@@ -121,9 +121,9 @@ Hues are applied **only** when directly communicating system state, errors, or d
   * Keep labels self-explanatory so status remains understandable without color.
 * **Flashing Status Badges:**
   * Reserve flashing for a live, time-sensitive condition that genuinely requires attention. Keep the explicit status label visible throughout; flash the tint or border treatment rather than making the text disappear.
-  * Offer a slow cadence around 1.5–2 seconds per cycle and a fast cadence around 600–800ms per cycle. Keep every cadence below three flashes per second. Tempo can increase urgency, but it does not replace the severity geometry: caution remains medium-radius and danger remains sharp.
+  * Make the slow variant a smooth, eased tint or border pulse around 1.5–2 seconds per cycle. Make the fast variant a discrete flash around 600–800ms per cycle. Keep every cadence below three flashes per second. Tempo can increase urgency, but it does not replace the severity geometry: caution remains medium-radius and danger remains sharp.
   * Continue flashing for as long as the represented live condition remains active, and stop immediately when that condition clears. Do not impose an arbitrary time limit that makes an unresolved state appear settled. Honor `prefers-reduced-motion: reduce` by presenting the same badge as a static status; add a user-facing pause control when the product's accessibility requirements call for one.
-* **Metadata Tags & Keyboard Shortcuts:** Non-status tags, commit hashes, versions, and keyboard hints (`<kbd>`) are strictly neutral (`--surface-raised`, `--line`, `--muted`).
+* **Metadata Tags:** Non-status tags, commit hashes, and versions are strictly neutral (`--surface-raised`, `--line`, `--muted`). Do not mix keyboard hints into metadata rows.
 
 ### 6. Tables & Data Grids
 * **Alignment Rules:**
@@ -166,6 +166,11 @@ Hues are applied **only** when directly communicating system state, errors, or d
 * **Popovers:** Neutral floating card for interactive options (filters, menus).
 
 ### 10. Navigation, Tabs & Breadcrumbs
+* **Page Search & Actions:**
+  * Every interactive page includes a persistent search field in the upper-right utility area, immediately left of the theme toggle. Static or non-interactive pages do not need it.
+  * Search filters the current page's meaningful destinations and available actions as the user types. Present results in a custom keyboard-accessible popover: `Up/Down Arrows` move the active result, `Enter` opens it, and `Escape` dismisses the popover.
+  * Support `Ctrl+K` and `Command+K` to focus the search, but do not display that hint beside the field. Include `Keyboard shortcuts` as an action in the search results; it opens a popup listing every shortcut the current surface actually supports.
+  * The shortcuts popup is the only visible place keyboard shortcuts appear. Do not append shortcut hints to buttons, labels, tooltips, navigation items, metadata, or placeholders. Render keys as compact neutral `<kbd>` elements inside that popup and keep its list synchronized with actual behavior.
 * **Side Navigation:**
   * Mark the active row with stronger text and font weight plus an optional neutral surface. Do not add a leading selection stripe or border; it duplicates the selected treatment and creates unnecessary visual noise.
 * **Tabs:**
