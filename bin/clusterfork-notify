@@ -55,50 +55,16 @@ else
   project="$(basename "${PWD:-workspace}")"
 fi
 [[ -n "$project" && "$project" != "/" ]] || project="workspace"
-sound="${CLUSTERFORK_NOTIFY_SOUND:-$clusterfork_dir/bell.mp3}"
-
-ring_local() {
-  if command -v mpv >/dev/null 2>&1 && [[ -f "$sound" ]]; then
-    mpv --no-video --no-terminal --volume="${NOTIFY_VOLUME:-100}" "$sound" \
-      </dev/null >/dev/null 2>&1 || true
-  elif [[ -w /dev/tty ]]; then
-    printf '\a' >/dev/tty 2>/dev/null || true
-  fi
-}
-
-notify_phone() {
-  local url="${CLUSTERFORK_NTFY_URL:-}"
-  [[ -n "$url" ]] || return 0
-  command -v curl >/dev/null 2>&1 || return 0
-
-  local -a args=(
-    --fail
-    --silent
-    --show-error
-    --connect-timeout 1
-    --max-time 3
-    --request POST
-    --header "X-Title: $label finished"
-    --header "X-Priority: high"
-    --header "X-Tags: robot"
-    --data-binary "Turn complete in $project"
-  )
-  if [[ -n "${CLUSTERFORK_NTFY_TOKEN:-}" ]]; then
-    args+=(--header "Authorization: Bearer $CLUSTERFORK_NTFY_TOKEN")
-  fi
-
-  curl "${args[@]}" "$url" </dev/null >/dev/null 2>&1 || true
-}
 
 # The network timeout stays below bell.mp3's duration, so phone delivery adds
 # no latency to the existing synchronous hooks. Neither path can fail a turn.
 pids=()
 if [[ "${NOTIFY_PREF[bell]}" == 1 ]]; then
-  ring_local &
+  notify_play_bell "$clusterfork_dir" &
   pids+=("$!")
 fi
 if [[ "${NOTIFY_PREF[phone]}" == 1 ]]; then
-  notify_phone &
+  notify_post_ntfy "$label finished" "Turn complete in $project" &
   pids+=("$!")
 fi
 if (( ${#pids[@]} )); then

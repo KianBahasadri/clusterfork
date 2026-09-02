@@ -40,6 +40,9 @@ notify bell            # toggle the local bell
 notify phone           # toggle ntfy phone push
 notify grok            # toggle one agent
 notify bell off        # set instead of toggle
+notify test            # play the bell and post a phone test
+notify test bell       # play the local bell now
+notify test phone      # post a phone test now
 ```
 
 Targets: `bell`, `phone`, `claude`, `codex`, `command-code`, `grok`,
@@ -50,6 +53,15 @@ skips both the bell and the phone path for that source. Disabling both
 channels leaves the hook silent for every agent. Missing keys default to on,
 matching the previous always-on behavior. Volume is passed to `mpv` as
 `--volume`; the tty `\a` fallback has no volume control.
+
+`notify test` fires the real channels now, without changing prefs and without
+waiting for a Stop hook. No argument tests both; `bell` or `phone` tests one.
+A test still runs when that switch is off, so a silenced channel can be
+checked before turning it back on. The bell test starts playback and returns;
+it does not wait for the clip to finish. The phone test waits for the post
+(title `Clusterfork test`, body `Phone path works`) to `CLUSTERFORK_NTFY_URL`.
+Missing URL, missing `curl`/`mpv`, or a failed post prints an error and exits
+non-zero.
 
 Prefs live in `~/.config/clusterfork/notify-prefs`. That file is not a mapped
 installer destination, so reinstalling clusterfork does not reset it.
@@ -99,11 +111,12 @@ publisher token in the gitignored clusterfork `.env` as
 Useful checks:
 
 ```bash
+notify test bell
+notify test phone
 curl -fsS http://127.0.0.1:2586/v1/health
 curl -d 'phone path works' \
   -H 'X-Title: Clusterfork test' \
   http://100.123.102.71:2586/clusterfork
-clusterfork-notify codex
 ```
 
 The server is reversible:

@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 import tomllib
 import unittest
 from pathlib import Path
@@ -91,6 +92,7 @@ class NotifyFixture(unittest.TestCase):
         *args: str,
         dotenv: str = "",
         extra_env: dict[str, str] | None = None,
+        timeout: float = 5,
     ) -> subprocess.CompletedProcess[str]:
         self.env_file.write_text(dotenv, encoding="utf-8")
         return subprocess.run(
@@ -99,8 +101,17 @@ class NotifyFixture(unittest.TestCase):
             capture_output=True,
             text=True,
             env=self.env(extra_env),
-            timeout=5,
+            timeout=timeout,
         )
+
+    def wait_file(self, path: Path, timeout: float = 1.0) -> str:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                return path.read_text()
+            except FileNotFoundError:
+                time.sleep(0.01)
+        self.fail(f"timed out waiting for {path}")
 
 
 class NotifierTests(NotifyFixture):
@@ -371,6 +382,108 @@ class NotifyCommandTests(NotifyFixture):
         self.assertIn("notify bell [on|off]", proc.stdout)
         self.assertIn("notify all on|off", proc.stdout)
         self.assertIn("notify volume <0-100>", proc.stdout)
+        self.assertIn("notify test [bell|phone]", proc.stdout)
+
+    def test_test_bell_plays_even_when_pref_is_off(self):
+        self.write_prefs("bell=0\nphone=0\nvolume=40\n")
+        proc = self.run_cli("test", "bell")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout, "  ✓  bell  playing\n")
+        self.assertEqual(proc.stderr, "")
+        log = self.wait_file(self.mpv_log)
+        self.assertIn(str(self.cf_dir / "bell.mp3"), log)
+        self.assertIn("--volume=40", log)
+        self.assertFalse(self.curl_log.exists())
+        self.assertIn("bell=0\n", (self.cf_dir / "notify-prefs").read_text())
+
+    def test_test_bell_returns_without_waiting_for_playback(self):
+        pid_file = self.root / "mpv.pid"
+
+        def _kill_mpv() -> None:
+            try:
+                os.kill(int(pid_file.read_text()), 15)
+            except (OSError, ValueError, FileNotFoundError):
+                pass
+
+        self.addCleanup(_kill_mpv)
+        self._write_mock(
+            "mpv",
+            'printf "%s\\n" "$@" >"$FAKE_MPV_LOG"\n'
+            'echo $$ >"$FAKE_MPV_PID"\n'
+            "sleep 8\n",
+        )
+        proc = self.run_cli(
+            "test",
+            "bell",
+            extra_env={"FAKE_MPV_PID": str(pid_file)},
+            timeout=2,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout, "  ✓  bell  playing\n")
+        self.assertIn(str(self.cf_dir / "bell.mp3"), self.wait_file(self.mpv_log))
+
+    def test_test_phone_posts_even_when_pref_is_off(self):
+        self.write_prefs("bell=0\nphone=0\n")
+        proc = self.run_cli(
+            "test",
+            "phone",
+            dotenv=(
+                f"CLUSTERFORK_NTFY_URL={PHONE_URL}\n"
+                "CLUSTERFORK_NTFY_TOKEN=test-token\n"
+            ),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout, f"  ✓  phone  posted to {PHONE_URL}\n")
+        self.assertEqual(proc.stderr, "")
+        self.assertFalse(self.mpv_log.exists())
+        args = self.curl_log.read_text()
+        self.assertIn("X-Title: Clusterfork test", args)
+        self.assertIn("Phone path works", args)
+        self.assertIn("Authorization: Bearer test-token", args)
+        self.assertIn(PHONE_URL, args)
+        self.assertNotIn("Turn complete", args)
+        self.assertEqual(self.curl_stdin.read_text(), "")
+        self.assertIn("phone=0\n", (self.cf_dir / "notify-prefs").read_text())
+
+    def test_test_both_channels(self):
+        proc = self.run_cli("test", dotenv=f"CLUSTERFORK_NTFY_URL={PHONE_URL}\n")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            proc.stdout,
+            "  ✓  bell  playing\n"
+            f"  ✓  phone  posted to {PHONE_URL}\n",
+        )
+        self.assertEqual(proc.stderr, "")
+        self.assertIn(str(self.cf_dir / "bell.mp3"), self.wait_file(self.mpv_log))
+        args = self.curl_log.read_text()
+        self.assertIn("X-Title: Clusterfork test", args)
+        self.assertIn("Phone path works", args)
+
+    def test_test_phone_without_url_fails(self):
+        proc = self.run_cli("test", "phone")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(proc.stdout, "")
+        self.assertIn("phone  no ntfy url", proc.stderr)
+        self.assertFalse(self.curl_log.exists())
+        self.assertFalse(self.mpv_log.exists())
+
+    def test_test_reports_delivery_failures(self):
+        phone = self.run_cli(
+            "test",
+            "phone",
+            dotenv=f"CLUSTERFORK_NTFY_URL={PHONE_URL}\n",
+            extra_env={"FAKE_CURL_EXIT": "22"},
+        )
+        self.assertEqual(phone.returncode, 1)
+        self.assertIn("phone  post failed", phone.stderr)
+        self.assertEqual(phone.stdout, "")
+
+    def test_test_unknown_channel_fails(self):
+        proc = self.run_cli("test", "particle")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("notify test expects bell or phone, not particle", proc.stderr)
+        self.assertFalse(self.mpv_log.exists())
+        self.assertFalse(self.curl_log.exists())
 
     def test_volume_sets_mpv_and_survives_all_off(self):
         proc = self.run_cli("volume", "40")
