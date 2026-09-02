@@ -1,6 +1,7 @@
 # Turn-completion notifications
 
-Claude Code, Grok, Command Code, and Codex use one shared Stop-hook command:
+Claude Code, Grok, Command Code, Codex, and Antigravity use one shared
+Stop-hook command:
 
 ```text
 ~/.config/clusterfork/bin/clusterfork-notify <agent>
@@ -8,18 +9,47 @@ Claude Code, Grok, Command Code, and Codex use one shared Stop-hook command:
 
 The helper plays `~/.config/clusterfork/bell.mp3` locally and, when
 `CLUSTERFORK_NTFY_URL` is set, publishes a phone notification through ntfy.
-Both jobs run together. Network delivery has a three-second ceiling, errors
-are silent, and the helper always exits zero, so a phone or server outage
-cannot fail or delay an agent beyond the existing 4.5-second bell.
+Both jobs run together, and both are on by default. Network delivery has a
+three-second ceiling, errors are silent, and the helper always exits zero, so
+a phone or server outage cannot fail or delay an agent beyond the existing
+4.5-second bell. `notify` can silence the bell, the phone path, or a particular
+agent without removing the Stop hook.
 
 The notification is deliberately small: its title identifies the agent and
-its body contains only the current directory's basename. Hook stdin is never
-read or forwarded, so prompts, transcripts, and final assistant messages do
-not leave the machine.
+its body contains only the current directory's basename (Antigravity uses the
+basename of `workspacePaths[0]`, because its hook cwd is the `hooks.json`
+directory). Hook stdin is never forwarded. Other agents do not read it.
+Antigravity Stop also fires on tool yields and subagent cycles, so that path
+reads stdin locally and notifies only when `fullyIdle` is true.
 
 Codex keeps the notifier on root `Stop` with `async = true`; it does not
 register `SubagentStop`, so thread-spawned subagents stay quiet. Its upstream
 usage-limit gap is unchanged; see [Codex bell vs usage-limit deaths](codex-usage-limit-bell.md).
+
+## `notify` command
+
+`notify` is on PATH via clusterfork `bin/`. With no arguments (or `status`) it
+prints the current switches. A target with no value toggles; `on`/`off` sets it.
+
+```bash
+notify                 # status
+notify all off         # silence everything
+notify all on          # restore every switch
+notify bell            # toggle the local bell
+notify phone           # toggle ntfy phone push
+notify grok            # toggle one agent
+notify bell off        # set instead of toggle
+```
+
+Targets: `bell`, `phone`, `claude`, `codex`, `command-code`, `grok`,
+`antigravity`. `all` sets every switch at once and requires `on` or `off`.
+Those five agents are the Stop hooks that call `clusterfork-notify`. Disabling
+an agent skips both the bell and the phone path for that source. Disabling
+both channels leaves the hook silent for every agent. Missing keys default to
+on, matching the previous always-on behavior.
+
+Prefs live in `~/.config/clusterfork/notify-prefs`. That file is not a mapped
+installer destination, so reinstalling clusterfork does not reset it.
 
 ## Private ntfy service over Tailscale
 

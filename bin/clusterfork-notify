@@ -5,27 +5,55 @@ set -u
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 clusterfork_dir="${CLUSTERFORK_DIR:-$(cd "$script_dir/.." && pwd)}"
-env_file="${CLUSTERFORK_ENV_FILE:-$clusterfork_dir/.env}"
 
-for config_file in "$clusterfork_dir/notify/settings.env" "$env_file"; do
-  if [[ -f "$config_file" ]]; then
-    set -a
-    # shellcheck source=/dev/null
-    . "$config_file" 2>/dev/null || true
-    set +a
-  fi
-done
-unset config_file
+# shellcheck source=notify
+. "$script_dir/notify"
+notify_load_env "$clusterfork_dir"
+notify_load_prefs "$clusterfork_dir"
 
-case "${1:-agent}" in
+agent="${1:-agent}"
+if [[ -n "${NOTIFY_PREF[$agent]+x}" && "${NOTIFY_PREF[$agent]}" != 1 ]]; then
+  exit 0
+fi
+
+case "$agent" in
   claude) label="Claude" ;;
   codex) label="Codex" ;;
   command-code) label="Command Code" ;;
   grok) label="Grok" ;;
+  antigravity) label="Antigravity" ;;
   *) label="Agent" ;;
 esac
 
-project="$(basename "${PWD:-workspace}")"
+# Antigravity Stop fires on tool yields and subagent cycles. Gate on
+# fullyIdle, and take the project name from workspacePaths because the hook
+# cwd is the hooks.json directory. Stdin is inspected locally, never forwarded.
+antigravity_gate() {
+  python3 -c '
+import json, os, sys
+raw = sys.stdin.read().strip()
+if not raw.startswith("{"):
+    sys.exit(1)
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError:
+    sys.exit(1)
+if data.get("fullyIdle") is not True:
+    sys.exit(1)
+paths = data.get("workspacePaths") or []
+path = paths[0] if isinstance(paths, list) and paths else ""
+name = os.path.basename(str(path).rstrip("/")) or "workspace"
+if name in ("", "/"):
+    name = "workspace"
+print(name)
+'
+}
+
+if [[ "$agent" == antigravity ]]; then
+  project="$(antigravity_gate 2>/dev/null)" || exit 0
+else
+  project="$(basename "${PWD:-workspace}")"
+fi
 [[ -n "$project" && "$project" != "/" ]] || project="workspace"
 sound="${CLUSTERFORK_NOTIFY_SOUND:-$clusterfork_dir/bell.mp3}"
 
@@ -63,10 +91,18 @@ notify_phone() {
 
 # The network timeout stays below bell.mp3's duration, so phone delivery adds
 # no latency to the existing synchronous hooks. Neither path can fail a turn.
-ring_local &
-ring_pid=$!
-notify_phone &
-phone_pid=$!
-wait "$ring_pid" 2>/dev/null || true
-wait "$phone_pid" 2>/dev/null || true
+pids=()
+if [[ "${NOTIFY_PREF[bell]}" == 1 ]]; then
+  ring_local &
+  pids+=("$!")
+fi
+if [[ "${NOTIFY_PREF[phone]}" == 1 ]]; then
+  notify_phone &
+  pids+=("$!")
+fi
+if (( ${#pids[@]} )); then
+  for pid in "${pids[@]}"; do
+    wait "$pid" 2>/dev/null || true
+  done
+fi
 exit 0

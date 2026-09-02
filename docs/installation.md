@@ -24,6 +24,7 @@
 | `agents/opencode.json`            | `~/.config/opencode/opencode.json`       | OpenCode settings                 |
 | `agents/qwen.json`                | `~/.qwen/settings.json`                  | Qwen Code settings                |
 | `agents/antigravity.json`         | `~/.gemini/antigravity-cli/settings.json`| Antigravity settings              |
+| `agents/antigravity-hooks.json`   | `~/.gemini/config/hooks.json`             | Antigravity lifecycle hooks (`Stop` → clusterfork-notify) |
 | `agents/antigravity-mcp.json`     | `~/.gemini/config/mcp_config.json`        | Antigravity MCP servers (`${ENV}` expanded from `.env`) |
 | `agents/grok.toml`                | `~/.grok/config.toml`                    | Grok CLI settings                 |
 | `agents/claude.json`              | `~/.claude/settings.json`                | Claude Code settings              |

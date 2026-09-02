@@ -40,6 +40,15 @@ Antigravity MCP servers. The installer expands `${ENV}` placeholders from the cl
 - **chrome-devtools:** local `pnpm dlx chrome-devtools-mcp@latest`, disabled — uses Chromium on port 9222
 - **pixellab:** remote `https://api.pixellab.ai/mcp`, disabled, with its bearer token from `PIXELLAB_API_KEY` in `.env`
 
+## agents/antigravity-hooks.json → ~/.gemini/config/hooks.json
+
+Antigravity lifecycle hooks:
+
+- **turn-bell:** `Stop` command hook invoking the shared completion notifier
+  (`clusterfork-notify antigravity`). The helper notifies only when stdin has
+  `fullyIdle: true`, so intermediate tool yields and subagent cycles stay
+  quiet. See [Notifications](notifications.md).
+
 ## agents/grok.toml → ~/.grok/config.toml
 
 Grok CLI settings:

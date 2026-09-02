@@ -1,4 +1,5 @@
 .env
+notify-prefs
 auth.json*
 __pycache__/
 *.py[cod]

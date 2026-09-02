@@ -1,0 +1,10 @@
+{
+  "turn-bell": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "~/.config/clusterfork/bin/clusterfork-notify antigravity"
+      }
+    ]
+  }
+}

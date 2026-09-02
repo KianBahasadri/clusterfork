@@ -7,7 +7,7 @@
 #      notify/, scripts/rotate_auth.py, and scripts/codeview/ from repo
 #   3. Overwrites ~/.tmux.conf from repo-local tmux.conf
 #   4. Overwrites agent settings from repo-local agents/ (Grok keeps existing
-#      theme from ~/.grok/config.toml if set)
+#      theme from ~/.grok/config.toml if set; Antigravity hooks.json is included)
 #   5. Overwrites ~/.qwen/skills/, ~/.grok/skills/, ~/.claude/skills/, and
 #      ~/.codex/skills/ (user skills only; preserves ~/.codex/skills/.system)
 #      from repo-local skills/. Also installs normalized skills for Command
@@ -71,6 +71,8 @@ QWEN_CONFIG_SRC="$AGENTS_SRC_DIR/qwen.json"
 QWEN_CONFIG_DEST="$HOME/.qwen/settings.json"
 ANTIGRAVITY_CONFIG_SRC="$AGENTS_SRC_DIR/antigravity.json"
 ANTIGRAVITY_CONFIG_DEST="$HOME/.gemini/antigravity-cli/settings.json"
+ANTIGRAVITY_HOOKS_SRC="$AGENTS_SRC_DIR/antigravity-hooks.json"
+ANTIGRAVITY_HOOKS_DEST="$HOME/.gemini/config/hooks.json"
 ANTIGRAVITY_MCP_SRC="$AGENTS_SRC_DIR/antigravity-mcp.json"
 ANTIGRAVITY_MCP_DEST="$HOME/.gemini/config/mcp_config.json"
 SKILLS_SRC_DIR="$REPO_DIR/skills"
@@ -451,7 +453,10 @@ mkdir -p "$(dirname "$ANTIGRAVITY_CONFIG_DEST")"
 cp "$ANTIGRAVITY_CONFIG_SRC" "$ANTIGRAVITY_CONFIG_DEST"
 step "antigravity" "$ANTIGRAVITY_CONFIG_DEST"
 
-rm -f "$HOME/.gemini/config/hooks.json"
+[[ -f "$ANTIGRAVITY_HOOKS_SRC" ]] || fail "missing $(tildify "$ANTIGRAVITY_HOOKS_SRC")"
+mkdir -p "$(dirname "$ANTIGRAVITY_HOOKS_DEST")"
+cp "$ANTIGRAVITY_HOOKS_SRC" "$ANTIGRAVITY_HOOKS_DEST"
+step "antigravity hooks" "$ANTIGRAVITY_HOOKS_DEST" "Stop → clusterfork-notify"
 
 if [[ -d "$SKILLS_SRC_DIR" ]]; then
   rm -rf -- "$QWEN_SKILLS_DEST_DIR"
