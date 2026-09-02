@@ -59,7 +59,8 @@ sound="${CLUSTERFORK_NOTIFY_SOUND:-$clusterfork_dir/bell.mp3}"
 
 ring_local() {
   if command -v mpv >/dev/null 2>&1 && [[ -f "$sound" ]]; then
-    mpv --no-video --no-terminal "$sound" </dev/null >/dev/null 2>&1 || true
+    mpv --no-video --no-terminal --volume="${NOTIFY_VOLUME:-100}" "$sound" \
+      </dev/null >/dev/null 2>&1 || true
   elif [[ -w /dev/tty ]]; then
     printf '\a' >/dev/tty 2>/dev/null || true
   fi

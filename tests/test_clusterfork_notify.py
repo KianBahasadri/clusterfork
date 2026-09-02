@@ -109,6 +109,7 @@ class NotifierTests(NotifyFixture):
         self.assertEqual(proc.returncode, 0)
         self.assertEqual((proc.stdout, proc.stderr), ("", ""))
         self.assertIn(str(self.cf_dir / "bell.mp3"), self.mpv_log.read_text())
+        self.assertIn("--volume=100", self.mpv_log.read_text())
         self.assertFalse(self.curl_log.exists())
 
     def test_posts_fixed_project_message_with_optional_token(self):
@@ -268,8 +269,9 @@ class NotifyCommandTests(NotifyFixture):
             proc.stdout,
             "  notify  ›  on\n"
             "\n"
-            "       bell           on\n"
+            "       bell           on  100%\n"
             f"       phone          on  {PHONE_URL}\n"
+            "\n"
             "       claude         on\n"
             "       codex          on\n"
             "       command-code   on\n"
@@ -288,7 +290,7 @@ class NotifyCommandTests(NotifyFixture):
         self.assertEqual(first.stdout, "  ✓  bell  off\n")
         self.assertEqual(
             (self.cf_dir / "notify-prefs").read_text(),
-            "bell=0\nphone=1\nclaude=1\ncodex=1\ncommand-code=1\ngrok=1\nantigravity=1\n",
+            "bell=0\nphone=1\nclaude=1\ncodex=1\ncommand-code=1\ngrok=1\nantigravity=1\nvolume=100\n",
         )
 
         silent = self.run_notifier(dotenv=f"CLUSTERFORK_NTFY_URL={PHONE_URL}\n")
@@ -319,7 +321,7 @@ class NotifyCommandTests(NotifyFixture):
         self.assertEqual(off.stdout, "  ✓  all  off\n")
         self.assertEqual(
             (self.cf_dir / "notify-prefs").read_text(),
-            "bell=0\nphone=0\nclaude=0\ncodex=0\ncommand-code=0\ngrok=0\nantigravity=0\n",
+            "bell=0\nphone=0\nclaude=0\ncodex=0\ncommand-code=0\ngrok=0\nantigravity=0\nvolume=100\n",
         )
         status = self.run_cli()
         self.assertTrue(status.stdout.startswith("  notify  ›  off\n"))
@@ -334,7 +336,7 @@ class NotifyCommandTests(NotifyFixture):
         restored = self.run_cli()
         self.assertTrue(restored.stdout.startswith("  notify  ›  on\n"))
         for line in (
-            "       bell           on\n",
+            "       bell           on  100%\n",
             "       claude         on\n",
             "       grok           on\n",
         ):
@@ -368,6 +370,33 @@ class NotifyCommandTests(NotifyFixture):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("notify bell [on|off]", proc.stdout)
         self.assertIn("notify all on|off", proc.stdout)
+        self.assertIn("notify volume <0-100>", proc.stdout)
+
+    def test_volume_sets_mpv_and_survives_all_off(self):
+        proc = self.run_cli("volume", "40")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout, "  ✓  volume  40%\n")
+        self.assertIn("volume=40\n", (self.cf_dir / "notify-prefs").read_text())
+
+        percent = self.run_cli("volume", "25%")
+        self.assertEqual(percent.returncode, 0, percent.stderr)
+        self.assertEqual(percent.stdout, "  ✓  volume  25%\n")
+
+        hook = self.run_notifier()
+        self.assertEqual(hook.returncode, 0)
+        self.assertIn("--volume=25", self.mpv_log.read_text())
+
+        self.run_cli("all", "off")
+        self.assertIn("volume=25\n", (self.cf_dir / "notify-prefs").read_text())
+        status = self.run_cli()
+        self.assertIn("bell           off  25%", status.stdout)
+
+        missing = self.run_cli("volume")
+        self.assertEqual(missing.returncode, 1)
+        self.assertIn("notify volume requires 0-100", missing.stderr)
+        bad = self.run_cli("volume", "101")
+        self.assertEqual(bad.returncode, 1)
+        self.assertIn("expected 0-100, not 101", bad.stderr)
 
 
 if __name__ == "__main__":

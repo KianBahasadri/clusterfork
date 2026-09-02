@@ -35,6 +35,7 @@ prints the current switches. A target with no value toggles; `on`/`off` sets it.
 notify                 # status
 notify all off         # silence everything
 notify all on          # restore every switch
+notify volume 40       # local bell loudness, 0-100 (mpv --volume)
 notify bell            # toggle the local bell
 notify phone           # toggle ntfy phone push
 notify grok            # toggle one agent
@@ -43,10 +44,12 @@ notify bell off        # set instead of toggle
 
 Targets: `bell`, `phone`, `claude`, `codex`, `command-code`, `grok`,
 `antigravity`. `all` sets every switch at once and requires `on` or `off`.
-Those five agents are the Stop hooks that call `clusterfork-notify`. Disabling
-an agent skips both the bell and the phone path for that source. Disabling
-both channels leaves the hook silent for every agent. Missing keys default to
-on, matching the previous always-on behavior.
+`volume` is 0–100 (default 100) and is not changed by `all`. Those five
+agents are the Stop hooks that call `clusterfork-notify`. Disabling an agent
+skips both the bell and the phone path for that source. Disabling both
+channels leaves the hook silent for every agent. Missing keys default to on,
+matching the previous always-on behavior. Volume is passed to `mpv` as
+`--volume`; the tty `\a` fallback has no volume control.
 
 Prefs live in `~/.config/clusterfork/notify-prefs`. That file is not a mapped
 installer destination, so reinstalling clusterfork does not reset it.

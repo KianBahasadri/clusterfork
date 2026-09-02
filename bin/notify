@@ -5,6 +5,7 @@
 NOTIFY_TARGETS=(bell phone claude codex command-code grok antigravity)
 NOTIFY_AGENTS=(claude codex command-code grok antigravity)
 declare -A NOTIFY_PREF=()
+NOTIFY_VOLUME=100
 
 notify_clusterfork_dir() {
   local here
@@ -42,12 +43,23 @@ notify_is_target() {
   return 1
 }
 
+notify_parse_volume() {
+  local raw="${1%"%"}"
+  [[ "$raw" =~ ^[0-9]+$ ]] || return 1
+  raw="$((10#$raw))"
+  if (( raw > 100 )); then
+    return 1
+  fi
+  printf '%s' "$raw"
+}
+
 notify_defaults() {
   local key
   NOTIFY_PREF=()
   for key in "${NOTIFY_TARGETS[@]}"; do
     NOTIFY_PREF["$key"]=1
   done
+  NOTIFY_VOLUME=100
 }
 
 notify_load_prefs() {
@@ -59,6 +71,11 @@ notify_load_prefs() {
     [[ "$line" == *=* ]] || continue
     key="${line%%=*}"
     value="${line#*=}"
+    if [[ "$key" == volume ]]; then
+      parsed="$(notify_parse_volume "$value")" || continue
+      NOTIFY_VOLUME="$parsed"
+      continue
+    fi
     notify_is_target "$key" || continue
     parsed="$(notify_parse_bool "$value")" || continue
     NOTIFY_PREF["$key"]="$parsed"
@@ -68,9 +85,12 @@ notify_load_prefs() {
 notify_save_prefs() {
   local prefs="$1/notify-prefs" tmp key
   tmp="$prefs.tmp.$$"
-  for key in "${NOTIFY_TARGETS[@]}"; do
-    printf '%s=%s\n' "$key" "${NOTIFY_PREF[$key]}"
-  done > "$tmp"
+  {
+    for key in "${NOTIFY_TARGETS[@]}"; do
+      printf '%s=%s\n' "$key" "${NOTIFY_PREF[$key]}"
+    done
+    printf 'volume=%s\n' "$NOTIFY_VOLUME"
+  } > "$tmp"
   mv -f "$tmp" "$prefs"
 }
 
@@ -95,25 +115,34 @@ notify_effective() {
   return 1
 }
 
+notify_print_row() {
+  local key="$1" state extra=""
+  state="$(notify_state_word "$key")"
+  if [[ "$key" == bell ]]; then
+    extra="  ${NOTIFY_VOLUME}%"
+  elif [[ "$key" == phone ]]; then
+    if [[ -n "${CLUSTERFORK_NTFY_URL:-}" ]]; then
+      extra="  $CLUSTERFORK_NTFY_URL"
+    else
+      extra="  no ntfy url"
+    fi
+  fi
+  printf '       %-13s  %s%s\n' "$key" "$state" "$extra"
+}
+
 notify_print_status() {
-  local key state extra
+  local key
   if notify_effective; then
     printf '  notify  ›  on\n'
   else
     printf '  notify  ›  off\n'
   fi
   printf '\n'
-  for key in "${NOTIFY_TARGETS[@]}"; do
-    state="$(notify_state_word "$key")"
-    extra=""
-    if [[ "$key" == phone ]]; then
-      if [[ -n "${CLUSTERFORK_NTFY_URL:-}" ]]; then
-        extra="  $CLUSTERFORK_NTFY_URL"
-      else
-        extra="  no ntfy url"
-      fi
-    fi
-    printf '       %-13s  %s%s\n' "$key" "$state" "$extra"
+  notify_print_row bell
+  notify_print_row phone
+  printf '\n'
+  for key in "${NOTIFY_AGENTS[@]}"; do
+    notify_print_row "$key"
   done
 }
 
@@ -124,6 +153,7 @@ Toggle turn-completion notifications.
 Usage:
   notify                      show status
   notify all on|off           set every switch
+  notify volume <0-100>       set the local bell volume
   notify bell [on|off]        toggle or set the local bell
   notify phone [on|off]       toggle or set phone push
   notify <agent> [on|off]     toggle or set one agent
@@ -136,6 +166,7 @@ EOF
 
 notify_hint() {
   printf '       Use: notify [all|bell|phone|claude|codex|command-code|grok|antigravity] [on|off]\n' >&2
+  printf '            notify volume <0-100>\n' >&2
 }
 
 notify_set_all() {
@@ -170,6 +201,22 @@ notify_main() {
   fi
 
   target="$1"
+  if [[ "$target" == volume ]]; then
+    if [[ $# -ne 2 ]]; then
+      printf '  ✗  notify volume requires 0-100\n' >&2
+      notify_hint
+      return 1
+    fi
+    if ! value="$(notify_parse_volume "$2")"; then
+      printf '  ✗  expected 0-100, not %s\n' "$2" >&2
+      return 1
+    fi
+    NOTIFY_VOLUME="$value"
+    notify_save_prefs "$dir"
+    printf '  ✓  volume  %s%%\n' "$NOTIFY_VOLUME"
+    return 0
+  fi
+
   if [[ "$target" == all ]]; then
     if [[ $# -ne 2 ]]; then
       printf '  ✗  notify all requires on or off\n' >&2
