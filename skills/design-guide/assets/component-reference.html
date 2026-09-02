@@ -103,84 +103,99 @@
       gap: 8px;
     }
 
-    .page-search {
-      position: relative;
-      width: 220px;
+    .spotlight-trigger {
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      border: 0;
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--muted);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 120ms ease, transform 80ms ease;
+    }
+    .spotlight-trigger:hover { color: var(--ink-strong); }
+    .spotlight-trigger:active { transform: scale(0.98); }
+    .spotlight-trigger svg,
+    .spotlight-search-icon {
+      width: 15px;
+      height: 15px;
     }
 
-    .page-search-field {
-      position: relative;
+    dialog.spotlight-dialog {
+      position: fixed;
+      inset: 12vh 0 auto;
+      width: min(600px, calc(100vw - 32px));
+      max-height: min(560px, calc(100vh - 24vh));
+      margin: 0 auto;
+      padding: 0;
+      overflow: hidden;
+      color: var(--ink);
+      background: var(--surface-raised);
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+    dialog.spotlight-dialog::backdrop {
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
     }
 
-    .page-search-icon {
+    .spotlight-search-field { position: relative; }
+    .spotlight-search-icon {
       position: absolute;
       top: 50%;
-      left: 10px;
-      width: 14px;
-      height: 14px;
+      left: 16px;
       color: var(--faint);
       transform: translateY(-50%);
       pointer-events: none;
     }
-
-    .page-search-input {
+    .spotlight-input {
       width: 100%;
-      height: 36px;
-      padding: 0 10px 0 32px;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      background: var(--surface);
-      color: var(--ink);
-      font-size: 13px;
-      outline: none;
-      transition: border-color 120ms ease;
+      height: 52px;
+      padding: 0 16px 0 42px;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--ink-strong);
+      font-size: 15px;
     }
-    .page-search-input::placeholder { color: var(--muted); }
-    .page-search-input:hover,
-    .page-search-input:focus { border-color: var(--line-strong); }
-    .page-search-input:focus-visible {
-      outline: 2px solid var(--focus);
-      outline-offset: 2px;
-    }
-    .page-search-input::-webkit-search-cancel-button { display: none; }
+    .spotlight-input::placeholder { color: var(--muted); }
+    .spotlight-input::-webkit-search-cancel-button { display: none; }
 
-    .page-search-results {
-      position: absolute;
-      top: calc(100% + 6px);
-      right: 0;
-      width: 260px;
-      max-height: min(360px, calc(100vh - 80px));
+    .spotlight-results {
+      max-height: min(456px, calc(100vh - 24vh - 54px));
       overflow-y: auto;
       list-style: none;
       padding: 4px;
-      border: 1px solid var(--line-strong);
-      border-radius: var(--radius);
-      background: var(--surface-raised);
-      box-shadow: var(--shadow);
     }
-    .page-search-results[hidden],
-    .page-search-option[hidden],
-    .page-search-empty[hidden] { display: none; }
+    .spotlight-option[hidden],
+    .spotlight-empty[hidden] { display: none; }
 
-    .page-search-option,
-    .page-search-empty {
-      padding: 6px 8px;
+    .spotlight-option,
+    .spotlight-empty {
+      padding: 7px 10px;
       color: var(--ink);
-      font-size: 13px;
+      font-size: 14px;
       line-height: 1.35;
       overflow-wrap: break-word;
     }
-    .page-search-option {
+    .spotlight-option {
       border-radius: var(--radius-sm);
       cursor: pointer;
     }
-    .page-search-option:hover,
-    .page-search-option.active {
+    .spotlight-option:hover,
+    .spotlight-option.active {
       color: var(--ink-strong);
       background: var(--surface);
       font-weight: 600;
     }
-    .page-search-empty { color: var(--muted); }
+    .spotlight-empty { color: var(--muted); }
 
     .theme-toggle {
       width: 36px;
@@ -226,12 +241,7 @@
         top: 12px;
         right: 12px;
       }
-      .page-search {
-        width: min(210px, calc(100vw - 76px));
-      }
-      .page-search-results {
-        width: min(280px, calc(100vw - 24px));
-      }
+      dialog.spotlight-dialog { inset: 72px 0 auto; }
       .layout-container {
         padding-top: 68px;
       }
@@ -1249,30 +1259,9 @@
 
   <!-- Persistent page utilities -->
   <div class="page-tools">
-    <div class="page-search" id="pageSearch">
-      <label class="sr-only" for="pageSearchInput">Search page and actions</label>
-      <div class="page-search-field">
-        <svg class="page-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-        <input class="page-search-input" id="pageSearchInput" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="pageSearchResults" aria-keyshortcuts="Control+K Meta+K" autocomplete="off" spellcheck="false" placeholder="Search page">
-      </div>
-      <ul class="page-search-results" id="pageSearchResults" role="listbox" aria-label="Page destinations and actions" hidden>
-        <li class="page-search-option" id="pageSearchShortcuts" role="option" aria-selected="false" data-page-search-action="shortcuts" data-search="keyboard shortcuts keys commands help">Keyboard shortcuts</li>
-        <li class="page-search-option" id="pageSearchButtons" role="option" aria-selected="false" data-page-search-target="#buttons" data-search="buttons actions triggers">01 Buttons &amp; Actions</li>
-        <li class="page-search-option" id="pageSearchDropdowns" role="option" aria-selected="false" data-page-search-target="#dropdowns" data-search="dropdowns menus comboboxes">02 Dropdowns &amp; Menus</li>
-        <li class="page-search-option" id="pageSearchInputs" role="option" aria-selected="false" data-page-search-target="#inputs" data-search="form inputs textareas validation">03 Form Inputs &amp; Textareas</li>
-        <li class="page-search-option" id="pageSearchSelection" role="option" aria-selected="false" data-page-search-target="#selection" data-search="selection controls checkboxes radios switches">04 Selection Controls</li>
-        <li class="page-search-option" id="pageSearchLabels" role="option" aria-selected="false" data-page-search-target="#labels" data-search="labels badges tags metadata">05 Labels, Badges &amp; Metadata</li>
-        <li class="page-search-option" id="pageSearchTables" role="option" aria-selected="false" data-page-search-target="#tables" data-search="tables data grids sorting">06 Tables &amp; Data Grids</li>
-        <li class="page-search-option" id="pageSearchCharts" role="option" aria-selected="false" data-page-search-target="#charts" data-search="charts graphics data visualization">07 Charts &amp; Graphics</li>
-        <li class="page-search-option" id="pageSearchDialogs" role="option" aria-selected="false" data-page-search-target="#dialogs" data-search="dialogs modals confirmation">08 Dialogs &amp; Modals</li>
-        <li class="page-search-option" id="pageSearchTooltips" role="option" aria-selected="false" data-page-search-target="#tooltips" data-search="tooltips popovers contextual help">09 Tooltips &amp; Popovers</li>
-        <li class="page-search-option" id="pageSearchNavigation" role="option" aria-selected="false" data-page-search-target="#navigation" data-search="navigation tabs breadcrumbs">10 Navigation, Tabs &amp; Breadcrumbs</li>
-        <li class="page-search-option" id="pageSearchCards" role="option" aria-selected="false" data-page-search-target="#cards" data-search="cards panels metrics">11 Cards &amp; Panels</li>
-        <li class="page-search-option" id="pageSearchAlerts" role="option" aria-selected="false" data-page-search-target="#alerts" data-search="alerts toasts callouts notifications">12 Alerts &amp; Toasts</li>
-        <li class="page-search-empty" id="pageSearchEmpty" role="presentation" hidden>No matching destinations or actions</li>
-      </ul>
-      <span class="sr-only" id="pageSearchStatus" aria-live="polite"></span>
-    </div>
+    <button class="spotlight-trigger" id="spotlightTrigger" type="button" aria-label="Open search and commands" aria-haspopup="dialog" aria-controls="spotlightDialog" aria-expanded="false" aria-keyshortcuts="Control+K Meta+K" title="Search and commands">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+    </button>
 
     <button class="theme-toggle" id="themeToggleBtn" type="button" aria-label="Switch to light theme" title="Toggle theme">
       <span id="themeIcon" aria-hidden="true">☀</span>
@@ -1813,6 +1802,35 @@
     </main>
   </div>
 
+  <dialog class="spotlight-dialog" id="spotlightDialog" aria-label="Search and commands">
+    <div class="spotlight-search-field">
+      <label class="sr-only" for="spotlightInput">Search sections and commands</label>
+      <svg class="spotlight-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+      <input class="spotlight-input" id="spotlightInput" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="spotlightResults" autocomplete="off" spellcheck="false" placeholder="Search sections and commands">
+    </div>
+    <ul class="spotlight-results" id="spotlightResults" role="listbox" aria-label="Sections and commands">
+      <li class="spotlight-option" id="spotlightExportMarkdown" role="option" aria-selected="false" data-spotlight-action="export-markdown" data-search="export download markdown md">Export as Markdown</li>
+      <li class="spotlight-option" id="spotlightExportPdf" role="option" aria-selected="false" data-spotlight-action="export-pdf" data-search="export download print pdf">Export as PDF</li>
+      <li class="spotlight-option" id="spotlightCopyLink" role="option" aria-selected="false" data-spotlight-action="copy-link" data-search="copy page link url clipboard share">Copy page link</li>
+      <li class="spotlight-option" id="spotlightToggleTheme" role="option" aria-selected="false" data-spotlight-action="toggle-theme" data-search="toggle switch dark light theme appearance">Toggle theme</li>
+      <li class="spotlight-option" id="spotlightShortcuts" role="option" aria-selected="false" data-spotlight-action="shortcuts" data-search="keyboard shortcuts keys commands help">Keyboard shortcuts</li>
+      <li class="spotlight-option" id="spotlightButtons" role="option" aria-selected="false" data-spotlight-target="#buttons" data-search="buttons actions triggers">01 Buttons &amp; Actions</li>
+      <li class="spotlight-option" id="spotlightDropdowns" role="option" aria-selected="false" data-spotlight-target="#dropdowns" data-search="dropdowns menus comboboxes">02 Dropdowns &amp; Menus</li>
+      <li class="spotlight-option" id="spotlightInputs" role="option" aria-selected="false" data-spotlight-target="#inputs" data-search="form inputs textareas validation">03 Form Inputs &amp; Textareas</li>
+      <li class="spotlight-option" id="spotlightSelection" role="option" aria-selected="false" data-spotlight-target="#selection" data-search="selection controls checkboxes radios switches">04 Selection Controls</li>
+      <li class="spotlight-option" id="spotlightLabels" role="option" aria-selected="false" data-spotlight-target="#labels" data-search="labels badges tags metadata">05 Labels, Badges &amp; Metadata</li>
+      <li class="spotlight-option" id="spotlightTables" role="option" aria-selected="false" data-spotlight-target="#tables" data-search="tables data grids sorting">06 Tables &amp; Data Grids</li>
+      <li class="spotlight-option" id="spotlightCharts" role="option" aria-selected="false" data-spotlight-target="#charts" data-search="charts graphics data visualization">07 Charts &amp; Graphics</li>
+      <li class="spotlight-option" id="spotlightDialogs" role="option" aria-selected="false" data-spotlight-target="#dialogs" data-search="dialogs modals confirmation">08 Dialogs &amp; Modals</li>
+      <li class="spotlight-option" id="spotlightTooltips" role="option" aria-selected="false" data-spotlight-target="#tooltips" data-search="tooltips popovers contextual help">09 Tooltips &amp; Popovers</li>
+      <li class="spotlight-option" id="spotlightNavigation" role="option" aria-selected="false" data-spotlight-target="#navigation" data-search="navigation tabs breadcrumbs">10 Navigation, Tabs &amp; Breadcrumbs</li>
+      <li class="spotlight-option" id="spotlightCards" role="option" aria-selected="false" data-spotlight-target="#cards" data-search="cards panels metrics">11 Cards &amp; Panels</li>
+      <li class="spotlight-option" id="spotlightAlerts" role="option" aria-selected="false" data-spotlight-target="#alerts" data-search="alerts toasts callouts notifications">12 Alerts &amp; Toasts</li>
+      <li class="spotlight-empty" id="spotlightEmpty" role="presentation" hidden>No matching sections or commands</li>
+    </ul>
+    <span class="sr-only" id="spotlightStatus" aria-live="polite"></span>
+  </dialog>
+
   <dialog class="modal-dialog shortcut-dialog" id="shortcutDialog" aria-labelledby="shortcutDialogTitle">
     <div class="modal-header">
       <h2 class="modal-title" id="shortcutDialogTitle">Keyboard shortcuts</h2>
@@ -1821,7 +1839,7 @@
     <div class="modal-body">
       <dl class="shortcut-list">
         <div class="shortcut-row">
-          <dt>Open search</dt>
+          <dt>Open search and commands</dt>
           <dd><kbd>Ctrl</kbd><span aria-hidden="true">+</span><kbd>K</kbd><span aria-hidden="true">/</span><kbd>⌘</kbd><span aria-hidden="true">+</span><kbd>K</kbd></dd>
         </div>
         <div class="shortcut-row">
@@ -1869,132 +1887,226 @@
         updateTheme(next);
       });
 
-      // 2. Persistent page search and action launcher
-      var pageSearch = document.getElementById("pageSearch");
-      var pageSearchInput = document.getElementById("pageSearchInput");
-      var pageSearchResults = document.getElementById("pageSearchResults");
-      var pageSearchOptions = Array.from(pageSearchResults.querySelectorAll(".page-search-option"));
-      var pageSearchEmpty = document.getElementById("pageSearchEmpty");
-      var pageSearchStatus = document.getElementById("pageSearchStatus");
+      // 2. Spotlight search and action launcher
+      var spotlightTrigger = document.getElementById("spotlightTrigger");
+      var spotlightDialog = document.getElementById("spotlightDialog");
+      var spotlightInput = document.getElementById("spotlightInput");
+      var spotlightResults = document.getElementById("spotlightResults");
+      var spotlightOptions = Array.from(spotlightResults.querySelectorAll(".spotlight-option"));
+      var spotlightEmpty = document.getElementById("spotlightEmpty");
+      var spotlightStatus = document.getElementById("spotlightStatus");
       var shortcutDialog = document.getElementById("shortcutDialog");
       var closeShortcutsBtn = document.getElementById("btnCloseShortcuts");
+      var restoreSpotlightFocus = true;
 
-      function visiblePageSearchOptions() {
-        return pageSearchOptions.filter(function (option) { return !option.hidden; });
+      function visibleSpotlightOptions() {
+        return spotlightOptions.filter(function (option) { return !option.hidden; });
       }
 
-      function setActivePageSearchOption(option) {
-        pageSearchOptions.forEach(function (candidate) {
+      function setActiveSpotlightOption(option) {
+        spotlightOptions.forEach(function (candidate) {
           var active = candidate === option;
           candidate.classList.toggle("active", active);
           candidate.setAttribute("aria-selected", active ? "true" : "false");
         });
 
         if (option) {
-          pageSearchInput.setAttribute("aria-activedescendant", option.id);
+          spotlightInput.setAttribute("aria-activedescendant", option.id);
           option.scrollIntoView({ block: "nearest" });
         } else {
-          pageSearchInput.removeAttribute("aria-activedescendant");
+          spotlightInput.removeAttribute("aria-activedescendant");
         }
       }
 
-      function openPageSearch() {
-        pageSearchResults.hidden = false;
-        pageSearchInput.setAttribute("aria-expanded", "true");
-      }
-
-      function closePageSearch(clearQuery) {
-        pageSearchResults.hidden = true;
-        pageSearchInput.setAttribute("aria-expanded", "false");
-        setActivePageSearchOption(null);
-        if (clearQuery) pageSearchInput.value = "";
-      }
-
-      function filterPageSearch() {
-        var query = pageSearchInput.value.trim().toLocaleLowerCase();
+      function filterSpotlight() {
+        var query = spotlightInput.value.trim().toLocaleLowerCase();
         var matches = [];
 
-        pageSearchOptions.forEach(function (option) {
+        spotlightOptions.forEach(function (option) {
           var searchableText = (option.textContent + " " + (option.dataset.search || "")).toLocaleLowerCase();
           option.hidden = query !== "" && !searchableText.includes(query);
           if (!option.hidden) matches.push(option);
         });
 
-        pageSearchEmpty.hidden = matches.length !== 0;
-        pageSearchStatus.textContent = matches.length === 1 ? "1 result available" : matches.length + " results available";
-        openPageSearch();
-        setActivePageSearchOption(matches[0] || null);
+        spotlightEmpty.hidden = matches.length !== 0;
+        spotlightStatus.textContent = matches.length === 1 ? "1 result available" : matches.length + " results available";
+        setActiveSpotlightOption(matches[0] || null);
       }
 
-      function activatePageSearchOption(option) {
+      function openSpotlight() {
+        if (shortcutDialog.open) shortcutDialog.close();
+        restoreSpotlightFocus = true;
+        if (!spotlightDialog.open) spotlightDialog.showModal();
+        spotlightTrigger.setAttribute("aria-expanded", "true");
+        spotlightInput.setAttribute("aria-expanded", "true");
+        spotlightInput.value = "";
+        filterSpotlight();
+        window.requestAnimationFrame(function () {
+          spotlightInput.focus();
+        });
+      }
+
+      function closeSpotlight(returnFocus) {
+        restoreSpotlightFocus = returnFocus !== false;
+        if (spotlightDialog.open) spotlightDialog.close();
+      }
+
+      function buildMarkdownExport() {
+        var lines = ["# Component Reference", ""];
+        document.querySelectorAll(".component-section").forEach(function (section) {
+          var heading = section.querySelector("h2");
+          if (!heading) return;
+
+          var title = heading.textContent.trim();
+          var bodyLines = section.innerText.split("\n").map(function (line) {
+            return line.trim();
+          }).filter(Boolean);
+          if (bodyLines[0] === title) bodyLines.shift();
+
+          lines.push("## " + title, "");
+          if (bodyLines.length) lines.push(bodyLines.join("\n\n"), "");
+        });
+        return lines.join("\n").trim() + "\n";
+      }
+
+      function downloadText(filename, contents, mimeType) {
+        var url = URL.createObjectURL(new Blob([contents], { type: mimeType }));
+        var link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+      }
+
+      function exportMarkdown() {
+        downloadText("component-reference.md", buildMarkdownExport(), "text/markdown;charset=utf-8");
+        spawnToast("Markdown export downloaded", false);
+      }
+
+      function fallbackCopyText(value) {
+        var field = document.createElement("textarea");
+        field.value = value;
+        field.setAttribute("readonly", "");
+        field.style.position = "fixed";
+        field.style.opacity = "0";
+        document.body.appendChild(field);
+        field.select();
+        var copied = false;
+        try { copied = document.execCommand("copy"); } catch (error) { copied = false; }
+        field.remove();
+        return copied;
+      }
+
+      function copyPageLink() {
+        var value = window.location.href;
+        var reportSuccess = function () { spawnToast("Page link copied", false); };
+        var reportFailure = function () { spawnToast("Could not copy the page link", false); };
+
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(value).then(reportSuccess, function () {
+            if (fallbackCopyText(value)) reportSuccess();
+            else reportFailure();
+          });
+        } else if (fallbackCopyText(value)) {
+          reportSuccess();
+        } else {
+          reportFailure();
+        }
+      }
+
+      function runSpotlightAction(action) {
+        if (action === "shortcuts") {
+          closeSpotlight(false);
+          shortcutDialog.showModal();
+        } else if (action === "export-markdown") {
+          closeSpotlight(true);
+          exportMarkdown();
+        } else if (action === "export-pdf") {
+          closeSpotlight(true);
+          window.setTimeout(function () { window.print(); }, 0);
+        } else if (action === "copy-link") {
+          closeSpotlight(true);
+          copyPageLink();
+        } else if (action === "toggle-theme") {
+          closeSpotlight(true);
+          updateTheme(html.dataset.theme === "dark" ? "light" : "dark");
+        }
+      }
+
+      function activateSpotlightOption(option) {
         if (!option) return;
 
-        if (option.dataset.pageSearchAction === "shortcuts") {
-          closePageSearch(true);
-          pageSearchInput.blur();
-          shortcutDialog.showModal();
+        if (option.dataset.spotlightAction) {
+          runSpotlightAction(option.dataset.spotlightAction);
           return;
         }
 
-        var selector = option.dataset.pageSearchTarget;
+        var selector = option.dataset.spotlightTarget;
         var target = selector ? document.querySelector(selector) : null;
         if (!target) return;
 
-        closePageSearch(true);
-        pageSearchInput.blur();
+        closeSpotlight(true);
         target.scrollIntoView({ behavior: "smooth", block: "start" });
         if (window.history && window.history.replaceState) {
           window.history.replaceState(null, "", selector);
         }
       }
 
-      pageSearchInput.addEventListener("focus", filterPageSearch);
-      pageSearchInput.addEventListener("input", filterPageSearch);
-      pageSearchInput.addEventListener("keydown", function (event) {
-        var options = visiblePageSearchOptions();
-        var active = pageSearchResults.querySelector(".page-search-option.active");
+      spotlightTrigger.addEventListener("click", openSpotlight);
+      spotlightInput.addEventListener("input", filterSpotlight);
+      spotlightInput.addEventListener("keydown", function (event) {
+        var options = visibleSpotlightOptions();
+        var active = spotlightResults.querySelector(".spotlight-option.active");
         var activeIndex = options.indexOf(active);
 
         if (event.key === "ArrowDown" && options.length) {
           event.preventDefault();
-          setActivePageSearchOption(options[(activeIndex + 1 + options.length) % options.length]);
+          setActiveSpotlightOption(options[(activeIndex + 1 + options.length) % options.length]);
         } else if (event.key === "ArrowUp" && options.length) {
           event.preventDefault();
-          setActivePageSearchOption(options[(activeIndex - 1 + options.length) % options.length]);
+          setActiveSpotlightOption(options[(activeIndex - 1 + options.length) % options.length]);
         } else if (event.key === "Enter" && active) {
           event.preventDefault();
-          activatePageSearchOption(active);
+          activateSpotlightOption(active);
         } else if (event.key === "Escape") {
           event.preventDefault();
-          closePageSearch(true);
-          pageSearchInput.blur();
+          closeSpotlight(true);
         }
       });
 
-      pageSearchOptions.forEach(function (option) {
+      spotlightOptions.forEach(function (option) {
         option.addEventListener("mousedown", function (event) { event.preventDefault(); });
-        option.addEventListener("mousemove", function () { setActivePageSearchOption(option); });
-        option.addEventListener("click", function () { activatePageSearchOption(option); });
+        option.addEventListener("mousemove", function () { setActiveSpotlightOption(option); });
+        option.addEventListener("click", function () { activateSpotlightOption(option); });
       });
 
       document.addEventListener("keydown", function (event) {
         if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLocaleLowerCase() === "k") {
           event.preventDefault();
-          if (shortcutDialog.open) shortcutDialog.close();
-          pageSearchInput.focus();
-          pageSearchInput.select();
-          filterPageSearch();
+          openSpotlight();
         }
       });
 
-      document.addEventListener("click", function (event) {
-        if (!pageSearch.contains(event.target)) closePageSearch(false);
+      spotlightDialog.addEventListener("click", function (event) {
+        if (event.target === spotlightDialog) closeSpotlight(true);
+      });
+
+      spotlightDialog.addEventListener("close", function () {
+        spotlightTrigger.setAttribute("aria-expanded", "false");
+        spotlightInput.setAttribute("aria-expanded", "false");
+        spotlightInput.value = "";
+        spotlightOptions.forEach(function (option) { option.hidden = false; });
+        spotlightEmpty.hidden = true;
+        setActiveSpotlightOption(null);
+        if (restoreSpotlightFocus) spotlightTrigger.focus({ preventScroll: true });
+        restoreSpotlightFocus = true;
       });
 
       closeShortcutsBtn.addEventListener("click", function () { shortcutDialog.close(); });
       shortcutDialog.addEventListener("close", function () {
-        pageSearchInput.focus({ preventScroll: true });
-        closePageSearch(true);
+        spotlightTrigger.focus({ preventScroll: true });
       });
 
       // 3. Loading button demo
@@ -2378,16 +2490,24 @@
       var spawnToastBtn = document.getElementById("btnSpawnToast");
       var toastContainer = document.getElementById("toastContainer");
 
-      function spawnToast(msg) {
+      function spawnToast(msg, undoable) {
         var toast = document.createElement("div");
         toast.className = "toast";
-        toast.innerHTML = '<span class="toast-msg">' + (msg || "Preferences updated successfully.") + '</span><button class="toast-undo" type="button">Undo</button>';
-        toastContainer.appendChild(toast);
+        var message = document.createElement("span");
+        message.className = "toast-msg";
+        message.textContent = msg || "Preferences updated successfully.";
+        toast.appendChild(message);
 
-        var undoBtn = toast.querySelector(".toast-undo");
-        undoBtn.addEventListener("click", function () {
-          toast.remove();
-        });
+        if (undoable !== false) {
+          var undoBtn = document.createElement("button");
+          undoBtn.className = "toast-undo";
+          undoBtn.type = "button";
+          undoBtn.textContent = "Undo";
+          undoBtn.addEventListener("click", function () { toast.remove(); });
+          toast.appendChild(undoBtn);
+        }
+
+        toastContainer.appendChild(toast);
 
         setTimeout(function () {
           if (toast.parentNode) toast.remove();

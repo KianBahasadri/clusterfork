@@ -166,10 +166,11 @@ Hues are applied **only** when directly communicating system state, errors, or d
 * **Popovers:** Neutral floating card for interactive options (filters, menus).
 
 ### 10. Navigation, Tabs & Breadcrumbs
-* **Page Search & Actions:**
-  * Every interactive page includes a persistent search field in the upper-right utility area, immediately left of the theme toggle. Static or non-interactive pages do not need it.
-  * Search filters the current page's meaningful destinations and available actions as the user types. Present results in a custom keyboard-accessible popover: `Up/Down Arrows` move the active result, `Enter` opens it, and `Escape` dismisses the popover.
-  * Support `Ctrl+K` and `Command+K` to focus the search, but do not display that hint beside the field. Include `Keyboard shortcuts` as an action in the search results; it opens a popup listing every shortcut the current surface actually supports.
+* **Spotlight Search & Actions:**
+  * Every interactive page includes a compact search launcher in the upper-right utility area, immediately left of the theme toggle. Static or non-interactive pages do not need it. Render the launcher as a transparent, borderless icon button identified by a familiar magnifier plus an accessible label; do not place placeholder copy such as `Search page` or a shortcut hint in the persistent chrome.
+  * Activating the launcher opens a centered Spotlight-style palette and moves focus into its editable search field. Filter the page's meaningful destinations and available commands together as the user types. Common commands include exporting as Markdown, opening the print-to-PDF flow, copying the page link, toggling the theme, and opening keyboard shortcuts; include only actions the page actually implements.
+  * Make the palette keyboard-accessible: `Up/Down Arrows` move the active result, `Enter` runs it, and `Escape` closes the palette and returns focus to the launcher. Support `Ctrl+K` and `Command+K` to open the palette, but do not display that hint beside the launcher.
+  * Include `Keyboard shortcuts` as a palette command; it opens a popup listing every shortcut the current surface actually supports.
   * The shortcuts popup is the only visible place keyboard shortcuts appear. Do not append shortcut hints to buttons, labels, tooltips, navigation items, metadata, or placeholders. Render keys as compact neutral `<kbd>` elements inside that popup and keep its list synchronized with actual behavior.
 * **Side Navigation:**
   * Mark the active row with stronger text and font weight plus an optional neutral surface. Do not add a leading selection stripe or border; it duplicates the selected treatment and creates unnecessary visual noise.
