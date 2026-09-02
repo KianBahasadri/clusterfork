@@ -65,7 +65,7 @@ Hues are applied **only** when directly communicating system state, errors, or d
 ### 2. Dropdowns & Menus
 * **Search Field & Selection Modes:**
   * Every value-selection dropdown uses a custom editable text field and popover rather than a browser-default `<select>` or a button-only picker. Typing filters the available options immediately.
-  * Decide whether the field is list-only or free-entry. A list-only field commits only an available option and restores its last committed value when unmatched text is dismissed. A free-entry field also accepts text not present in the list and provides a clear `Use “entered value”` option or equivalent commit affordance.
+  * Decide whether the field is list-only or free-entry. A list-only field commits only an available option and restores its last committed value when unmatched text is dismissed. A free-entry field also accepts text not present in the list and offers the entered text itself as a selectable custom option. Distinguish that value with quotes or text treatment when needed, but do not prepend an instruction such as `Use`.
   * Display the committed value in the text field with a right-aligned chevron. Keep that value synchronized with form submission or application state.
   * Give the editable field `role="combobox"`, `aria-autocomplete="list"`, `aria-expanded="true/false"`, and `aria-controls` pointing to the listbox. Expose the active option with `aria-activedescendant`; options use `role="option"` and accurate `aria-selected` state.
 * **Menu Surface:**
@@ -91,7 +91,7 @@ Hues are applied **only** when directly communicating system state, errors, or d
 * **States:**
   * *Hover:* Border becomes `--line-strong`.
   * *Focus:* Border becomes `--ink-strong` with 2px `--focus` ring.
-  * *Invalid / Error:* Border becomes `--danger` and corners become sharp. Render an inline error message beneath the field with `role="alert"`, a sharp-edged error icon, and clear instructions to fix the error. This is where color is permitted, because it conveys an error state.
+  * *Invalid / Error:* Border becomes `--danger` and corners become sharp. Render concise inline text beneath the field with `role="alert"` and clear instructions to fix the error. Do not prepend a status icon when the field treatment and message already identify the error. Omit a trailing period from a short, one-line corrective message. This is where color is permitted, because it conveys an error state.
   * *Search / Clearable:* Magnifier icon on left; clear ("×") button on right appearing only when input has a value.
 
 ### 4. Selection Controls (Checkboxes, Radios, Switches)
@@ -112,13 +112,17 @@ Hues are applied **only** when directly communicating system state, errors, or d
 * **Status Badges / Pills (Informational Color):**
   * Used **specifically** to communicate health, condition, and telemetry state.
   * Compact padding (2px 8px), border-radius 4px or 999px (pill).
-  * Composed of a soft background tint + crisp text + 6px indicator dot.
+  * Composed of a soft background tint and crisp, explicit status text. Do not prepend a colored indicator dot; it repeats information, consumes space, and adds visual noise without improving identification.
   * *Nominal:* Neutral tint, `--muted` text.
-  * *Good:* `--good-soft` tint, `--good` text, fully rounded container, and circular indicator.
-  * *Caution:* `--caution-soft` tint, `--caution` text, medium-radius container, and rounded-square indicator.
-  * *Danger:* `--danger-soft` tint, `--danger` text, sharp rectangular container, and square indicator.
+  * *Good:* `--good-soft` tint, `--good` text, and a fully rounded container.
+  * *Caution:* `--caution-soft` tint, `--caution` text, and a medium-radius container.
+  * *Danger:* `--danger-soft` tint, `--danger` text, and a sharp rectangular container.
   * *Derived:* `--derived-soft` tint, `--derived` text.
-  * *Never use a bare colored dot without text.*
+  * Keep labels self-explanatory so status remains understandable without color.
+* **Flashing Status Badges:**
+  * Reserve flashing for a live, time-sensitive condition that genuinely requires attention. Keep the explicit status label visible throughout; flash the tint or border treatment rather than making the text disappear.
+  * Offer a slow cadence around 1.5–2 seconds per cycle and a fast cadence around 600–800ms per cycle. Keep every cadence below three flashes per second. Tempo can increase urgency, but it does not replace the severity geometry: caution remains medium-radius and danger remains sharp.
+  * Continue flashing for as long as the represented live condition remains active, and stop immediately when that condition clears. Do not impose an arbitrary time limit that makes an unresolved state appear settled. Honor `prefers-reduced-motion: reduce` by presenting the same badge as a static status; add a user-facing pause control when the product's accessibility requirements call for one.
 * **Metadata Tags & Keyboard Shortcuts:** Non-status tags, commit hashes, versions, and keyboard hints (`<kbd>`) are strictly neutral (`--surface-raised`, `--line`, `--muted`).
 
 ### 6. Tables & Data Grids
@@ -162,6 +166,8 @@ Hues are applied **only** when directly communicating system state, errors, or d
 * **Popovers:** Neutral floating card for interactive options (filters, menus).
 
 ### 10. Navigation, Tabs & Breadcrumbs
+* **Side Navigation:**
+  * Mark the active row with stronger text and font weight plus an optional neutral surface. Do not add a leading selection stripe or border; it duplicates the selected treatment and creates unnecessary visual noise.
 * **Tabs:**
   * Container has `role="tablist"`, each tab has `role="tab"` and `aria-selected="true|false"`.
   * Active tab has strong text (`--ink-strong`) and an active neutral underline (`--ink-strong` or `--line-strong`). No colored accent line.
