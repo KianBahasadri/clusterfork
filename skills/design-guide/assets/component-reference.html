@@ -175,10 +175,12 @@
       display: flex;
       flex-direction: column;
       gap: 56px;
+      min-width: 0;
     }
 
     .component-section {
       scroll-margin-top: 24px;
+      min-width: 0;
     }
 
     .section-header {
@@ -202,6 +204,7 @@
       display: flex;
       flex-direction: column;
       gap: 20px;
+      min-width: 0;
     }
 
     .showcase-group {
@@ -215,6 +218,8 @@
       flex-wrap: wrap;
       align-items: center;
       gap: 12px;
+      min-width: 0;
+      max-width: 100%;
     }
 
     /* -------------------------------------------------------------
@@ -275,6 +280,7 @@
     .btn-danger {
       background: var(--danger-soft);
       border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+      border-radius: 0;
       color: var(--danger);
     }
     .btn-danger:hover:not(:disabled) {
@@ -314,54 +320,47 @@
     .dropdown-container {
       position: relative;
       display: inline-block;
+      width: var(--dropdown-width, 220px);
+      max-width: 100%;
+      min-width: 0;
     }
 
-    .native-select {
-      appearance: none;
-      -webkit-appearance: none;
-      background: var(--surface);
-      color: var(--ink);
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
+    .dropdown-field {
+      position: relative;
+      width: 100%;
+    }
+
+    .custom-dropdown-input {
+      display: block;
+      width: 100%;
+      min-width: 0;
       padding: 9px 36px 9px 14px;
-      font-size: 14px;
-      cursor: pointer;
-      background-image: url('data:image/svg+xml;utf8,<svg fill="%23849094" height="12" viewBox="0 0 24 24" width="12" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
-      background-repeat: no-repeat;
-      background-position: right 10px center;
-      transition: border-color 120ms ease;
-    }
-    .native-select:hover {
-      border-color: var(--line-strong);
-    }
-    .native-select:focus-visible {
-      border-color: var(--line-strong);
-    }
-
-    .custom-dropdown-btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 9px 14px;
       border: 1px solid var(--line);
       border-radius: var(--radius);
       background: var(--surface);
       color: var(--ink);
       font-size: 14px;
-      min-width: 180px;
       transition: border-color 120ms ease;
     }
-    .custom-dropdown-btn:hover {
+    .custom-dropdown-input:hover {
       border-color: var(--line-strong);
     }
-    .custom-dropdown-btn .chevron {
+    .custom-dropdown-input::placeholder {
+      color: var(--muted);
+      opacity: 1;
+    }
+    .dropdown-field .chevron {
+      position: absolute;
+      top: 50%;
+      right: 13px;
+      transform: translateY(-50%);
       transition: transform 150ms ease;
       color: var(--muted);
       font-size: 10px;
+      pointer-events: none;
     }
-    .custom-dropdown-btn[aria-expanded="true"] .chevron {
-      transform: rotate(180deg);
+    .custom-dropdown-input[aria-expanded="true"] + .chevron {
+      transform: translateY(-50%) rotate(180deg);
     }
 
     .dropdown-menu {
@@ -369,14 +368,17 @@
       top: calc(100% + 6px);
       left: 0;
       z-index: 40;
-      min-width: 200px;
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
       max-height: 240px;
       overflow-y: auto;
+      overflow-x: hidden;
       background: var(--surface-raised);
       border: 1px solid var(--line-strong);
       border-radius: var(--radius);
       box-shadow: var(--shadow);
-      padding: 4px;
+      padding: 2px;
       list-style: none;
       display: none;
     }
@@ -387,15 +389,18 @@
     .dropdown-item {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      padding: 8px 12px;
+      width: 100%;
+      min-height: 28px;
+      max-width: 100%;
+      padding: 3px 10px;
       font-size: 13.5px;
+      line-height: 1.35;
       border-radius: var(--radius-sm);
       cursor: pointer;
       color: var(--ink);
       transition: background 100ms ease;
     }
-    .dropdown-item:hover, .dropdown-item:focus {
+    .dropdown-item:hover, .dropdown-item.active {
       background: var(--surface);
       color: var(--ink-strong);
       outline: none;
@@ -403,6 +408,33 @@
     .dropdown-item.selected {
       color: var(--ink-strong);
       font-weight: 600;
+    }
+
+    .dropdown-option-label,
+    .dropdown-empty {
+      min-width: 0;
+      white-space: normal;
+      word-break: normal;
+      overflow-wrap: break-word;
+      hyphens: none;
+      text-wrap: pretty;
+    }
+
+    .dropdown-empty {
+      min-height: 28px;
+      padding: 3px 10px;
+      color: var(--muted);
+      font-size: 13.5px;
+      line-height: 1.35;
+    }
+
+    @media (pointer: coarse) {
+      .dropdown-item,
+      .dropdown-empty {
+        min-height: 44px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+      }
     }
 
     /* -------------------------------------------------------------
@@ -458,11 +490,7 @@
     }
     .input-field.is-invalid {
       border-color: var(--danger);
-    }
-
-    .input-hint {
-      font-size: 12px;
-      color: var(--muted);
+      border-radius: 0;
     }
 
     .input-error {
@@ -622,12 +650,16 @@
       background: var(--caution-soft);
       color: var(--caution);
       border: 1px solid color-mix(in srgb, var(--caution) 30%, transparent);
+      border-radius: var(--radius-sm);
     }
+    .badge-caution .badge-dot { border-radius: 2px; }
     .badge-danger {
       background: var(--danger-soft);
       color: var(--danger);
       border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+      border-radius: 0;
     }
+    .badge-danger .badge-dot { border-radius: 0; }
     .badge-derived {
       background: var(--derived-soft);
       color: var(--derived);
@@ -984,6 +1016,7 @@
     .callout-caution {
       background: var(--caution-soft);
       border: 1px solid color-mix(in srgb, var(--caution) 35%, transparent);
+      border-radius: var(--radius-sm);
       color: var(--ink);
     }
     .callout-caution .callout-icon { color: var(--caution); }
@@ -991,6 +1024,7 @@
     .callout-danger {
       background: var(--danger-soft);
       border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+      border-radius: 0;
       color: var(--ink);
     }
     .callout-danger .callout-icon { color: var(--danger); }
@@ -1120,27 +1154,86 @@
         <div class="showcase-card">
           <div class="showcase-group">
             <div class="row-wrap">
-              <div class="dropdown-container">
-                <label class="sr-only" for="demoNativeSelect">Environment</label>
-                <select class="native-select" id="demoNativeSelect">
-                  <option value="prod">Production (us-east-1)</option>
-                  <option value="staging">Staging (eu-central-1)</option>
-                  <option value="dev">Development (local)</option>
-                </select>
+              <div class="dropdown-container" data-custom-dropdown data-allow-custom="false">
+                <label class="sr-only" id="environmentDropdownLabel" for="environmentDropdownInput">Environment</label>
+                <span class="sr-only" id="environmentDropdownHint">Search and choose an available environment.</span>
+                <div class="dropdown-field">
+                  <input class="custom-dropdown-input" id="environmentDropdownInput" type="text" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="environmentDropdownMenu" aria-labelledby="environmentDropdownLabel" aria-describedby="environmentDropdownHint" autocomplete="off" spellcheck="false" value="Production (us-east-1)" data-dropdown-input>
+                  <span class="chevron" aria-hidden="true">▼</span>
+                </div>
+                <input type="hidden" name="environment" value="prod" data-dropdown-value>
+                <ul class="dropdown-menu" id="environmentDropdownMenu" role="listbox" tabindex="-1" aria-labelledby="environmentDropdownLabel">
+                  <li class="dropdown-item selected" id="environmentOptionProd" role="option" aria-selected="true" data-value="prod" data-label="Production (us-east-1)"><span class="dropdown-option-label">Production (us&#8209;east&#8209;1)</span></li>
+                  <li class="dropdown-item" id="environmentOptionStaging" role="option" aria-selected="false" data-value="staging" data-label="Staging (eu-central-1)"><span class="dropdown-option-label">Staging (eu&#8209;central&#8209;1)</span></li>
+                  <li class="dropdown-item" id="environmentOptionDev" role="option" aria-selected="false" data-value="dev" data-label="Development (local)"><span class="dropdown-option-label">Development (local)</span></li>
+                  <li class="dropdown-empty" role="presentation" hidden>No matching options</li>
+                </ul>
+                <span class="sr-only" aria-live="polite" data-dropdown-status></span>
               </div>
 
-              <!-- Custom Dropdown -->
-              <div class="dropdown-container" id="customDropdown">
-                <button class="custom-dropdown-btn" id="customDropdownTrigger" type="button" aria-haspopup="listbox" aria-expanded="false">
-                  <span id="customSelectedLabel">Select role...</span>
+              <div class="dropdown-container" data-custom-dropdown data-allow-custom="true">
+                <label class="sr-only" id="roleDropdownLabel" for="roleDropdownInput">Role</label>
+                <span class="sr-only" id="roleDropdownHint">Search available roles or enter a custom role.</span>
+                <div class="dropdown-field">
+                  <input class="custom-dropdown-input" id="roleDropdownInput" type="text" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="roleDropdownMenu" aria-labelledby="roleDropdownLabel" aria-describedby="roleDropdownHint" autocomplete="off" spellcheck="false" placeholder="Select or enter role…" data-dropdown-input>
                   <span class="chevron" aria-hidden="true">▼</span>
-                </button>
-                <ul class="dropdown-menu" id="customDropdownMenu" role="listbox" tabindex="-1">
-                  <li class="dropdown-item" role="option" data-value="admin" tabindex="0">Administrator</li>
-                  <li class="dropdown-item" role="option" data-value="editor" tabindex="0">Technical Editor</li>
-                  <li class="dropdown-item" role="option" data-value="viewer" tabindex="0">Auditor (View-only)</li>
-                  <li class="dropdown-item" role="option" data-value="billing" tabindex="0">Billing Manager</li>
+                </div>
+                <input type="hidden" name="role" value="" data-dropdown-value>
+                <ul class="dropdown-menu" id="roleDropdownMenu" role="listbox" tabindex="-1" aria-labelledby="roleDropdownLabel">
+                  <li class="dropdown-item" id="roleOptionAdmin" role="option" aria-selected="false" data-value="admin" data-label="Administrator"><span class="dropdown-option-label">Administrator</span></li>
+                  <li class="dropdown-item" id="roleOptionEditor" role="option" aria-selected="false" data-value="editor" data-label="Technical Editor"><span class="dropdown-option-label">Technical Editor</span></li>
+                  <li class="dropdown-item" id="roleOptionViewer" role="option" aria-selected="false" data-value="viewer" data-label="Auditor (View-only)"><span class="dropdown-option-label">Auditor (View&#8209;only)</span></li>
+                  <li class="dropdown-item" id="roleOptionBilling" role="option" aria-selected="false" data-value="billing" data-label="Billing Manager"><span class="dropdown-option-label">Billing Manager</span></li>
+                  <li class="dropdown-item dropdown-custom-option" id="roleCustomOption" role="option" aria-selected="false" data-value="" data-label="" hidden><span class="dropdown-option-label">Use “<span data-dropdown-custom-label></span>”</span></li>
+                  <li class="dropdown-empty" role="presentation" hidden>No matching options</li>
                 </ul>
+                <span class="sr-only" aria-live="polite" data-dropdown-status></span>
+              </div>
+
+              <div class="dropdown-container" data-custom-dropdown data-allow-custom="false">
+                <label class="sr-only" id="languageDropdownLabel" for="languageDropdownInput">Language</label>
+                <span class="sr-only" id="languageDropdownHint">Search and choose an available language.</span>
+                <div class="dropdown-field">
+                  <input class="custom-dropdown-input" id="languageDropdownInput" type="text" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="languageDropdownMenu" aria-labelledby="languageDropdownLabel" aria-describedby="languageDropdownHint" autocomplete="off" spellcheck="false" value="English" data-dropdown-input>
+                  <span class="chevron" aria-hidden="true">▼</span>
+                </div>
+                <input type="hidden" name="language" value="en" data-dropdown-value>
+                <ul class="dropdown-menu" id="languageDropdownMenu" role="listbox" tabindex="-1" aria-labelledby="languageDropdownLabel">
+                  <li class="dropdown-item" id="languageOptionAr" role="option" aria-selected="false" data-value="ar" data-label="Arabic"><span class="dropdown-option-label">Arabic</span></li>
+                  <li class="dropdown-item" id="languageOptionBn" role="option" aria-selected="false" data-value="bn" data-label="Bengali"><span class="dropdown-option-label">Bengali</span></li>
+                  <li class="dropdown-item" id="languageOptionZhHans" role="option" aria-selected="false" data-value="zh-Hans" data-label="Chinese (Simplified)"><span class="dropdown-option-label">Chinese (Simplified)</span></li>
+                  <li class="dropdown-item" id="languageOptionZhHant" role="option" aria-selected="false" data-value="zh-Hant" data-label="Chinese (Traditional)"><span class="dropdown-option-label">Chinese (Traditional)</span></li>
+                  <li class="dropdown-item" id="languageOptionCs" role="option" aria-selected="false" data-value="cs" data-label="Czech"><span class="dropdown-option-label">Czech</span></li>
+                  <li class="dropdown-item" id="languageOptionDa" role="option" aria-selected="false" data-value="da" data-label="Danish"><span class="dropdown-option-label">Danish</span></li>
+                  <li class="dropdown-item" id="languageOptionNl" role="option" aria-selected="false" data-value="nl" data-label="Dutch"><span class="dropdown-option-label">Dutch</span></li>
+                  <li class="dropdown-item selected" id="languageOptionEn" role="option" aria-selected="true" data-value="en" data-label="English"><span class="dropdown-option-label">English</span></li>
+                  <li class="dropdown-item" id="languageOptionFi" role="option" aria-selected="false" data-value="fi" data-label="Finnish"><span class="dropdown-option-label">Finnish</span></li>
+                  <li class="dropdown-item" id="languageOptionFr" role="option" aria-selected="false" data-value="fr" data-label="French"><span class="dropdown-option-label">French</span></li>
+                  <li class="dropdown-item" id="languageOptionDe" role="option" aria-selected="false" data-value="de" data-label="German"><span class="dropdown-option-label">German</span></li>
+                  <li class="dropdown-item" id="languageOptionEl" role="option" aria-selected="false" data-value="el" data-label="Greek"><span class="dropdown-option-label">Greek</span></li>
+                  <li class="dropdown-item" id="languageOptionHe" role="option" aria-selected="false" data-value="he" data-label="Hebrew"><span class="dropdown-option-label">Hebrew</span></li>
+                  <li class="dropdown-item" id="languageOptionHi" role="option" aria-selected="false" data-value="hi" data-label="Hindi"><span class="dropdown-option-label">Hindi</span></li>
+                  <li class="dropdown-item" id="languageOptionHu" role="option" aria-selected="false" data-value="hu" data-label="Hungarian"><span class="dropdown-option-label">Hungarian</span></li>
+                  <li class="dropdown-item" id="languageOptionId" role="option" aria-selected="false" data-value="id" data-label="Indonesian"><span class="dropdown-option-label">Indonesian</span></li>
+                  <li class="dropdown-item" id="languageOptionIt" role="option" aria-selected="false" data-value="it" data-label="Italian"><span class="dropdown-option-label">Italian</span></li>
+                  <li class="dropdown-item" id="languageOptionJa" role="option" aria-selected="false" data-value="ja" data-label="Japanese"><span class="dropdown-option-label">Japanese</span></li>
+                  <li class="dropdown-item" id="languageOptionKo" role="option" aria-selected="false" data-value="ko" data-label="Korean"><span class="dropdown-option-label">Korean</span></li>
+                  <li class="dropdown-item" id="languageOptionMs" role="option" aria-selected="false" data-value="ms" data-label="Malay"><span class="dropdown-option-label">Malay</span></li>
+                  <li class="dropdown-item" id="languageOptionNb" role="option" aria-selected="false" data-value="nb" data-label="Norwegian Bokmål"><span class="dropdown-option-label">Norwegian Bokmål</span></li>
+                  <li class="dropdown-item" id="languageOptionPl" role="option" aria-selected="false" data-value="pl" data-label="Polish"><span class="dropdown-option-label">Polish</span></li>
+                  <li class="dropdown-item" id="languageOptionPtBr" role="option" aria-selected="false" data-value="pt-BR" data-label="Portuguese (Brazil)"><span class="dropdown-option-label">Portuguese (Brazil)</span></li>
+                  <li class="dropdown-item" id="languageOptionPtPt" role="option" aria-selected="false" data-value="pt-PT" data-label="Portuguese (Portugal)"><span class="dropdown-option-label">Portuguese (Portugal)</span></li>
+                  <li class="dropdown-item" id="languageOptionRo" role="option" aria-selected="false" data-value="ro" data-label="Romanian"><span class="dropdown-option-label">Romanian</span></li>
+                  <li class="dropdown-item" id="languageOptionRu" role="option" aria-selected="false" data-value="ru" data-label="Russian"><span class="dropdown-option-label">Russian</span></li>
+                  <li class="dropdown-item" id="languageOptionEs" role="option" aria-selected="false" data-value="es" data-label="Spanish"><span class="dropdown-option-label">Spanish</span></li>
+                  <li class="dropdown-item" id="languageOptionSv" role="option" aria-selected="false" data-value="sv" data-label="Swedish"><span class="dropdown-option-label">Swedish</span></li>
+                  <li class="dropdown-item" id="languageOptionTh" role="option" aria-selected="false" data-value="th" data-label="Thai"><span class="dropdown-option-label">Thai</span></li>
+                  <li class="dropdown-item" id="languageOptionTr" role="option" aria-selected="false" data-value="tr" data-label="Turkish"><span class="dropdown-option-label">Turkish</span></li>
+                  <li class="dropdown-item" id="languageOptionUk" role="option" aria-selected="false" data-value="uk" data-label="Ukrainian"><span class="dropdown-option-label">Ukrainian</span></li>
+                  <li class="dropdown-item" id="languageOptionVi" role="option" aria-selected="false" data-value="vi" data-label="Vietnamese"><span class="dropdown-option-label">Vietnamese</span></li>
+                  <li class="dropdown-empty" role="presentation" hidden>No matching options</li>
+                </ul>
+                <span class="sr-only" aria-live="polite" data-dropdown-status></span>
               </div>
             </div>
           </div>
@@ -1158,14 +1251,12 @@
             <div class="form-group">
               <label class="form-label" for="inputName">Workspace Name <span class="required-star" aria-hidden="true">*</span></label>
               <input class="input-field" id="inputName" type="text" placeholder="e.g. clusterfork" value="clusterfork">
-              <span class="input-hint">Unique identifier within your organization.</span>
             </div>
 
             <!-- Monospaced API token -->
             <div class="form-group">
               <label class="form-label" for="inputToken">API Secret Key</label>
               <input class="input-field mono" id="inputToken" type="text" value="cf_live_9a7d83f1240c" readonly>
-              <span class="input-hint">Read-only live credentials token.</span>
             </div>
 
             <!-- Clearable search input -->
@@ -1182,7 +1273,7 @@
               <label class="form-label" for="inputEmail">Billing Email <span class="required-star" aria-hidden="true">*</span></label>
               <input class="input-field is-invalid" id="inputEmail" type="email" value="invalid-address" aria-describedby="email-error">
               <span class="input-error" id="email-error" role="alert">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="18" height="18"></rect><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
                 Enter a valid email address containing “@”.
               </span>
             </div>
@@ -1585,65 +1676,292 @@
         }, 1200);
       });
 
-      // 3. Custom accessible dropdown
-      var dropdown = document.getElementById("customDropdown");
-      var trigger = document.getElementById("customDropdownTrigger");
-      var menu = document.getElementById("customDropdownMenu");
-      var label = document.getElementById("customSelectedLabel");
-      var items = menu.querySelectorAll(".dropdown-item");
+      // 3. Searchable accessible comboboxes
+      var dropdowns = document.querySelectorAll("[data-custom-dropdown]");
+      var dropdownStates = new WeakMap();
 
-      trigger.addEventListener("click", function () {
-        var isOpen = menu.classList.contains("open");
-        if (isOpen) {
-          closeDropdown();
+      function dropdownParts(dropdown) {
+        return {
+          input: dropdown.querySelector("[data-dropdown-input]"),
+          menu: dropdown.querySelector(".dropdown-menu"),
+          value: dropdown.querySelector("[data-dropdown-value]"),
+          items: dropdown.querySelectorAll(".dropdown-item"),
+          fixedItems: dropdown.querySelectorAll(".dropdown-item:not(.dropdown-custom-option)"),
+          customItem: dropdown.querySelector(".dropdown-custom-option"),
+          customLabel: dropdown.querySelector("[data-dropdown-custom-label]"),
+          empty: dropdown.querySelector(".dropdown-empty"),
+          status: dropdown.querySelector("[data-dropdown-status]")
+        };
+      }
+
+      function normalizeDropdownText(value) {
+        return value.trim().toLocaleLowerCase();
+      }
+
+      function dropdownItemLabel(item) {
+        return item.getAttribute("data-label") || item.textContent.trim();
+      }
+
+      function fitDropdownWidth(dropdown) {
+        var parts = dropdownParts(dropdown);
+        var context = document.createElement("canvas").getContext("2d");
+        if (!context) return;
+
+        var inputStyles = window.getComputedStyle(parts.input);
+        context.font = [inputStyles.fontStyle, inputStyles.fontWeight, inputStyles.fontSize, inputStyles.fontFamily].join(" ");
+        var inputLabels = [parts.input.value, parts.input.placeholder];
+        var widestInputLabel = inputLabels.reduce(function (widest, label) {
+          return Math.max(widest, context.measureText(label || "").width);
+        }, 0);
+
+        var optionStyles = window.getComputedStyle(parts.fixedItems[0] || parts.input);
+        context.font = [optionStyles.fontStyle, "600", optionStyles.fontSize, optionStyles.fontFamily].join(" ");
+        var widestOptionLabel = Array.prototype.reduce.call(parts.fixedItems, function (widest, item) {
+          return Math.max(widest, context.measureText(dropdownItemLabel(item)).width);
+        }, 0);
+
+        var fittedWidth = Math.ceil(Math.max(widestInputLabel + 52, widestOptionLabel + 28));
+        fittedWidth = Math.min(232, Math.max(176, fittedWidth));
+        dropdown.style.setProperty("--dropdown-width", fittedWidth + "px");
+      }
+
+      function visibleDropdownItems(parts) {
+        return Array.prototype.filter.call(parts.items, function (item) {
+          return !item.hidden;
+        });
+      }
+
+      function setActiveDropdownItem(dropdown, item) {
+        var parts = dropdownParts(dropdown);
+        var state = dropdownStates.get(dropdown);
+        parts.items.forEach(function (option) { option.classList.remove("active"); });
+        state.activeItem = item || null;
+
+        if (item) {
+          item.classList.add("active");
+          parts.input.setAttribute("aria-activedescendant", item.id);
+          item.scrollIntoView({ block: "nearest" });
         } else {
-          openDropdown();
+          parts.input.removeAttribute("aria-activedescendant");
         }
-      });
-
-      function openDropdown() {
-        menu.classList.add("open");
-        trigger.setAttribute("aria-expanded", "true");
-        items[0].focus();
       }
 
-      function closeDropdown() {
-        menu.classList.remove("open");
-        trigger.setAttribute("aria-expanded", "false");
-        trigger.focus();
-      }
+      function filterDropdown(dropdown, showAll) {
+        var parts = dropdownParts(dropdown);
+        var state = dropdownStates.get(dropdown);
+        var query = parts.input.value.trim();
+        var normalizedQuery = normalizeDropdownText(query);
+        var filter = showAll ? "" : normalizedQuery;
+        var exactItem = null;
+        var matchCount = 0;
 
-      items.forEach(function (item, index) {
-        item.addEventListener("click", function () {
-          label.textContent = item.textContent;
-          items.forEach(function (i) { i.classList.remove("selected"); });
-          item.classList.add("selected");
-          closeDropdown();
+        parts.fixedItems.forEach(function (item) {
+          var normalizedLabel = normalizeDropdownText(dropdownItemLabel(item));
+          var matches = !filter || normalizedLabel.indexOf(filter) !== -1;
+          item.hidden = !matches;
+          if (matches) matchCount += 1;
+          if (normalizedLabel === normalizedQuery) exactItem = item;
         });
 
-        item.addEventListener("keydown", function (e) {
-          if (e.key === "ArrowDown") {
+        var customVisible = dropdown.dataset.allowCustom === "true" && !!query && !exactItem;
+        if (parts.customItem) {
+          parts.customItem.hidden = !customVisible;
+          parts.customItem.setAttribute("data-label", query);
+          parts.customItem.setAttribute("data-value", query);
+          parts.customLabel.textContent = query;
+          var customSelected = customVisible && state.committedCustom && state.committedLabel === query;
+          parts.customItem.classList.toggle("selected", customSelected);
+          parts.customItem.setAttribute("aria-selected", customSelected ? "true" : "false");
+        }
+
+        var availableCount = matchCount + (customVisible ? 1 : 0);
+        parts.empty.hidden = availableCount !== 0;
+        parts.status.textContent = availableCount === 0
+          ? "No matching options."
+          : availableCount + (availableCount === 1 ? " option available." : " options available.");
+
+        var visible = visibleDropdownItems(parts);
+        var active = state.activeItem;
+        if (!active || active.hidden || visible.indexOf(active) === -1) {
+          active = visible.filter(function (item) {
+            return item.getAttribute("aria-selected") === "true";
+          })[0] || visible[0] || null;
+        }
+        setActiveDropdownItem(dropdown, active);
+      }
+
+      function hideDropdown(dropdown) {
+        var parts = dropdownParts(dropdown);
+        parts.menu.classList.remove("open");
+        parts.input.setAttribute("aria-expanded", "false");
+        setActiveDropdownItem(dropdown, null);
+      }
+
+      function setCommittedDropdownValue(dropdown, label, value, selectedItem, isCustom) {
+        var parts = dropdownParts(dropdown);
+        var state = dropdownStates.get(dropdown);
+        var changed = state.committedLabel !== label || state.committedValue !== value;
+
+        state.committedLabel = label;
+        state.committedValue = value;
+        state.committedCustom = isCustom;
+        parts.input.value = label;
+        parts.value.value = value;
+
+        parts.fixedItems.forEach(function (item) {
+          var selected = item === selectedItem;
+          item.classList.toggle("selected", selected);
+          item.setAttribute("aria-selected", selected ? "true" : "false");
+        });
+
+        if (parts.customItem) {
+          parts.customItem.classList.toggle("selected", isCustom);
+          parts.customItem.setAttribute("aria-selected", isCustom ? "true" : "false");
+        }
+
+        if (changed) parts.value.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+
+      function findExactDropdownItem(parts, value) {
+        var normalizedValue = normalizeDropdownText(value);
+        return Array.prototype.filter.call(parts.fixedItems, function (item) {
+          return normalizeDropdownText(dropdownItemLabel(item)) === normalizedValue;
+        })[0] || null;
+      }
+
+      function settleDropdownInput(dropdown) {
+        var parts = dropdownParts(dropdown);
+        var state = dropdownStates.get(dropdown);
+        var query = parts.input.value.trim();
+        var exactItem = findExactDropdownItem(parts, query);
+
+        if (exactItem) {
+          setCommittedDropdownValue(dropdown, dropdownItemLabel(exactItem), exactItem.dataset.value, exactItem, false);
+        } else if (dropdown.dataset.allowCustom === "true") {
+          setCommittedDropdownValue(dropdown, query, query, null, !!query);
+        } else {
+          parts.input.value = state.committedLabel;
+        }
+      }
+
+      function openDropdown(dropdown, showAll, focusLast) {
+        dropdowns.forEach(function (other) {
+          if (other !== dropdown && dropdownParts(other).menu.classList.contains("open")) {
+            settleDropdownInput(other);
+            hideDropdown(other);
+          }
+        });
+
+        var parts = dropdownParts(dropdown);
+        parts.menu.classList.add("open");
+        parts.input.setAttribute("aria-expanded", "true");
+        filterDropdown(dropdown, showAll);
+
+        if (focusLast) {
+          var visible = visibleDropdownItems(parts);
+          setActiveDropdownItem(dropdown, visible[visible.length - 1] || null);
+        }
+      }
+
+      function selectDropdownItem(dropdown, item) {
+        var isCustom = item.classList.contains("dropdown-custom-option");
+        setCommittedDropdownValue(
+          dropdown,
+          dropdownItemLabel(item),
+          item.dataset.value,
+          isCustom ? null : item,
+          isCustom
+        );
+        hideDropdown(dropdown);
+        dropdownParts(dropdown).input.focus();
+      }
+
+      dropdowns.forEach(function (dropdown) {
+        var parts = dropdownParts(dropdown);
+        fitDropdownWidth(dropdown);
+        dropdownStates.set(dropdown, {
+          activeItem: null,
+          committedLabel: parts.input.value,
+          committedValue: parts.value.value,
+          committedCustom: false
+        });
+
+        parts.input.addEventListener("click", function () {
+          if (!parts.menu.classList.contains("open")) {
+            openDropdown(dropdown, true, false);
+            parts.input.select();
+          }
+        });
+
+        parts.input.addEventListener("input", function () {
+          dropdownStates.get(dropdown).activeItem = null;
+          openDropdown(dropdown, false, false);
+        });
+
+        parts.input.addEventListener("keydown", function (e) {
+          var isOpen = parts.menu.classList.contains("open");
+
+          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
             e.preventDefault();
-            var next = items[(index + 1) % items.length];
-            next.focus();
-          } else if (e.key === "ArrowUp") {
+            if (!isOpen) {
+              openDropdown(dropdown, true, e.key === "ArrowUp");
+              return;
+            }
+
+            var visible = visibleDropdownItems(parts);
+            var active = dropdownStates.get(dropdown).activeItem;
+            var index = visible.indexOf(active);
+            var offset = e.key === "ArrowDown" ? 1 : -1;
+            var nextIndex = index === -1
+              ? (offset === 1 ? 0 : visible.length - 1)
+              : (index + offset + visible.length) % visible.length;
+            setActiveDropdownItem(dropdown, visible[nextIndex] || null);
+          } else if (e.key === "Enter" && isOpen) {
+            var activeItem = dropdownStates.get(dropdown).activeItem;
+            if (activeItem) {
+              e.preventDefault();
+              selectDropdownItem(dropdown, activeItem);
+            }
+          } else if (e.key === "Escape" && (isOpen || parts.input.value !== dropdownStates.get(dropdown).committedLabel)) {
             e.preventDefault();
-            var prev = items[(index - 1 + items.length) % items.length];
-            prev.focus();
-          } else if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            item.click();
-          } else if (e.key === "Escape") {
-            closeDropdown();
+            parts.input.value = dropdownStates.get(dropdown).committedLabel;
+            hideDropdown(dropdown);
+          } else if (e.key === "Tab" && isOpen) {
+            settleDropdownInput(dropdown);
+            hideDropdown(dropdown);
+          }
+        });
+
+        parts.items.forEach(function (item) {
+          item.addEventListener("mousedown", function (e) { e.preventDefault(); });
+          item.addEventListener("mousemove", function () { setActiveDropdownItem(dropdown, item); });
+          item.addEventListener("click", function () { selectDropdownItem(dropdown, item); });
+        });
+      });
+
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(function () {
+          dropdowns.forEach(fitDropdownWidth);
+        });
+      }
+
+      document.addEventListener("click", function (e) {
+        dropdowns.forEach(function (dropdown) {
+          var parts = dropdownParts(dropdown);
+          if (!dropdown.contains(e.target) && parts.menu.classList.contains("open")) {
+            settleDropdownInput(dropdown);
+            hideDropdown(dropdown);
           }
         });
       });
 
-      document.addEventListener("click", function (e) {
-        if (!dropdown.contains(e.target)) {
-          menu.classList.remove("open");
-          trigger.setAttribute("aria-expanded", "false");
-        }
+      window.addEventListener("blur", function () {
+        dropdowns.forEach(function (dropdown) {
+          if (dropdownParts(dropdown).menu.classList.contains("open")) {
+            settleDropdownInput(dropdown);
+            hideDropdown(dropdown);
+          }
+        });
       });
 
       // 4. Clear search button

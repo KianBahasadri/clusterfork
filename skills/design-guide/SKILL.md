@@ -38,9 +38,9 @@ Surfaces, borders, typography, and nominal controls use exclusively monochromati
 ### Informational Color Tokens (Strictly Reserved for Meaning & State)
 Hues are applied **only** when directly communicating system state, errors, or discrete data series:
 
-* `--good`: Confirmed success, healthy state (`#79c99e` dark / `#1d6846` light).
-* `--caution`: Degraded condition, warning, impending threshold (`#d6ad63` dark / `#805600` light).
-* `--danger`: Critical error, destructive action, hard failure (`#df7e78` dark / `#9a332f` light).
+* `--good`: Confirmed success, healthy state (`#79c99e` dark / `#1d6846` light). Shaped good-state surfaces and markers use the most rounded geometry in a severity family.
+* `--caution`: Degraded condition, warning, impending threshold (`#d6ad63` dark / `#805600` light). Shaped caution surfaces use an intermediate corner radius, and markers use rounded-square geometry—visibly between healthy circles or pills and danger squares.
+* `--danger`: Critical error, destructive action, hard failure (`#df7e78` dark / `#9a332f` light). Every container, border, marker, or icon rendered with `--danger` or `--danger-soft` uses sharp geometry: zero corner radius and square or angular indicators rather than circles or pills. Danger-colored text without a surrounding shape needs no geometry treatment.
 * `--derived`: Estimated, modeled, or synthetic data distinguished from ground truth (`#b9aaef` dark / `#63559b` light).
 * *Rule:* Never apply these colors to nominal buttons, background headers, navigational chrome, or decorative accents.
 
@@ -53,7 +53,7 @@ Hues are applied **only** when directly communicating system state, errors, or d
   * *Primary:* Solid neutral high-contrast fill (`--ink-strong`) with inverted text (`--canvas`). Never a colored accent button. Use once per primary action on a surface.
   * *Secondary / Outline:* Transparent fill, 1px `--line` border, `--ink` text. On hover: `--surface-raised` background and `--line-strong` border.
   * *Quiet / Ghost:* Transparent fill, no border, `--muted` text. On hover: `--ink-strong` text and subtle neutral background tint.
-  * *Danger:* Red fill or border (`--danger`). The **only** colored button variant, permitted because it conveys critical risk and destructive consequences.
+  * *Danger:* Red fill or border (`--danger`) with sharp, zero-radius corners. The **only** colored button variant, permitted because it conveys critical risk and destructive consequences.
   * *Icon Button:* Square or circular hit target (minimum 36×36px visual, 44×44px touch area) with a transparent background, no border, and no shadow. Use the icon's neutral tone or opacity for hover and active feedback while preserving a clear focus-visible ring. Provide an accessible label via `aria-label` or `title` plus a tooltip.
 * **States:**
   * *Hover:* Shift filled or outlined button backgrounds by 8–12% neutrally. For icon-only buttons, change the icon tone or opacity without adding container chrome.
@@ -63,22 +63,27 @@ Hues are applied **only** when directly communicating system state, errors, or d
   * *Loading / Busy:* Retain fixed button width to prevent layout jump; show inline neutral spinner; set `aria-busy="true"` and disable repeated clicks.
 
 ### 2. Dropdowns & Menus
-* **Trigger:**
-  * Button displaying current selected value with a right-aligned chevron icon (`▾` or SVG). Neutral background and border.
-  * Set `aria-haspopup="listbox"` (or `"menu"`) and `aria-expanded="true/false"`.
+* **Search Field & Selection Modes:**
+  * Every value-selection dropdown uses a custom editable text field and popover rather than a browser-default `<select>` or a button-only picker. Typing filters the available options immediately.
+  * Decide whether the field is list-only or free-entry. A list-only field commits only an available option and restores its last committed value when unmatched text is dismissed. A free-entry field also accepts text not present in the list and provides a clear `Use “entered value”` option or equivalent commit affordance.
+  * Display the committed value in the text field with a right-aligned chevron. Keep that value synchronized with form submission or application state.
+  * Give the editable field `role="combobox"`, `aria-autocomplete="list"`, `aria-expanded="true/false"`, and `aria-controls` pointing to the listbox. Expose the active option with `aria-activedescendant`; options use `role="option"` and accurate `aria-selected` state.
 * **Menu Surface:**
   * Elevated container (`--surface-raised`), 1px `--line-strong` border, neutral box shadow.
   * Constrained height (`max-height: 280px; overflow-y: auto`).
-  * Options: 32–36px row height, comfortable padding (8px 12px). Selected option indicated by a checkmark (`✓`) and bold `--ink-strong`, not a colored fill.
+  * Options: use compact 28–30px rows with 3–4px vertical and 10–12px horizontal padding in pointer-dense interfaces. Keep labels clearly separated without leaving large empty bands between them, and preserve at least a 44px target for coarse-pointer or touch layouts. Indicate the selected option with stronger `--ink-strong` text and font weight plus accurate `aria-selected`; do not add a checkmark or reserve a trailing indicator gutter.
+  * Show an explicit empty result when filtering finds no available option. In free-entry mode, offer the entered text as the custom option instead.
+* **Sizing & Wrapping:**
+  * Content-fit the field and menu instead of applying one generous width to every dropdown. Use the narrowest stable width that accommodates ordinary labels and the field's chevron, with a practical minimum and viewport cap; do not leave a large empty area after the content. Let unusually long or user-defined values wrap in the menu rather than permanently widening the control.
+  * Wrap labels at spaces whenever possible. Keep short words, region codes, and other compact identifiers intact; break inside a token only when it is too long to fit the available width. Never use indiscriminate break-all wrapping.
 * **Keyboard & Dismissal:**
-  * `Down Arrow` opens menu and focuses first option.
-  * `Up/Down Arrows` navigate options; `Enter` or `Space` selects; `Escape` closes and restores focus to trigger.
-  * Dismisses on click outside or viewport blur.
+  * Keep DOM focus in the editable field while `Up/Down Arrows` move the active option. Preserve ordinary text-editing keys while the user types.
+  * `Enter` commits the active option or an offered custom value. `Escape` restores the last committed value and closes. `Tab`, click outside, and viewport blur close the popover and apply the dropdown's list-only or free-entry commit policy.
 
 ### 3. Form Inputs & Textareas
 * **Structure & Labeling:**
   * Always pair inputs with a visible `<label for="id">`. Never use placeholder text as a substitute for a label.
-  * Optional help text placed below label or input, linked via `aria-describedby`.
+  * Add help text below the label or input only when it communicates a non-obvious format, constraint, consequence, or recovery instruction, and link it with `aria-describedby`. Omit copy that merely restates the field label, current value, or data type.
 * **Field Styling:**
   * Background: `--surface` or `--canvas`.
   * Border: 1px solid `--line`, border-radius 4–6px, padding 8px 12px.
@@ -86,7 +91,7 @@ Hues are applied **only** when directly communicating system state, errors, or d
 * **States:**
   * *Hover:* Border becomes `--line-strong`.
   * *Focus:* Border becomes `--ink-strong` with 2px `--focus` ring.
-  * *Invalid / Error:* Border becomes `--danger`. Render an inline error message beneath the field with `role="alert"`, an error icon, and clear instructions to fix the error. This is where color is permitted, because it conveys an error state.
+  * *Invalid / Error:* Border becomes `--danger` and corners become sharp. Render an inline error message beneath the field with `role="alert"`, a sharp-edged error icon, and clear instructions to fix the error. This is where color is permitted, because it conveys an error state.
   * *Search / Clearable:* Magnifier icon on left; clear ("×") button on right appearing only when input has a value.
 
 ### 4. Selection Controls (Checkboxes, Radios, Switches)
@@ -109,9 +114,9 @@ Hues are applied **only** when directly communicating system state, errors, or d
   * Compact padding (2px 8px), border-radius 4px or 999px (pill).
   * Composed of a soft background tint + crisp text + 6px indicator dot.
   * *Nominal:* Neutral tint, `--muted` text.
-  * *Good:* `--good-soft` tint, `--good` text.
-  * *Caution:* `--caution-soft` tint, `--caution` text.
-  * *Danger:* `--danger-soft` tint, `--danger` text.
+  * *Good:* `--good-soft` tint, `--good` text, fully rounded container, and circular indicator.
+  * *Caution:* `--caution-soft` tint, `--caution` text, medium-radius container, and rounded-square indicator.
+  * *Danger:* `--danger-soft` tint, `--danger` text, sharp rectangular container, and square indicator.
   * *Derived:* `--derived-soft` tint, `--derived` text.
   * *Never use a bare colored dot without text.*
 * **Metadata Tags & Keyboard Shortcuts:** Non-status tags, commit hashes, versions, and keyboard hints (`<kbd>`) are strictly neutral (`--surface-raised`, `--line`, `--muted`).
@@ -172,9 +177,9 @@ Hues are applied **only** when directly communicating system state, errors, or d
 * **Inline Callouts:**
   * Permitted to use status colors because they communicate abnormal or consequential conditions:
     * *Info / System:* Neutral or faint tint.
-    * *Caution:* `--caution` icon, border, and text.
-    * *Danger / Outage:* `--danger` icon, border, and text.
-    * *Success:* `--good` icon, border, and text.
+    * *Caution:* `--caution` icon, border, and text with an intermediate corner radius.
+    * *Danger / Outage:* `--danger` icon, border, and text with sharp container and icon geometry.
+    * *Success:* `--good` icon, border, and text with rounded geometry.
 * **Toast Notifications:**
   * Neutral floating container (`--surface-raised`, `--line-strong`) with status icon, operation message, and neutral "Undo" action button.
   * Auto-dismisses after 4–6 seconds; pauses countdown when hovered or focused.
