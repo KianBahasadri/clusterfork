@@ -253,6 +253,7 @@ class HookWiringTests(unittest.TestCase):
         self.assertTrue(all("clusterfork-notify" in item for item in commands))
         self.assertTrue(all("mpv" not in item for item in commands))
         self.assertIn("antigravity", antigravity["turn-bell"]["Stop"][0]["command"])
+        self.assertFalse(grok["compat"]["claude"]["hooks"])
 
     def test_codex_repo_defaults_are_sol_ultra(self):
         with (REPO_ROOT / "agents/codex.toml").open("rb") as file:

@@ -60,7 +60,7 @@ Grok CLI settings:
   so it is not shown on fresh installations
 - **Marketplace:** xAI Official plugin marketplace source; default skills installs are not purged (`default_skills_installs_purged = false`)
 - **MCP servers:** context7 (remote, requires `CONTEXT7_API_KEY`), linear (remote, disabled), chrome-devtools (local, disabled — uses Chromium on port 9222), pixellab (remote, disabled — requires `PIXELLAB_API_KEY`), ElevenLabs (local via clusterfork launcher)
-- **Hooks:** `[[hooks.Stop]]` invokes the shared completion notifier; see [Notifications](notifications.md)
+- **Hooks:** `[[hooks.Stop]]` invokes the shared completion notifier; see [Notifications](notifications.md). `[compat.claude] hooks = false` so Grok does not also import `~/.claude/settings.json`'s Stop notifier (that pair is what produced `hooks: 2` and a double bell). Other Claude compatibility cells stay at Grok's defaults.
 - **Plugins:** chrome-devtools-mcp disabled
 - **Updates:** auto-update enabled; `installer = internal`
 

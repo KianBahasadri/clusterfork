@@ -64,6 +64,11 @@ command = "bash"
 args = ["-c", "exec \"$HOME/.config/clusterfork/bin/elevenlabs-mcp\""]
 enabled = true
 
+# Grok scans ~/.claude/settings.json Stop hooks by default. That would also
+# fire clusterfork-notify claude at the end of a Grok turn (hooks: 2).
+[compat.claude]
+hooks = false
+
 [[hooks.Stop]]
   [[hooks.Stop.hooks]]
   type = "command"
