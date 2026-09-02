@@ -12,7 +12,7 @@ OpenCode), and GNOME Keyring (Antigravity). All six share the same flags:
 - `rotate-* --list` — list saved profiles (`*` marks the current one)
 - `rotate-*` — rotate to the next account in sorted order
 - `rotate-* NAME` — switch to a specific account
-- `rotate-* --start [names]` (alias `--kickoff`) — for every saved profile of
+- `rotate-* --kickoff [names]` — for every saved profile of
   that provider, or just the named ones, temporarily install it and send one
   tiny one-shot message ("hi") via the agent CLI's non-interactive mode. Intent
   is only to kick off each account's usage ticker; the active credentials are
@@ -35,9 +35,9 @@ The shell modules are thin wrappers. They resolve
 sourced from the repo or from `~/.config/clusterfork/shell/` after install
 (the installer copies the script to `~/.config/clusterfork/scripts/`).
 
-## --start (alias --kickoff)
+## --kickoff
 
-Pings every saved profile by default, or only the named ones (`--start alice bob`),
+Pings every saved profile by default, or only the named ones (`--kickoff alice bob`),
 once per profile with a one-shot non-interactive message (`hi`)
 so the provider starts counting usage for each account. Per-agent ping
 commands: `claude -p`, `codex exec --skip-git-repo-check`, `cursor-agent -p`,

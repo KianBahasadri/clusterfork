@@ -23,17 +23,17 @@ PROFILE_PREFIX = "auth.json."
 CLAUDE_ACTIVE = ".credentials.json"
 CLAUDE_PREFIX = ".credentials.json."
 
-START_MESSAGE = "hi"
+KICKOFF_MESSAGE = "hi"
 PING_TIMEOUT_SECONDS = 120
-START_PINGS = {
+KICKOFF_PINGS = {
     # One-shot mode per agent: send one tiny message so the provider starts
     # its usage ticker for that account. Keyed by backend `command`.
-    "rotate-claude": ["claude", "-p", START_MESSAGE],
-    "rotate-codex": ["codex", "exec", "--skip-git-repo-check", START_MESSAGE],
-    "rotate-cursor-cli": ["cursor-agent", "-p", START_MESSAGE],
-    "rotate-grok": ["grok", "-p", START_MESSAGE],
-    "rotate-opencode": ["opencode", "run", START_MESSAGE],
-    "rotate-antigravity": ["agy", "--print", START_MESSAGE],
+    "rotate-claude": ["claude", "-p", KICKOFF_MESSAGE],
+    "rotate-codex": ["codex", "exec", "--skip-git-repo-check", KICKOFF_MESSAGE],
+    "rotate-cursor-cli": ["cursor-agent", "-p", KICKOFF_MESSAGE],
+    "rotate-grok": ["grok", "-p", KICKOFF_MESSAGE],
+    "rotate-opencode": ["opencode", "run", KICKOFF_MESSAGE],
+    "rotate-antigravity": ["agy", "--print", KICKOFF_MESSAGE],
 }
 
 
@@ -167,7 +167,7 @@ def next_in_order(suffixes: list[str], current: str | None) -> str:
 
 def ping_agent(command_key: str) -> tuple[bool, str]:
     """Run the one-shot ping for an agent backend. Returns (ok, detail)."""
-    argv = START_PINGS.get(command_key)
+    argv = KICKOFF_PINGS.get(command_key)
     if argv is None:
         return False, f"no ping command registered for {command_key}"
     try:
@@ -216,7 +216,7 @@ def usage(command: str) -> list[str]:
         f"  {command} --save name",
         f"  {command} --unhook",
         f"  {command} --list",
-        f"  {command} --start [names] (alias --kickoff)",
+        f"  {command} --kickoff [names]",
     ]
 
 
@@ -236,7 +236,7 @@ def parse_action(command: str, args: list[str]) -> tuple[str, str | list[str] | 
         if len(args) != 1:
             fail(*usage(command))
         return "unhook", None
-    if first in ("--start", "--kickoff"):
+    if first == "--kickoff":
         profiles = args[1:]
         if any(n.startswith("-") or not n for n in profiles):
             fail(*usage(command))
@@ -245,7 +245,7 @@ def parse_action(command: str, args: list[str]) -> tuple[str, str | list[str] | 
         if profiles:
             for name in profiles:
                 validate_suffix(command, name)
-        return "start", profiles or None  # type: ignore[return-value]
+        return "kickoff", profiles or None  # type: ignore[return-value]
     if first == "--save":
         if len(args) != 2:
             fail(*usage(command))
@@ -353,7 +353,7 @@ class ClaudeBackend:
         print(f"  Log in, then: {self.command} --save NAME")
         return 0
 
-    def start(self, selected: list[str] | None = None) -> int:  # noqa: C901
+    def kickoff(self, selected: list[str] | None = None) -> int:  # noqa: C901
         names = self.suffixes()
         if not names:
             fail(
@@ -375,7 +375,7 @@ class ClaudeBackend:
         if self.active.is_file():
             active_bytes = self.active.read_bytes()
 
-        print(f"{self.command}: start — pinging each saved profile with {START_MESSAGE!r}")
+        print(f"{self.command}: kickoff — pinging each saved profile with {KICKOFF_MESSAGE!r}")
         failures = 0
         for name in names:
             atomic_copy(self.claude_dir / f"{CLAUDE_PREFIX}{name}", self.active)
@@ -493,7 +493,7 @@ class SharedStoreBackend:
         )
         return 0
 
-    def start(self, selected: list[str] | None = None) -> int:
+    def kickoff(self, selected: list[str] | None = None) -> int:
         if self.auth.exists() and not self.auth.is_symlink():
             fail(
                 f"{self.command}: {self.auth} exists but is not a symlink",
@@ -523,7 +523,7 @@ class SharedStoreBackend:
         orig_current = readlink_text(self.current) if self.current.is_symlink() else None
         orig_auth_hooked = self.auth.is_symlink()
 
-        print(f"{self.command}: start — pinging each saved profile with {START_MESSAGE!r}")
+        print(f"{self.command}: kickoff — pinging each saved profile with {KICKOFF_MESSAGE!r}")
         failures = 0
         for name in names:
             atomic_symlink(f"{PROFILE_PREFIX}{name}", self.current)
@@ -678,7 +678,7 @@ class AntigravityBackend:
         print(f"  Active: service={self.active_service} username={self.active_user}")
         return 0
 
-    def start(self, selected: list[str] | None = None) -> int:
+    def kickoff(self, selected: list[str] | None = None) -> int:
         self._require_secret_tool()
         self._prepare_state()
         names = self.suffixes()
@@ -714,7 +714,7 @@ class AntigravityBackend:
                 )
             was_unhooked = True
 
-        print(f"{self.command}: start — pinging each saved profile with {START_MESSAGE!r}")
+        print(f"{self.command}: kickoff — pinging each saved profile with {KICKOFF_MESSAGE!r}")
         failures = 0
         for name in names:
             self._install_profile(name)
@@ -911,7 +911,7 @@ def run(argv: list[str]) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         print(
             "usage: rotate_auth.py <claude|codex|cursor|grok|opencode|antigravity> "
-            "[name | --save name | --unhook | --list | --start [names]]",
+            "[name | --save name | --unhook | --list | --kickoff [names]]",
             file=sys.stderr,
         )
         return 0 if argv else 1
@@ -925,9 +925,9 @@ def run(argv: list[str]) -> int:
         return backend.list_profiles()
     if action == "unhook":
         return backend.unhook()
-    if action == "start":
+    if action == "kickoff":
         selected = name if isinstance(name, list) else None
-        return backend.start(selected)
+        return backend.kickoff(selected)
     if action == "save":
         assert name is not None and isinstance(name, str)
         return backend.save(name)

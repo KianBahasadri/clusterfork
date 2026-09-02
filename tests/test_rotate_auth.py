@@ -52,15 +52,19 @@ class ParseActionTests(unittest.TestCase):
             with self.assertRaises(rotate_auth.RotateError):
                 rotate_auth.parse_action("cmd", [flag, "extra"])
 
-    def test_start_and_kickoff_are_aliases(self):
-        self.assertEqual(rotate_auth.parse_action("cmd", ["--start"]), ("start", None))
+    def test_kickoff_parses_action(self):
         self.assertEqual(
-            rotate_auth.parse_action("cmd", ["--kickoff"]), ("start", None)
+            rotate_auth.parse_action("cmd", ["--kickoff"]), ("kickoff", None)
+        )
+        self.assertEqual(
+            rotate_auth.parse_action("cmd", ["--kickoff", "a", "b"]),
+            ("kickoff", ["a", "b"]),
         )
 
     def test_unknown_flag_fails(self):
-        with self.assertRaises(rotate_auth.RotateError):
-            rotate_auth.parse_action("cmd", ["--bogus"])
+        for flag in ("--bogus", "--start"):
+            with self.assertRaises(rotate_auth.RotateError):
+                rotate_auth.parse_action("cmd", [flag])
 
     def test_too_many_positional_args_fail(self):
         with self.assertRaises(rotate_auth.RotateError):
@@ -266,7 +270,7 @@ class SharedStoreBackendTests(unittest.TestCase):
         with self.assertRaises(rotate_auth.RotateError):
             backend.select("nope")
 
-    def test_start_pings_each_profile_and_restores_current(self):
+    def test_kickoff_pings_each_profile_and_restores_current(self):
         self._write_profile("alpha", '{"t": 1}')
         self._write_profile("beta", '{"t": 2}')
         backend = self._backend()
@@ -275,7 +279,7 @@ class SharedStoreBackendTests(unittest.TestCase):
         self.assertEqual(orig_current, "auth.json.beta")
 
         log = self._patch_ping(exit_code=0)
-        self.assertEqual(backend.start(), 0)
+        self.assertEqual(backend.kickoff(), 0)
 
         lines = log.read_text(encoding="utf-8").splitlines()
         # Each blocking call logs the argv ("run", "hi") plus a "called" marker.
@@ -288,35 +292,35 @@ class SharedStoreBackendTests(unittest.TestCase):
         auth = self.agent_dir / "auth.json"
         self.assertTrue(auth.is_symlink())
 
-    def test_start_counts_failures_and_still_restores_current(self):
+    def test_kickoff_counts_failures_and_still_restores_current(self):
         self._write_profile("alpha", '{"t": 1}')
         self._write_profile("beta", '{"t": 2}')
         backend = self._backend()
         self.assertEqual(backend.select("alpha"), 0)
 
         self._patch_ping(exit_code=3)
-        self.assertEqual(backend.start(), 1)
+        self.assertEqual(backend.kickoff(), 1)
         self.assertEqual(
             rotate_auth.readlink_text(self.store_dir / "current"), "auth.json.alpha"
         )
 
-    def test_start_when_unhooked_removes_auth_link_afterwards(self):
+    def test_kickoff_when_unhooked_removes_auth_link_afterwards(self):
         self._write_profile("alpha", '{"t": 1}')
         backend = self._backend()
 
         log = self._patch_ping(exit_code=0)
-        self.assertEqual(backend.start(), 0)
+        self.assertEqual(backend.kickoff(), 0)
         self.assertEqual(log.read_text(encoding="utf-8").count("called"), 1)
         self.assertFalse((self.agent_dir / "auth.json").exists())
         self.assertTrue((self.store_dir / "current").is_symlink())
 
-    def test_start_refuses_regular_auth_file(self):
+    def test_kickoff_refuses_regular_auth_file(self):
         self._write_profile("alpha", "{}")
         self.agent_dir.mkdir(parents=True, exist_ok=True)
         (self.agent_dir / "auth.json").write_text("{}", encoding="utf-8")
         backend = self._backend()
         with self.assertRaises(rotate_auth.RotateError):
-            backend.start()
+            backend.kickoff()
 
     def test_unhook_without_symlink_reports_already(self):
         self._write_profile("alpha", "{}")
