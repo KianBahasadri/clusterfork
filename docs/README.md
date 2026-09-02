@@ -3,6 +3,7 @@
 - [Installation](installation.md) — running the installer and what it writes
 - [Shell Modules](shell-modules.md) — launch wrappers and aliases per agent
 - [Agent Configs](agent-configs.md) — per-agent settings files
+- [Notifications](notifications.md) — shared completion bell and private ntfy phone delivery over Tailscale
 - [Statusline](statusline.md) — Claude Code and Cursor Agent status lines
 - [Dashboard](dashboard.md) — codeview repo introspection dashboard and drop-in modules
 - [Auth Rotation](auth-rotation.md) — switching between saved accounts

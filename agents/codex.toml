@@ -1,13 +1,16 @@
 # Codex settings and MCP servers.
 #
 # Top-level settings defined here, [mcp_servers] tables, and [hooks] tables
-# are installed/overwritten into ~/.codex/config.toml. Other settings (model,
-# approvals, per-project trust levels written by Codex) are preserved.
+# are installed/overwritten into ~/.codex/config.toml. Other settings
+# (approvals and per-project trust levels written by Codex) are preserved.
 # The installer also strips retired clusterfork keys (notify).
 #
 # Secrets stay in .env: Codex resolves env_http_headers and bearer_token_env_var
 # from the environment at launch, and bash_profile.sh exports .env into every
 # shell, so no API key is written into config.toml.
+
+model = "gpt-5.6-sol"
+model_reasoning_effort = "ultra"
 
 [mcp_servers.context7]
 url = "https://mcp.context7.com/mcp"
@@ -42,9 +45,9 @@ bearer_token_env_var = "PIXELLAB_API_KEY"
 enabled = false
 
 # Stop is root-turn only. Thread-spawned subagents fire SubagentStop instead,
-# so they do not ring. async: don't hold the turn open until mpv exits.
+# so they do not notify. async: don't hold the turn open for the notifier.
 [[hooks.Stop]]
   [[hooks.Stop.hooks]]
   type = "command"
-  command = "mpv --no-video --no-terminal ${HOME}/.config/clusterfork/bell.mp3"
+  command = "${HOME}/.config/clusterfork/bin/clusterfork-notify codex"
   async = true

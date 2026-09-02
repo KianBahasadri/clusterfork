@@ -51,7 +51,7 @@ Grok CLI settings:
   so it is not shown on fresh installations
 - **Marketplace:** xAI Official plugin marketplace source; default skills installs are not purged (`default_skills_installs_purged = false`)
 - **MCP servers:** context7 (remote, requires `CONTEXT7_API_KEY`), linear (remote, disabled), chrome-devtools (local, disabled — uses Chromium on port 9222), pixellab (remote, disabled — requires `PIXELLAB_API_KEY`), ElevenLabs (local via clusterfork launcher)
-- **Hooks:** `[[hooks.Stop]]` command hook playing `~/.config/clusterfork/bell.mp3` via `mpv --no-video --no-terminal`
+- **Hooks:** `[[hooks.Stop]]` invokes the shared completion notifier; see [Notifications](notifications.md)
 - **Plugins:** chrome-devtools-mcp disabled
 - **Updates:** auto-update enabled; `installer = internal`
 
@@ -63,7 +63,7 @@ Claude Code settings:
 - **Model:** `claude-opus-4-8` (Opus 4.8; not the `opus` alias, which resolves to Opus 5)
 - **Status line:** command `bash ~/.claude/statusline-command.sh`, refresh every 60s (see [Statusline](statusline.md))
 - **Plugins:** context7 enabled; linear, chrome-devtools, and pixellab shipped disabled — see [agents/claude-plugins/](#agentsclaude-plugins--claudeskills)
-- **Hooks:** `Stop` command hook playing `~/.config/clusterfork/bell.mp3` via `mpv --no-video --no-terminal`
+- **Hooks:** `Stop` invokes the shared completion notifier; see [Notifications](notifications.md)
 - **UI:** dark theme, fullscreen TUI, prompt suggestions off
 - **Voice:** enabled, hold mode
 - **Other:** auto-memory off, skip dangerous-mode permission prompt, agent push notifications on, drafted feedback off (`"feedbackDrafts": "off"`)
@@ -119,11 +119,11 @@ If `~/.commandcode/config.json` does not exist, it is created with `{"telemetry"
 
 ## agents/command-code-settings.json → ~/.commandcode/settings.json
 
-Command Code user-scope settings. The installer ensures the `Stop` turn-bell
-hook — it appends the hook definition when missing and preserves every other
-key in the file:
+Command Code user-scope settings. The installer ensures the shared `Stop`
+notifier, migrates the exact legacy clusterfork bell, and preserves every
+other key and hook in the file:
 
-- **Hooks:** `Stop` command hook playing `~/.config/clusterfork/bell.mp3` via `mpv --no-video --no-terminal`
+- **Hooks:** `Stop` invokes the shared completion notifier; see [Notifications](notifications.md)
 
 ## agents/command-code-mcp.json → ~/.commandcode/mcp.json
 
@@ -140,15 +140,15 @@ Command Code MCP servers. The installer expands `${ENV}` placeholders from the c
 Codex settings and MCP servers. Top-level settings defined in `agents/codex.toml`
 and all `[mcp_servers…]` / hook event tables are updated/overwritten into
 `~/.codex/config.toml`. The installer also strips retired clusterfork keys
-(`notify`) and stamps `trusted_hash` for the clusterfork Stop bell only
+(`notify`) and stamps `trusted_hash` for the clusterfork Stop notifier only
 (`[hooks.state."…/config.toml:stop:0:0"]`; other `hooks.state` entries stay).
-Codex owns the rest of `~/.codex/config.toml` — `model`,
-`model_reasoning_effort`, `approvals_reviewer`, `service_tier`, and the
-`[projects]` trust levels it writes as you accept directories — so other keys
-and tables stay untouched. `${HOME}` placeholders in values are expanded at
-install time.
+Codex owns the rest of `~/.codex/config.toml` — `approvals_reviewer`,
+`service_tier`, and the `[projects]` trust levels it writes as you accept
+directories — so other keys and tables stay untouched. `${HOME}` placeholders
+in values are expanded at install time.
 
-- **Hooks:** `[[hooks.Stop]]` command hook playing `~/.config/clusterfork/bell.mp3` via `mpv --no-video --no-terminal`, `async = true`. Stop is root-turn only (thread-spawned subagents fire `SubagentStop`, which is not registered). The installer writes the matching `trusted_hash` so this hook does not wait on `/hooks`.
+- **Model:** `gpt-5.6-sol`, reasoning effort `ultra`
+- **Hooks:** root-only asynchronous `[[hooks.Stop]]` invokes the shared completion notifier; see [Notifications](notifications.md). The installer writes its matching `trusted_hash` so it does not wait on `/hooks`.
 - **context7:** remote `https://mcp.context7.com/mcp`
 - **ElevenLabs:** clusterfork `bin/elevenlabs-mcp` launcher
 - **linear:** remote `https://mcp.linear.app/mcp`, disabled

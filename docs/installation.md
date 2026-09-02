@@ -14,6 +14,7 @@
 |-----------------------------------|------------------------------------------|-----------------------------------|
 | `.env`                            | `~/.config/clusterfork/.env`             | API keys (gitignored)             |
 | `bell.mp3`                        | `~/.config/clusterfork/bell.mp3`         | Turn-completion notification sound|
+| `notify/`                         | `~/.config/clusterfork/notify/`          | Private ntfy Compose and route settings |
 | `bash_profile.sh`                 | `~/.config/clusterfork/bash_profile.sh`  | Sourced on shell startup          |
 | `shell/*.sh`                      | `~/.config/clusterfork/shell/*.sh`       | One module per agent              |
 | `bin/*`                           | `~/.config/clusterfork/bin/*`            | Helper launchers (on `PATH`)      |
@@ -30,8 +31,8 @@
 | `agents/cursor-mcp.json`          | `~/.cursor/mcp.json`                     | Cursor MCP servers (`${ENV}` expanded from `.env`) |
 | `agents/command-code-mcp.json`    | `~/.commandcode/mcp.json`                | Command Code MCP servers (`${ENV}` expanded from `.env`) |
 | `agents/command-code.json`        | `~/.commandcode/config.json`             | Command Code settings (`telemetry` only; other keys preserved) |
-| `agents/command-code-settings.json` | `~/.commandcode/settings.json`         | Command Code user settings (ensures the `Stop` turn-bell hook; other keys preserved) |
-| `agents/codex.toml`               | `~/.codex/config.toml`                   | Codex settings and MCP servers (merges top-level keys, replaces `mcp_servers` and hook events, drops retired `notify`, trusts Stop bell) |
+| `agents/command-code-settings.json` | `~/.commandcode/settings.json`         | Command Code user settings (ensures shared `Stop` notifier; other hooks/keys preserved) |
+| `agents/codex.toml`               | `~/.codex/config.toml`                   | Codex Sol Ultra default, MCP servers, and hooks (drops retired `notify`, trusts Stop notifier) |
 | `statusline/claude/statusline.sh` | `~/.claude/statusline-command.sh`        | Claude status line script         |
 | `statusline/claude/usage-fetch.py`| `~/.claude/claude-usage-fetch.py`        | Claude usage cache helper         |
 | `statusline/cursor/statusline.sh` | `~/.cursor/statusline.sh`                | Cursor status line script         |
@@ -46,7 +47,7 @@ The installer also:
 - Appends a `source` line to `~/.bashrc` so `bash_profile.sh` is loaded in every new shell
 - Ensures the `statusLine` key in `~/.cursor/cli-config.json` (without replacing that whole file). See [Statusline](statusline.md)
 - Ensures the ElevenLabs entry in `~/.claude.json` `mcpServers` (without replacing that whole file)
-- Updates top-level settings defined in `agents/codex.toml`, replaces `mcp_servers` and hook event tables, strips retired clusterfork keys (`notify`), and stamps `trusted_hash` for the Stop bell in `~/.codex/config.toml`; Codex's model, approval settings, `[projects]` trust levels, and other `hooks.state` entries are left alone
+- Updates top-level settings defined in `agents/codex.toml` (including the Sol Ultra default), replaces `mcp_servers` and hook event tables, strips retired clusterfork keys (`notify`), and stamps `trusted_hash` for the Stop notifier in `~/.codex/config.toml`; Codex's approval settings, `[projects]` trust levels, and other `hooks.state` entries are left alone
 - Installs each `agents/claude-plugins/<name>/` into `~/.claude/skills/` as the plugin `<name>@skills-dir`, after the skills copy that wipes that directory. It aborts if `agents/claude.json` does not set `"<name>@skills-dir": false` in `enabledPlugins`, since plugins are on unless told otherwise
 - Overwrites `~/.commandcode/mcp.json` from `agents/command-code-mcp.json`, expanding `${ENV}` placeholders from `.env` (full replace)
 - Overwrites `~/.gemini/config/mcp_config.json` from `agents/antigravity-mcp.json`, expanding `${ENV}` placeholders from `.env` (full replace)
@@ -55,7 +56,7 @@ The installer also:
 
 ## Installer output
 
-Each `✓` step line prints the label and destination; a parenthesized detail names what the step installs inside that destination — bell hooks (`Stop → bell.mp3`), MCP server names (read live from the source files), merged keys, shipped-disabled plugin names, helper script names, or skill-tree notes. A `+` line under a step is an extra destination installed by it (the statusline usage fetchers). Details are derived from the repo sources at run time, so they track the configs without edits to the installer.
+Each `✓` step line prints the label and destination; a parenthesized detail names what the step installs inside that destination — completion hooks (`Stop → clusterfork-notify`), MCP server names (read live from the source files), merged keys, shipped-disabled plugin names, helper script names, or skill-tree notes. A `+` line under a step is an extra destination installed by it (the statusline usage fetchers). Details are derived from the repo sources at run time, so they track the configs without edits to the installer.
 
 ## Requirements
 
@@ -64,4 +65,4 @@ Each `✓` step line prints the label and destination; a parenthesized detail na
 
 ## Re-running
 
-The installer is idempotent — running it again **overwrites** every mapped destination from the repo (full replace, not merge). It will not add a duplicate `source` line to `~/.bashrc`. Exceptions: `~/.grok/config.toml` is replaced from the repo, but an existing `theme` value is kept; `~/.codex/config.toml` has repo top-level keys, `mcp_servers`, and hook events updated (retired `notify` stripped, Stop bell `trusted_hash` stamped) while preserving Codex-managed runtime settings; `~/.commandcode/config.json` and `~/.claude.json`/`~/.cursor/cli-config.json` have only specific keys merged. See [Conventions](conventions.md) for the source-of-truth rule.
+The installer is idempotent — running it again **overwrites** every mapped destination from the repo (full replace, not merge). It will not add a duplicate `source` line to `~/.bashrc`. Exceptions: `~/.grok/config.toml` is replaced from the repo, but an existing `theme` value is kept; `~/.codex/config.toml` has repo top-level keys, `mcp_servers`, and hook events updated (retired `notify` stripped, Stop notifier `trusted_hash` stamped) while preserving unrelated Codex-managed runtime settings; `~/.commandcode/config.json` and `~/.claude.json`/`~/.cursor/cli-config.json` have only specific keys merged. See [Conventions](conventions.md) for the source-of-truth rule.

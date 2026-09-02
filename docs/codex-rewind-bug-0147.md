@@ -17,10 +17,11 @@ fails for every prompt, not just old ones.
 
 ## Why it is not clusterfork
 
-The installer never writes `~/.codex/config.toml` — it only symlinks
-`~/.codex/skills/` and `auth.json`. The only Codex behaviour clusterfork owns
-is the `cc` alias. Nothing in the local config touches history, threads, or
-compaction, and the error string is compiled into the `codex` binary itself:
+Clusterfork now writes the model default, MCP roster, and hook tables in
+`~/.codex/config.toml`, installs skills, manages shared auth links, and owns
+the `cc` wrapper. None of those paths writes history, thread items, or
+compaction state, and the error string is compiled into the `codex` binary
+itself:
 
 ```bash
 strings ~/.codex/packages/standalone/current/bin/codex | grep 'persisted thread'
@@ -67,9 +68,9 @@ Two things that look like causes but are not:
 
 ## Fix
 
-Fixed upstream in **0.148.0**. As of 2026-08-16 the latest stable release is
-still 0.147.0, so `codex update` does not help; the fix is only in the
-`0.148.0-alpha.*` line (alpha.12 or later, per the maintainer).
+Fixed upstream in **0.148.0**. At investigation time on 2026-08-16 the latest
+stable release was still 0.147.0, so `codex update` did not help; the fix was
+only in the `0.148.0-alpha.*` line (alpha.12 or later, per the maintainer).
 
 The standalone install lays out as
 `~/.codex/packages/standalone/releases/<version>-x86_64-unknown-linux-musl/bin/`

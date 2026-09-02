@@ -1,0 +1,19 @@
+services:
+  ntfy:
+    image: binwiederhier/ntfy:v2.28.0
+    container_name: clusterfork-ntfy
+    command:
+      - serve
+      - --base-url=${CLUSTERFORK_NTFY_PUBLIC_URL:?set CLUSTERFORK_NTFY_PUBLIC_URL in .env}
+      - --behind-proxy
+      - --cache-file=/var/cache/ntfy/cache.db
+      - --cache-duration=24h
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:2586:80
+      - 100.123.102.71:2586:80
+    volumes:
+      - ntfy-cache:/var/cache/ntfy
+
+volumes:
+  ntfy-cache:

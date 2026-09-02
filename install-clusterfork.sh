@@ -4,7 +4,7 @@
 # What this does:
 #   1. Overwrites ~/.config/clusterfork/.env from repo-local .env
 #   2. Overwrites ~/.config/clusterfork/bash_profile.sh, shell/*.sh, bin/,
-#      scripts/rotate_auth.py, and scripts/codeview/ from repo
+#      notify/, scripts/rotate_auth.py, and scripts/codeview/ from repo
 #   3. Overwrites ~/.tmux.conf from repo-local tmux.conf
 #   4. Overwrites agent settings from repo-local agents/ (Grok keeps existing
 #      theme from ~/.grok/config.toml if set)
@@ -22,12 +22,12 @@
 #      (expands ${ENV} placeholders from the clusterfork .env)
 #  10. Ensures telemetry is disabled in ~/.commandcode/config.json from
 #      agents/command-code.json (key only; does not replace the whole file)
-#  11. Ensures the Stop turn-bell hook in ~/.commandcode/settings.json from
+#  11. Ensures the Stop turn-notification hook in ~/.commandcode/settings.json from
 #      agents/command-code-settings.json (appends the hook if missing; preserves
 #      the rest of the file)
 #  12. Updates ~/.codex/config.toml from agents/codex.toml (merges top-level
 #      settings, replaces mcp_servers and hook event tables, strips retired
-#      keys like notify, stamps trusted_hash for the Stop bell only; Codex owns
+#      keys like notify, stamps trusted_hash for the Stop notifier only; Codex owns
 #      the rest of that file)
 #  13. Installs agents/claude-plugins/* into ~/.claude/skills/ as skills-dir
 #      plugins; agents/claude.json ships each one disabled
@@ -56,6 +56,8 @@ SHELL_SRC_DIR="$REPO_DIR/shell"
 SHELL_DEST_DIR="$CLUSTERFORK_CONFIG_DIR/shell"
 BIN_SRC_DIR="$REPO_DIR/bin"
 BIN_DEST_DIR="$CLUSTERFORK_CONFIG_DIR/bin"
+NOTIFY_SRC_DIR="$REPO_DIR/notify"
+NOTIFY_DEST_DIR="$CLUSTERFORK_CONFIG_DIR/notify"
 TMUX_CONFIG_SRC="$REPO_DIR/tmux.conf"
 TMUX_CONFIG_DEST="$HOME/.tmux.conf"
 ROTATE_AUTH_SRC="$REPO_DIR/scripts/rotate_auth.py"
@@ -415,6 +417,12 @@ for f in "$BIN_SRC_DIR"/*; do
 done
 step "bin helpers" "$BIN_DEST_DIR" "${bin_detail#, }"
 
+[[ -d "$NOTIFY_SRC_DIR" ]] || fail "missing $(tildify "$NOTIFY_SRC_DIR")"
+rm -rf -- "$NOTIFY_DEST_DIR"
+mkdir -p "$NOTIFY_DEST_DIR"
+cp -r "$NOTIFY_SRC_DIR"/. "$NOTIFY_DEST_DIR"/
+step "notify service" "$NOTIFY_DEST_DIR" "ntfy compose"
+
 [[ -f "$ROTATE_AUTH_SRC" ]] || fail "missing $(tildify "$ROTATE_AUTH_SRC")"
 mkdir -p "$(dirname "$ROTATE_AUTH_DEST")"
 cp "$ROTATE_AUTH_SRC" "$ROTATE_AUTH_DEST"
@@ -538,7 +546,7 @@ cp "$GROK_CONFIG_SRC" "$GROK_CONFIG_DEST"
 if [[ -n "$grok_theme" ]]; then
   sed -i "s/^theme = \".*\"/theme = \"$grok_theme\"/" "$GROK_CONFIG_DEST"
 fi
-grok_detail="Stop → bell.mp3"
+grok_detail="Stop → clusterfork-notify"
 if [[ -n "$grok_theme" ]]; then
   grok_detail+="; theme preserved"
 fi
@@ -547,7 +555,7 @@ step "grok config" "$GROK_CONFIG_DEST" "$grok_detail"
 [[ -f "$CLAUDE_CONFIG_SRC" ]] || fail "missing $(tildify "$CLAUDE_CONFIG_SRC")"
 mkdir -p "$(dirname "$CLAUDE_CONFIG_DEST")"
 cp "$CLAUDE_CONFIG_SRC" "$CLAUDE_CONFIG_DEST"
-step "claude" "$CLAUDE_CONFIG_DEST" "Stop → bell.mp3"
+step "claude" "$CLAUDE_CONFIG_DEST" "Stop → clusterfork-notify"
 
 [[ -f "$CLAUDE_STATUSLINE_SRC" ]] || fail "missing $(tildify "$CLAUDE_STATUSLINE_SRC")"
 [[ -f "$CLAUDE_USAGE_FETCH_SRC" ]] || fail "missing $(tildify "$CLAUDE_USAGE_FETCH_SRC")"
@@ -715,8 +723,8 @@ if merged != current:
 PY
 step "command code config" "$COMMAND_CODE_CONFIG_DEST" "merge: $(python3 -c 'import json, sys; print(", ".join(json.load(open(sys.argv[1], encoding="utf-8"))))' "$COMMAND_CODE_CONFIG_SRC")"
 
-# Command Code user settings: ensure the Stop turn-bell hook. settings.json holds
-# other user-scope keys, so only the hook definition is appended when missing.
+# Command Code user settings: ensure the shared Stop notifier. settings.json
+# holds other user-scope keys, so unrelated hooks and settings are preserved.
 [[ -f "$COMMAND_CODE_SETTINGS_SRC" ]] || fail "missing $(tildify "$COMMAND_CODE_SETTINGS_SRC")"
 mkdir -p "$(dirname "$COMMAND_CODE_SETTINGS_DEST")"
 python3 - "$COMMAND_CODE_SETTINGS_SRC" "$COMMAND_CODE_SETTINGS_DEST" <<'PY'
@@ -741,17 +749,45 @@ if not isinstance(hooks, dict):
 stop = hooks.setdefault("Stop", [])
 if not isinstance(stop, list):
     raise SystemExit(f"command code settings: 'hooks.Stop' in {dest} must be a JSON array")
-if not any(d in stop for d in wanted_stop):
-    stop.extend(wanted_stop)
+
+# Migrate the exact legacy clusterfork bell without touching user-owned hooks.
+legacy_commands = {
+    "mpv --no-video --no-terminal ~/.config/clusterfork/bell.mp3",
+    "mpv --no-video --no-terminal ${HOME}/.config/clusterfork/bell.mp3",
+}
+
+def is_legacy_clusterfork_bell(group):
+    if not isinstance(group, dict) or set(group) != {"hooks"}:
+        return False
+    handlers = group.get("hooks")
+    return (
+        isinstance(handlers, list)
+        and len(handlers) == 1
+        and isinstance(handlers[0], dict)
+        and handlers[0].get("type") == "command"
+        and handlers[0].get("command") in legacy_commands
+        and set(handlers[0]) == {"type", "command"}
+    )
+
+changed = False
+migrated = [group for group in stop if not is_legacy_clusterfork_bell(group)]
+if migrated != stop:
+    hooks["Stop"] = stop = migrated
+    changed = True
+for definition in wanted_stop:
+    if definition not in stop:
+        stop.append(definition)
+        changed = True
+if changed or not dest.is_file():
     dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY
-step "command code hooks" "$COMMAND_CODE_SETTINGS_DEST" "Stop → bell.mp3"
+step "command code hooks" "$COMMAND_CODE_SETTINGS_DEST" "Stop → clusterfork-notify"
 
 # Codex config: update top-level settings, replace mcp_servers and hook event
 # tables from agents/codex.toml, strip retired clusterfork keys (notify), and
-# stamp trusted_hash for the Stop bell only (other hooks.state entries kept).
-# Other settings (model, approvals, per-project trust levels written by Codex)
-# are preserved.
+# stamp trusted_hash for the Stop notifier only (other hooks.state entries kept).
+# Other settings (approvals and per-project trust levels written by Codex) are
+# preserved.
 [[ -f "$CODEX_CONFIG_SRC" ]] || fail "missing $(tildify "$CODEX_CONFIG_SRC")"
 mkdir -p "$(dirname "$CODEX_CONFIG_DEST")"
 python3 - "$CODEX_CONFIG_SRC" "$CODEX_CONFIG_DEST" "$DOTENV_DEST" "$REPO_DIR/scripts" <<'PY'
@@ -919,7 +955,7 @@ table_section = "\n".join(kept_tables).strip("\n")
 parts = [p for p in [top_section, table_section, src_tables_block] if p]
 result = "\n\n".join(parts) + "\n"
 
-# Stamp trust for the clusterfork Stop bell only. hooks.state is Codex-managed;
+# Stamp trust for the clusterfork Stop notifier only. hooks.state is Codex-managed;
 # keep any other entries and overwrite just dest:stop:0:0.
 stop_groups = (wanted.get("hooks") or {}).get("Stop") or []
 if not (
@@ -979,7 +1015,7 @@ for k, v in before.items():
 if result != current:
     dest_path.write_text(result, encoding="utf-8")
 PY
-step "codex config" "$CODEX_CONFIG_DEST" "Stop → bell.mp3; mcp_servers: $(python3 -c 'import sys, tomllib; print(", ".join(tomllib.load(open(sys.argv[1], "rb")).get("mcp_servers", {})))' "$CODEX_CONFIG_SRC")"
+step "codex config" "$CODEX_CONFIG_DEST" "Sol Ultra; Stop → clusterfork-notify; mcp_servers: $(python3 -c 'import sys, tomllib; print(", ".join(tomllib.load(open(sys.argv[1], "rb")).get("mcp_servers", {})))' "$CODEX_CONFIG_SRC")"
 
 # Ensure Claude Code user-scope MCP includes ElevenLabs. ~/.claude.json holds a lot
 # of unrelated state, so only upsert this one server entry.
@@ -1100,7 +1136,7 @@ fi
 printf '\n  Shell commands\n'
 printf '    %-5s %-18s %s\n' cl "claude" "--dangerously-skip-permissions --effort max"
 printf '    %-5s %-18s %s\n' cmd "cmd" "--resume --yolo (unless --yolo/--dangerously-skip-permissions given)"
-printf '    %-5s %-18s %s\n' cc "codex resume" "--yolo"
+printf '    %-5s %-18s %s\n' cc "codex resume" "--yolo; gpt-5.6-sol ultra"
 printf '    %-5s %-18s %s\n' ca "cursor-agent" "--yolo"
 printf '    %-5s %-18s %s\n' oc "opencode" ""
 printf '    %-5s %-18s %s\n' occ "claude (Go)" "--dangerously-skip-permissions --effort \$OCC_EFFORT (max)"

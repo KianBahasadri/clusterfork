@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Shared turn-completion notifier: ring locally and optionally publish to ntfy.
+
+set -u
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+clusterfork_dir="${CLUSTERFORK_DIR:-$(cd "$script_dir/.." && pwd)}"
+env_file="${CLUSTERFORK_ENV_FILE:-$clusterfork_dir/.env}"
+
+for config_file in "$clusterfork_dir/notify/settings.env" "$env_file"; do
+  if [[ -f "$config_file" ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    . "$config_file" 2>/dev/null || true
+    set +a
+  fi
+done
+unset config_file
+
+case "${1:-agent}" in
+  claude) label="Claude" ;;
+  codex) label="Codex" ;;
+  command-code) label="Command Code" ;;
+  grok) label="Grok" ;;
+  *) label="Agent" ;;
+esac
+
+project="$(basename "${PWD:-workspace}")"
+[[ -n "$project" && "$project" != "/" ]] || project="workspace"
+sound="${CLUSTERFORK_NOTIFY_SOUND:-$clusterfork_dir/bell.mp3}"
+
+ring_local() {
+  if command -v mpv >/dev/null 2>&1 && [[ -f "$sound" ]]; then
+    mpv --no-video --no-terminal "$sound" </dev/null >/dev/null 2>&1 || true
+  elif [[ -w /dev/tty ]]; then
+    printf '\a' >/dev/tty 2>/dev/null || true
+  fi
+}
+
+notify_phone() {
+  local url="${CLUSTERFORK_NTFY_URL:-}"
+  [[ -n "$url" ]] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+
+  local -a args=(
+    --fail
+    --silent
+    --show-error
+    --connect-timeout 1
+    --max-time 3
+    --request POST
+    --header "X-Title: $label finished"
+    --header "X-Priority: high"
+    --header "X-Tags: robot"
+    --data-binary "Turn complete in $project"
+  )
+  if [[ -n "${CLUSTERFORK_NTFY_TOKEN:-}" ]]; then
+    args+=(--header "Authorization: Bearer $CLUSTERFORK_NTFY_TOKEN")
+  fi
+
+  curl "${args[@]}" "$url" </dev/null >/dev/null 2>&1 || true
+}
+
+# The network timeout stays below bell.mp3's duration, so phone delivery adds
+# no latency to the existing synchronous hooks. Neither path can fail a turn.
+ring_local &
+ring_pid=$!
+notify_phone &
+phone_pid=$!
+wait "$ring_pid" 2>/dev/null || true
+wait "$phone_pid" 2>/dev/null || true
+exit 0

@@ -14,7 +14,9 @@ installer bug.
 
 ## Current setup
 
-`agents/codex.toml` installs a root-only `[[hooks.Stop]]` bell (async `mpv`).
+`agents/codex.toml` installs the root-only shared notifier on `[[hooks.Stop]]`.
+The helper rings locally and publishes to ntfy concurrently; the hook remains
+asynchronous in Codex.
 The installer also strips the retired top-level `notify` key so it cannot
 stack with Stop, and stamps `trusted_hash` for that Stop hook so it does not
 wait on `/hooks`. See [Agent Configs](agent-configs.md).
@@ -23,13 +25,13 @@ wait on `/hooks`. See [Agent Configs](agent-configs.md).
 [[hooks.Stop]]
   [[hooks.Stop.hooks]]
   type = "command"
-  command = "mpv --no-video --no-terminal ${HOME}/.config/clusterfork/bell.mp3"
+  command = "${HOME}/.config/clusterfork/bin/clusterfork-notify codex"
   async = true
 ```
 
 Stop was chosen over `notify` so thread-spawned subagent completions do not
-ring (`SubagentStop` is not registered). That does not change the usage-limit
-gap below: Stop still only runs on normal turn completion.
+notify (`SubagentStop` is not registered). That does not change the
+usage-limit gap below: Stop still only runs on normal turn completion.
 
 ## What we verified in the Codex source (upstream `main`, 2026-08-29)
 
@@ -82,8 +84,9 @@ gap below: Stop still only runs on normal turn completion.
 approach that rings at the moment the limit hits in an interactive session,
 but it was rejected as too much complexity for a workaround keyed to a
 serialization format rather than a documented hook contract. The fleet later
-moved the bell from `notify` to `[[hooks.Stop]]` so subagent completions stay
-silent; that path still does not run on a usage-limit death.
+moved completion handling from `notify` to `[[hooks.Stop]]` so subagent
+completions stay silent; the shared bell/phone notifier now uses that same
+path, which still does not run on a usage-limit death.
 
 Upstream has a "broader event taxonomy — including `error`, `session-limit`,
 `authentication-required`" on the roadmap; if that lands, revisit.

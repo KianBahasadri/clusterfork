@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "mpv --no-video --no-terminal ~/.config/clusterfork/bell.mp3"
+            "command": "~/.config/clusterfork/bin/clusterfork-notify claude"
           }
         ]
       }
