@@ -19,6 +19,16 @@ Build interfaces with quiet defaults, direct manipulation, and progressive maste
 
 ---
 
+## Icon System
+
+* Use [Lucide](https://lucide.dev/icons/) as the canonical general-purpose icon set. Choose the official icon whose documented name most directly matches the action or concept; do not mix icon packs, substitute Unicode glyphs, or redraw a standard symbol when Lucide already provides one.
+* Preserve Lucide's 24×24 view box, 2px outline stroke, round caps and joins, and `currentColor` behavior. Scale the complete icon uniformly to fit its context; do not stretch it, fill an outline icon, splice paths from different icons, or change stroke weight from icon to icon.
+* Import, tree-shake, or embed only the icons the interface uses. Avoid shipping the complete catalog or adding a remote runtime dependency to a surface that needs to work offline. Preserve Lucide's ISC notice when vendoring SVGs; the reference asset's copy is [assets/LUCIDE-LICENSE.txt](assets/LUCIDE-LICENSE.txt).
+* Use a custom icon only for a real domain concept absent from Lucide, and construct it on Lucide's grid and stroke grammar. For danger-colored status, select an angular Lucide silhouette such as an octagon rather than recoloring a circular status icon.
+* Treat decorative icons as hidden from assistive technology. Give every icon-only control an accessible name and a visible tooltip; pair ambiguous, rare, or consequential symbols with visible text.
+
+---
+
 ## Design Tokens
 
 ### Monochromatic Structural Tokens (Chrome, Structure & Typography)
@@ -54,7 +64,7 @@ Hues are applied **only** when directly communicating system state, errors, or d
   * *Secondary / Outline:* Transparent fill, 1px `--line` border, `--ink` text. On hover: `--surface-raised` background and `--line-strong` border.
   * *Quiet / Ghost:* Transparent fill, no border, `--muted` text. On hover: `--ink-strong` text and subtle neutral background tint.
   * *Danger:* Red fill or border (`--danger`) with sharp, zero-radius corners. The **only** colored button variant, permitted because it conveys critical risk and destructive consequences.
-  * *Icon Button:* Square or circular hit target (minimum 36×36px visual, 44×44px touch area) with a transparent background, no border, and no shadow. Use the icon's neutral tone or opacity for hover and active feedback while preserving a clear focus-visible ring. Provide an accessible label via `aria-label` or `title` plus a tooltip.
+  * *Icon Button:* Square or circular hit target (minimum 36×36px visual, 44×44px touch area) with a transparent background, no border, and no shadow. Use the matching Lucide icon and adjust its neutral tone or opacity for hover and active feedback while preserving a clear focus-visible ring. Provide an accessible label via `aria-label` or `title` plus a tooltip.
 * **States:**
   * *Hover:* Shift filled or outlined button backgrounds by 8–12% neutrally. For icon-only buttons, change the icon tone or opacity without adding container chrome.
   * *Active:* Slight downscale (`transform: scale(0.98)`).
@@ -66,7 +76,7 @@ Hues are applied **only** when directly communicating system state, errors, or d
 * **Search Field & Selection Modes:**
   * Every value-selection dropdown uses a custom editable text field and popover rather than a browser-default `<select>` or a button-only picker. Typing filters the available options immediately.
   * Decide whether the field is list-only or free-entry. A list-only field commits only an available option and restores its last committed value when unmatched text is dismissed. A free-entry field also accepts text not present in the list and offers the entered text itself as a selectable custom option. Distinguish that value with quotes or text treatment when needed, but do not prepend an instruction such as `Use`.
-  * Display the committed value in the text field with a right-aligned chevron. Keep that value synchronized with form submission or application state.
+  * Display the committed value in the text field with a right-aligned Lucide `Chevron Down`. Keep that value synchronized with form submission or application state.
   * Give the editable field `role="combobox"`, `aria-autocomplete="list"`, `aria-expanded="true/false"`, and `aria-controls` pointing to the listbox. Expose the active option with `aria-activedescendant`; options use `role="option"` and accurate `aria-selected` state.
 * **Menu Surface:**
   * Elevated container (`--surface-raised`), 1px `--line-strong` border, neutral box shadow.
@@ -92,7 +102,7 @@ Hues are applied **only** when directly communicating system state, errors, or d
   * *Hover:* Border becomes `--line-strong`.
   * *Focus:* Border becomes `--ink-strong` with 2px `--focus` ring.
   * *Invalid / Error:* Border becomes `--danger` and corners become sharp. Render concise inline text beneath the field with `role="alert"` and the shortest complete instruction needed to fix the error. When the label and field type already make the expected format obvious, use direct copy such as `Enter a valid email address` instead of explaining basic syntax. Do not prepend a status icon when the field treatment and message already identify the error. Omit a trailing period from a short, one-line corrective message. This is where color is permitted, because it conveys an error state.
-  * *Search / Clearable:* Magnifier icon on left; clear ("×") button on right appearing only when input has a value.
+  * *Search / Clearable:* Lucide `Search` icon on the left; icon-only clear button using Lucide `X` on the right, appearing only when the input has a value.
 
 ### 4. Selection Controls (Checkboxes, Radios, Switches)
 * **Checkboxes:**
@@ -167,7 +177,7 @@ Hues are applied **only** when directly communicating system state, errors, or d
 
 ### 10. Navigation, Tabs & Breadcrumbs
 * **Spotlight Search & Actions:**
-  * Every interactive page includes a compact search launcher in the upper-right utility area, immediately left of the theme toggle. Static or non-interactive pages do not need it. Render the launcher as a transparent, borderless icon button identified by a familiar magnifier plus an accessible label; do not place placeholder copy such as `Search page` or a shortcut hint in the persistent chrome.
+  * Every interactive page includes a compact search launcher in the upper-right utility area, immediately left of the theme toggle. Static or non-interactive pages do not need it. Render the launcher as a short field-shaped button with a neutral surface and thin neutral border, and place the magnifier at the field's left inset rather than centering it; this makes the control read as a search bar instead of an icon button. Give it an accessible label, but do not place visible copy such as `Search page` or a shortcut hint in the persistent chrome.
   * Activating the launcher opens a centered Spotlight-style palette and moves focus into its editable search field. Filter the page's meaningful destinations and available commands together as the user types. Common commands include exporting as Markdown, opening the print-to-PDF flow, copying the page link, toggling the theme, and opening keyboard shortcuts; include only actions the page actually implements.
   * Make the palette keyboard-accessible: `Up/Down Arrows` move the active result, `Enter` runs it, and `Escape` closes the palette and returns focus to the launcher. Support `Ctrl+K` and `Command+K` to open the palette, but do not display that hint beside the launcher.
   * Include `Keyboard shortcuts` as a palette command; it opens a popup listing every shortcut the current surface actually supports.

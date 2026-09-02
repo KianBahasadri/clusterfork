@@ -87,6 +87,24 @@
     button { cursor: pointer; background: transparent; border: none; }
     a { color: inherit; text-decoration: none; }
 
+    .icon {
+      width: 16px;
+      height: 16px;
+      flex: 0 0 auto;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .icon-sprite {
+      position: absolute;
+      width: 0;
+      height: 0;
+      overflow: hidden;
+    }
+
     :focus-visible {
       outline: 2px solid var(--focus);
       outline-offset: 2px;
@@ -104,21 +122,24 @@
     }
 
     .spotlight-trigger {
-      width: 36px;
+      width: 72px;
       height: 36px;
-      padding: 0;
-      border: 0;
+      padding: 0 10px;
+      border: 1px solid var(--line);
       border-radius: var(--radius);
-      background: transparent;
+      background: var(--surface);
       color: var(--muted);
       display: inline-flex;
       align-items: center;
-      justify-content: center;
-      transition: color 120ms ease, transform 80ms ease;
+      justify-content: flex-start;
+      transition: color 120ms ease, border-color 120ms ease, transform 80ms ease;
     }
-    .spotlight-trigger:hover { color: var(--ink-strong); }
+    .spotlight-trigger:hover {
+      color: var(--ink-strong);
+      border-color: var(--line-strong);
+    }
     .spotlight-trigger:active { transform: scale(0.98); }
-    .spotlight-trigger svg,
+    .spotlight-trigger .icon,
     .spotlight-search-icon {
       width: 15px;
       height: 15px;
@@ -215,6 +236,10 @@
     }
     .theme-toggle:active {
       transform: scale(0.96);
+    }
+    .theme-toggle .icon {
+      width: 17px;
+      height: 17px;
     }
 
     /* Layout */
@@ -418,9 +443,6 @@
     .spinner {
       width: 14px;
       height: 14px;
-      border: 2px solid currentColor;
-      border-right-color: transparent;
-      border-radius: 50%;
       animation: spin 700ms linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
@@ -464,10 +486,11 @@
       position: absolute;
       top: 50%;
       right: 13px;
+      width: 14px;
+      height: 14px;
       transform: translateY(-50%);
       transition: transform 150ms ease;
       color: var(--muted);
-      font-size: 10px;
       pointer-events: none;
     }
     .custom-dropdown-input[aria-expanded="true"] + .chevron {
@@ -620,7 +643,16 @@
       align-items: center;
     }
     .input-with-action .input-field {
+      padding-left: 36px;
       padding-right: 36px;
+    }
+    .input-leading-icon {
+      position: absolute;
+      left: 11px;
+      width: 15px;
+      height: 15px;
+      color: var(--faint);
+      pointer-events: none;
     }
     .input-clear-btn {
       position: absolute;
@@ -636,6 +668,10 @@
     }
     .input-clear-btn:hover {
       color: var(--ink-strong);
+    }
+    .input-clear-btn .icon {
+      width: 14px;
+      height: 14px;
     }
 
     /* -------------------------------------------------------------
@@ -661,6 +697,11 @@
       justify-content: center;
       transition: background 120ms ease, border-color 120ms ease;
     }
+    .custom-checkbox .icon {
+      width: 14px;
+      height: 14px;
+      opacity: 0;
+    }
     .control-row:hover .custom-checkbox {
       border-color: var(--ink-strong);
     }
@@ -668,6 +709,10 @@
       background: var(--ink-strong);
       border-color: var(--ink-strong);
       color: var(--canvas);
+    }
+    input[type="checkbox"]:checked + .custom-checkbox .icon,
+    input[type="checkbox"]:indeterminate + .custom-checkbox .icon {
+      opacity: 1;
     }
     input[type="checkbox"]:indeterminate + .custom-checkbox {
       background: var(--ink-strong);
@@ -866,6 +911,10 @@
     }
     .sort-th-btn:hover {
       color: var(--ink-strong);
+    }
+    .sort-th-btn .icon {
+      width: 13px;
+      height: 13px;
     }
 
     .data-table td {
@@ -1172,8 +1221,9 @@
       line-height: 1.5;
     }
     .callout-icon {
-      font-size: 16px;
-      line-height: 1.2;
+      width: 18px;
+      height: 18px;
+      margin-top: 1px;
     }
     .callout-info {
       background: var(--surface-raised);
@@ -1233,6 +1283,12 @@
       flex: 1;
       color: var(--ink-strong);
     }
+    .toast-icon {
+      color: var(--good);
+    }
+    .toast-icon-danger {
+      color: var(--danger);
+    }
     .toast-undo {
       color: var(--ink-strong);
       font-weight: 600;
@@ -1257,14 +1313,81 @@
 </head>
 <body>
 
+  <!-- Lucide Static 1.39.0 icons; ISC license in LUCIDE-LICENSE.txt. -->
+  <svg class="icon-sprite" aria-hidden="true" focusable="false">
+    <defs>
+      <symbol id="lucide-search" viewBox="0 0 24 24">
+        <path d="m21 21-4.34-4.34"></path>
+        <circle cx="11" cy="11" r="8"></circle>
+      </symbol>
+      <symbol id="lucide-sun" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="4"></circle>
+        <path d="M12 2v2"></path>
+        <path d="M12 20v2"></path>
+        <path d="m4.93 4.93 1.41 1.41"></path>
+        <path d="m17.66 17.66 1.41 1.41"></path>
+        <path d="M2 12h2"></path>
+        <path d="M20 12h2"></path>
+        <path d="m6.34 17.66-1.41 1.41"></path>
+        <path d="m19.07 4.93-1.41 1.41"></path>
+      </symbol>
+      <symbol id="lucide-moon" viewBox="0 0 24 24">
+        <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"></path>
+      </symbol>
+      <symbol id="lucide-chevron-down" viewBox="0 0 24 24">
+        <path d="m6 9 6 6 6-6"></path>
+      </symbol>
+      <symbol id="lucide-x" viewBox="0 0 24 24">
+        <path d="M18 6 6 18"></path>
+        <path d="m6 6 12 12"></path>
+      </symbol>
+      <symbol id="lucide-arrow-up-down" viewBox="0 0 24 24">
+        <path d="m21 16-4 4-4-4"></path>
+        <path d="M17 20V4"></path>
+        <path d="m3 8 4-4 4 4"></path>
+        <path d="M7 4v16"></path>
+      </symbol>
+      <symbol id="lucide-refresh-cw" viewBox="0 0 24 24">
+        <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
+        <path d="M21 3v5h-5"></path>
+        <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
+        <path d="M8 16H3v5"></path>
+      </symbol>
+      <symbol id="lucide-info" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="10"></circle>
+        <path d="M12 16v-4"></path>
+        <path d="M12 8h.01"></path>
+      </symbol>
+      <symbol id="lucide-triangle-alert" viewBox="0 0 24 24">
+        <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path>
+        <path d="M12 9v4"></path>
+        <path d="M12 17h.01"></path>
+      </symbol>
+      <symbol id="lucide-octagon-x" viewBox="0 0 24 24">
+        <path d="m15 9-6 6"></path>
+        <path d="M2.586 16.726A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2h6.624a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586z"></path>
+        <path d="m9 9 6 6"></path>
+      </symbol>
+      <symbol id="lucide-check" viewBox="0 0 24 24">
+        <path d="M20 6 9 17l-5-5"></path>
+      </symbol>
+      <symbol id="lucide-minus" viewBox="0 0 24 24">
+        <path d="M5 12h14"></path>
+      </symbol>
+      <symbol id="lucide-loader-circle" viewBox="0 0 24 24">
+        <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
+      </symbol>
+    </defs>
+  </svg>
+
   <!-- Persistent page utilities -->
   <div class="page-tools">
     <button class="spotlight-trigger" id="spotlightTrigger" type="button" aria-label="Open search and commands" aria-haspopup="dialog" aria-controls="spotlightDialog" aria-expanded="false" aria-keyshortcuts="Control+K Meta+K" title="Search and commands">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+      <svg class="icon" aria-hidden="true"><use href="#lucide-search"></use></svg>
     </button>
 
     <button class="theme-toggle" id="themeToggleBtn" type="button" aria-label="Switch to light theme" title="Toggle theme">
-      <span id="themeIcon" aria-hidden="true">☀</span>
+      <svg class="icon" id="themeIcon" aria-hidden="true"><use id="themeIconUse" href="#lucide-sun"></use></svg>
     </button>
   </div>
 
@@ -1305,7 +1428,7 @@
               <button class="btn btn-quiet" type="button">Quiet Ghost</button>
               <button class="btn btn-danger" type="button">Destructive Action</button>
               <button class="btn btn-icon" type="button" aria-label="Search items" title="Search">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                <svg class="icon" aria-hidden="true"><use href="#lucide-search"></use></svg>
               </button>
             </div>
           </div>
@@ -1334,7 +1457,7 @@
                 <span class="sr-only" id="environmentDropdownHint">Search and choose an available environment.</span>
                 <div class="dropdown-field">
                   <input class="custom-dropdown-input" id="environmentDropdownInput" type="text" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="environmentDropdownMenu" aria-labelledby="environmentDropdownLabel" aria-describedby="environmentDropdownHint" autocomplete="off" spellcheck="false" value="Production (us-east-1)" data-dropdown-input>
-                  <span class="chevron" aria-hidden="true">▼</span>
+                  <svg class="icon chevron" aria-hidden="true"><use href="#lucide-chevron-down"></use></svg>
                 </div>
                 <input type="hidden" name="environment" value="prod" data-dropdown-value>
                 <ul class="dropdown-menu" id="environmentDropdownMenu" role="listbox" tabindex="-1" aria-labelledby="environmentDropdownLabel">
@@ -1351,7 +1474,7 @@
                 <span class="sr-only" id="roleDropdownHint">Search available roles or enter a custom role.</span>
                 <div class="dropdown-field">
                   <input class="custom-dropdown-input" id="roleDropdownInput" type="text" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="roleDropdownMenu" aria-labelledby="roleDropdownLabel" aria-describedby="roleDropdownHint" autocomplete="off" spellcheck="false" placeholder="Select or enter role…" data-dropdown-input>
-                  <span class="chevron" aria-hidden="true">▼</span>
+                  <svg class="icon chevron" aria-hidden="true"><use href="#lucide-chevron-down"></use></svg>
                 </div>
                 <input type="hidden" name="role" value="" data-dropdown-value>
                 <ul class="dropdown-menu" id="roleDropdownMenu" role="listbox" tabindex="-1" aria-labelledby="roleDropdownLabel">
@@ -1370,7 +1493,7 @@
                 <span class="sr-only" id="languageDropdownHint">Search and choose an available language.</span>
                 <div class="dropdown-field">
                   <input class="custom-dropdown-input" id="languageDropdownInput" type="text" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="languageDropdownMenu" aria-labelledby="languageDropdownLabel" aria-describedby="languageDropdownHint" autocomplete="off" spellcheck="false" value="English" data-dropdown-input>
-                  <span class="chevron" aria-hidden="true">▼</span>
+                  <svg class="icon chevron" aria-hidden="true"><use href="#lucide-chevron-down"></use></svg>
                 </div>
                 <input type="hidden" name="language" value="en" data-dropdown-value>
                 <ul class="dropdown-menu" id="languageDropdownMenu" role="listbox" tabindex="-1" aria-labelledby="languageDropdownLabel">
@@ -1438,8 +1561,9 @@
             <div class="form-group">
               <label class="form-label" for="inputSearch">Clearable Search</label>
               <div class="input-with-action">
+                <svg class="icon input-leading-icon" aria-hidden="true"><use href="#lucide-search"></use></svg>
                 <input class="input-field" id="inputSearch" type="text" placeholder="Filter resources..." value="telemetry">
-                <button class="input-clear-btn" id="btnClearSearch" type="button" aria-label="Clear search input">×</button>
+                <button class="input-clear-btn" id="btnClearSearch" type="button" aria-label="Clear search input"><svg class="icon" aria-hidden="true"><use href="#lucide-x"></use></svg></button>
               </div>
             </div>
 
@@ -1464,17 +1588,17 @@
             <div class="showcase-group">
               <label class="control-row">
                 <input class="sr-only" type="checkbox" checked>
-                <span class="custom-checkbox" aria-hidden="true">✓</span>
+                <span class="custom-checkbox" aria-hidden="true"><svg class="icon"><use href="#lucide-check"></use></svg></span>
                 <span>Telemetry logging enabled</span>
               </label>
               <label class="control-row">
                 <input class="sr-only" type="checkbox" id="indeterminateBox">
-                <span class="custom-checkbox" aria-hidden="true" id="indeterminateMark">–</span>
+                <span class="custom-checkbox" aria-hidden="true" id="indeterminateMark"><svg class="icon"><use href="#lucide-minus"></use></svg></span>
                 <span>Mixed regional sync</span>
               </label>
               <label class="control-row">
                 <input class="sr-only" type="checkbox">
-                <span class="custom-checkbox" aria-hidden="true">✓</span>
+                <span class="custom-checkbox" aria-hidden="true"><svg class="icon"><use href="#lucide-check"></use></svg></span>
                 <span>Strict TLS pinning</span>
               </label>
             </div>
@@ -1554,10 +1678,10 @@
             <table class="data-table" id="sampleTable">
               <thead>
                 <tr>
-                  <th scope="col"><button class="sort-th-btn" type="button" data-sort="service">Service <span>↕</span></button></th>
+                  <th scope="col"><button class="sort-th-btn" type="button" data-sort="service">Service <svg class="icon" aria-hidden="true"><use href="#lucide-arrow-up-down"></use></svg></button></th>
                   <th scope="col">Status</th>
-                  <th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="rpm">RPM <span>↕</span></button></th>
-                  <th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="latency">p95 Latency <span>↕</span></button></th>
+                  <th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="rpm">RPM <svg class="icon" aria-hidden="true"><use href="#lucide-arrow-up-down"></use></svg></button></th>
+                  <th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="latency">p95 Latency <svg class="icon" aria-hidden="true"><use href="#lucide-arrow-up-down"></use></svg></button></th>
                   <th class="num" scope="col">Error Rate</th>
                   <th scope="col" style="text-align: right;">Action</th>
                 </tr>
@@ -1676,7 +1800,7 @@
           <dialog class="modal-dialog" id="demoDialog" aria-labelledby="dialogTitle">
             <div class="modal-header">
               <h3 class="modal-title" id="dialogTitle">Rollback Traffic Allocation?</h3>
-              <button class="btn-icon" id="btnCloseModal" type="button" aria-label="Close dialog">×</button>
+              <button class="btn-icon" id="btnCloseModal" type="button" aria-label="Close dialog"><svg class="icon" aria-hidden="true"><use href="#lucide-x"></use></svg></button>
             </div>
             <div class="modal-body">
               This will route all pending traffic from canary instance <strong>canary-9b</strong> back to the stable release cluster. The operation takes approximately 15 seconds to propagate across all edge regions.
@@ -1698,7 +1822,7 @@
           <div class="row-wrap" style="gap: 24px;">
             <div class="tooltip-wrapper">
               <button class="btn btn-icon" type="button" aria-label="Refresh telemetry data">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                <svg class="icon" aria-hidden="true"><use href="#lucide-refresh-cw"></use></svg>
               </button>
               <div class="tooltip-bubble" role="tooltip">Refresh telemetry data</div>
             </div>
@@ -1778,15 +1902,15 @@
         <div class="showcase-card">
           <div class="showcase-group">
             <div class="callout callout-info">
-              <span class="callout-icon" aria-hidden="true">ℹ</span>
+              <svg class="icon callout-icon" aria-hidden="true"><use href="#lucide-info"></use></svg>
               <div><strong>Scheduled Maintenance:</strong> Global database schema migration is scheduled for Sunday 02:00 UTC. No downtime expected.</div>
             </div>
             <div class="callout callout-caution">
-              <span class="callout-icon" aria-hidden="true">⚠</span>
+              <svg class="icon callout-icon" aria-hidden="true"><use href="#lucide-triangle-alert"></use></svg>
               <div><strong>Telemetry Delay:</strong> Regional metrics from eu-west-1 are trailing by approximately 180 seconds due to network throttling.</div>
             </div>
             <div class="callout callout-danger">
-              <span class="callout-icon" aria-hidden="true">✖</span>
+              <svg class="icon callout-icon" aria-hidden="true"><use href="#lucide-octagon-x"></use></svg>
               <div><strong>Outage Detected:</strong> Connection pool exhaustion on payment-db-primary. Automated failover initiated.</div>
             </div>
           </div>
@@ -1805,7 +1929,7 @@
   <dialog class="spotlight-dialog" id="spotlightDialog" aria-label="Search and commands">
     <div class="spotlight-search-field">
       <label class="sr-only" for="spotlightInput">Search sections and commands</label>
-      <svg class="spotlight-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+      <svg class="icon spotlight-search-icon" aria-hidden="true"><use href="#lucide-search"></use></svg>
       <input class="spotlight-input" id="spotlightInput" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="spotlightResults" autocomplete="off" spellcheck="false" placeholder="Search sections and commands">
     </div>
     <ul class="spotlight-results" id="spotlightResults" role="listbox" aria-label="Sections and commands">
@@ -1834,7 +1958,7 @@
   <dialog class="modal-dialog shortcut-dialog" id="shortcutDialog" aria-labelledby="shortcutDialogTitle">
     <div class="modal-header">
       <h2 class="modal-title" id="shortcutDialogTitle">Keyboard shortcuts</h2>
-      <button class="btn-icon" id="btnCloseShortcuts" type="button" aria-label="Close keyboard shortcuts">×</button>
+      <button class="btn-icon" id="btnCloseShortcuts" type="button" aria-label="Close keyboard shortcuts"><svg class="icon" aria-hidden="true"><use href="#lucide-x"></use></svg></button>
     </div>
     <div class="modal-body">
       <dl class="shortcut-list">
@@ -1864,19 +1988,29 @@
   <!-- JavaScript Interaction Logic -->
   <script>
     (function () {
+      function createLucideIcon(name, className) {
+        var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        var use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+        svg.setAttribute("class", className || "icon");
+        svg.setAttribute("aria-hidden", "true");
+        use.setAttribute("href", "#lucide-" + name);
+        svg.appendChild(use);
+        return svg;
+      }
+
       // 1. Theme toggle
       var html = document.documentElement;
       var themeToggle = document.getElementById("themeToggleBtn");
-      var themeIcon = document.getElementById("themeIcon");
+      var themeIconUse = document.getElementById("themeIconUse");
 
       function updateTheme(theme) {
         html.dataset.theme = theme;
         if (theme === "light") {
-          themeIcon.textContent = "☾";
+          themeIconUse.setAttribute("href", "#lucide-moon");
           themeToggle.setAttribute("aria-label", "Switch to dark theme");
           themeToggle.setAttribute("title", "Switch to dark theme");
         } else {
-          themeIcon.textContent = "☀";
+          themeIconUse.setAttribute("href", "#lucide-sun");
           themeToggle.setAttribute("aria-label", "Switch to light theme");
           themeToggle.setAttribute("title", "Switch to light theme");
         }
@@ -2002,7 +2136,7 @@
       function copyPageLink() {
         var value = window.location.href;
         var reportSuccess = function () { spawnToast("Page link copied", false); };
-        var reportFailure = function () { spawnToast("Could not copy the page link", false); };
+        var reportFailure = function () { spawnToast("Could not copy the page link", false, "danger"); };
 
         if (navigator.clipboard && window.isSecureContext) {
           navigator.clipboard.writeText(value).then(reportSuccess, function () {
@@ -2111,17 +2245,16 @@
 
       // 3. Loading button demo
       var btnLoading = document.getElementById("btnLoadingDemo");
-      var btnLoadingText = document.getElementById("btnLoadingText");
       btnLoading.addEventListener("click", function () {
         btnLoading.disabled = true;
         btnLoading.setAttribute("aria-busy", "true");
-        btnLoading.innerHTML = '<span class="spinner" aria-hidden="true"></span> Saving...';
+        btnLoading.replaceChildren(createLucideIcon("loader-circle", "icon spinner"), document.createTextNode("Saving..."));
         setTimeout(function () {
           btnLoading.disabled = false;
           btnLoading.setAttribute("aria-busy", "false");
-          btnLoading.innerHTML = 'Saved ✓';
+          btnLoading.replaceChildren(createLucideIcon("check"), document.createTextNode("Saved"));
           setTimeout(function () {
-            btnLoading.innerHTML = 'Click for Loading';
+            btnLoading.textContent = "Click for Loading";
           }, 1500);
         }, 1200);
       });
@@ -2490,9 +2623,12 @@
       var spawnToastBtn = document.getElementById("btnSpawnToast");
       var toastContainer = document.getElementById("toastContainer");
 
-      function spawnToast(msg, undoable) {
+      function spawnToast(msg, undoable, tone) {
         var toast = document.createElement("div");
         toast.className = "toast";
+        var iconName = tone === "danger" ? "octagon-x" : "check";
+        var iconClass = tone === "danger" ? "icon toast-icon toast-icon-danger" : "icon toast-icon";
+        toast.appendChild(createLucideIcon(iconName, iconClass));
         var message = document.createElement("span");
         message.className = "toast-msg";
         message.textContent = msg || "Preferences updated successfully.";
