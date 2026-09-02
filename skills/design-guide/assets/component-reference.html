@@ -102,19 +102,15 @@
       height: 36px;
       padding: 0;
       border-radius: var(--radius);
-      border: 1px solid var(--line);
-      background: var(--surface);
-      color: var(--ink);
+      color: var(--muted);
       display: inline-flex;
       align-items: center;
       justify-content: center;
       font-size: 15px;
-      box-shadow: var(--shadow-sm);
-      transition: background 120ms ease, border-color 120ms ease, transform 80ms ease;
+      transition: color 120ms ease, transform 80ms ease;
     }
     .theme-toggle:hover {
-      background: var(--surface-raised);
-      border-color: var(--line-strong);
+      color: var(--ink-strong);
     }
     .theme-toggle:active {
       transform: scale(0.96);
@@ -146,15 +142,6 @@
       max-height: calc(100vh - 64px);
       overflow-y: auto;
       padding-right: 12px;
-    }
-
-    .toc-title {
-      font-size: 11px;
-      font-family: var(--mono);
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
-      color: var(--muted);
-      margin-bottom: 12px;
     }
 
     .toc-list {
@@ -208,23 +195,8 @@
       letter-spacing: 0.08em;
     }
 
-    .section-title {
-      font-size: 22px;
-      font-weight: 600;
-      color: var(--ink-strong);
-      letter-spacing: -0.015em;
-    }
-
-    .section-desc {
-      font-size: 14px;
-      color: var(--muted);
-      margin-top: 4px;
-    }
-
     /* Showcase grid */
     .showcase-card {
-      background: var(--surface);
-      border: 1px solid var(--line);
       border-radius: var(--radius);
       padding: 24px;
       display: flex;
@@ -236,14 +208,6 @@
       display: flex;
       flex-direction: column;
       gap: 10px;
-    }
-
-    .showcase-group-title {
-      font-size: 12px;
-      font-family: var(--mono);
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
     }
 
     .row-wrap {
@@ -326,13 +290,12 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      border: 1px solid var(--line);
+      border: 0;
+      background: transparent;
       color: var(--muted);
     }
     .btn-icon:hover:not(:disabled) {
-      background: var(--surface-raised);
       color: var(--ink-strong);
-      border-color: var(--line-strong);
     }
 
     .spinner {
@@ -532,7 +495,6 @@
     }
     .input-clear-btn:hover {
       color: var(--ink-strong);
-      background: var(--line);
     }
 
     /* -------------------------------------------------------------
@@ -1100,21 +1062,20 @@
   <div class="layout-container">
     <!-- Sidebar Navigation -->
     <aside class="toc-sidebar" aria-label="Component index">
-      <div class="toc-title">Components</div>
       <nav>
         <ul class="toc-list">
-          <li><a class="toc-link" href="#buttons">1. Buttons & Actions</a></li>
-          <li><a class="toc-link" href="#dropdowns">2. Dropdowns & Menus</a></li>
-          <li><a class="toc-link" href="#inputs">3. Form Inputs</a></li>
-          <li><a class="toc-link" href="#selection">4. Selection Controls</a></li>
-          <li><a class="toc-link" href="#labels">5. Labels & Badges</a></li>
-          <li><a class="toc-link" href="#tables">6. Tables & Data</a></li>
-          <li><a class="toc-link" href="#charts">7. Charts & Graphics</a></li>
-          <li><a class="toc-link" href="#dialogs">8. Dialogs & Modals</a></li>
-          <li><a class="toc-link" href="#tooltips">9. Tooltips & Popovers</a></li>
-          <li><a class="toc-link" href="#navigation">10. Tabs & Breadcrumbs</a></li>
-          <li><a class="toc-link" href="#cards">11. Cards & Panels</a></li>
-          <li><a class="toc-link" href="#alerts">12. Alerts & Toasts</a></li>
+          <li><a class="toc-link" href="#buttons">01 Buttons &amp; Actions</a></li>
+          <li><a class="toc-link" href="#dropdowns">02 Dropdowns &amp; Menus</a></li>
+          <li><a class="toc-link" href="#inputs">03 Form Inputs &amp; Textareas</a></li>
+          <li><a class="toc-link" href="#selection">04 Selection Controls</a></li>
+          <li><a class="toc-link" href="#labels">05 Labels, Badges &amp; Metadata</a></li>
+          <li><a class="toc-link" href="#tables">06 Tables &amp; Data Grids</a></li>
+          <li><a class="toc-link" href="#charts">07 Charts &amp; Graphics</a></li>
+          <li><a class="toc-link" href="#dialogs">08 Dialogs &amp; Modals</a></li>
+          <li><a class="toc-link" href="#tooltips">09 Tooltips &amp; Popovers</a></li>
+          <li><a class="toc-link" href="#navigation">10 Tabs &amp; Breadcrumbs</a></li>
+          <li><a class="toc-link" href="#cards">11 Cards &amp; Panels</a></li>
+          <li><a class="toc-link" href="#alerts">12 Alerts &amp; Toasts</a></li>
         </ul>
       </nav>
     </aside>
@@ -1125,7 +1086,7 @@
       <!-- SECTION 1: Buttons -->
       <section class="component-section" id="buttons" aria-labelledby="heading-buttons">
         <header class="section-header">
-          <h2 class="section-index" id="heading-buttons">01 / Buttons &amp; Actions</h2>
+          <h2 class="section-index" id="heading-buttons">01 Buttons &amp; Actions</h2>
         </header>
         <div class="showcase-card">
           <div class="showcase-group">
@@ -1154,13 +1115,10 @@
       <!-- SECTION 2: Dropdowns -->
       <section class="component-section" id="dropdowns" aria-labelledby="heading-dropdowns">
         <header class="section-header">
-          <div class="section-index">02 / Specification</div>
-          <h2 class="section-title" id="heading-dropdowns">Dropdowns & Menus</h2>
-          <p class="section-desc">Native form selects alongside accessible custom popover menus with keyboard navigation.</p>
+          <h2 class="section-index" id="heading-dropdowns">02 Dropdowns &amp; Menus</h2>
         </header>
         <div class="showcase-card">
           <div class="showcase-group">
-            <span class="showcase-group-title">Native Select & Custom Accessible Popover</span>
             <div class="row-wrap">
               <div class="dropdown-container">
                 <label class="sr-only" for="demoNativeSelect">Environment</label>
@@ -1192,9 +1150,7 @@
       <!-- SECTION 3: Inputs -->
       <section class="component-section" id="inputs" aria-labelledby="heading-inputs">
         <header class="section-header">
-          <div class="section-index">03 / Specification</div>
-          <h2 class="section-title" id="heading-inputs">Form Inputs & Textareas</h2>
-          <p class="section-desc">Persistent labels, monospaced tokens, clearable search, and inline accessible validation.</p>
+          <h2 class="section-index" id="heading-inputs">03 Form Inputs &amp; Textareas</h2>
         </header>
         <div class="showcase-card">
           <div class="row-wrap" style="align-items: flex-start; gap: 24px;">
@@ -1237,15 +1193,12 @@
       <!-- SECTION 4: Selection Controls -->
       <section class="component-section" id="selection" aria-labelledby="heading-selection">
         <header class="section-header">
-          <div class="section-index">04 / Specification</div>
-          <h2 class="section-title" id="heading-selection">Selection Controls</h2>
-          <p class="section-desc">Checkboxes with indeterminate support, grouped radio buttons, and toggle switches for immediate preferences.</p>
+          <h2 class="section-index" id="heading-selection">04 Selection Controls</h2>
         </header>
         <div class="showcase-card">
           <div class="row-wrap" style="align-items: flex-start; gap: 36px;">
             <!-- Checkboxes -->
             <div class="showcase-group">
-              <span class="showcase-group-title">Checkboxes</span>
               <label class="control-row">
                 <input class="sr-only" type="checkbox" checked>
                 <span class="custom-checkbox" aria-hidden="true">✓</span>
@@ -1265,7 +1218,7 @@
 
             <!-- Radios -->
             <fieldset class="showcase-group" style="border: none; padding: 0;">
-              <legend class="showcase-group-title" style="margin-bottom: 8px;">Update Cadence</legend>
+              <legend class="sr-only">Update Cadence</legend>
               <label class="control-row">
                 <input class="sr-only" type="radio" name="cadence" value="continuous" checked>
                 <span class="custom-radio" aria-hidden="true"></span>
@@ -1285,7 +1238,6 @@
 
             <!-- Toggle Switch -->
             <div class="showcase-group">
-              <span class="showcase-group-title">Switches</span>
               <label class="control-row">
                 <input class="sr-only switch-input" type="checkbox" role="switch" aria-checked="true" checked>
                 <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
@@ -1304,13 +1256,10 @@
       <!-- SECTION 5: Labels & Badges -->
       <section class="component-section" id="labels" aria-labelledby="heading-labels">
         <header class="section-header">
-          <div class="section-index">05 / Specification</div>
-          <h2 class="section-title" id="heading-labels">Labels, Badges, Tags & Metadata</h2>
-          <p class="section-desc">Protected status families with non-color redundancy, monospaced metadata tokens, and keyboard hints.</p>
+          <h2 class="section-index" id="heading-labels">05 Labels, Badges &amp; Metadata</h2>
         </header>
         <div class="showcase-card">
           <div class="showcase-group">
-            <span class="showcase-group-title">Protected Status Families</span>
             <div class="row-wrap">
               <span class="badge badge-nominal"><span class="badge-dot" aria-hidden="true"></span>Nominal</span>
               <span class="badge badge-good"><span class="badge-dot" aria-hidden="true"></span>Healthy (200 OK)</span>
@@ -1321,7 +1270,6 @@
           </div>
 
           <div class="showcase-group">
-            <span class="showcase-group-title">Technical Metadata & Keyboard Hints</span>
             <div class="row-wrap">
               <span class="meta-tag">commit:72f4fb4</span>
               <span class="meta-tag">v2.14.0-rc</span>
@@ -1336,9 +1284,7 @@
       <!-- SECTION 6: Tables -->
       <section class="component-section" id="tables" aria-labelledby="heading-tables">
         <header class="section-header">
-          <div class="section-index">06 / Specification</div>
-          <h2 class="section-title" id="heading-tables">Tables & Data Grids</h2>
-          <p class="section-desc">Sortable headers, tabular numbers right-aligned, status badges, row hover, and interactive filter controls.</p>
+          <h2 class="section-index" id="heading-tables">06 Tables &amp; Data Grids</h2>
         </header>
         <div class="showcase-card" style="padding: 0; overflow: hidden;">
           <div class="table-container">
@@ -1395,9 +1341,7 @@
       <!-- SECTION 7: Charts -->
       <section class="component-section" id="charts" aria-labelledby="heading-charts">
         <header class="section-header">
-          <div class="section-index">07 / Specification</div>
-          <h2 class="section-title" id="heading-charts">Charts & Data Graphics</h2>
-          <p class="section-desc">Vector SVG charts with explicit axes, multi-series differentiation, hover inspection, and accessible tabular fallback.</p>
+          <h2 class="section-index" id="heading-charts">07 Charts &amp; Data Graphics</h2>
         </header>
         <div class="chart-box">
           <div class="chart-header">
@@ -1458,9 +1402,7 @@
       <!-- SECTION 8: Dialogs & Modals -->
       <section class="component-section" id="dialogs" aria-labelledby="heading-dialogs">
         <header class="section-header">
-          <div class="section-index">08 / Specification</div>
-          <h2 class="section-title" id="heading-dialogs">Dialogs & Modals</h2>
-          <p class="section-desc">Accessible modal with focus trapping, backdrop dimming, Escape key dismissal, and explicit action buttons.</p>
+          <h2 class="section-index" id="heading-dialogs">08 Dialogs &amp; Modals</h2>
         </header>
         <div class="showcase-card">
           <div class="row-wrap">
@@ -1487,9 +1429,7 @@
       <!-- SECTION 9: Tooltips & Popovers -->
       <section class="component-section" id="tooltips" aria-labelledby="heading-tooltips">
         <header class="section-header">
-          <div class="section-index">09 / Specification</div>
-          <h2 class="section-title" id="heading-tooltips">Tooltips & Popovers</h2>
-          <p class="section-desc">Non-interactive hover/focus tooltips for icon buttons and brief explanations.</p>
+          <h2 class="section-index" id="heading-tooltips">09 Tooltips &amp; Popovers</h2>
         </header>
         <div class="showcase-card">
           <div class="row-wrap" style="gap: 24px;">
@@ -1511,9 +1451,7 @@
       <!-- SECTION 10: Tabs & Breadcrumbs -->
       <section class="component-section" id="navigation" aria-labelledby="heading-navigation">
         <header class="section-header">
-          <div class="section-index">10 / Specification</div>
-          <h2 class="section-title" id="heading-navigation">Navigation, Tabs & Breadcrumbs</h2>
-          <p class="section-desc">ARIA tablist with keyboard arrow navigation and structured breadcrumbs.</p>
+          <h2 class="section-index" id="heading-navigation">10 Navigation, Tabs &amp; Breadcrumbs</h2>
         </header>
         <div class="showcase-card">
           <!-- Breadcrumb -->
@@ -1548,20 +1486,18 @@
       <!-- SECTION 11: Cards & Panels -->
       <section class="component-section" id="cards" aria-labelledby="heading-cards">
         <header class="section-header">
-          <div class="section-index">11 / Specification</div>
-          <h2 class="section-title" id="heading-cards">Cards & Panels</h2>
-          <p class="section-desc">Key-metric summary cards, structured surface containers, and compact operational cockpits.</p>
+          <h2 class="section-index" id="heading-cards">11 Cards &amp; Panels</h2>
         </header>
         <div class="row-wrap" style="align-items: stretch;">
           <div class="metric-card">
             <span class="metric-label">Request Rate</span>
             <span class="metric-num">14,280</span>
-            <span class="metric-sub"><span style="color: var(--good);">+4.2%</span> vs last hour</span>
+            <span class="metric-sub">+4.2% vs last hour</span>
           </div>
           <div class="metric-card">
             <span class="metric-label">p95 Latency</span>
             <span class="metric-num">42 ms</span>
-            <span class="metric-sub"><span style="color: var(--good);">Stable</span> within bounds</span>
+            <span class="metric-sub">Stable within bounds</span>
           </div>
           <div class="metric-card">
             <span class="metric-label">Active Incidents</span>
@@ -1574,13 +1510,10 @@
       <!-- SECTION 12: Alerts & Toasts -->
       <section class="component-section" id="alerts" aria-labelledby="heading-alerts">
         <header class="section-header">
-          <div class="section-index">12 / Specification</div>
-          <h2 class="section-title" id="heading-alerts">Alerts, Callouts & Toast Notifications</h2>
-          <p class="section-desc">Inline semantic callouts and transient operational toast notifications with undo capability.</p>
+          <h2 class="section-index" id="heading-alerts">12 Alerts, Callouts &amp; Toasts</h2>
         </header>
         <div class="showcase-card">
           <div class="showcase-group">
-            <span class="showcase-group-title">Inline Callouts</span>
             <div class="callout callout-info">
               <span class="callout-icon" aria-hidden="true">ℹ</span>
               <div><strong>Scheduled Maintenance:</strong> Global database schema migration is scheduled for Sunday 02:00 UTC. No downtime expected.</div>
@@ -1596,7 +1529,6 @@
           </div>
 
           <div class="showcase-group">
-            <span class="showcase-group-title">Toast Feedback Demo</span>
             <div class="row-wrap">
               <button class="btn btn-secondary" id="btnSpawnToast" type="button">Trigger Toast Notification</button>
             </div>

@@ -54,9 +54,9 @@ Hues are applied **only** when directly communicating system state, errors, or d
   * *Secondary / Outline:* Transparent fill, 1px `--line` border, `--ink` text. On hover: `--surface-raised` background and `--line-strong` border.
   * *Quiet / Ghost:* Transparent fill, no border, `--muted` text. On hover: `--ink-strong` text and subtle neutral background tint.
   * *Danger:* Red fill or border (`--danger`). The **only** colored button variant, permitted because it conveys critical risk and destructive consequences.
-  * *Icon Button:* Square/circular target (minimum 36×36px visual, 44×44px touch area) with neutral border and icon. Must have an accessible label via `aria-label` or `title` plus a tooltip.
+  * *Icon Button:* Square or circular hit target (minimum 36×36px visual, 44×44px touch area) with a transparent background, no border, and no shadow. Use the icon's neutral tone or opacity for hover and active feedback while preserving a clear focus-visible ring. Provide an accessible label via `aria-label` or `title` plus a tooltip.
 * **States:**
-  * *Hover:* Shift background brightness by 8–12% neutrally.
+  * *Hover:* Shift filled or outlined button backgrounds by 8–12% neutrally. For icon-only buttons, change the icon tone or opacity without adding container chrome.
   * *Active:* Slight downscale (`transform: scale(0.98)`).
   * *Focus-Visible:* 2px solid `--focus` ring with 2px offset.
   * *Disabled:* `opacity: 0.45`, `cursor: not-allowed`, `aria-disabled="true"`.
@@ -186,13 +186,15 @@ Hues are applied **only** when directly communicating system state, errors, or d
 
 ### Component Sections Must Identify Themselves
 
-* **Include:** One compact heading containing the ordinal and specific component name, such as `01 / Buttons & Actions`.
+* **Include:** One compact heading containing the ordinal followed directly by the specific component name, such as `01 Buttons & Actions`.
 * **Include:** A semantic heading (`h2` at the top section level) connected to its section with `aria-labelledby`.
 * **Include:** The rendered component immediately after the heading, with visible control labels, familiar affordances, and states that identify themselves.
 * **Do not include:** A description, subtitle, or summary sentence explaining the component. `[INV]` A viewer must be able to identify it from its visible name, rendered content, and boundary.
-* **Do not include:** A generic heading such as `01 / Specification`, a second larger title that repeats the component name, or a horizontal rule beneath the heading.
+* **Do not include:** Decorative punctuation such as a slash between the ordinal and section name, a generic heading such as `01 Specification`, a second larger title that repeats the component name, or a horizontal rule beneath the heading.
 * **Do not include:** Self-evident showcase taxonomy such as `Variants` or `States: Disabled & Loading`. If those labels seem necessary, strengthen the examples' visible labels and states instead.
-* **Boundary:** Use whitespace and the component container to distinguish the section; avoid extra separators or labels that describe the layout rather than the interface being demonstrated.
+* **Do not include:** A generic visible label such as `Components` above a navigation list when the links already identify its contents. Keep an accessible navigation name even when the visible label is unnecessary.
+* **Do not include:** A border or background color whose only purpose is to visually distinguish separate sections of a page. Repeated boxes add visual fatigue without clarifying the interface.
+* **Boundary:** Separate page sections with clear headings and whitespace. Preserve borders and surface fills only when they belong to an actual component or communicate a real control boundary or state.
 
 ---
 
