@@ -59,15 +59,21 @@ fi
 # The network timeout stays below bell.mp3's duration, so phone delivery adds
 # no latency to the existing synchronous hooks. Neither path can fail a turn.
 pids=()
+channels=()
+triggered_at="$(notify_history_timestamp 2>/dev/null || true)"
 if [[ "${NOTIFY_PREF[bell]}" == 1 ]]; then
   notify_play_bell "$clusterfork_dir" &
   pids+=("$!")
+  channels+=(bell)
 fi
 if [[ "${NOTIFY_PREF[phone]}" == 1 ]]; then
   notify_post_ntfy "$label finished" "Turn complete in $project" &
   pids+=("$!")
+  channels+=(phone)
 fi
 if (( ${#pids[@]} )); then
+  notifications="$(IFS=,; printf '%s' "${channels[*]}")"
+  notify_record_trigger "$clusterfork_dir" "$agent" "$notifications" "$triggered_at"
   for pid in "${pids[@]}"; do
     wait "$pid" 2>/dev/null || true
   done

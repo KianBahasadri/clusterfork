@@ -222,6 +222,10 @@ exist under `~/.local/share/clusterfork-auth/<agent>/`, it:
 - atomically repoints `store/current` and the agent's `auth.json` through the
   shared link chain
 
+Grok's runtime `~/.grok/auth.json.lock` sidecar is ignored during legacy
+profile discovery. It is not an `auth.json.SUFFIX` account profile and does not
+opt an otherwise single-account Grok installation into shared auth.
+
 It is a no-op when no suffixed profiles exist (plain single-account
 `auth.json`). Re-running the installer repairs a missing agent-side
 `auth.json` symlink as long as the shared store still has profiles and a

@@ -29,7 +29,10 @@ usage-limit gap is unchanged; see [Codex bell vs usage-limit deaths](codex-usage
 ## `notify` command
 
 `notify` is on PATH via clusterfork `bin/`. With no arguments (or `status`) it
-prints the current switches. A target with no value toggles; `on`/`off` sets it.
+prints the current switches followed by the five most recent notification
+triggers. Each history row shows a friendly local date and time with the time
+zone, the agent that invoked the hook, and the channels triggered. A target
+with no value toggles; `on`/`off` sets it.
 
 ```bash
 notify                 # status
@@ -43,6 +46,8 @@ notify bell off        # set instead of toggle
 notify test            # play the bell and post a phone test
 notify test bell       # play the local bell now
 notify test phone      # post a phone test now
+notify log              # show the 50 most recent triggers
+notify log 100          # choose a history length, up to 200
 ```
 
 Targets: `bell`, `phone`, `claude`, `codex`, `command-code`, `grok`,
@@ -57,14 +62,23 @@ matching the previous always-on behavior. Volume is passed to `mpv` as
 `notify test` fires the real channels now, without changing prefs and without
 waiting for a Stop hook. No argument tests both; `bell` or `phone` tests one.
 A test still runs when that switch is off, so a silenced channel can be
-checked before turning it back on. The bell test starts playback and returns;
-it does not wait for the clip to finish. The phone test waits for the post
-(title `Clusterfork test`, body `Phone path works`) to `CLUSTERFORK_NTFY_URL`.
-Missing URL, missing `curl`/`mpv`, or a failed post prints an error and exits
-non-zero.
+checked before turning it back on. Successful test channels appear in history
+with `test` as their source. The bell test starts playback and returns; it does
+not wait for the clip to finish. The phone test waits for the post (title
+`Clusterfork test`, body `Phone path works`) to `CLUSTERFORK_NTFY_URL`. Missing
+URL, missing `curl`/`mpv`, or a failed post prints an error and exits non-zero.
 
 Prefs live in `~/.config/clusterfork/notify-prefs`. That file is not a mapped
 installer destination, so reinstalling clusterfork does not reset it.
+
+Trigger history lives in `~/.config/clusterfork/notify-history`, which is also
+not overwritten on reinstall. The helper records enabled channels when it
+dispatches a notification; the history is not a delivery receipt. Disabled
+agents and Antigravity events rejected by the `fullyIdle` gate do not create a
+row. Writes are serialized when `flock` is available, logging failures remain
+silent, and only the newest 200 rows are retained. `notify log` displays 50 by
+default, accepts a count from 1 through 200, and—like the five-row status
+summary—prints newest first.
 
 ## Private ntfy service over Tailscale
 

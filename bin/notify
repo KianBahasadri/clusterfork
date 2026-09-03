@@ -4,6 +4,9 @@
 
 NOTIFY_TARGETS=(bell phone claude codex command-code grok antigravity)
 NOTIFY_AGENTS=(claude codex command-code grok antigravity)
+NOTIFY_STATUS_HISTORY_LIMIT=5
+NOTIFY_LOG_HISTORY_LIMIT=50
+NOTIFY_HISTORY_RETAIN=200
 declare -A NOTIFY_PREF=()
 NOTIFY_VOLUME=100
 
@@ -115,6 +118,91 @@ notify_effective() {
   return 1
 }
 
+notify_history_timestamp() {
+  date '+%Y-%m-%dT%H:%M:%S%z'
+}
+
+notify_human_time() {
+  local timestamp="$1" formatted
+  if formatted="$(date --date="$timestamp" '+%b %-d, %Y %-I:%M %p %Z' 2>/dev/null)"; then
+    printf '%s' "$formatted"
+  else
+    printf '%s' "$timestamp"
+  fi
+}
+
+notify_append_history_unlocked() {
+  local history="$1" timestamp="$2" source="$3" notifications="$4"
+  local line_count tmp
+
+  printf '%s\t%s\t%s\n' "$timestamp" "$source" "$notifications" >> "$history" || return 0
+  line_count="$(wc -l < "$history")" || return 0
+  if (( line_count > NOTIFY_HISTORY_RETAIN )); then
+    tmp="${history}.tmp.$$"
+    tail -n "$NOTIFY_HISTORY_RETAIN" "$history" > "$tmp" || return 0
+    mv -f "$tmp" "$history" || return 0
+  fi
+}
+
+notify_record_trigger() {
+  local dir="$1" source="$2" notifications="$3" timestamp="${4:-}"
+  local history="$dir/notify-history"
+
+  [[ -n "$notifications" ]] || return 0
+  case "$notifications" in
+    bell|phone|bell,phone) ;;
+    *) return 0 ;;
+  esac
+
+  source="${source//$'\t'/ }"
+  source="${source//$'\n'/ }"
+  source="${source//$'\r'/ }"
+  source="${source:0:32}"
+  [[ -n "$source" ]] || source="agent"
+  if [[ -z "$timestamp" ]]; then
+    timestamp="$(notify_history_timestamp 2>/dev/null)" || return 0
+  fi
+
+  # Stop hooks can overlap. Serialize the append/trim when flock is available;
+  # history is diagnostic only, so every error remains silent and fail-open.
+  if command -v flock >/dev/null 2>&1; then
+    (
+      flock -x 9 || exit 0
+      notify_append_history_unlocked \
+        "$history" "$timestamp" "$source" "$notifications"
+    ) 2>/dev/null 9>"${history}.lock" || true
+  else
+    notify_append_history_unlocked \
+      "$history" "$timestamp" "$source" "$notifications" 2>/dev/null || true
+  fi
+}
+
+notify_print_history() {
+  local dir="$1" limit="$2" title="$3"
+  local history="$dir/notify-history" timestamp display_time source notifications
+  local index shown=0
+  local -a lines=()
+
+  printf '  %s  ›  last %s\n' "$title" "$limit"
+  printf '\n'
+  printf '       %-27s  %-13s  %s\n' "time" "triggered by" "notifications"
+
+  if [[ -f "$history" ]]; then
+    mapfile -t lines < <(tail -n "$limit" "$history" 2>/dev/null)
+  fi
+  for ((index=${#lines[@]} - 1; index >= 0; index--)); do
+    IFS=$'\t' read -r timestamp source notifications <<< "${lines[$index]}"
+    [[ -n "$timestamp" && -n "$source" && -n "$notifications" ]] || continue
+    display_time="$(notify_human_time "$timestamp")"
+    notifications="${notifications//,/, }"
+    printf '       %-27s  %-13s  %s\n' "$display_time" "$source" "$notifications"
+    shown=1
+  done
+  if (( ! shown )); then
+    printf '       none yet\n'
+  fi
+}
+
 notify_print_row() {
   local key="$1" state extra=""
   state="$(notify_state_word "$key")"
@@ -131,7 +219,7 @@ notify_print_row() {
 }
 
 notify_print_status() {
-  local key
+  local dir="$1" key
   if notify_effective; then
     printf '  notify  ›  on\n'
   else
@@ -144,6 +232,8 @@ notify_print_status() {
   for key in "${NOTIFY_AGENTS[@]}"; do
     notify_print_row "$key"
   done
+  printf '\n'
+  notify_print_history "$dir" "$NOTIFY_STATUS_HISTORY_LIMIT" "recent notifications"
 }
 
 notify_usage() {
@@ -160,8 +250,10 @@ Usage:
                               claude, codex, command-code, grok,
                               antigravity
   notify test [bell|phone]    play the bell and/or post a phone test
+  notify log [count]          show trigger history (default 50, max 200)
 
 Prefs: ~/.config/clusterfork/notify-prefs (not overwritten by install)
+History: ~/.config/clusterfork/notify-history (newest 200 retained)
 EOF
 }
 
@@ -169,6 +261,7 @@ notify_hint() {
   printf '       Use: notify [all|bell|phone|claude|codex|command-code|grok|antigravity] [on|off]\n' >&2
   printf '            notify volume <0-100>\n' >&2
   printf '            notify test [bell|phone]\n' >&2
+  printf '            notify log [1-200]\n' >&2
 }
 
 notify_play_bell() {
@@ -252,17 +345,34 @@ notify_test_phone() {
 
 notify_run_test() {
   local dir="$1" channel="${2:-}"
-  local failed=0
+  local failed=0 timestamp notifications=""
+  timestamp="$(notify_history_timestamp 2>/dev/null || true)"
   case "$channel" in
     "")
-      notify_test_bell "$dir" || failed=1
-      notify_test_phone || failed=1
+      if notify_test_bell "$dir"; then
+        notifications="bell"
+      else
+        failed=1
+      fi
+      if notify_test_phone; then
+        notifications="${notifications:+$notifications,}phone"
+      else
+        failed=1
+      fi
       ;;
     bell)
-      notify_test_bell "$dir" || failed=1
+      if notify_test_bell "$dir"; then
+        notifications="bell"
+      else
+        failed=1
+      fi
       ;;
     phone)
-      notify_test_phone || failed=1
+      if notify_test_phone; then
+        notifications="phone"
+      else
+        failed=1
+      fi
       ;;
     *)
       printf '  ✗  notify test expects bell or phone, not %s\n' "$channel" >&2
@@ -270,6 +380,7 @@ notify_run_test() {
       return 1
       ;;
   esac
+  notify_record_trigger "$dir" "test" "$notifications" "$timestamp"
   return "$failed"
 }
 
@@ -287,7 +398,7 @@ notify_main() {
   notify_load_prefs "$dir"
 
   if [[ $# -eq 0 || "${1:-}" == status ]]; then
-    notify_print_status
+    notify_print_status "$dir"
     return 0
   fi
 
@@ -305,6 +416,18 @@ notify_main() {
   fi
 
   target="$1"
+  if [[ "$target" == log ]]; then
+    value="${2:-$NOTIFY_LOG_HISTORY_LIMIT}"
+    if [[ ! "$value" =~ ^[1-9][0-9]*$ ]] || (( 10#$value > NOTIFY_HISTORY_RETAIN )); then
+      printf '  ✗  notify log expects 1-%s, not %s\n' \
+        "$NOTIFY_HISTORY_RETAIN" "$value" >&2
+      return 1
+    fi
+    value="$((10#$value))"
+    notify_print_history "$dir" "$value" "notify log"
+    return 0
+  fi
+
   if [[ "$target" == volume ]]; then
     if [[ $# -ne 2 ]]; then
       printf '  ✗  notify volume requires 0-100\n' >&2

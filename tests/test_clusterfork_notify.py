@@ -32,6 +32,7 @@ class NotifyFixture(unittest.TestCase):
         self.mpv_log = self.root / "mpv.log"
         self.curl_log = self.root / "curl.log"
         self.curl_stdin = self.root / "curl.stdin"
+        self.notify_history = self.cf_dir / "notify-history"
 
         self._write_mock(
             "mpv",
@@ -54,6 +55,11 @@ class NotifyFixture(unittest.TestCase):
 
     def write_prefs(self, text: str) -> None:
         (self.cf_dir / "notify-prefs").write_text(text, encoding="utf-8")
+
+    def write_history(self, rows: list[tuple[str, str, str]]) -> None:
+        self.notify_history.write_text(
+            "".join("\t".join(row) + "\n" for row in rows), encoding="utf-8"
+        )
 
     def env(self, extra_env: dict[str, str] | None = None) -> dict[str, str]:
         return {
@@ -144,6 +150,12 @@ class NotifierTests(NotifyFixture):
         self.assertIn("http://127.0.0.1:2586/clusterfork", args)
         self.assertNotIn("raw hook transcript", args)
         self.assertEqual(self.curl_stdin.read_text(), "")
+        timestamp, source, notifications = self.notify_history.read_text().strip().split(
+            "\t"
+        )
+        self.assertRegex(timestamp, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4}$")
+        self.assertEqual(source, "claude")
+        self.assertEqual(notifications, "bell,phone")
 
     def test_audio_and_network_failures_are_silent_and_fail_open(self):
         proc = self.run_notifier(
@@ -175,6 +187,7 @@ class NotifierTests(NotifyFixture):
         self.assertEqual((grok.stdout, grok.stderr), ("", ""))
         self.assertFalse(self.mpv_log.exists())
         self.assertFalse(self.curl_log.exists())
+        self.assertFalse(self.notify_history.exists())
 
         claude = self.run_notifier(
             "claude", dotenv=f"CLUSTERFORK_NTFY_URL={PHONE_URL}\n"
@@ -288,7 +301,12 @@ class NotifyCommandTests(NotifyFixture):
             "       codex          on\n"
             "       command-code   on\n"
             "       grok           on\n"
-            "       antigravity    on\n",
+            "       antigravity    on\n"
+            "\n"
+            "  recent notifications  ›  last 5\n"
+            "\n"
+            "       time                         triggered by   notifications\n"
+            "       none yet\n",
         )
 
     def test_status_without_ntfy_url(self):
@@ -384,6 +402,46 @@ class NotifyCommandTests(NotifyFixture):
         self.assertIn("notify all on|off", proc.stdout)
         self.assertIn("notify volume <0-100>", proc.stdout)
         self.assertIn("notify test [bell|phone]", proc.stdout)
+        self.assertIn("notify log [count]", proc.stdout)
+
+    def test_status_shows_five_recent_triggers_and_log_shows_more(self):
+        rows = [
+            (f"2026-09-02T12:{minute:02d}:00-0400", "codex", "bell,phone")
+            for minute in range(8)
+        ]
+        self.write_history(rows)
+
+        display_env = {"TZ": "America/New_York", "LC_ALL": "C"}
+        status = self.run_cli("status", extra_env=display_env)
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertIn("recent notifications  ›  last 5", status.stdout)
+        self.assertNotIn("2026-09-02T12:02:00-0400", status.stdout)
+        for minute in range(3, 8):
+            self.assertIn(f"Sep 2, 2026 12:{minute:02d} PM EDT", status.stdout)
+        self.assertLess(
+            status.stdout.index("Sep 2, 2026 12:07 PM EDT"),
+            status.stdout.index("Sep 2, 2026 12:06 PM EDT"),
+        )
+        self.assertIn("codex          bell, phone", status.stdout)
+
+        history = self.run_cli("log", extra_env=display_env)
+        self.assertEqual(history.returncode, 0, history.stderr)
+        self.assertIn("notify log  ›  last 50", history.stdout)
+        for minute in range(8):
+            self.assertIn(f"Sep 2, 2026 12:{minute:02d} PM EDT", history.stdout)
+
+        limited = self.run_cli("log", "2", extra_env=display_env)
+        self.assertEqual(limited.returncode, 0, limited.stderr)
+        self.assertIn("notify log  ›  last 2", limited.stdout)
+        self.assertIn("Sep 2, 2026 12:07 PM EDT", limited.stdout)
+        self.assertIn("Sep 2, 2026 12:06 PM EDT", limited.stdout)
+        self.assertNotIn("Sep 2, 2026 12:05 PM EDT", limited.stdout)
+
+    def test_log_rejects_counts_outside_retained_history(self):
+        for value in ("0", "201", "all"):
+            proc = self.run_cli("log", value)
+            self.assertEqual(proc.returncode, 1)
+            self.assertIn(f"notify log expects 1-200, not {value}", proc.stderr)
 
     def test_test_bell_plays_even_when_pref_is_off(self):
         self.write_prefs("bell=0\nphone=0\nvolume=40\n")
@@ -445,6 +503,8 @@ class NotifyCommandTests(NotifyFixture):
         self.assertNotIn("Turn complete", args)
         self.assertEqual(self.curl_stdin.read_text(), "")
         self.assertIn("phone=0\n", (self.cf_dir / "notify-prefs").read_text())
+        _, source, notifications = self.notify_history.read_text().strip().split("\t")
+        self.assertEqual((source, notifications), ("test", "phone"))
 
     def test_test_both_channels(self):
         proc = self.run_cli("test", dotenv=f"CLUSTERFORK_NTFY_URL={PHONE_URL}\n")

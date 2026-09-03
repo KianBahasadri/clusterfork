@@ -36,7 +36,7 @@
 #  15. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
 #      replace the whole file)
 #  16. Appends a source line to ~/.bashrc if it is not already present
-#  17. Best-effort: ensures Codex/Cursor/OpenCode auth.json links through
+#  17. Best-effort: ensures Codex/Cursor/Grok/OpenCode auth.json links through
 #      ~/.local/share/clusterfork-auth/<agent>/current when profiles exist
 #
 # Usage:
@@ -229,6 +229,9 @@ configure_shared_auth() {
 
   for path in "$agent_dir"/auth.json.*; do
     [[ -e "$path" || -L "$path" ]] || continue
+    # Grok maintains this runtime sidecar next to auth.json. It is a lock,
+    # not a legacy named profile to migrate into the shared auth store.
+    [[ "${path##*/}" == "auth.json.lock" ]] && continue
     if [[ ! -f "$path" || -L "$path" ]]; then
       printf '%s auth: profile must be a regular file: %s\n' "$label" "$path" >&2
       return 1
