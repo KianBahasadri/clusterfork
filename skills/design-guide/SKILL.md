@@ -295,7 +295,7 @@ metadata:
 * Include `--canvas`, `--surface`, `--surface-raised`, `--ink`, `--ink-strong`, `--muted`, `--faint`, `--line`, `--line-strong`, `--focus`, `--accent`, `--good`, `--caution`, `--danger`, and `--derived`. Show each semantic token's soft tint in the same swatch and label the tint opacity beside each theme value.
 * Lay tokens out in a responsive grid with a 240px minimum column width, 32px column gaps, and 24px row gaps. At narrow widths, collapse to one column without horizontal overflow.
 * Build each token as a 44px swatch beside a text block. Set the token name in 12px semibold `--mono`, the usage label in 13px `--muted`, and theme values in 10.5px `--faint` monospace text that may wrap only between complete values.
-* A swatch boundary is allowed because it identifies the demonstrated color. Use a 1px `--line-strong` boundary and 6px default radius. Keep good swatches at 6px, caution swatches at 4px, and danger swatches at 0px; never round a red swatch.
+* Keep every swatch and soft-tint region borderless, dividerless, outlineless, and shadowless; the color fill itself provides the shape. Use a 6px default radius, keep good swatches at 6px, caution swatches at 4px, and danger swatches at 0px; never round a red swatch.
 * Use `Viewport background`, `Controls and bounded surfaces`, `Overlays and active rows`, `Body text and data values`, `Headings and selected values`, `Secondary metadata and labels`, `Placeholders and inactive icons`, `Borders and row dividers`, `Active and overlay boundaries`, `Keyboard focus only`, `Observed data`, `Healthy or successful`, `Warning or degraded`, `Error, outage, or destructive`, and `Estimated, modeled, or synthetic` as the corresponding usage labels in token order.
 
 ## Reference Asset
