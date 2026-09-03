@@ -1,6 +1,6 @@
 ---
 name: design-guide
-description: Apply an exact UI implementation contract covering tokens, component anatomy, dimensions, states, interaction, accessibility, responsive behavior, and acceptance checks.
+description: Apply exact UI component implementation specifications covering tokens, anatomy, dimensions, states, interaction, accessibility, and responsive behavior.
 metadata:
   short-description: Exact UI implementation contract
 ---
@@ -83,16 +83,24 @@ metadata:
 
 #### Spotlight Search and Commands
 
-* Activating the search launcher or pressing `Ctrl+K` or `Command+K` opens one modal command palette and moves focus to its search input.
+* Activating the search launcher, pressing `Ctrl+K` or `Command+K`, or pressing `Ctrl+Space` opens one modal command palette and moves focus to its search input. Put all three combinations in the launcher's `aria-keyshortcuts` value and list them together in the shortcuts popup.
 * Size the palette to `min(600px, viewport width minus 32px)`. Position its top edge at 12vh, cap its height at the smaller of 560px and the viewport height minus 24vh, and use `--surface-raised`, a 1px `--line-strong` border, 6px radius, and the large overlay shadow.
 * Give the palette a neutral backdrop at `rgba(0, 0, 0, 0.65)`. Keep focus inside the palette while open.
 * Place a 15×15px Lucide `Search` icon 16px from the input's left edge. Size the input to 52px high with 42px left padding and 16px right padding. Use only a 1px `--line` bottom border.
-* Search page destinations and executable commands together with case-insensitive substring matching on every input event.
-* Include only commands the page implements. Standard commands are `Export as Markdown`, `Print or export as PDF`, `Copy page link`, `Toggle theme`, and `Keyboard shortcuts`.
-* Render result rows at 14px with 7px vertical and 10px horizontal padding. Use `--surface` plus `--ink-strong` and weight 600 for the active row.
+* Open Spotlight in command mode. Show one `Jump to…` option followed by only commands the page implements; do not place every section heading in the default result list. Standard commands are `Export as Markdown`, `Export as PDF`, `Toggle theme`, and `Keyboard shortcuts`. Do not add a copy-page-link command because the browser address bar already provides that action.
+* Activating `Jump to…` switches the same palette to destination mode, clears the query, changes the dialog and input names plus the input placeholder to `Jump to a component`, changes the listbox name to `Components`, and displays only top-level component destinations. Keep the section ordinal and component name in each destination label.
+* Filter only the options in the active mode with case-insensitive substring matching on every input event. Show `No matching commands` in command mode and `No matching components` in destination mode.
+* Render each result row as a flex row with its label on the left and shortcut on the right, separated by 24px. Use 14px text with 7px vertical and 10px horizontal padding; reduce the internal gap to 12px at 600px and below. Let the label wrap normally and keep the shortcut from shrinking.
+* Render each shortcut as separate compact neutral `<kbd>` elements with 10px text, 2px vertical and 4px horizontal padding, an 18px minimum width, transparent fill, a 1px `--line` border, no shadow, and 3px between keys. Use `--faint` by default and `--muted` on the active or hovered row.
+* Give every result a working page-wide shortcut. Use `Alt+J` to open Spotlight directly in destination mode, `Alt+Shift+M` for Markdown export, `Alt+Shift+P` for PDF export, `Alt+Shift+T` for theme toggle, and `Alt+/` for the shortcut popup. Jump to sections 01–10 with `Alt+1` through `Alt+0`, section 11 with `Alt+Shift+1`, section 12 with `Alt+Shift+2`, and section 13 with `Alt+Shift+3`.
+* Handle these shortcuts whether Spotlight is open or closed. Ignore them while focus is in an ordinary input, textarea, select, editable region, or non-Spotlight modal; continue handling them from the Spotlight search input.
+* Render `Alt` as `⌥` on Apple platforms and `Alt` elsewhere. Set each result's `aria-keyshortcuts` to its `Alt` combination. Hide the visual keycap group from assistive technology so the option label is not duplicated.
+* Add page-wide component traversal with `Alt+ArrowUp` and `Alt+ArrowDown`. Skip to the previous or next top-level component, stop at the first and last component instead of wrapping, align the destination heading to the viewport start, and update the URL fragment to that section. Ignore traversal while the user is editing text or a non-Spotlight modal is open.
+* Use `--surface` plus `--ink-strong` and weight 600 for the active row.
 * Keep DOM focus in the search input. `ArrowDown` and `ArrowUp` move the active result, `Enter` executes it, and `Escape` closes the palette. Closing returns focus to the launcher.
 * Give the input `role="combobox"`, `aria-autocomplete="list"`, `aria-expanded`, `aria-controls`, and `aria-activedescendant`. Give results `role="option"` and maintain `aria-selected`.
-* The `Keyboard shortcuts` command opens a popup containing every shortcut active on that page. Render shortcuts as neutral `<kbd>` elements only in this popup. Do not show shortcuts in persistent chrome, buttons, tooltips, labels, navigation items, metadata, or placeholders.
+* The `Keyboard shortcuts` command opens a popup containing every shortcut active on that page, including the palette accelerators. Shortcut labels may appear only at the right edge of Spotlight results and inside this popup. Do not show them in persistent chrome, buttons, tooltips, labels, navigation items, metadata, or placeholders.
+* Close Spotlight and the keyboard-shortcuts popup when the user activates their backdrop. In each dialog's click handler, close only when the event target is the `<dialog>` itself; a click inside the dialog content must not dismiss it. Restore focus to the element that opened the dismissed dialog.
 
 #### Component Section Construction
 
@@ -280,6 +288,15 @@ metadata:
 * Put an operation-specific message and optional neutral `Undo` action in each toast. If a status icon is included, use Lucide and apply the same severity geometry; use an angular icon for danger.
 * Announce non-urgent toasts through `role="status"` or `aria-live="polite"`. Use `role="alert"` only when immediate interruption is required.
 * Auto-dismiss non-critical toasts after 4–6 seconds. Pause the remaining countdown on hover and whenever focus is inside the toast, then resume from the remaining duration. Do not auto-dismiss a critical error that requires action.
+
+### 13. Color Semantics
+
+* Add a `Color Semantics` section to every complete component reference. Show every shared color token as a swatch with its exact token name, one short usage label, and both dark- and light-theme values; do not rely on a prose introduction to explain the palette.
+* Include `--canvas`, `--surface`, `--surface-raised`, `--ink`, `--ink-strong`, `--muted`, `--faint`, `--line`, `--line-strong`, `--focus`, `--accent`, `--good`, `--caution`, `--danger`, and `--derived`. Show each semantic token's soft tint in the same swatch and label the tint opacity beside each theme value.
+* Lay tokens out in a responsive grid with a 240px minimum column width, 32px column gaps, and 24px row gaps. At narrow widths, collapse to one column without horizontal overflow.
+* Build each token as a 44px swatch beside a text block. Set the token name in 12px semibold `--mono`, the usage label in 13px `--muted`, and theme values in 10.5px `--faint` monospace text that may wrap only between complete values.
+* A swatch boundary is allowed because it identifies the demonstrated color. Use a 1px `--line-strong` boundary and 6px default radius. Keep good swatches at 6px, caution swatches at 4px, and danger swatches at 0px; never round a red swatch.
+* Use `Viewport background`, `Controls and bounded surfaces`, `Overlays and active rows`, `Body text and data values`, `Headings and selected values`, `Secondary metadata and labels`, `Placeholders and inactive icons`, `Borders and row dividers`, `Active and overlay boundaries`, `Keyboard focus only`, `Observed data`, `Healthy or successful`, `Warning or degraded`, `Error, outage, or destructive`, and `Estimated, modeled, or synthetic` as the corresponding usage labels in token order.
 
 ## Reference Asset
 
