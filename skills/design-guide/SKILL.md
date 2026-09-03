@@ -120,6 +120,7 @@ metadata:
 * Collapse to one column at 900px and below. Hide the component index at that breakpoint unless a mobile navigation replacement is implemented.
 * Set content columns and flex children to `min-width: 0` so long labels cannot force page overflow.
 * Mark the active side-navigation row with `--ink-strong`, weight 600, and an optional neutral surface. Do not add a leading stripe or border.
+* When side navigation scrolls, add at least 4px of inner space on every clipped edge around its links. A 2px focus outline with a 2px offset must remain fully visible on the first, last, leftmost, and rightmost focused link; never let an overflow container crop it.
 
 ### 1. Buttons and Action Triggers
 
