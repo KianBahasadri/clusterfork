@@ -14,13 +14,14 @@
   <span id="ci-info" hidden></span>
   <span id="stale-banner" hidden>cache stale</span>
 </header>
-<nav id="tabs" role="tablist"></nav>
+<nav id="tabs" role="tablist" aria-label="Repository views"></nav>
 <main id="panels">
-  <section class="panel" data-panel="overview"><div class="loading">loading…</div></section>
-  <section class="panel" data-panel="history" hidden><div class="loading">loading…</div></section>
-  <section class="panel" data-panel="files" hidden><div class="loading">loading…</div></section>
-  <section class="panel" data-panel="deps" hidden><div class="loading">loading…</div></section>
-  <section class="panel" data-panel="logs" hidden><div class="loading">loading…</div></section>
+  <section class="panel" id="panel-overview" data-panel="overview" role="tabpanel" aria-labelledby="tab-overview"><div class="loading">loading…</div></section>
+  <section class="panel" id="panel-history" data-panel="history" role="tabpanel" aria-labelledby="tab-history" hidden><div class="loading">loading…</div></section>
+  <section class="panel" id="panel-churn" data-panel="churn" role="tabpanel" aria-labelledby="tab-churn" hidden><div class="loading">loading…</div></section>
+  <section class="panel" id="panel-files" data-panel="files" role="tabpanel" aria-labelledby="tab-files" hidden><div class="loading">loading…</div></section>
+  <section class="panel" id="panel-deps" data-panel="deps" role="tabpanel" aria-labelledby="tab-deps" hidden><div class="loading">loading…</div></section>
+  <section class="panel" id="panel-logs" data-panel="logs" role="tabpanel" aria-labelledby="tab-logs" hidden><div class="loading">loading…</div></section>
 </main>
 <script src="/assets/app.js"></script>
 </body>

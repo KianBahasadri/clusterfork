@@ -53,7 +53,7 @@ changes). It is hidden when `gh` is missing, origin isn't GitHub, or HEAD
 has no check runs. The commit hash is not shown. All dates render with
 three-letter months ("Aug 28 2026 15:24").
 
-Five core tabs, built from git + manifest scanning (stdlib; no pip
+Six core tabs, built from git + manifest scanning (stdlib; no pip
 dependencies anywhere in the tool):
 
 - **Overview** — file/line/commit counts, lines by top-level dir, lines by language
@@ -63,6 +63,13 @@ dependencies anywhere in the tool):
   cumulative LOC. Click pins that tooltip (click again, click outside, or
   Esc to dismiss) so the sha can be copied. Also most-changed dirs and
   recent commits
+- **Churn** — ranks file hotspots over the same bounded commit window by
+  lines touched (additions + deletions, so same-size rewrites do not disappear
+  as they would with net LOC). Shows total churn, top-level directories, and
+  the top 200 files with commit count, additions, deletions, and last-change
+  date. Paths excluded from the Files index and binary changes are omitted;
+  deleted files remain visible as historical, while current files can be
+  clicked through to their file profile
 - **Files** — tracked-file index with physical/source/blank/comment lines,
   functions, imports, and estimated cyclomatic complexity in every row;
   filterable and excludes vendor dirs, minified/lockfile/map suffixes by
@@ -101,7 +108,9 @@ Everything lands in `<repo>/.codeview/`:
 - Cache files are written atomically (tmp + rename) and reloaded on boot, so
   startup is fast on the second run. `daemon.json` is written on boot and
   removed on clean shutdown; a stale file (pid gone) is detected and cleaned
-  up by the control CLI.
+  up by the control CLI. The scanner schema participates in cache
+  fingerprinting, so an upgraded scanner refreshes otherwise-current caches
+  automatically.
 - A watch thread (3 s cycle) compares a data fingerprint (HEAD sha + dirty
   status hash + scan options). A real change triggers a background rescan of
   stale sections in place — the generation counter bumps and the browser

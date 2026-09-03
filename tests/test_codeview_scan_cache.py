@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys_path = str(REPO_ROOT / "scripts")
@@ -28,11 +29,14 @@ class TempRepoTestCase(unittest.TestCase):
         run(["git", "config", "user.email", "t@t"], self.repo)
         run(["git", "config", "user.name", "t"], self.repo)
 
-    def commit(self, files: dict, msg: str):
+    def commit(self, files: dict[str, str | bytes], msg: str):
         for rel, content in files.items():
             p = self.repo / rel
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content)
+            if isinstance(content, bytes):
+                p.write_bytes(content)
+            else:
+                p.write_text(content)
         run(["git", "add", "-A"], self.repo)
         run(["git", "commit", "-qm", msg], self.repo)
 
@@ -60,12 +64,106 @@ class HistoryScanTests(TempRepoTestCase):
         self.assertEqual(len(h["commits"]), 3)
         self.assertTrue(h["truncated"])
         self.assertTrue(h["commits"][0]["sha"])  # oldest of the last 3
+        self.assertEqual(h["churn"]["total"], 6)
+        self.assertEqual(h["churn"]["files"][0]["commits"], 3)
 
     def test_root_files_bucketed_under_root(self):
         self.commit({"top.txt": "a\nb\n"}, "rootfile")
         h = scan.scan_history(self.repo, scan.RepoShape())
         self.assertIn("(root)", h["dirs"])
         self.assertEqual(h["commits"][-1]["dirs"]["(root)"], 2)
+
+    def test_churn_counts_rewrites_orders_and_skips_non_code(self):
+        self.commit({
+            "src/hot.py": "1\n2\n3\n4\n5\n",
+            "a.py": "one\ntwo\n",
+            "lib/b.py": "1\n2\n3\n4\n",
+            "lib/c.py": "1\n2\n3\n4\n",
+            "package-lock.json": "generated\n" * 20,
+            "assets/blob.bin": b"\x00\x01\x02",
+        }, "baseline")
+        self.commit({"a.py": "ONE\ntwo\n"}, "rewrite one line")
+
+        churn = scan.scan_history(self.repo, scan.RepoShape())["churn"]
+        self.assertEqual(churn["total"], 17)
+        self.assertEqual(churn["file_count"], 4)
+        self.assertEqual(
+            [row["path"] for row in churn["files"]],
+            ["src/hot.py", "a.py", "lib/b.py", "lib/c.py"],
+        )
+        self.assertEqual(
+            churn["files"][1],
+            {
+                "path": "a.py", "additions": 3, "deletions": 1,
+                "churn": 4, "commits": 2,
+                "last_date": run(
+                    ["git", "log", "-1", "--format=%cI", "--", "a.py"],
+                    self.repo,
+                ).strip()[:16],
+            },
+        )
+        self.assertEqual(
+            [(row["name"], row["churn"], row["commits"])
+             for row in churn["dirs"]],
+            [("lib", 8, 1), ("src", 5, 1), ("(root)", 4, 2)],
+        )
+        self.assertNotIn("package-lock.json",
+                         {row["path"] for row in churn["files"]})
+        self.assertNotIn("assets/blob.bin",
+                         {row["path"] for row in churn["files"]})
+
+    def test_same_size_rewrite_has_churn_despite_zero_net_delta(self):
+        self.commit({"same.py": "before\n"}, "before")
+        self.commit({"same.py": "after\n"}, "after")
+
+        history = scan.scan_history(
+            self.repo, scan.RepoShape(max_commits=1))
+        self.assertEqual(history["commits"][0]["delta"], 0)
+        self.assertEqual(history["churn"]["total"], 2)
+        self.assertEqual(history["churn"]["files"], [{
+            "path": "same.py", "additions": 1, "deletions": 1,
+            "churn": 2, "commits": 1,
+            "last_date": history["commits"][0]["date"],
+        }])
+
+    def test_churn_caps_file_rows_without_truncating_totals(self):
+        files = {f"files/f{i:03}.py": "x\n" for i in range(205)}
+        self.commit(files, "many files")
+
+        churn = scan.scan_history(self.repo, scan.RepoShape())["churn"]
+        self.assertEqual(churn["total"], 205)
+        self.assertEqual(churn["file_count"], 205)
+        self.assertEqual(len(churn["files"]), scan.MAX_CHURN_FILES)
+        self.assertEqual(churn["files"][0]["path"], "files/f000.py")
+        self.assertEqual(churn["files"][-1]["path"], "files/f199.py")
+
+    def test_repo_shape_includes_scan_schema_version(self):
+        self.assertEqual(scan.RepoShape(max_commits=42).as_dict(), {
+            "max_commits": 42,
+            "schema_version": scan.SCAN_SCHEMA_VERSION,
+        })
+
+    def test_churn_normalizes_rename_paths_to_destinations(self):
+        raw = (
+            "\x01" + "a" * 40
+            + "\t2026-01-02T03:04:05+00:00\trenames\n"
+            + "1\t2\told.py => new.py\n"
+            + "3\t4\tdir/{old => new}/x.py\n"
+            + "0\t0\tempty.py => renamed.py\n"
+        )
+        with mock.patch.object(scan, "try_git", return_value=raw):
+            churn = scan.scan_history(
+                self.repo, scan.RepoShape())["churn"]
+
+        self.assertEqual(churn["total"], 10)
+        self.assertEqual(
+            [row["path"] for row in churn["files"]],
+            ["dir/new/x.py", "new.py"],
+        )
+        self.assertEqual(
+            [(row["name"], row["churn"]) for row in churn["dirs"]],
+            [("dir", 7), ("(root)", 3)],
+        )
 
 
 class FilesScanTests(TempRepoTestCase):

@@ -14,6 +14,8 @@ from pathlib import Path
 from codeview import metrics
 
 CODEVIEW_DIR_NAME = ".codeview"
+SCAN_SCHEMA_VERSION = 2
+MAX_CHURN_FILES = 200
 
 # Excluded from the LOC snapshot by suffix or directory component.
 EXCLUDE_SUFFIXES = (
@@ -65,7 +67,10 @@ class RepoShape:
         self.max_commits = max_commits
 
     def as_dict(self) -> dict:
-        return {"max_commits": self.max_commits}
+        return {
+            "max_commits": self.max_commits,
+            "schema_version": SCAN_SCHEMA_VERSION,
+        }
 
 
 # ------------------------------------------------------------------- meta --
@@ -97,10 +102,26 @@ def _now_iso() -> str:
 
 # --------------------------------------------------------------- history --
 
+_NUMSTAT_RENAME_BRACE_RE = re.compile(r"\{[^{}]* => ([^{}]*)\}")
+
+
+def _numstat_destination(path: str) -> str:
+    """Normalize git's compact rename notation to the destination path."""
+    if " => " not in path:
+        return path
+    normalized, substitutions = _NUMSTAT_RENAME_BRACE_RE.subn(
+        lambda match: match.group(1), path)
+    if substitutions:
+        return normalized.replace("//", "/").lstrip("/")
+    return path.split(" => ", 1)[1]
+
+
 def scan_history(repo: Path, shape: RepoShape) -> dict:
     """Cumulative LOC-over-time from `git log --numstat`.
 
     Per commit: net added-removed delta overall and per top-level dir.
+    Churn aggregates additions + deletions by file and top-level directory
+    over the same bounded commit window.
     Cumulative totals are prefix sums the UI derives; binary entries
     (`-\t-\t`) are skipped.
     """
@@ -111,6 +132,8 @@ def scan_history(repo: Path, shape: RepoShape) -> dict:
     )
     commits: list[dict] = []
     all_dirs: set[str] = set()
+    churn_files: dict[str, dict] = {}
+    churn_dirs: dict[str, dict] = {}
     total = 0
     if raw:
         for chunk in raw.split("\x01"):
@@ -123,34 +146,81 @@ def scan_history(repo: Path, shape: RepoShape) -> dict:
             sha, date, subject = head_parts[0], head_parts[1], head_parts[2]
             delta = 0
             chunk_dirs: dict[str, int] = {}
+            touched_files: set[str] = set()
+            touched_dirs: set[str] = set()
             for line in lines[1:]:
                 parts = line.split("\t")
                 if len(parts) != 3:
                     continue
                 add_s, del_s, path = parts
+                path = _numstat_destination(path)
                 if add_s == "-" or del_s == "-" or not path:
                     continue
                 try:
-                    d = int(add_s) - int(del_s)
+                    additions, deletions = int(add_s), int(del_s)
                 except ValueError:
                     continue
+                d = additions - deletions
                 delta += d
                 top = path.split("/", 1)[0]
                 # Root-level files have no dir; bucket them under "(root)".
                 if "/" not in path:
                     top = "(root)"
                 chunk_dirs[top] = chunk_dirs.get(top, 0) + d
+
+                if _excluded(path):
+                    continue
+                changed = additions + deletions
+                if changed == 0:
+                    continue
+                file_row = churn_files.setdefault(path, {
+                    "path": path, "additions": 0, "deletions": 0,
+                    "churn": 0, "commits": 0, "last_date": None,
+                })
+                file_row["additions"] += additions
+                file_row["deletions"] += deletions
+                file_row["churn"] += changed
+                file_row["last_date"] = date[:16]
+                touched_files.add(path)
+
+                dir_row = churn_dirs.setdefault(top, {
+                    "name": top, "additions": 0, "deletions": 0,
+                    "churn": 0, "commits": 0, "last_date": None,
+                })
+                dir_row["additions"] += additions
+                dir_row["deletions"] += deletions
+                dir_row["churn"] += changed
+                dir_row["last_date"] = date[:16]
+                touched_dirs.add(top)
+            for path in touched_files:
+                churn_files[path]["commits"] += 1
+            for name in touched_dirs:
+                churn_dirs[name]["commits"] += 1
             total += delta
             all_dirs.update(chunk_dirs)
             commits.append({
                 "sha": sha[:8], "date": date[:16], "subject": subject[:120],
                 "delta": delta, "total": total, "dirs": chunk_dirs,
             })
+    file_rows = sorted(
+        churn_files.values(),
+        key=lambda row: (-row["churn"], -row["commits"], row["path"]),
+    )
+    dir_rows = sorted(
+        churn_dirs.values(),
+        key=lambda row: (-row["churn"], -row["commits"], row["name"]),
+    )
     return {
         "commits": commits,
         "dirs": sorted(all_dirs),
         "max_commits": shape.max_commits,
         "truncated": len(commits) >= shape.max_commits,
+        "churn": {
+            "total": sum(row["churn"] for row in file_rows),
+            "file_count": len(file_rows),
+            "files": file_rows[:MAX_CHURN_FILES],
+            "dirs": dir_rows,
+        },
     }
 
 

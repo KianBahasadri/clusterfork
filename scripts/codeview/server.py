@@ -206,6 +206,14 @@ def read_cached_sections(codeview_dir: Path) -> tuple[dict[str, dict],
     return sections, fps
 
 
+def sections_needing_scan(state: AppState, wanted_fp: str) -> list[str]:
+    """Return missing or stale cache sections for the current repo shape."""
+    with state.lock:
+        return [section for section in SCAN_SECTIONS
+                if section not in state.sections
+                or state.fingerprints.get(section) != wanted_fp]
+
+
 def scan_all(repo: Path, shape: scan.RepoShape, codeview_dir: Path,
              state: AppState, force: bool) -> None:
     """Rescan stale sections into memory + disk; keeps old data on failure.
@@ -557,6 +565,7 @@ class DashHandler(BaseHTTPRequestHandler):
         mods = self.app["modules"]
         tabs = [{"kind": "core", "name": "overview"},
                 {"kind": "core", "name": "history"},
+                {"kind": "core", "name": "churn"},
                 {"kind": "core", "name": "files"},
                 {"kind": "core", "name": "deps"}]
         for m in mods:
@@ -819,9 +828,10 @@ def main(argv=None) -> int:
     _init_rescan_ts(state)
     log_line(state, f"boot: loaded cached sections "
              f"{sorted(sections) or '[]'} from {codeview_dir.name}/cache")
-    missing = [s for s in SCAN_SECTIONS if s not in state.sections]
-    if missing:
-        log_line(state, f"boot: cache miss for {missing} → scanning")
+    stale = sections_needing_scan(
+        state, current_data_fingerprint(repo, shape))
+    if stale:
+        log_line(state, f"boot: cache stale or missing for {stale} → scanning")
         scan_all(repo, shape, codeview_dir, state, force=args.reindex)
     persist_state(codeview_dir, state)
 

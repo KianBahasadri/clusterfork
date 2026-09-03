@@ -279,8 +279,10 @@ function showPanel(name) {
     p.hidden = p.dataset.panel !== name;
   });
   document.querySelectorAll("#tabs button").forEach(b => {
-    b.classList.toggle("active", b.dataset.tab === name);
-    b.setAttribute("aria-selected", b.dataset.tab === name ? "true" : "false");
+    const active = b.dataset.tab === name;
+    b.classList.toggle("active", active);
+    b.setAttribute("aria-selected", active ? "true" : "false");
+    b.setAttribute("tabindex", active ? "0" : "-1");
   });
   if (!document.querySelector(`.panel[data-panel="${name}"] iframe`)
       && name.startsWith("m:")) {
@@ -298,11 +300,35 @@ function loadModuleTab(name) {
 
 function renderTabs(tabs) {
   const nav = $("#tabs");
+  const moduleKeys = new Set();
+  for (const tab of tabs) {
+    if (tab.kind === "core") continue;
+    const key = `m:${tab.name}`;
+    moduleKeys.add(key);
+    if (document.querySelector(`.panel[data-panel="${key}"]`)) continue;
+    const panel = document.createElement("section");
+    panel.className = "panel";
+    panel.dataset.panel = key;
+    panel.id = `panel-m-${tab.name}`;
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("aria-labelledby", `tab-m-${tab.name}`);
+    panel.hidden = true;
+    panel.innerHTML = '<div class="loading">loading…</div>';
+    $("#panels").appendChild(panel);
+  }
+  document.querySelectorAll('.panel[data-panel^="m:"]').forEach(panel => {
+    if (!moduleKeys.has(panel.dataset.panel)) panel.remove();
+  });
   nav.innerHTML = tabs.map(t => {
     const key = t.kind === "core" ? t.name : `m:${t.name}`;
+    const idPart = t.kind === "core" ? t.name : `m-${t.name}`;
     const label = t.kind === "broken" ? `⚠ ${t.name}` : t.name;
-    return `<button role="tab" data-tab="${key}"
-      title="${t.description || ""}">${label}</button>`;
+    const active = key === (state.active || "overview");
+    return `<button type="button" id="tab-${idPart}" role="tab"
+      data-tab="${key}" aria-controls="panel-${idPart}"
+      aria-selected="${active ? "true" : "false"}"
+      tabindex="${active ? "0" : "-1"}"
+      title="${esc(t.description || "")}">${esc(label)}</button>`;
   }).join("");
   if (!state.active || !tabs.some(t =>
       (t.kind === "core" ? t.name : `m:${t.name}`) === state.active)) {
@@ -472,6 +498,126 @@ async function renderHistory() {
         </tr>`).join("")}
     </tbody></table>`;
   bindHistoryChartHover(panel.querySelector(".chart-wrap"), commits);
+}
+
+async function renderChurn() {
+  const [hist, filesData] = await Promise.all([
+    api("/api/section/history"),
+    api("/api/section/files").catch(() => ({ files: [] })),
+  ]);
+  const panel = $('.panel[data-panel="churn"]');
+  const commits = hist.commits || [];
+  const churn = hist.churn || {};
+  const hotspots = churn.files || [];
+  if (!commits.length) {
+    panel.innerHTML = "<p>No commit history available.</p>";
+    return;
+  }
+  if (!hotspots.length) {
+    panel.innerHTML = `<h2>code churn</h2>
+      <p>No textual file changes were found in the scanned history.</p>`;
+    return;
+  }
+
+  const trackedPaths = new Set((filesData.files || []).map(f => f.path));
+  const topCurrent = hotspots.find(file => trackedPaths.has(file.path));
+  const top = topCurrent || hotspots[0];
+  const dirs = (churn.dirs || []).slice(0, 10);
+  const firstDate = commits[0]?.date;
+  const lastDate = commits[commits.length - 1]?.date;
+  const windowNote = `${fmtDate(firstDate)} – ${fmtDate(lastDate)}`;
+
+  panel.innerHTML = `
+    <h2>churn window · ${esc(windowNote)}</h2>
+    <div class="churn-metrics">
+      <div class="churn-metric">
+        <span class="churn-metric-label">lines touched · additions + deletions</span>
+        <span class="churn-metric-value">${fmt(churn.total)}</span>
+      </div>
+      <div class="churn-metric">
+        <span class="churn-metric-label">files changed · ${fmt(commits.length)} commits${hist.truncated ? " · limit reached" : ""}</span>
+        <span class="churn-metric-value">${fmt(churn.file_count)}</span>
+      </div>
+      <div class="churn-metric churn-metric-path">
+        <span class="churn-metric-label">${topCurrent ? "highest-churn current file" : "highest-churn file"} · ${fmt(top.churn)} lines</span>
+        <span class="churn-metric-value">${esc(top.path)}</span>
+      </div>
+    </div>
+    <section class="breakdown-panel churn-dirs">
+      <h2>churn by top-level dir</h2>
+      ${dirs.length
+        ? `${barRows(dirs.map(d => [d.name, d.churn]))}
+           <p class="stats-note">Lines touched, not net LOC. Rewrites stay visible even when file size does not change.</p>`
+        : `<p class="stats-empty">No directories to show.</p>`}
+    </section>
+    <h2>highest-churn files</h2>
+    <div class="churn-filter-row">
+      <div class="churn-filter-group">
+        <label for="churn-filter">Filter hotspots</label>
+        <div class="churn-search-control">
+          <!-- Lucide Search; ISC license in skills/design-guide/assets. -->
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="m21 21-4.34-4.34"></path><circle cx="11" cy="11" r="8"></circle>
+          </svg>
+          <input type="search" placeholder="Path or directory" id="churn-filter">
+        </div>
+      </div>
+      <span class="file-list-count" aria-live="polite">${fmt(hotspots.length)} hotspots shown · top ${fmt(hotspots.length)} of ${fmt(churn.file_count)}</span>
+    </div>
+    <div class="table-scroll churn-table-region" role="region"
+         aria-label="Highest code-churn files"><table id="churn-table">
+      <caption class="sr-only">Files ranked by additions plus deletions in the scanned commit window</caption>
+      <thead><tr>
+      <th scope="col">path</th><th scope="col" class="num">commits</th>
+      <th scope="col" class="num">added</th><th scope="col" class="num">deleted</th>
+      <th scope="col" class="num">churn</th><th scope="col" class="num">last change</th>
+    </tr></thead><tbody>
+      ${hotspots.map(file => {
+        const tracked = trackedPaths.has(file.path);
+        return `<tr class="${tracked ? "" : "churn-file-historical"}">
+          <td>${tracked
+            ? `<button type="button" class="churn-file-link" data-path="${esc(file.path)}"
+                 title="Open current file profile">${esc(file.path)}</button>`
+            : `${esc(file.path)} <span class="history-only"
+                 title="File is no longer in the current tracked-file index">historical</span>`}</td>
+          <td class="num">${fmt(file.commits)}</td>
+          <td class="num">+${fmt(file.additions)}</td>
+          <td class="num">−${fmt(file.deletions)}</td>
+          <td class="num churn-total">${fmt(file.churn)}</td>
+          <td class="num">${esc(fmtDate(file.last_date))}</td>
+        </tr>`;
+      }).join("")}
+    </tbody></table></div>
+    <p class="churn-filter-empty" hidden>No hotspots match.
+      <button type="button" id="churn-filter-clear">Clear filter</button>
+    </p>`;
+
+  const input = $("#churn-filter");
+  const count = panel.querySelector(".file-list-count");
+  const empty = panel.querySelector(".churn-filter-empty");
+  input.addEventListener("input", () => {
+    const q = input.value.toLowerCase();
+    const rows = $("#churn-table tbody").children;
+    let shown = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const visible = !q || rows[i].textContent.toLowerCase().includes(q);
+      rows[i].style.display = visible ? "" : "none";
+      if (visible) shown++;
+    }
+    count.textContent = `${fmt(shown)} hotspots shown`;
+    empty.hidden = shown !== 0;
+  });
+  $("#churn-filter-clear").addEventListener("click", () => {
+    input.value = "";
+    input.dispatchEvent(new Event("input"));
+    input.focus();
+  });
+  panel.querySelectorAll("button.churn-file-link").forEach(button => {
+    button.addEventListener("click", () => {
+      showPanel("files");
+      openFile(button.dataset.path).catch(console.error);
+    });
+  });
 }
 
 async function renderFiles() {
@@ -779,8 +925,22 @@ async function pollGeneration() {
     const key = b.dataset.tab;
     showPanel(key);
     if (key === "history") renderHistory().catch(console.error);
+    else if (key === "churn") renderChurn().catch(console.error);
     else if (key === "files") renderFiles().catch(console.error);
     else if (key === "deps") renderDeps().catch(console.error);
     else if (key === "logs") renderLogs().catch(console.error);
+  });
+
+  document.addEventListener("keydown", (ev) => {
+    const current = ev.target.closest("#tabs button");
+    if (!current || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(ev.key)) return;
+    const tabs = [...document.querySelectorAll("#tabs button")];
+    let index = tabs.indexOf(current);
+    if (ev.key === "Home") index = 0;
+    else if (ev.key === "End") index = tabs.length - 1;
+    else index = (index + (ev.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    ev.preventDefault();
+    tabs[index].focus();
+    tabs[index].click();
   });
 })();

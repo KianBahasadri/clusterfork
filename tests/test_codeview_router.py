@@ -94,6 +94,7 @@ class ServerBootTestCase(unittest.TestCase):
         status, body = get(self.url("/"))
         self.assertEqual(status, 200)
         self.assertIn(b"codeview", body)
+        self.assertIn(b'data-panel="churn"', body)
 
     def test_assets_traversal_guard(self):
         import urllib.error
@@ -128,15 +129,24 @@ class ServerBootTestCase(unittest.TestCase):
             self.assertEqual(status, 200)
             data = json.loads(body)
             self.assertTrue(data or data == [])
+            if section == "history":
+                self.assertEqual(data["churn"]["file_count"], 1)
+                self.assertEqual(data["churn"]["files"][0]["path"],
+                                 "app.py")
 
     def test_tabs_include_modules_and_broken_flag(self):
         _, body = get(self.url("/api/tabs"))
         tabs = json.loads(body)["tabs"]
         names_kinds = {(t["name"], t["kind"]) for t in tabs}
         self.assertIn(("overview", "core"), names_kinds)
+        self.assertIn(("churn", "core"), names_kinds)
         self.assertIn(("hello", "module"), names_kinds)
         self.assertIn(("broken", "broken"), names_kinds)
         self.assertIn(("logs", "core"), names_kinds)
+        self.assertEqual(
+            [t["name"] for t in tabs if t["kind"] == "core"],
+            ["overview", "history", "churn", "files", "deps", "logs"],
+        )
         # Server logs is a core tab and sits after all module tabs.
         self.assertEqual(tabs[-1]["name"], "logs")
 
@@ -262,6 +272,18 @@ class ServerBootTestCase(unittest.TestCase):
         self.assertTrue(state2.get("files").get("sentinel"))
         # meta is always refreshed regardless.
         self.assertIsNotNone(state2.get("meta"))
+
+    def test_cache_schema_change_marks_every_loaded_section_stale(self):
+        state2 = srv.AppState()
+        for section in srv.SCAN_SECTIONS:
+            state2.sections[section] = {"sentinel": True}
+            state2.fingerprints[section] = "previous-schema"
+        wanted = srv.current_data_fingerprint(self.repo, self.shape)
+        self.assertEqual(srv.sections_needing_scan(state2, wanted),
+                         list(srv.SCAN_SECTIONS))
+        state2.fingerprints.update(
+            {section: wanted for section in srv.SCAN_SECTIONS})
+        self.assertEqual(srv.sections_needing_scan(state2, wanted), [])
 
 
 if __name__ == "__main__":
