@@ -26,7 +26,7 @@ Creates a `CLAUDE.md → AGENTS.md` symlink so Claude Code picks up the same ins
 
 ## design-guide
 
-Provides principles, design tokens, component guidance, and a runnable reference for building and reviewing accessible interfaces across web, desktop, and mobile. Detailed behavior is canonical in `skills/design-guide/SKILL.md` and its referenced assets.
+Provides principles, design tokens, component guidance, and runnable references for building and reviewing accessible interfaces across web, desktop, and mobile. `skills/design-guide/SKILL.md` routes to the canonical detailed Markdown references; each runnable reference and its supporting files live together in a dedicated subdirectory under `skills/design-guide/assets/`.
 
 ## ask-claude
 
