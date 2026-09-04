@@ -16,7 +16,7 @@ metadata:
 * Use `--mono` only for code, tokens, identifiers, keyboard keys, timestamps, aligned numeric data, and compact ordinal headings.
 * Render keyboard focus with a 2px solid `--focus` outline and a 2px offset. Do not remove focus without replacing it with this treatment.
 * Keep source order identical to visual reading order. Every visible interactive element must be reachable and operable by keyboard.
-* Limit routine color, border, opacity, and background transitions to 80–150ms. Limit overlay entrance transitions to 200ms. Disable non-essential animation when `prefers-reduced-motion: reduce` matches.
+* Limit routine color, border, opacity, and background transitions to 80–150ms. Limit overlay entrance transitions to 300ms. Disable non-essential animation when `prefers-reduced-motion: reduce` matches.
 
 ### Shared Tokens
 
@@ -35,6 +35,8 @@ metadata:
 | `--line-strong` | `#3a4a51` | `#9dacab` | Active borders, overlay borders, and tab rules |
 | `--action-primary` | `#26343a` | `#d5dcdb` | Primary action fill |
 | `--action-primary-hover` | `#314249` | `#c5cfce` | Hovered primary action fill |
+| `--control-selected` | `#66777e` | `#596970` | Selected checkbox, radio, and switch fill |
+| `--control-selected-hover` | `#74868d` | `#4b5c64` | Hovered selected checkbox, radio, and switch fill |
 | `--focus` | `#9cc8ff` | `#005fcc` | Keyboard focus only |
 | `--accent` | `#62c8d8` | `#006f7c` | One observed chart series |
 | `--accent-soft` | `rgba(98, 200, 216, 0.12)` | `rgba(0, 111, 124, 0.10)` | Soft observed-series treatment |
@@ -47,7 +49,7 @@ metadata:
 | `--derived` | `#b9aaef` | `#63559b` | Estimated, modeled, or synthetic data |
 | `--derived-soft` | `rgba(185, 170, 239, 0.14)` | `rgba(99, 85, 155, 0.12)` | Estimated, modeled, or synthetic surface |
 
-* Use `--canvas`, `--surface`, `--surface-raised`, `--ink`, `--ink-strong`, `--muted`, `--faint`, `--line`, `--line-strong`, `--action-primary`, and `--action-primary-hover` for routine interface chrome.
+* Use `--canvas`, `--surface`, `--surface-raised`, `--ink`, `--ink-strong`, `--muted`, `--faint`, `--line`, `--line-strong`, `--action-primary`, `--action-primary-hover`, `--control-selected`, and `--control-selected-hover` for routine interface chrome.
 * Use `--good`, `--caution`, `--danger`, and `--derived` only on elements that communicate the corresponding state or data provenance.
 * Pair every semantic color with explicit text and, when the color is on a shaped element, the geometry specified below.
 
@@ -189,13 +191,14 @@ metadata:
 ### 4. Selection Controls
 
 * Use native checkbox and radio inputs for state and form submission. A visually hidden native input must remain focusable and must receive the global focus-visible treatment on its visible companion.
-* Render checkboxes at 18×18px with a 1px `--line-strong` border, `--surface` fill, and 4px radius. Checked and indeterminate states use `--ink-strong` fill and border with a 14×14px inverted Lucide `Check` or `Minus`.
-* Render radio controls at 18×18px with a circular `--line-strong` border and an 8×8px `--ink-strong` selected dot.
+* Render checkboxes at 18×18px with a 1px `--line-strong` border, `--surface` fill, and 4px radius. Checked and indeterminate states use tonal `--control-selected` fill and border with a 14×14px Lucide `Check` or `Minus` in `--canvas`; use `--control-selected-hover` while the selected row is hovered. Do not use `--ink-strong` as the selected fill.
+* Render radio controls at 18×18px with a circular `--line-strong` border. Use `--control-selected` for both the selected border and the 8×8px selected dot, and `--control-selected-hover` for both while the selected row is hovered. Do not use `--ink-strong` for the selected dot.
 * Wrap related radios in `<fieldset>` and provide a visible `<legend>`.
-* Render switches with a 38×22px pill track and a 16×16px circular thumb inset 3px. Use `--line` for the off track, `--ink-strong` for the on track, and translate the thumb 16px when on.
+* Render switches with a 38×22px pill track and a 16×16px circular thumb inset 3px. Use `--line` for the off track with a `--muted` thumb; on hover, use `--line-strong` for the off track. Use `--control-selected` for the on track with a `--canvas` thumb, use `--control-selected-hover` while the on row is hovered, and translate the thumb 16px when on. Do not use `--ink-strong` for the track or thumb.
 * Use a checkbox with `role="switch"` and maintain `aria-checked` only when native checked semantics do not already expose the required switch role.
 * Put the input and visible label in one clickable row with a 10px gap and a minimum 44px target height. Clicking the text toggles the control.
-* Support `Space` for checkboxes and switches and arrow-key movement within a native radio group. Disabled controls must not toggle.
+* Support `Space` for checkboxes and switches and arrow-key movement within a native radio group.
+* Set the native `disabled` attribute on disabled checkboxes, radios, and switches. Preserve whether the control is checked or unchecked, apply opacity 0.45 and `cursor: not-allowed` to its visible indicator and label, suppress every hover treatment, and prevent toggling. In a complete selection-control reference, show a disabled example of all three control types and include both checked and unchecked disabled states across the set.
 
 ### 5. Labels, Badges, and Metadata
 
@@ -273,7 +276,7 @@ metadata:
 * Do not render a descriptive or supporting subline beneath the value.
 * Keep each metric group transparent, borderless, shadowless, and without container padding. Do not use a card background to separate neighboring metrics.
 * Lay out three metrics as equal columns with a 32px gap. At 600px and below, use one column with a 24px gap.
-* Set metric labels in `--mono` at 12px, uppercase, letter-spacing 0.08em, and `--muted`. Set metric values at 26px, weight 700, line-height 1, `--ink-strong`, and tabular numerals.
+* Set metric labels in `--mono` at 12px, uppercase, letter-spacing 0.08em, and `--muted`. Set metric values at 26px, weight 700, line-height 1, `--muted`, and tabular numerals. Let size and weight establish hierarchy; do not use `--ink-strong` for large metric values.
 * Add a bordered or filled card only for a real interactive, independently stateful, draggable, selectable, collapsible, or semantically bounded object. Do not add one for page-section separation.
 * When a real card boundary is required, use `--surface`, a 1px `--line` border, 6px radius, and no shadow unless the card is temporarily elevated during drag.
 
@@ -289,6 +292,7 @@ metadata:
 * Position toast stacks 24px from the bottom and right with 10px between toasts. At narrow mobile widths, use 12px side offsets and cap each toast to the available width.
 * Size a toast from 280px through 360px, use 12px vertical and 16px horizontal padding, a 1px `--line-strong` border, `--surface-raised`, and the large overlay shadow.
 * Use 6px radius for neutral or success toasts, 4px for caution toasts, and 0px for danger toasts.
+* Animate toast entrance over 280ms with `cubic-bezier(0.16, 1, 0.3, 1)`, moving from 16px below its resting position while fading from transparent to opaque. Remove the entrance animation when `prefers-reduced-motion: reduce` matches.
 * Put an operation-specific message and optional neutral `Undo` action in each toast. If a status icon is included, use Lucide and apply the same severity geometry; use an angular icon for danger.
 * Announce non-urgent toasts through `role="status"` or `aria-live="polite"`. Use `role="alert"` only when immediate interruption is required.
 * Auto-dismiss non-critical toasts after 4–6 seconds. Pause the remaining countdown on hover and whenever focus is inside the toast, then resume from the remaining duration. Do not auto-dismiss a critical error that requires action.
@@ -296,11 +300,11 @@ metadata:
 ### 13. Color Semantics
 
 * Add a `Color Semantics` section to every complete component reference. Show every shared color token as a swatch with its exact token name, one short usage label, and both dark- and light-theme values; do not rely on a prose introduction to explain the palette.
-* Include `--canvas`, `--surface`, `--surface-raised`, `--ink`, `--ink-strong`, `--muted`, `--faint`, `--line`, `--line-strong`, `--action-primary`, `--action-primary-hover`, `--focus`, `--accent`, `--good`, `--caution`, `--danger`, and `--derived`. Show each semantic token's soft tint in the same swatch and label the tint opacity beside each theme value.
+* Include `--canvas`, `--surface`, `--surface-raised`, `--ink`, `--ink-strong`, `--muted`, `--faint`, `--line`, `--line-strong`, `--action-primary`, `--action-primary-hover`, `--control-selected`, `--control-selected-hover`, `--focus`, `--accent`, `--good`, `--caution`, `--danger`, and `--derived`. Show each semantic token's soft tint in the same swatch and label the tint opacity beside each theme value.
 * Lay tokens out in a responsive grid with a 240px minimum column width, 32px column gaps, and 24px row gaps. At narrow widths, collapse to one column without horizontal overflow.
 * Build each token as a 44px swatch beside a text block. Set the token name in 12px semibold `--mono`, the usage label in 13px `--muted`, and theme values in 10.5px `--faint` monospace text that may wrap only between complete values.
 * Keep every swatch and soft-tint region borderless, dividerless, outlineless, and shadowless; the color fill itself provides the shape. Use a 6px default radius, keep good swatches at 6px, caution swatches at 4px, and danger swatches at 0px; never round a red swatch.
-* Use `Viewport background`, `Controls and bounded surfaces`, `Overlays and active rows`, `Body text and data values`, `Headings and selected values`, `Secondary metadata and labels`, `Placeholders and inactive icons`, `Borders and row dividers`, `Active and overlay boundaries`, `Primary action fill`, `Hovered primary action fill`, `Keyboard focus only`, `Observed data`, `Healthy or successful`, `Warning or degraded`, `Error, outage, or destructive`, and `Estimated, modeled, or synthetic` as the corresponding usage labels in token order.
+* Use `Viewport background`, `Controls and bounded surfaces`, `Overlays and active rows`, `Body text and data values`, `Headings and selected values`, `Secondary metadata and labels`, `Placeholders and inactive icons`, `Borders and row dividers`, `Active and overlay boundaries`, `Primary action fill`, `Hovered primary action fill`, `Selected control fill`, `Hovered selected control fill`, `Keyboard focus only`, `Observed data`, `Healthy or successful`, `Warning or degraded`, `Error, outage, or destructive`, and `Estimated, modeled, or synthetic` as the corresponding usage labels in token order.
 
 ## Reference Asset
 
