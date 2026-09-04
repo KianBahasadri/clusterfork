@@ -981,7 +981,6 @@
       min-height: 28px;
       display: inline-flex;
       align-items: center;
-      gap: 6px;
       white-space: nowrap;
       cursor: copy;
       transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
@@ -991,15 +990,27 @@
       background: var(--surface);
       border-color: var(--line-strong);
     }
-    .meta-tag-copy .icon {
-      width: 12px;
-      height: 12px;
-    }
     .meta-tag-copy.is-copied {
-      color: var(--good);
-      background: var(--good-soft);
-      border-color: color-mix(in srgb, var(--good) 30%, transparent);
-      border-radius: var(--radius-pill);
+      color: var(--ink-strong);
+      background: var(--surface-raised);
+      border-color: var(--line-strong);
+    }
+    .meta-hash-wrapper {
+      position: relative;
+      display: inline-flex;
+    }
+    .meta-hash-wrapper .tooltip-bubble {
+      left: 0;
+      transform: none;
+      width: max-content;
+      max-width: min(360px, calc(100vw - 32px));
+      white-space: normal;
+      overflow-wrap: anywhere;
+      font-family: var(--mono);
+    }
+    .meta-hash-wrapper.is-tooltip-visible .tooltip-bubble {
+      opacity: 1;
+      visibility: visible;
     }
 
     kbd {
@@ -1232,6 +1243,63 @@
       gap: 4px;
       color: var(--muted);
       white-space: nowrap;
+    }
+
+    .toast-history-dialog {
+      max-width: 560px;
+      max-height: min(680px, calc(100vh - 32px));
+      overflow: hidden;
+    }
+    .toast-history-dialog .modal-header {
+      margin-bottom: 12px;
+    }
+    .toast-history-dialog .modal-body {
+      max-height: min(560px, calc(100vh - 124px));
+      margin-bottom: 0;
+      padding-right: 4px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+    .toast-history-list {
+      display: grid;
+      list-style: none;
+    }
+    .toast-history-item {
+      display: grid;
+      grid-template-columns: 16px minmax(0, 1fr);
+      gap: 12px;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .toast-history-item:first-child { padding-top: 0; }
+    .toast-history-item:last-child {
+      padding-bottom: 0;
+      border-bottom: 0;
+    }
+    .toast-history-icon {
+      width: 16px;
+      height: 16px;
+      margin-top: 2px;
+      color: var(--good);
+    }
+    .toast-history-item[data-tone="danger"] .toast-history-icon {
+      color: var(--danger);
+    }
+    .toast-history-copy {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+    .toast-history-message {
+      color: var(--ink-strong);
+      line-height: 1.45;
+    }
+    .toast-history-time {
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.4;
     }
 
     /* -------------------------------------------------------------
@@ -1473,39 +1541,87 @@
     /* Toast Container */
     .toast-container {
       position: fixed;
-      bottom: 24px;
-      right: 24px;
+      right: 0;
+      bottom: 0;
       z-index: 90;
+      width: min(408px, 100vw);
+      max-height: calc(100vh - 8px);
+      padding: 24px;
       display: flex;
       flex-direction: column;
       gap: 10px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-color: var(--line-strong) transparent;
+      scrollbar-width: thin;
       pointer-events: none;
+      transition: max-height 240ms ease;
+    }
+    .toast-container.has-history {
+      pointer-events: auto;
+    }
+    .toast-container.is-resting {
+      max-height: 92px;
+      overflow: hidden;
+    }
+    .toast-container.is-resting:hover,
+    .toast-container.is-resting:focus-within {
+      max-height: min(320px, calc(100vh - 8px));
+      overflow-y: auto;
     }
 
     .toast {
+      flex: 0 0 auto;
       pointer-events: auto;
       background: var(--surface-raised);
       border: 1px solid var(--line-strong);
       border-radius: var(--radius);
-      padding: 12px 16px;
       box-shadow: var(--shadow);
       font-size: 13.5px;
       display: flex;
       align-items: center;
-      gap: 14px;
+      overflow: hidden;
       min-width: 280px;
       max-width: 360px;
       animation: slideIn 280ms cubic-bezier(0.16, 1, 0.3, 1);
+      transition: opacity 620ms ease, transform 620ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 620ms ease;
+    }
+    .toast[data-tone="danger"] {
+      border-radius: 0;
+    }
+    .toast.is-archived {
+      opacity: 0.2;
+      transform: translate(18px, 42px);
+      box-shadow: var(--shadow-sm);
+    }
+    .toast-container:hover .toast.is-archived,
+    .toast-container:focus-within .toast.is-archived {
+      opacity: 0.86;
+      transform: translate(0, 0);
     }
     @keyframes slideIn {
       from { transform: translateY(16px); opacity: 0; }
       to { transform: translateY(0); opacity: 1; }
     }
-    @media (prefers-reduced-motion: reduce) {
-      .toast { animation: none; }
+    .toast-main {
+      align-self: stretch;
+      flex: 1;
+      min-width: 0;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      text-align: left;
+    }
+    .toast.has-undo .toast-main {
+      padding-right: 12px;
+    }
+    .toast-main:hover {
+      background: var(--surface);
     }
     .toast-msg {
       flex: 1;
+      min-width: 0;
       color: var(--ink-strong);
     }
     .toast-icon {
@@ -1515,12 +1631,41 @@
       color: var(--danger);
     }
     .toast-undo {
+      align-self: stretch;
+      padding: 0 16px;
+      border-left: 1px solid var(--line);
       color: var(--ink-strong);
       font-weight: 600;
       font-size: 13px;
     }
     .toast-undo:hover {
       text-decoration: underline;
+    }
+
+    @media (max-width: 600px) {
+      .toast-container {
+        width: 100%;
+        padding: 12px;
+      }
+      .toast-container.is-resting { max-height: 72px; }
+      .toast {
+        width: 100%;
+        min-width: 0;
+        max-width: none;
+      }
+      .toast.is-archived { transform: translate(8px, 32px); }
+      .toast-history-dialog {
+        width: calc(100% - 24px);
+        padding: 20px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .toast-container,
+      .toast {
+        animation: none;
+        transition: none;
+      }
     }
 
     .sr-only {
@@ -1591,10 +1736,6 @@
       </symbol>
       <symbol id="lucide-loader-circle" viewBox="0 0 24 24">
         <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
-      </symbol>
-      <symbol id="lucide-copy" viewBox="0 0 24 24">
-        <rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect>
-        <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
       </symbol>
     </defs>
   </svg>
@@ -1916,13 +2057,12 @@
 
           <div class="showcase-group">
             <div class="row-wrap">
-              <span class="meta-tag">commit:72f4fb4</span>
-              <span class="meta-tag">v2.14.0-rc</span>
-              <button class="meta-tag meta-tag-copy" id="copyIpButton" type="button" data-copy-value="192.168.1.104" aria-label="Copy IP address 192.168.1.104">
-                <span>192.168.1.104</span>
-                <svg class="icon" aria-hidden="true"><use id="copyIpIconUse" href="#lucide-copy"></use></svg>
-              </button>
-              <span class="sr-only" id="metadataCopyStatus" aria-live="polite"></span>
+              <span class="meta-hash-wrapper" id="commitHashWrapper">
+                <button class="meta-tag meta-tag-copy" id="copyCommitButton" type="button" data-copy-kind="Commit hash" data-copy-value="72f4fb47c444ef3303f3e44f4082aab383ec22da" aria-label="Copy commit hash 72f4fb4">commit:72f4fb4</button>
+                <span class="tooltip-bubble" id="commitHashTooltip" role="tooltip">72f4fb47c444ef3303f3e44f4082aab383ec22da</span>
+              </span>
+              <button class="meta-tag meta-tag-copy" type="button" data-copy-kind="Version" data-copy-value="v2.14.0-rc" aria-label="Copy version v2.14.0-rc" title="Copy version">v2.14.0-rc</button>
+              <button class="meta-tag meta-tag-copy" type="button" data-copy-kind="IP address" data-copy-value="192.168.1.104" aria-label="Copy IP address 192.168.1.104" title="Copy IP address">192.168.1.104</button>
             </div>
           </div>
         </div>
@@ -2442,8 +2582,18 @@
     </div>
   </dialog>
 
-  <!-- Toast Notification Container -->
-  <div class="toast-container" id="toastContainer" aria-live="polite"></div>
+  <dialog class="modal-dialog toast-history-dialog" id="toastHistoryDialog" aria-labelledby="toastHistoryDialogTitle">
+    <div class="modal-header">
+      <h2 class="modal-title" id="toastHistoryDialogTitle">Toast history</h2>
+      <button class="btn-icon" id="btnCloseToastHistory" type="button" aria-label="Close toast history"><svg class="icon" aria-hidden="true"><use href="#lucide-x"></use></svg></button>
+    </div>
+    <div class="modal-body toast-history-body">
+      <ol class="toast-history-list" id="toastHistoryList"></ol>
+    </div>
+  </dialog>
+
+  <!-- Toast Notification Tray -->
+  <div class="toast-container" id="toastContainer" aria-live="polite" aria-relevant="additions text"></div>
 
   <!-- JavaScript Interaction Logic -->
   <script>
@@ -3284,10 +3434,14 @@
       if (indeterminateBox) indeterminateBox.indeterminate = true;
 
       // 9. Copyable metadata
-      var copyIpButton = document.getElementById("copyIpButton");
-      var copyIpIconUse = document.getElementById("copyIpIconUse");
-      var metadataCopyStatus = document.getElementById("metadataCopyStatus");
-      var metadataCopyResetTimer = 0;
+      var metadataCopyButtons = document.querySelectorAll(".meta-tag-copy[data-copy-value]");
+      var metadataCopyResetTimers = new Map();
+      var commitHashWrapper = document.getElementById("commitHashWrapper");
+      var copyCommitButton = document.getElementById("copyCommitButton");
+      var commitHashTooltipTimer = 0;
+      var commitHashPointerInside = false;
+      var commitHashFocused = false;
+      var commitHashTooltipSuppressed = false;
 
       function fallbackCopyText(value) {
         var previousFocus = document.activeElement;
@@ -3319,26 +3473,71 @@
         return fallbackCopyText(value);
       }
 
-      function resetMetadataCopyButton() {
-        copyIpButton.classList.remove("is-copied");
-        copyIpIconUse.setAttribute("href", "#lucide-copy");
-        metadataCopyStatus.textContent = "";
+      function resetMetadataCopyButton(button) {
+        button.classList.remove("is-copied");
+        var timer = metadataCopyResetTimers.get(button);
+        if (timer) window.clearTimeout(timer);
+        metadataCopyResetTimers.delete(button);
       }
 
-      copyIpButton.addEventListener("click", function () {
-        var value = copyIpButton.dataset.copyValue;
-        metadataCopyStatus.textContent = "";
-        copyText(value).then(function () {
-          window.clearTimeout(metadataCopyResetTimer);
-          copyIpButton.classList.add("is-copied");
-          copyIpIconUse.setAttribute("href", "#lucide-check");
-          metadataCopyStatus.textContent = "IP address " + value + " copied";
-          metadataCopyResetTimer = window.setTimeout(resetMetadataCopyButton, 1600);
-        }).catch(function () {
-          window.clearTimeout(metadataCopyResetTimer);
-          resetMetadataCopyButton();
-          metadataCopyStatus.textContent = "Could not copy IP address";
+      metadataCopyButtons.forEach(function (button) {
+        button.addEventListener("click", function () {
+          var value = button.dataset.copyValue;
+          copyText(value).then(function () {
+            resetMetadataCopyButton(button);
+            button.classList.add("is-copied");
+            spawnToast("Copied to clipboard", false);
+            metadataCopyResetTimers.set(button, window.setTimeout(function () {
+              resetMetadataCopyButton(button);
+            }, 1600));
+          }).catch(function () {
+            resetMetadataCopyButton(button);
+            spawnToast("Could not copy to clipboard", false, "danger");
+          });
         });
+      });
+
+      function hideCommitHashTooltip() {
+        if (commitHashTooltipTimer) window.clearTimeout(commitHashTooltipTimer);
+        commitHashTooltipTimer = 0;
+        commitHashWrapper.classList.remove("is-tooltip-visible");
+        copyCommitButton.removeAttribute("aria-describedby");
+      }
+
+      function updateCommitHashTooltip() {
+        hideCommitHashTooltip();
+        if (commitHashTooltipSuppressed || (!commitHashPointerInside && !commitHashFocused)) return;
+        commitHashTooltipTimer = window.setTimeout(function () {
+          commitHashTooltipTimer = 0;
+          commitHashWrapper.classList.add("is-tooltip-visible");
+          copyCommitButton.setAttribute("aria-describedby", "commitHashTooltip");
+        }, 150);
+      }
+
+      commitHashWrapper.addEventListener("pointerenter", function () {
+        commitHashPointerInside = true;
+        commitHashTooltipSuppressed = false;
+        updateCommitHashTooltip();
+      });
+      commitHashWrapper.addEventListener("pointerleave", function () {
+        commitHashPointerInside = false;
+        if (!commitHashFocused) commitHashTooltipSuppressed = false;
+        updateCommitHashTooltip();
+      });
+      copyCommitButton.addEventListener("focus", function () {
+        commitHashFocused = true;
+        commitHashTooltipSuppressed = false;
+        updateCommitHashTooltip();
+      });
+      copyCommitButton.addEventListener("blur", function () {
+        commitHashFocused = false;
+        if (!commitHashPointerInside) commitHashTooltipSuppressed = false;
+        updateCommitHashTooltip();
+      });
+      copyCommitButton.addEventListener("keydown", function (event) {
+        if (event.key !== "Escape") return;
+        commitHashTooltipSuppressed = true;
+        hideCommitHashTooltip();
       });
 
       // 10. Table sorting
@@ -3404,32 +3603,165 @@
       // 13. Toast notification
       var spawnToastBtn = document.getElementById("btnSpawnToast");
       var toastContainer = document.getElementById("toastContainer");
+      var toastHistoryDialog = document.getElementById("toastHistoryDialog");
+      var toastHistoryList = document.getElementById("toastHistoryList");
+      var closeToastHistoryButton = document.getElementById("btnCloseToastHistory");
+      var toastHistory = [];
+      var toastCountdowns = new WeakMap();
+      var toastHistoryReturnFocus = null;
+
+      function formatToastTimestamp(date) {
+        return new Intl.DateTimeFormat(undefined, {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+          second: "2-digit"
+        }).format(date);
+      }
+
+      function renderToastHistory() {
+        toastHistoryList.replaceChildren();
+        toastHistory.slice().reverse().forEach(function (record) {
+          var item = document.createElement("li");
+          item.className = "toast-history-item";
+          item.dataset.tone = record.tone;
+          item.appendChild(createLucideIcon(record.tone === "danger" ? "octagon-x" : "check", "icon toast-history-icon"));
+
+          var copy = document.createElement("div");
+          copy.className = "toast-history-copy";
+
+          var message = document.createElement("span");
+          message.className = "toast-history-message";
+          message.textContent = record.message;
+          copy.appendChild(message);
+
+          var timestamp = document.createElement("time");
+          timestamp.className = "toast-history-time";
+          timestamp.dateTime = record.createdAt.toISOString();
+          timestamp.textContent = formatToastTimestamp(record.createdAt);
+          copy.appendChild(timestamp);
+
+          item.appendChild(copy);
+          toastHistoryList.appendChild(item);
+        });
+      }
+
+      function openToastHistory(trigger) {
+        toastHistoryReturnFocus = trigger || document.activeElement;
+        renderToastHistory();
+        if (!toastHistoryDialog.open) toastHistoryDialog.showModal();
+        closeToastHistoryButton.focus();
+      }
+
+      function updateToastTrayState() {
+        var hasToasts = Boolean(toastContainer.querySelector(".toast"));
+        var hasLiveToast = Boolean(toastContainer.querySelector(".toast:not(.is-archived)"));
+        toastContainer.classList.toggle("has-history", hasToasts);
+        toastContainer.classList.toggle("is-resting", hasToasts && !hasLiveToast);
+        window.requestAnimationFrame(function () {
+          toastContainer.scrollTop = toastContainer.scrollHeight;
+        });
+      }
+
+      function archiveToast(toast) {
+        var countdown = toastCountdowns.get(toast);
+        if (!countdown || countdown.archived) return;
+        if (countdown.timer) window.clearTimeout(countdown.timer);
+        countdown.timer = 0;
+        countdown.archived = true;
+
+        var undoButton = toast.querySelector(".toast-undo");
+        if (undoButton) undoButton.remove();
+        toast.classList.remove("has-undo");
+        toast.classList.add("is-archived");
+        updateToastTrayState();
+      }
+
+      function resumeToastCountdown(toast) {
+        var countdown = toastCountdowns.get(toast);
+        if (!countdown || countdown.archived || countdown.timer) return;
+        if (countdown.remaining <= 0) {
+          archiveToast(toast);
+          return;
+        }
+        countdown.startedAt = performance.now();
+        countdown.timer = window.setTimeout(function () {
+          countdown.timer = 0;
+          countdown.remaining = 0;
+          archiveToast(toast);
+        }, countdown.remaining);
+      }
+
+      function pauseToastCountdown(toast) {
+        var countdown = toastCountdowns.get(toast);
+        if (!countdown || countdown.archived || !countdown.timer) return;
+        window.clearTimeout(countdown.timer);
+        countdown.timer = 0;
+        countdown.remaining = Math.max(0, countdown.remaining - (performance.now() - countdown.startedAt));
+      }
 
       function spawnToast(msg, undoable, tone) {
+        var resolvedMessage = msg || "Preferences updated successfully.";
+        var resolvedTone = tone === "danger" ? "danger" : "success";
+        var createdAt = new Date();
+        toastHistory.push({
+          message: resolvedMessage,
+          tone: resolvedTone,
+          createdAt: createdAt
+        });
+
         var toast = document.createElement("div");
         toast.className = "toast";
-        var iconName = tone === "danger" ? "octagon-x" : "check";
-        var iconClass = tone === "danger" ? "icon toast-icon toast-icon-danger" : "icon toast-icon";
-        toast.appendChild(createLucideIcon(iconName, iconClass));
+        toast.dataset.tone = resolvedTone;
+
+        var toastMain = document.createElement("button");
+        toastMain.className = "toast-main";
+        toastMain.type = "button";
+        toastMain.setAttribute("aria-label", resolvedMessage + " Open toast history");
+        toastMain.title = "Open toast history";
+
+        var iconName = resolvedTone === "danger" ? "octagon-x" : "check";
+        var iconClass = resolvedTone === "danger" ? "icon toast-icon toast-icon-danger" : "icon toast-icon";
+        toastMain.appendChild(createLucideIcon(iconName, iconClass));
         var message = document.createElement("span");
         message.className = "toast-msg";
-        message.textContent = msg || "Preferences updated successfully.";
-        toast.appendChild(message);
+        message.textContent = resolvedMessage;
+        toastMain.appendChild(message);
+        toastMain.addEventListener("click", function () { openToastHistory(toastMain); });
+        toast.appendChild(toastMain);
 
         if (undoable !== false) {
+          toast.classList.add("has-undo");
           var undoBtn = document.createElement("button");
           undoBtn.className = "toast-undo";
           undoBtn.type = "button";
           undoBtn.textContent = "Undo";
-          undoBtn.addEventListener("click", function () { toast.remove(); });
+          undoBtn.addEventListener("click", function () { archiveToast(toast); });
           toast.appendChild(undoBtn);
         }
 
         toastContainer.appendChild(toast);
+        toastCountdowns.set(toast, {
+          archived: false,
+          remaining: 4500,
+          startedAt: 0,
+          timer: 0
+        });
+        toast.addEventListener("pointerenter", function () { pauseToastCountdown(toast); });
+        toast.addEventListener("pointerleave", function () {
+          if (!toast.contains(document.activeElement)) resumeToastCountdown(toast);
+        });
+        toast.addEventListener("focusin", function () { pauseToastCountdown(toast); });
+        toast.addEventListener("focusout", function () {
+          window.requestAnimationFrame(function () {
+            if (!toast.contains(document.activeElement) && !toast.matches(":hover")) resumeToastCountdown(toast);
+          });
+        });
 
-        setTimeout(function () {
-          if (toast.parentNode) toast.remove();
-        }, 4500);
+        updateToastTrayState();
+        resumeToastCountdown(toast);
       }
 
       if (spawnToastBtn) {
@@ -3437,6 +3769,17 @@
           spawnToast("Cluster configuration snapshot saved.");
         });
       }
+
+      closeToastHistoryButton.addEventListener("click", function () {
+        toastHistoryDialog.close();
+      });
+
+      toastHistoryDialog.addEventListener("close", function () {
+        if (toastHistoryReturnFocus && document.contains(toastHistoryReturnFocus)) {
+          toastHistoryReturnFocus.focus({ preventScroll: true });
+        }
+        toastHistoryReturnFocus = null;
+      });
 
       // 14. Sidebar scroll spy
       var sections = document.querySelectorAll(".component-section");
