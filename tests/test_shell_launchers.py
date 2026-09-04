@@ -229,14 +229,12 @@ class MockTmuxTests(unittest.TestCase):
         self.log.unlink(missing_ok=True)
         self._script_run("'source bash_profile.sh; PWD=/tmp/proj cc'")
         log = self._log()
-        self.assertIn(
-            "codex resume --yolo --config model=gpt-5.6-sol "
-            "--config model_reasoning_effort=ultra",
-            log,
-        )
+        self.assertIn("codex resume --yolo", log)
+        self.assertNotIn("model=", log)
+        self.assertNotIn("model_reasoning_effort=", log)
         self.assertNotIn("MOCK_TMUX_ERROR", log)
 
-    def test_cc_user_args_follow_defaults(self):
+    def test_cc_forwards_user_args(self):
         self.log.unlink(missing_ok=True)
         self._script_run(
             "'source bash_profile.sh; PWD=/tmp/proj "
@@ -244,9 +242,7 @@ class MockTmuxTests(unittest.TestCase):
         )
         log = self._log()
         self.assertIn(
-            "codex resume --yolo --config model=gpt-5.6-sol "
-            "--config model_reasoning_effort=ultra "
-            "--model gpt-5.6-terra --config model_reasoning_effort=max",
+            "codex resume --yolo --model gpt-5.6-terra --config model_reasoning_effort=max",
             log,
         )
         self.assertNotIn("MOCK_TMUX_ERROR", log)

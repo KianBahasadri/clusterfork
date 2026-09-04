@@ -268,11 +268,11 @@ class HookWiringTests(unittest.TestCase):
         self.assertIn("antigravity", antigravity["turn-bell"]["Stop"][0]["command"])
         self.assertFalse(grok["compat"]["claude"]["hooks"])
 
-    def test_codex_repo_defaults_are_sol_ultra(self):
+    def test_codex_repo_leaves_model_unspecified(self):
         with (REPO_ROOT / "agents/codex.toml").open("rb") as file:
             codex = tomllib.load(file)
-        self.assertEqual(codex["model"], "gpt-5.6-sol")
-        self.assertEqual(codex["model_reasoning_effort"], "ultra")
+        self.assertNotIn("model", codex)
+        self.assertNotIn("model_reasoning_effort", codex)
 
 
 class NotifyCommandTests(NotifyFixture):

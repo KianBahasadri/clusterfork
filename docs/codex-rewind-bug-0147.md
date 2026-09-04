@@ -17,7 +17,7 @@ fails for every prompt, not just old ones.
 
 ## Why it is not clusterfork
 
-Clusterfork now writes the model default, MCP roster, and hook tables in
+Clusterfork now writes the MCP roster and hook tables in
 `~/.codex/config.toml`, installs skills, manages shared auth links, and owns
 the `cc` wrapper. None of those paths writes history, thread items, or
 compaction state, and the error string is compiled into the `codex` binary

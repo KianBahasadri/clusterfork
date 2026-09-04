@@ -794,8 +794,8 @@ step "command code hooks" "$COMMAND_CODE_SETTINGS_DEST" "Stop → clusterfork-no
 # Codex config: update top-level settings, replace mcp_servers and hook event
 # tables from agents/codex.toml, strip retired clusterfork keys (notify), and
 # stamp trusted_hash for the Stop notifier only (other hooks.state entries kept).
-# Other settings (approvals and per-project trust levels written by Codex) are
-# preserved.
+# Other settings (model, approvals, per-project trust levels written by Codex)
+# are preserved.
 [[ -f "$CODEX_CONFIG_SRC" ]] || fail "missing $(tildify "$CODEX_CONFIG_SRC")"
 mkdir -p "$(dirname "$CODEX_CONFIG_DEST")"
 python3 - "$CODEX_CONFIG_SRC" "$CODEX_CONFIG_DEST" "$DOTENV_DEST" "$REPO_DIR/scripts" <<'PY'
@@ -1023,7 +1023,7 @@ for k, v in before.items():
 if result != current:
     dest_path.write_text(result, encoding="utf-8")
 PY
-step "codex config" "$CODEX_CONFIG_DEST" "Sol Ultra; Stop → clusterfork-notify; mcp_servers: $(python3 -c 'import sys, tomllib; print(", ".join(tomllib.load(open(sys.argv[1], "rb")).get("mcp_servers", {})))' "$CODEX_CONFIG_SRC")"
+step "codex config" "$CODEX_CONFIG_DEST" "Stop → clusterfork-notify; mcp_servers: $(python3 -c 'import sys, tomllib; print(", ".join(tomllib.load(open(sys.argv[1], "rb")).get("mcp_servers", {})))' "$CODEX_CONFIG_SRC")"
 
 # Ensure Claude Code user-scope MCP includes ElevenLabs. ~/.claude.json holds a lot
 # of unrelated state, so only upsert this one server entry.
@@ -1144,7 +1144,7 @@ fi
 printf '\n  Shell commands\n'
 printf '    %-5s %-18s %s\n' cl "claude" "--dangerously-skip-permissions --effort max"
 printf '    %-5s %-18s %s\n' cmd "cmd" "--resume --yolo (unless --yolo/--dangerously-skip-permissions given)"
-printf '    %-5s %-18s %s\n' cc "codex resume" "--yolo; gpt-5.6-sol ultra"
+printf '    %-5s %-18s %s\n' cc "codex resume" "--yolo"
 printf '    %-5s %-18s %s\n' ca "cursor-agent" "--yolo"
 printf '    %-5s %-18s %s\n' oc "opencode" ""
 printf '    %-5s %-18s %s\n' occ "claude (Go)" "--dangerously-skip-permissions --effort \$OCC_EFFORT (max)"

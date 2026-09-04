@@ -151,12 +151,12 @@ and all `[mcp_servers…]` / hook event tables are updated/overwritten into
 `~/.codex/config.toml`. The installer also strips retired clusterfork keys
 (`notify`) and stamps `trusted_hash` for the clusterfork Stop notifier only
 (`[hooks.state."…/config.toml:stop:0:0"]`; other `hooks.state` entries stay).
-Codex owns the rest of `~/.codex/config.toml` — `approvals_reviewer`,
-`service_tier`, and the `[projects]` trust levels it writes as you accept
-directories — so other keys and tables stay untouched. `${HOME}` placeholders
-in values are expanded at install time.
+Codex owns the rest of `~/.codex/config.toml` — `model`,
+`model_reasoning_effort`, `approvals_reviewer`, `service_tier`, and the
+`[projects]` trust levels it writes as you accept directories — so other keys
+and tables stay untouched. `${HOME}` placeholders in values are expanded at
+install time.
 
-- **Model:** `gpt-5.6-sol`, reasoning effort `ultra`
 - **Hooks:** root-only asynchronous `[[hooks.Stop]]` invokes the shared completion notifier; see [Notifications](notifications.md). The installer writes its matching `trusted_hash` so it does not wait on `/hooks`.
 - **context7:** remote `https://mcp.context7.com/mcp`
 - **ElevenLabs:** clusterfork `bin/elevenlabs-mcp` launcher

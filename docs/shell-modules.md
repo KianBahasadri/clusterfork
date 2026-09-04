@@ -16,7 +16,7 @@
 
 ## codex.sh
 
-`cc` launches `codex resume --yolo` via `_cf_tmux`, defaulting each launch to `gpt-5.6-sol` with `model_reasoning_effort=ultra`. The defaults precede forwarded arguments, so a later `--model` or `--config model_reasoning_effort=...` overrides them for that launch. `rotate-codex` switches between saved Codex accounts via symlinks.
+`cc` launches `codex resume --yolo` via `_cf_tmux`. `rotate-codex` switches between saved Codex accounts via symlinks.
 
 ## cursor.sh
 
