@@ -469,6 +469,12 @@
       isolation: isolate;
       touch-action: manipulation;
     }
+    .btn-danger-dwell:not(.is-armed) {
+      cursor: not-allowed;
+    }
+    .btn-danger-dwell.is-armed {
+      cursor: pointer;
+    }
     .btn-danger-dwell:hover:not(:disabled),
     .btn-danger-dwell.is-arming,
     .btn-danger-dwell.is-armed {
@@ -713,6 +719,24 @@
       color: var(--danger);
     }
 
+    .email-validation-form {
+      max-width: 460px;
+    }
+    .email-validation-controls {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: stretch;
+      gap: 8px;
+    }
+    @media (max-width: 600px) {
+      .email-validation-controls {
+        grid-template-columns: 1fr;
+      }
+      .email-validation-controls .btn {
+        justify-self: start;
+      }
+    }
+
     .input-with-action {
       position: relative;
       display: flex;
@@ -952,6 +976,30 @@
       background: var(--surface-raised);
       color: var(--muted);
       border: 1px solid var(--line);
+    }
+    .meta-tag-copy {
+      min-height: 28px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+      cursor: copy;
+      transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+    }
+    .meta-tag-copy:hover {
+      color: var(--ink);
+      background: var(--surface);
+      border-color: var(--line-strong);
+    }
+    .meta-tag-copy .icon {
+      width: 12px;
+      height: 12px;
+    }
+    .meta-tag-copy.is-copied {
+      color: var(--good);
+      background: var(--good-soft);
+      border-color: color-mix(in srgb, var(--good) 30%, transparent);
+      border-radius: var(--radius-pill);
     }
 
     kbd {
@@ -1544,6 +1592,10 @@
       <symbol id="lucide-loader-circle" viewBox="0 0 24 24">
         <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
       </symbol>
+      <symbol id="lucide-copy" viewBox="0 0 24 24">
+        <rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect>
+        <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+      </symbol>
     </defs>
   </svg>
 
@@ -1744,9 +1796,19 @@
             <!-- Error State -->
             <div class="form-group">
               <label class="form-label" for="inputEmail">Billing Email <span class="required-star" aria-hidden="true">*</span></label>
-              <input class="input-field is-invalid" id="inputEmail" type="email" value="invalid-address" aria-describedby="email-error">
+              <input class="input-field is-invalid" id="inputEmail" type="email" value="invalid-address" required aria-invalid="true" aria-describedby="email-error">
               <span class="input-error" id="email-error" role="alert">Enter a valid email address</span>
             </div>
+
+            <!-- Submit-triggered email validation -->
+            <form class="form-group email-validation-form" id="emailValidationForm" novalidate>
+              <label class="form-label" for="validationEmail">Notification Email <span class="required-star" aria-hidden="true">*</span></label>
+              <div class="email-validation-controls">
+                <input class="input-field" id="validationEmail" name="email" type="email" autocomplete="email" placeholder="name@example.com" required aria-describedby="validationEmailError">
+                <button class="btn btn-secondary" id="validationEmailSubmit" type="submit" aria-busy="false">Validate Email</button>
+              </div>
+              <span class="input-error" id="validationEmailError" role="alert" hidden></span>
+            </form>
           </div>
         </div>
       </section>
@@ -1856,7 +1918,11 @@
             <div class="row-wrap">
               <span class="meta-tag">commit:72f4fb4</span>
               <span class="meta-tag">v2.14.0-rc</span>
-              <span class="meta-tag">192.168.1.104</span>
+              <button class="meta-tag meta-tag-copy" id="copyIpButton" type="button" data-copy-value="192.168.1.104" aria-label="Copy IP address 192.168.1.104">
+                <span>192.168.1.104</span>
+                <svg class="icon" aria-hidden="true"><use id="copyIpIconUse" href="#lucide-copy"></use></svg>
+              </button>
+              <span class="sr-only" id="metadataCopyStatus" aria-live="polite"></span>
             </div>
           </div>
         </div>
@@ -3157,11 +3223,125 @@
         searchInput.focus();
       });
 
-      // 7. Indeterminate checkbox demo
+      // 7. Submit-triggered email validation
+      var emailValidationForm = document.getElementById("emailValidationForm");
+      var validationEmail = document.getElementById("validationEmail");
+      var validationEmailSubmit = document.getElementById("validationEmailSubmit");
+      var validationEmailError = document.getElementById("validationEmailError");
+      var emailValidationPending = false;
+
+      function resetEmailValidation() {
+        validationEmail.classList.remove("is-invalid");
+        validationEmail.removeAttribute("aria-invalid");
+        validationEmailError.hidden = true;
+        validationEmailError.textContent = "";
+      }
+
+      emailValidationForm.addEventListener("submit", function (event) {
+        event.preventDefault();
+        if (emailValidationPending) return;
+        if (!validationEmail.checkValidity()) {
+          validationEmail.classList.add("is-invalid");
+          validationEmail.setAttribute("aria-invalid", "true");
+          validationEmailError.textContent = validationEmail.validity.valueMissing
+            ? "Enter an email address"
+            : "Enter a valid email address";
+          validationEmailError.hidden = false;
+          validationEmail.focus();
+          return;
+        }
+
+        var returnFocus = document.activeElement;
+        emailValidationPending = true;
+        resetEmailValidation();
+        validationEmail.readOnly = true;
+        validationEmailSubmit.style.minWidth = validationEmailSubmit.getBoundingClientRect().width + "px";
+        validationEmailSubmit.disabled = true;
+        validationEmailSubmit.setAttribute("aria-busy", "true");
+        validationEmailSubmit.replaceChildren(
+          createLucideIcon("loader-circle", "icon spinner"),
+          document.createTextNode("Submitting…")
+        );
+
+        window.setTimeout(function () {
+          spawnToast("Notification email submitted successfully.", false);
+          validationEmail.value = "";
+          validationEmail.readOnly = false;
+          resetEmailValidation();
+          validationEmailSubmit.disabled = false;
+          validationEmailSubmit.setAttribute("aria-busy", "false");
+          validationEmailSubmit.textContent = "Validate Email";
+          validationEmailSubmit.style.minWidth = "";
+          emailValidationPending = false;
+          if (returnFocus && document.contains(returnFocus)) returnFocus.focus({ preventScroll: true });
+        }, 1200);
+      });
+
+      validationEmail.addEventListener("input", resetEmailValidation);
+
+      // 8. Indeterminate checkbox demo
       var indeterminateBox = document.getElementById("indeterminateBox");
       if (indeterminateBox) indeterminateBox.indeterminate = true;
 
-      // 8. Table sorting
+      // 9. Copyable metadata
+      var copyIpButton = document.getElementById("copyIpButton");
+      var copyIpIconUse = document.getElementById("copyIpIconUse");
+      var metadataCopyStatus = document.getElementById("metadataCopyStatus");
+      var metadataCopyResetTimer = 0;
+
+      function fallbackCopyText(value) {
+        var previousFocus = document.activeElement;
+        var helper = document.createElement("textarea");
+        helper.value = value;
+        helper.setAttribute("readonly", "");
+        helper.style.position = "fixed";
+        helper.style.opacity = "0";
+        helper.style.pointerEvents = "none";
+        document.body.appendChild(helper);
+        helper.select();
+        helper.setSelectionRange(0, value.length);
+        var didCopy = false;
+        try {
+          didCopy = document.execCommand("copy");
+        } finally {
+          helper.remove();
+          if (previousFocus && typeof previousFocus.focus === "function") previousFocus.focus();
+        }
+        return didCopy ? Promise.resolve() : Promise.reject(new Error("Copy command failed"));
+      }
+
+      function copyText(value) {
+        if (navigator.clipboard && window.isSecureContext) {
+          return navigator.clipboard.writeText(value).catch(function () {
+            return fallbackCopyText(value);
+          });
+        }
+        return fallbackCopyText(value);
+      }
+
+      function resetMetadataCopyButton() {
+        copyIpButton.classList.remove("is-copied");
+        copyIpIconUse.setAttribute("href", "#lucide-copy");
+        metadataCopyStatus.textContent = "";
+      }
+
+      copyIpButton.addEventListener("click", function () {
+        var value = copyIpButton.dataset.copyValue;
+        metadataCopyStatus.textContent = "";
+        copyText(value).then(function () {
+          window.clearTimeout(metadataCopyResetTimer);
+          copyIpButton.classList.add("is-copied");
+          copyIpIconUse.setAttribute("href", "#lucide-check");
+          metadataCopyStatus.textContent = "IP address " + value + " copied";
+          metadataCopyResetTimer = window.setTimeout(resetMetadataCopyButton, 1600);
+        }).catch(function () {
+          window.clearTimeout(metadataCopyResetTimer);
+          resetMetadataCopyButton();
+          metadataCopyStatus.textContent = "Could not copy IP address";
+        });
+      });
+
+      // 10. Table sorting
       var table = document.getElementById("sampleTable");
       var sortBtns = table.querySelectorAll(".sort-th-btn");
       sortBtns.forEach(function (btn) {
@@ -3184,7 +3364,7 @@
         });
       });
 
-      // 9. Modal dialog
+      // 11. Modal dialog
       var dialog = document.getElementById("demoDialog");
       var openModalBtn = document.getElementById("btnOpenModal");
       var closeModalBtn = document.getElementById("btnCloseModal");
@@ -3203,7 +3383,7 @@
         });
       }
 
-      // 10. Tabs
+      // 12. Tabs
       var tabBtns = document.querySelectorAll(".tab-btn");
       var tabPanels = document.querySelectorAll(".tab-panel");
       tabBtns.forEach(function (btn) {
@@ -3221,7 +3401,7 @@
         });
       });
 
-      // 11. Toast notification
+      // 13. Toast notification
       var spawnToastBtn = document.getElementById("btnSpawnToast");
       var toastContainer = document.getElementById("toastContainer");
 
@@ -3258,7 +3438,7 @@
         });
       }
 
-      // 12. Sidebar scroll spy
+      // 14. Sidebar scroll spy
       var sections = document.querySelectorAll(".component-section");
       var tocLinks = document.querySelectorAll(".toc-link");
 
