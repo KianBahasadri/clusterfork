@@ -42,6 +42,9 @@
   color: inherit;
   text-transform: inherit;
 }
+.data-table th.num .sort-th-btn {
+  flex-direction: row-reverse;
+}
 .sort-th-btn:hover {
   color: var(--ink-strong);
 }
