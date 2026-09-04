@@ -10,6 +10,83 @@ NOTIFY_HISTORY_RETAIN=200
 declare -A NOTIFY_PREF=()
 NOTIFY_VOLUME=100
 
+c_reset=""
+c_bold=""
+c_dim=""
+c_green=""
+c_bgreen=""
+c_red=""
+c_bred=""
+c_yellow=""
+c_cyan=""
+e_reset=""
+e_bred=""
+
+notify_color_enabled() {
+  local fd="${1:-1}"
+  if [[ -n "${NO_COLOR:-}" ]]; then
+    return 1
+  fi
+  if [[ "${CLICOLOR_FORCE:-0}" != "0" || "${FORCE_COLOR:-0}" != "0" ]]; then
+    return 0
+  fi
+  if [[ "${CLICOLOR:-1}" == "0" ]]; then
+    return 1
+  fi
+  if [[ "${TERM:-}" == "dumb" ]]; then
+    return 1
+  fi
+  [[ -t "$fd" ]]
+}
+
+notify_init_colors() {
+  if notify_color_enabled 1; then
+    c_reset=$'\033[0m'
+    c_bold=$'\033[1m'
+    c_dim=$'\033[90m'
+    c_green=$'\033[32m'
+    c_bgreen=$'\033[1;32m'
+    c_red=$'\033[31m'
+    c_bred=$'\033[1;31m'
+    c_yellow=$'\033[33m'
+    c_cyan=$'\033[36m'
+  else
+    c_reset=""
+    c_bold=""
+    c_dim=""
+    c_green=""
+    c_bgreen=""
+    c_red=""
+    c_bred=""
+    c_yellow=""
+    c_cyan=""
+  fi
+
+  if notify_color_enabled 2; then
+    e_reset=$'\033[0m'
+    e_bred=$'\033[1;31m'
+  else
+    e_reset=""
+    e_bred=""
+  fi
+}
+
+notify_ok() {
+  local target="$1" detail="$2" c_det="" c_dreset=""
+  case "$detail" in
+    on) c_det="$c_green"; c_dreset="$c_reset" ;;
+    off) c_det="$c_red"; c_dreset="$c_reset" ;;
+  esac
+  printf '  %s✓%s  %s%s%s  %s%s%s\n' \
+    "$c_bgreen" "$c_reset" \
+    "$c_bold" "$target" "$c_reset" \
+    "$c_det" "$detail" "$c_dreset"
+}
+
+notify_err() {
+  printf '  %s✗%s  %s\n' "$e_bred" "$e_reset" "$1" >&2
+}
+
 notify_clusterfork_dir() {
   local here
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -183,9 +260,14 @@ notify_print_history() {
   local index shown=0
   local -a lines=()
 
-  printf '  %s  ›  last %s\n' "$title" "$limit"
+  notify_init_colors
+  printf '  %s%s%s  %s›%s  last %s\n' \
+    "$c_bold" "$title" "$c_reset" \
+    "$c_dim" "$c_reset" \
+    "$limit"
   printf '\n'
-  printf '       %-27s  %-13s  %s\n' "time" "triggered by" "notifications"
+  printf '       %s%-27s  %-13s  %s%s\n' \
+    "$c_bold" "time" "triggered by" "notifications" "$c_reset"
 
   if [[ -f "$history" ]]; then
     mapfile -t lines < <(tail -n "$limit" "$history" 2>/dev/null)
@@ -195,7 +277,10 @@ notify_print_history() {
     [[ -n "$timestamp" && -n "$source" && -n "$notifications" ]] || continue
     display_time="$(notify_human_time "$timestamp")"
     notifications="${notifications//,/, }"
-    printf '       %-27s  %-13s  %s\n' "$display_time" "$source" "$notifications"
+    printf '       %-27s  %s%-13s%s  %s\n' \
+      "$display_time" \
+      "$c_cyan" "$source" "$c_reset" \
+      "$notifications"
     shown=1
   done
   if (( ! shown )); then
@@ -204,26 +289,41 @@ notify_print_history() {
 }
 
 notify_print_row() {
-  local key="$1" state extra=""
+  local key="$1" state extra="" c_state=""
   state="$(notify_state_word "$key")"
+  if [[ "$state" == on ]]; then
+    c_state="$c_green"
+  else
+    c_state="$c_red"
+  fi
   if [[ "$key" == bell ]]; then
     extra="  ${NOTIFY_VOLUME}%"
   elif [[ "$key" == phone ]]; then
     if [[ -n "${CLUSTERFORK_NTFY_URL:-}" ]]; then
       extra="  $CLUSTERFORK_NTFY_URL"
     else
-      extra="  no ntfy url"
+      if [[ -n "$c_yellow" ]]; then
+        extra="  ${c_yellow}no ntfy url${c_reset}"
+      else
+        extra="  no ntfy url"
+      fi
     fi
   fi
-  printf '       %-13s  %s%s\n' "$key" "$state" "$extra"
+  printf '       %s%-13s%s  %s%s%s%s\n' \
+    "$c_bold" "$key" "$c_reset" \
+    "$c_state" "$state" "$c_reset" \
+    "$extra"
 }
 
 notify_print_status() {
   local dir="$1" key
+  notify_init_colors
   if notify_effective; then
-    printf '  notify  ›  on\n'
+    printf '  %snotify%s  %s›%s  %son%s\n' \
+      "$c_bold" "$c_reset" "$c_dim" "$c_reset" "$c_bgreen" "$c_reset"
   else
-    printf '  notify  ›  off\n'
+    printf '  %snotify%s  %s›%s  %soff%s\n' \
+      "$c_bold" "$c_reset" "$c_dim" "$c_reset" "$c_bred" "$c_reset"
   fi
   printf '\n'
   notify_print_row bell
@@ -237,10 +337,10 @@ notify_print_status() {
 }
 
 notify_usage() {
-  cat <<'EOF'
+  cat <<EOF
 Toggle turn-completion notifications.
 
-Usage:
+${c_bold}Usage:${c_reset}
   notify                      show status
   notify all on|off           set every switch
   notify volume <0-100>       set the local bell volume
@@ -252,8 +352,8 @@ Usage:
   notify test [bell|phone]    play the bell and/or post a phone test
   notify log [count]          show trigger history (default 50, max 200)
 
-Prefs: ~/.config/clusterfork/notify-prefs (not overwritten by install)
-History: ~/.config/clusterfork/notify-history (newest 200 retained)
+${c_bold}Prefs:${c_reset} ~/.config/clusterfork/notify-prefs (not overwritten by install)
+${c_bold}History:${c_reset} ~/.config/clusterfork/notify-history (newest 200 retained)
 EOF
 }
 
@@ -316,30 +416,30 @@ notify_bell_ready() {
 
 notify_test_bell() {
   if ! notify_bell_ready "$1"; then
-    printf '  ✗  bell  play failed\n' >&2
+    notify_err "bell  play failed"
     return 1
   fi
   # Detach so the clip can finish after this command returns. The job
   # must not inherit stdout or a caller capturing output will wait for it.
   notify_play_bell "$1" </dev/null >/dev/null 2>&1 &
   disown "$!" 2>/dev/null || true
-  printf '  ✓  bell  playing\n'
+  notify_ok "bell" "playing"
 }
 
 notify_test_phone() {
   if [[ -z "${CLUSTERFORK_NTFY_URL:-}" ]]; then
-    printf '  ✗  phone  no ntfy url\n' >&2
+    notify_err "phone  no ntfy url"
     return 1
   fi
   if ! command -v curl >/dev/null 2>&1; then
-    printf '  ✗  phone  curl not found\n' >&2
+    notify_err "phone  curl not found"
     return 1
   fi
   if notify_post_ntfy "Clusterfork test" "Phone path works"; then
-    printf '  ✓  phone  posted to %s\n' "$CLUSTERFORK_NTFY_URL"
+    notify_ok "phone" "posted to $CLUSTERFORK_NTFY_URL"
     return 0
   fi
-  printf '  ✗  phone  post failed\n' >&2
+  notify_err "phone  post failed"
   return 1
 }
 
@@ -375,7 +475,7 @@ notify_run_test() {
       fi
       ;;
     *)
-      printf '  ✗  notify test expects bell or phone, not %s\n' "$channel" >&2
+      notify_err "notify test expects bell or phone, not $channel"
       notify_hint
       return 1
       ;;
@@ -394,6 +494,7 @@ notify_set_all() {
 notify_main() {
   local dir target value
   dir="$(notify_clusterfork_dir)"
+  notify_init_colors
   notify_load_env "$dir"
   notify_load_prefs "$dir"
 
@@ -410,7 +511,7 @@ notify_main() {
   esac
 
   if [[ $# -gt 2 ]]; then
-    printf '  ✗  unexpected argument: %s\n' "$3" >&2
+    notify_err "unexpected argument: $3"
     notify_hint
     return 1
   fi
@@ -419,8 +520,7 @@ notify_main() {
   if [[ "$target" == log ]]; then
     value="${2:-$NOTIFY_LOG_HISTORY_LIMIT}"
     if [[ ! "$value" =~ ^[1-9][0-9]*$ ]] || (( 10#$value > NOTIFY_HISTORY_RETAIN )); then
-      printf '  ✗  notify log expects 1-%s, not %s\n' \
-        "$NOTIFY_HISTORY_RETAIN" "$value" >&2
+      notify_err "notify log expects 1-$NOTIFY_HISTORY_RETAIN, not $value"
       return 1
     fi
     value="$((10#$value))"
@@ -430,39 +530,39 @@ notify_main() {
 
   if [[ "$target" == volume ]]; then
     if [[ $# -ne 2 ]]; then
-      printf '  ✗  notify volume requires 0-100\n' >&2
+      notify_err "notify volume requires 0-100"
       notify_hint
       return 1
     fi
     if ! value="$(notify_parse_volume "$2")"; then
-      printf '  ✗  expected 0-100, not %s\n' "$2" >&2
+      notify_err "expected 0-100, not $2"
       return 1
     fi
     NOTIFY_VOLUME="$value"
     notify_save_prefs "$dir"
-    printf '  ✓  volume  %s%%\n' "$NOTIFY_VOLUME"
+    notify_ok "volume" "${NOTIFY_VOLUME}%"
     return 0
   fi
 
   if [[ "$target" == all ]]; then
     if [[ $# -ne 2 ]]; then
-      printf '  ✗  notify all requires on or off\n' >&2
+      notify_err "notify all requires on or off"
       notify_hint
       return 1
     fi
     if ! value="$(notify_parse_bool "$2")"; then
-      printf '  ✗  expected on or off, not %s\n' "$2" >&2
+      notify_err "expected on or off, not $2"
       return 1
     fi
     notify_set_all "$value"
     notify_save_prefs "$dir"
-    printf '  ✓  all  %s\n' "$(notify_state_word bell)"
+    notify_ok "all" "$(notify_state_word bell)"
     return 0
   fi
 
   if [[ "$target" == test ]]; then
     if [[ $# -eq 2 && "$2" != bell && "$2" != phone ]]; then
-      printf '  ✗  notify test expects bell or phone, not %s\n' "$2" >&2
+      notify_err "notify test expects bell or phone, not $2"
       notify_hint
       return 1
     fi
@@ -471,7 +571,7 @@ notify_main() {
   fi
 
   if ! notify_is_target "$target"; then
-    printf '  ✗  unknown target: %s\n' "$target" >&2
+    notify_err "unknown target: $target"
     notify_hint
     return 1
   fi
@@ -483,13 +583,13 @@ notify_main() {
       value=1
     fi
   elif ! value="$(notify_parse_bool "$2")"; then
-    printf '  ✗  expected on or off, not %s\n' "$2" >&2
+    notify_err "expected on or off, not $2"
     return 1
   fi
 
   NOTIFY_PREF["$target"]="$value"
   notify_save_prefs "$dir"
-  printf '  ✓  %s  %s\n' "$target" "$(notify_state_word "$target")"
+  notify_ok "$target" "$(notify_state_word "$target")"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

@@ -572,6 +572,91 @@ class NotifyCommandTests(NotifyFixture):
         self.assertEqual(bad.returncode, 1)
         self.assertIn("expected 0-100, not 101", bad.stderr)
 
+    def test_colored_status_with_clicolor_force(self):
+        proc = self.run_cli(
+            dotenv=f"CLUSTERFORK_NTFY_URL={PHONE_URL}\n",
+            extra_env={"CLICOLOR_FORCE": "1"},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("\033[1mnotify\033[0m  \033[90m›\033[0m  \033[1;32mon\033[0m\n", proc.stdout)
+        self.assertIn("\033[1mbell         \033[0m  \033[32mon\033[0m  100%\n", proc.stdout)
+        self.assertIn(
+            f"\033[1mphone        \033[0m  \033[32mon\033[0m  {PHONE_URL}\n",
+            proc.stdout,
+        )
+        self.assertIn(
+            "  \033[1mrecent notifications\033[0m  \033[90m›\033[0m  last 5\n",
+            proc.stdout,
+        )
+        self.assertIn("       none yet\n", proc.stdout)
+
+    def test_colored_status_off_state(self):
+        self.write_prefs("bell=0\nphone=0\nclaude=0\ncodex=0\ncommand-code=0\ngrok=0\nantigravity=0\nvolume=50\n")
+        proc = self.run_cli(extra_env={"CLICOLOR_FORCE": "1"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("\033[1mnotify\033[0m  \033[90m›\033[0m  \033[1;31moff\033[0m\n", proc.stdout)
+        self.assertIn("\033[1mbell         \033[0m  \033[31moff\033[0m  50%\n", proc.stdout)
+
+    def test_colored_history_rows(self):
+        self.write_history([("2026-09-02T12:07:00-0400", "codex", "bell,phone")])
+        proc = self.run_cli(
+            "log",
+            "5",
+            extra_env={"CLICOLOR_FORCE": "1", "TZ": "America/New_York", "LC_ALL": "C"},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("  \033[1mnotify log\033[0m  \033[90m›\033[0m  last 5\n", proc.stdout)
+        self.assertIn(
+            "       \033[1mtime                         triggered by   notifications\033[0m\n",
+            proc.stdout,
+        )
+        self.assertIn("Sep 2, 2026 12:07 PM EDT", proc.stdout)
+        self.assertIn("\033[36mcodex        \033[0m", proc.stdout)
+        self.assertIn("bell, phone", proc.stdout)
+
+    def test_colored_actions(self):
+        off = self.run_cli("bell", extra_env={"CLICOLOR_FORCE": "1"})
+        self.assertEqual(off.returncode, 0, off.stderr)
+        self.assertEqual(off.stdout, "  \033[1;32m✓\033[0m  \033[1mbell\033[0m  \033[31moff\033[0m\n")
+
+        on = self.run_cli("bell", extra_env={"CLICOLOR_FORCE": "1"})
+        self.assertEqual(on.returncode, 0, on.stderr)
+        self.assertEqual(on.stdout, "  \033[1;32m✓\033[0m  \033[1mbell\033[0m  \033[32mon\033[0m\n")
+
+        vol = self.run_cli("volume", "40", extra_env={"CLICOLOR_FORCE": "1"})
+        self.assertEqual(vol.returncode, 0, vol.stderr)
+        self.assertEqual(vol.stdout, "  \033[1;32m✓\033[0m  \033[1mvolume\033[0m  40%\n")
+
+    def test_colored_errors(self):
+        proc = self.run_cli("particle", extra_env={"CLICOLOR_FORCE": "1"})
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("  \033[1;31m✗\033[0m  unknown target: particle\n", proc.stderr)
+        self.assertIn("Use: notify", proc.stderr)
+
+    def test_no_color_overrides_force(self):
+        proc = self.run_cli(
+            "bell",
+            extra_env={"CLICOLOR_FORCE": "1", "NO_COLOR": "1"},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("\033[", proc.stdout)
+
+    def test_clicolor_zero_disables_color(self):
+        proc = self.run_cli(
+            "bell",
+            extra_env={"CLICOLOR": "0"},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("\033[", proc.stdout)
+
+    def test_term_dumb_disables_color(self):
+        proc = self.run_cli(
+            "bell",
+            extra_env={"TERM": "dumb"},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("\033[", proc.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

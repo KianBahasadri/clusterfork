@@ -32,7 +32,9 @@ usage-limit gap is unchanged; see [Codex bell vs usage-limit deaths](codex-usage
 prints the current switches followed by the five most recent notification
 triggers. Each history row shows a friendly local date and time with the time
 zone, the agent that invoked the hook, and the channels triggered. A target
-with no value toggles; `on`/`off` sets it.
+with no value toggles; `on`/`off` sets it. Interactive output is colorized when
+connected to a terminal (or forced via `CLICOLOR_FORCE`/`FORCE_COLOR`), and stays
+plain text when redirected or when `NO_COLOR`/`CLICOLOR=0`/`TERM=dumb` is set.
 
 ```bash
 notify                 # status
