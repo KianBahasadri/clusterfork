@@ -1,0 +1,66 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap");
+
+:root {
+  /* Dark theme defaults */
+  --canvas: #080b0d;
+  --surface: #11171b;
+  --surface-raised: #151d21;
+  --ink: #dbe3e6;
+  --ink-strong: #f3f6f5;
+  --muted: #849094;
+  --faint: #566166;
+  --line: #263137;
+  --line-strong: #3a4a51;
+  --action-primary: #26343a;
+  --action-primary-hover: #314249;
+  --control-selected: #66777e;
+  --control-selected-hover: #74868d;
+  --accent: #62c8d8;
+  --accent-soft: rgba(98, 200, 216, 0.12);
+  --focus: #9cc8ff;
+  --good: #79c99e;
+  --good-soft: rgba(121, 201, 158, 0.14);
+  --caution: #d6ad63;
+  --caution-soft: rgba(214, 173, 99, 0.14);
+  --danger: #df7e78;
+  --danger-soft: rgba(223, 126, 120, 0.14);
+  --derived: #b9aaef;
+  --derived-soft: rgba(185, 170, 239, 0.14);
+
+  --ui: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", Consolas, monospace;
+  --radius: 6px;
+  --radius-sm: 4px;
+  --radius-pill: 9999px;
+  --shadow: 0 16px 40px rgba(0, 0, 0, 0.42);
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+[data-theme="light"] {
+  --canvas: #ecefec;
+  --surface: #f7f8f5;
+  --surface-raised: #ffffff;
+  --ink: #172027;
+  --ink-strong: #0a0d0f;
+  --muted: #536168;
+  --faint: #778287;
+  --line: #c8d1d0;
+  --line-strong: #9dacab;
+  --action-primary: #d5dcdb;
+  --action-primary-hover: #c5cfce;
+  --control-selected: #596970;
+  --control-selected-hover: #4b5c64;
+  --accent: #006f7c;
+  --accent-soft: rgba(0, 111, 124, 0.10);
+  --focus: #005fcc;
+  --good: #1d6846;
+  --good-soft: rgba(29, 104, 70, 0.12);
+  --caution: #805600;
+  --caution-soft: rgba(128, 86, 0, 0.12);
+  --danger: #9a332f;
+  --danger-soft: rgba(154, 51, 47, 0.12);
+  --derived: #63559b;
+  --derived-soft: rgba(99, 85, 155, 0.12);
+  --shadow: 0 16px 36px rgba(23, 32, 39, 0.12);
+  --shadow-sm: 0 2px 6px rgba(23, 32, 39, 0.08);
+}

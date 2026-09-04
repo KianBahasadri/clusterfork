@@ -1,0 +1,149 @@
+/* Persistent page utilities */
+.page-tools {
+  position: fixed;
+  top: 20px;
+  right: 24px;
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.theme-toggle {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  padding: 0;
+  border-radius: var(--radius);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  transition: color 120ms ease, transform 80ms ease;
+}
+.theme-toggle:hover {
+  color: var(--ink-strong);
+}
+.theme-toggle:active {
+  transform: scale(0.96);
+}
+.theme-toggle .icon {
+  width: 17px;
+  height: 17px;
+}
+
+/* Layout */
+.layout-container {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 32px 24px 80px;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 40px;
+}
+
+@media (max-width: 900px) {
+  .layout-container {
+    grid-template-columns: 1fr;
+  }
+  .toc-sidebar {
+    display: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .page-tools {
+    top: 12px;
+    right: 12px;
+  }
+  .layout-container {
+    padding-top: 68px;
+  }
+}
+
+/* Table of contents sidebar */
+.toc-sidebar {
+  position: sticky;
+  top: 32px;
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  padding: 4px 12px 4px 4px;
+}
+
+.toc-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.toc-link {
+  display: block;
+  font-size: 13.5px;
+  color: var(--muted);
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  transition: color 120ms ease, background 120ms ease;
+}
+.toc-link:hover {
+  color: var(--ink-strong);
+  background: var(--surface);
+}
+.toc-link.active {
+  color: var(--ink-strong);
+  background: var(--surface-raised);
+  font-weight: 600;
+}
+
+/* Component Sections */
+.spec-content {
+  display: flex;
+  flex-direction: column;
+  gap: 56px;
+  min-width: 0;
+}
+
+.component-section {
+  scroll-margin-top: 24px;
+  min-width: 0;
+}
+
+.section-header {
+  margin-bottom: 20px;
+}
+
+.section-index {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* Showcase grid */
+.showcase-card {
+  border-radius: var(--radius);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.showcase-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.row-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  max-width: 100%;
+}

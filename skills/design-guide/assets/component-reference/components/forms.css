@@ -1,0 +1,235 @@
+/* -------------------------------------------------------------
+   COMPONENT 3: Inputs & Textareas
+   ------------------------------------------------------------- */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 320px;
+  width: 100%;
+}
+
+.form-label {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink-strong);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.form-label .required-star {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.input-field {
+  width: 100%;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 9px 12px;
+  font-size: 14px;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.input-field:hover:not(:disabled) {
+  border-color: var(--line-strong);
+}
+.input-field:focus {
+  outline: none;
+  border-color: var(--line-strong);
+  box-shadow: 0 0 0 2px var(--focus);
+}
+.input-field:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--canvas);
+}
+.input-field.mono {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.input-field.is-invalid {
+  border-color: var(--danger);
+  border-radius: 0;
+}
+
+.input-error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.email-validation-form {
+  max-width: 460px;
+}
+.email-validation-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 8px;
+}
+@media (max-width: 600px) {
+  .email-validation-controls {
+    grid-template-columns: 1fr;
+  }
+  .email-validation-controls .btn {
+    justify-self: start;
+  }
+}
+
+.input-with-action {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.input-with-action .input-field {
+  padding-left: 36px;
+  padding-right: 36px;
+}
+.input-leading-icon {
+  position: absolute;
+  left: 11px;
+  width: 15px;
+  height: 15px;
+  color: var(--faint);
+  pointer-events: none;
+}
+.input-clear-btn {
+  position: absolute;
+  right: 10px;
+  color: var(--muted);
+  font-size: 14px;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+}
+.input-clear-btn:hover {
+  color: var(--ink-strong);
+}
+.input-clear-btn .icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* -------------------------------------------------------------
+   COMPONENT 4: Selection Controls (Check, Radio, Switch)
+   ------------------------------------------------------------- */
+.control-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 14px;
+}
+
+.custom-checkbox {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.custom-checkbox .icon {
+  width: 14px;
+  height: 14px;
+  opacity: 0;
+}
+.control-row:hover input[type="checkbox"]:not(:disabled) + .custom-checkbox {
+  border-color: var(--control-selected);
+}
+input[type="checkbox"]:checked + .custom-checkbox {
+  background: var(--control-selected);
+  border-color: var(--control-selected);
+  color: var(--canvas);
+}
+input[type="checkbox"]:checked + .custom-checkbox .icon,
+input[type="checkbox"]:indeterminate + .custom-checkbox .icon {
+  opacity: 1;
+}
+input[type="checkbox"]:indeterminate + .custom-checkbox {
+  background: var(--control-selected);
+  border-color: var(--control-selected);
+  color: var(--canvas);
+}
+.control-row:hover input[type="checkbox"]:checked:not(:disabled) + .custom-checkbox,
+.control-row:hover input[type="checkbox"]:indeterminate:not(:disabled) + .custom-checkbox {
+  background: var(--control-selected-hover);
+  border-color: var(--control-selected-hover);
+}
+
+.custom-radio {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 120ms ease;
+}
+.control-row:hover input[type="radio"]:not(:disabled) + .custom-radio {
+  border-color: var(--control-selected);
+}
+input[type="radio"]:checked + .custom-radio {
+  border-color: var(--control-selected);
+}
+input[type="radio"]:checked + .custom-radio::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--control-selected);
+}
+.control-row:hover input[type="radio"]:checked:not(:disabled) + .custom-radio {
+  border-color: var(--control-selected-hover);
+}
+.control-row:hover input[type="radio"]:checked:not(:disabled) + .custom-radio::after {
+  background: var(--control-selected-hover);
+}
+
+/* Switch */
+.switch-track {
+  width: 38px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  background: var(--line);
+  position: relative;
+  transition: background 150ms ease;
+  cursor: pointer;
+}
+.switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 150ms ease, background 150ms ease;
+}
+.control-row:hover input[type="checkbox"].switch-input:not(:disabled) + .switch-track {
+  background: var(--line-strong);
+}
+input[type="checkbox"].switch-input:checked + .switch-track {
+  background: var(--control-selected);
+}
+input[type="checkbox"].switch-input:checked + .switch-track .switch-thumb {
+  transform: translateX(16px);
+  background: var(--canvas);
+}
+.control-row:hover input[type="checkbox"].switch-input:checked:not(:disabled) + .switch-track {
+  background: var(--control-selected-hover);
+}
+.control-row input:disabled ~ span {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

@@ -1,0 +1,78 @@
+/* -------------------------------------------------------------
+   COMPONENT 13: Color Semantics
+   ------------------------------------------------------------- */
+.color-token-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  column-gap: 32px;
+  row-gap: 24px;
+  width: 100%;
+}
+
+.color-token {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.color-swatch {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  background: var(--swatch);
+  border-radius: var(--radius);
+}
+
+.color-swatch-soft {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 14px;
+  background: var(--swatch-soft);
+}
+
+.color-token[data-tone="caution"] .color-swatch {
+  border-radius: var(--radius-sm);
+}
+
+.color-token[data-tone="danger"] .color-swatch {
+  border-radius: 0;
+}
+
+.color-token-copy {
+  min-width: 0;
+}
+
+.color-token-name {
+  color: var(--ink-strong);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.color-token-meaning {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.color-token-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  margin-top: 6px;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.color-token-values span {
+  white-space: nowrap;
+}

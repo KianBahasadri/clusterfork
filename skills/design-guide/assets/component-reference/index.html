@@ -6,7 +6,23 @@
   <meta name="color-scheme" content="dark light">
   <meta name="description" content="Component specifications and interactive catalog for the design-guide skill.">
   <title>Component Reference & System Catalog | Design Guide</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="shared/tokens.css">
+  <link rel="stylesheet" href="shared/base.css">
+  <link rel="stylesheet" href="shared/page.css">
+  <link rel="stylesheet" href="components/dialogs.css">
+  <link rel="stylesheet" href="components/spotlight.css">
+  <link rel="stylesheet" href="components/buttons.css">
+  <link rel="stylesheet" href="components/dropdowns.css">
+  <link rel="stylesheet" href="components/forms.css">
+  <link rel="stylesheet" href="components/badges.css">
+  <link rel="stylesheet" href="components/tables.css">
+  <link rel="stylesheet" href="components/charts.css">
+  <link rel="stylesheet" href="components/tooltips.css">
+  <link rel="stylesheet" href="components/navigation.css">
+  <link rel="stylesheet" href="components/metrics.css">
+  <link rel="stylesheet" href="components/alerts.css">
+  <link rel="stylesheet" href="components/colors.css">
+  <link rel="stylesheet" href="components/toasts.css">
 </head>
 <body>
 
@@ -412,57 +428,50 @@
                   <th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="number">RPM <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th>
                   <th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="number">p95 Latency <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th>
                   <th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="number">Error Rate <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th>
-                  <th scope="col" style="text-align: right;"><button class="sort-th-btn" type="button" data-sort="text">Action <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th>
                 </tr>
               </thead>
               <tbody>
-                <tr>
-                  <td style="font-weight: 500;">auth-gateway</td>
+                <tr data-service-id="auth-gateway">
+                  <td><button class="table-row-trigger" type="button" aria-label="View details for auth-gateway" aria-haspopup="dialog" aria-controls="serviceDetailsDialog">auth-gateway</button></td>
                   <td data-sort-severity="good"><span class="badge badge-good">Operational</span></td>
                   <td class="num">14,280</td>
                   <td class="num">42 ms</td>
                   <td class="num">0.01%</td>
-                  <td style="text-align: right;"><button class="btn btn-quiet" style="padding: 4px 8px; font-size: 12px;">Inspect</button></td>
                 </tr>
-                <tr>
-                  <td style="font-weight: 500;">checkout-api</td>
+                <tr data-service-id="checkout-api">
+                  <td><button class="table-row-trigger" type="button" aria-label="View details for checkout-api" aria-haspopup="dialog" aria-controls="serviceDetailsDialog">checkout-api</button></td>
                   <td data-sort-severity="caution"><span class="badge badge-caution">Degraded</span></td>
                   <td class="num">8,190</td>
                   <td class="num">1,326 ms</td>
                   <td class="num">1.94%</td>
-                  <td style="text-align: right;"><button class="btn btn-quiet" style="padding: 4px 8px; font-size: 12px;">Inspect</button></td>
                 </tr>
-                <tr>
-                  <td style="font-weight: 500;">order-queue</td>
+                <tr data-service-id="order-queue">
+                  <td><button class="table-row-trigger" type="button" aria-label="View details for order-queue" aria-haspopup="dialog" aria-controls="serviceDetailsDialog">order-queue</button></td>
                   <td data-sort-severity="danger"><span class="badge badge-danger">Worker Backlog</span></td>
                   <td class="num">2,410</td>
                   <td class="num">4,812 ms</td>
                   <td class="num">6.20%</td>
-                  <td style="text-align: right;"><button class="btn btn-quiet" style="padding: 4px 8px; font-size: 12px;">Inspect</button></td>
                 </tr>
-                <tr>
-                  <td style="font-weight: 500;">prediction-engine</td>
+                <tr data-service-id="prediction-engine">
+                  <td><button class="table-row-trigger" type="button" aria-label="View details for prediction-engine" aria-haspopup="dialog" aria-controls="serviceDetailsDialog">prediction-engine</button></td>
                   <td><span class="badge badge-derived">Simulated</span></td>
                   <td class="num">560</td>
                   <td class="num">180 ms</td>
                   <td class="num">0.00%</td>
-                  <td style="text-align: right;"><button class="btn btn-quiet" style="padding: 4px 8px; font-size: 12px;">Inspect</button></td>
                 </tr>
-                <tr>
-                  <td style="font-weight: 500;">session-cache</td>
+                <tr data-service-id="session-cache">
+                  <td><button class="table-row-trigger" type="button" aria-label="View details for session-cache" aria-haspopup="dialog" aria-controls="serviceDetailsDialog">session-cache</button></td>
                   <td data-sort-severity="good"><span class="badge badge-good">Operational</span></td>
                   <td class="num">14,280</td>
                   <td class="num">18 ms</td>
                   <td class="num">0.00%</td>
-                  <td style="text-align: right;"><button class="btn btn-quiet" type="button" style="padding: 4px 8px; font-size: 12px;">Inspect</button></td>
                 </tr>
-                <tr>
-                  <td style="font-weight: 500;">inventory-api</td>
+                <tr data-service-id="inventory-api">
+                  <td><button class="table-row-trigger" type="button" aria-label="View details for inventory-api" aria-haspopup="dialog" aria-controls="serviceDetailsDialog">inventory-api</button></td>
                   <td data-sort-severity="caution"><span class="badge badge-caution">Degraded</span></td>
                   <td class="num">8,190</td>
                   <td class="num">840 ms</td>
                   <td class="num">0.72%</td>
-                  <td style="text-align: right;"><button class="btn btn-quiet" type="button" style="padding: 4px 8px; font-size: 12px;">Inspect</button></td>
                 </tr>
               </tbody>
             </table>
@@ -920,6 +929,14 @@
           <dd><kbd>Enter</kbd></dd>
         </div>
         <div class="shortcut-row">
+          <dt>Move between table rows</dt>
+          <dd><kbd>↑</kbd><kbd>↓</kbd></dd>
+        </div>
+        <div class="shortcut-row">
+          <dt>Open selected row details</dt>
+          <dd><kbd>Enter</kbd><kbd>Space</kbd></dd>
+        </div>
+        <div class="shortcut-row">
           <dt>Close the current overlay</dt>
           <dd><kbd>Esc</kbd></dd>
         </div>
@@ -937,10 +954,40 @@
     </div>
   </dialog>
 
+  <dialog class="modal-dialog service-details-dialog" id="serviceDetailsDialog" aria-labelledby="serviceDetailsTitle">
+    <div class="modal-header">
+      <h2 class="modal-title" id="serviceDetailsTitle">Service details</h2>
+      <button class="btn btn-icon" id="btnCloseServiceDetails" type="button" aria-label="Close" title="Close"><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-x"></use></svg></button>
+    </div>
+    <div class="modal-body">
+      <dl class="service-details-list" aria-labelledby="serviceDetailsTitle">
+        <div><dt>Status</dt><dd data-service-detail="status"></dd></div>
+        <div><dt>Requests per minute</dt><dd class="service-detail-value" data-service-detail="rpm"></dd></div>
+        <div><dt>p95 latency</dt><dd class="service-detail-value" data-service-detail="latency"></dd></div>
+        <div><dt>Error rate</dt><dd class="service-detail-value" data-service-detail="errorRate"></dd></div>
+        <div><dt>Region</dt><dd class="service-detail-value" data-service-detail="region"></dd></div>
+        <div><dt>Team</dt><dd data-service-detail="team"></dd></div>
+        <div><dt>Release</dt><dd class="service-detail-value" data-service-detail="version"></dd></div>
+        <div><dt>Replicas</dt><dd class="service-detail-value" data-service-detail="replicas"></dd></div>
+      </dl>
+    </div>
+  </dialog>
+
   <!-- Toast Notification Tray -->
   <div class="toast-container" id="toastContainer" aria-live="polite" aria-relevant="additions text"></div>
 
-  <!-- JavaScript Interaction Logic -->
-  <script src="interactions.js"></script>
+  <!-- Classic scripts keep this reference runnable directly from index.html.
+       Load shared icons and toasts before their consumers. -->
+  <script src="shared/icons.js"></script>
+  <script src="components/toasts.js"></script>
+  <script src="shared/page.js"></script>
+  <script src="components/spotlight.js"></script>
+  <script src="components/buttons.js"></script>
+  <script src="components/dropdowns.js"></script>
+  <script src="components/forms.js"></script>
+  <script src="components/badges.js"></script>
+  <script src="components/tables.js"></script>
+  <script src="components/dialogs.js"></script>
+  <script src="components/navigation.js"></script>
 </body>
 </html>

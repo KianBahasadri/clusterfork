@@ -1,0 +1,28 @@
+/* -------------------------------------------------------------
+   COMPONENT 12: Alerts & Callouts
+   ------------------------------------------------------------- */
+.callout {
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.callout-info {
+  background: var(--surface-raised);
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+}
+
+.callout-caution {
+  background: var(--caution-soft);
+  border: 1px solid color-mix(in srgb, var(--caution) 35%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+}
+
+.callout-danger {
+  background: var(--danger-soft);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+  border-radius: 0;
+  color: var(--ink);
+}

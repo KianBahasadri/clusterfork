@@ -1,0 +1,138 @@
+/* -------------------------------------------------------------
+   COMPONENT 1: Buttons
+   ------------------------------------------------------------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 9px 16px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  transition: background 120ms ease, border-color 120ms ease, transform 80ms ease, opacity 120ms ease;
+  white-space: nowrap;
+  user-select: none;
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.btn:disabled, .btn[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.btn-primary {
+  background: var(--action-primary);
+  border-color: transparent;
+  color: var(--ink-strong);
+  font-weight: 600;
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--action-primary-hover);
+}
+
+.btn-secondary {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--ink);
+}
+.btn-secondary:hover:not(:disabled) {
+  background: var(--surface-raised);
+  border-color: var(--line-strong);
+}
+
+.btn-quiet {
+  background: transparent;
+  color: var(--muted);
+}
+.btn-quiet:hover:not(:disabled) {
+  color: var(--ink-strong);
+  background: var(--surface-raised);
+}
+
+.btn-danger {
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  border-radius: 0;
+  color: var(--danger);
+}
+.btn-danger:hover:not(:disabled) {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+.btn-danger-dwell {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  touch-action: manipulation;
+}
+.btn-danger-dwell:not(.is-armed) {
+  cursor: not-allowed;
+}
+.btn-danger-dwell.is-armed {
+  cursor: pointer;
+}
+.btn-danger-dwell:hover:not(:disabled),
+.btn-danger-dwell.is-arming,
+.btn-danger-dwell.is-armed {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.btn-danger-dwell:active:not(.is-armed) {
+  transform: none;
+}
+.btn-danger-dwell-label {
+  position: relative;
+  z-index: 0;
+}
+.btn-danger-dwell-fill {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 9px 16px;
+  background: var(--danger);
+  color: #ffffff;
+  clip-path: inset(0 100% 0 0);
+  pointer-events: none;
+}
+.btn-danger-dwell.is-arming .btn-danger-dwell-fill {
+  clip-path: inset(0 0 0 0);
+  transition: clip-path 1000ms linear;
+}
+
+.btn-icon {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: var(--radius);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.btn-icon:hover:not(:disabled) {
+  color: var(--ink-strong);
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  animation: spin 700ms linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-danger-dwell.is-arming .btn-danger-dwell-fill {
+    transition-timing-function: steps(4, end);
+  }
+}

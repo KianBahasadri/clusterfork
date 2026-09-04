@@ -1,0 +1,35 @@
+/* -------------------------------------------------------------
+   COMPONENT 11: Cards & Panels
+   ------------------------------------------------------------- */
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 32px;
+  width: 100%;
+}
+.metric-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+.metric-label {
+  font-size: 12px;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.metric-num {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+@media (max-width: 600px) {
+  .metric-grid {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+}

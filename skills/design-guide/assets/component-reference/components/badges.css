@@ -1,0 +1,115 @@
+/* -------------------------------------------------------------
+   COMPONENT 5: Labels, Badges & Metadata
+   ------------------------------------------------------------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+}
+
+.badge-nominal {
+  background: var(--surface-raised);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+.badge-good {
+  background: var(--good-soft);
+  color: var(--good);
+  border: 1px solid color-mix(in srgb, var(--good) 30%, transparent);
+}
+.badge-caution {
+  --badge-flash-base: var(--caution-soft);
+  background: var(--caution-soft);
+  color: var(--caution);
+  border: 1px solid color-mix(in srgb, var(--caution) 30%, transparent);
+  border-radius: var(--radius-sm);
+}
+.badge-danger {
+  --badge-flash-base: var(--danger-soft);
+  background: var(--danger-soft);
+  color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  border-radius: 0;
+}
+.badge-derived {
+  background: var(--derived-soft);
+  color: var(--derived);
+  border: 1px solid color-mix(in srgb, var(--derived) 30%, transparent);
+}
+
+.badge-flash {
+  animation-iteration-count: infinite;
+}
+.badge-flash-slow {
+  animation-name: badgePulse;
+  animation-duration: 1600ms;
+  animation-timing-function: ease-in-out;
+}
+.badge-flash-fast {
+  animation-name: badgeFlash;
+  animation-duration: 600ms;
+  animation-timing-function: steps(1, end);
+}
+@keyframes badgePulse {
+  0%, 100% { background-color: var(--badge-flash-base); }
+  50% { background-color: color-mix(in srgb, currentColor 28%, transparent); }
+}
+@keyframes badgeFlash {
+  0%, 49% { background-color: var(--badge-flash-base); }
+  50%, 99% { background-color: color-mix(in srgb, currentColor 28%, transparent); }
+  100% { background-color: var(--badge-flash-base); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .badge-flash { animation: none; }
+}
+
+.meta-tag {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+.meta-tag-copy {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  cursor: copy;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+.meta-tag-copy:hover {
+  color: var(--ink);
+  background: var(--surface);
+  border-color: var(--line-strong);
+}
+.meta-tag-copy.is-copied {
+  color: var(--ink-strong);
+  background: var(--surface-raised);
+  border-color: var(--line-strong);
+}
+.meta-hash-wrapper {
+  position: relative;
+  display: inline-flex;
+}
+.meta-hash-wrapper .tooltip-bubble {
+  left: 0;
+  transform: none;
+  width: max-content;
+  max-width: min(360px, calc(100vw - 32px));
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+}
+.meta-hash-wrapper.is-tooltip-visible .tooltip-bubble {
+  opacity: 1;
+  visibility: visible;
+}

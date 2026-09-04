@@ -1,0 +1,57 @@
+/* -------------------------------------------------------------
+   COMPONENT 10: Navigation & Tabs
+   ------------------------------------------------------------- */
+.tab-nav {
+  display: flex;
+  border-bottom: 1px solid var(--line);
+  gap: 20px;
+}
+
+.tab-btn {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--muted);
+  padding: 10px 4px;
+  position: relative;
+  transition: color 120ms ease;
+}
+.tab-btn:hover {
+  color: var(--ink-strong);
+}
+.tab-btn[aria-selected="true"] {
+  color: var(--ink-strong);
+  font-weight: 600;
+}
+.tab-btn[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--ink-strong);
+}
+
+.tab-panel {
+  padding: 16px 0;
+  display: none;
+}
+.tab-panel.active {
+  display: block;
+}
+
+/* Breadcrumbs */
+.breadcrumb-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.breadcrumb-sep {
+  color: var(--faint);
+}
+.breadcrumb-cur {
+  color: var(--ink-strong);
+  font-weight: 500;
+}
