@@ -38,11 +38,13 @@
         <path d="M18 6 6 18"></path>
         <path d="m6 6 12 12"></path>
       </symbol>
-      <symbol id="lucide-arrow-up-down" viewBox="0 0 24 24">
-        <path d="m21 16-4 4-4-4"></path>
-        <path d="M17 20V4"></path>
-        <path d="m3 8 4-4 4 4"></path>
-        <path d="M7 4v16"></path>
+      <symbol id="lucide-arrow-up" viewBox="0 0 24 24">
+        <path d="m5 12 7-7 7 7"></path>
+        <path d="M12 19V5"></path>
+      </symbol>
+      <symbol id="lucide-arrow-down" viewBox="0 0 24 24">
+        <path d="M12 5v14"></path>
+        <path d="m19 12-7 7-7-7"></path>
       </symbol>
       <symbol id="lucide-refresh-cw" viewBox="0 0 24 24">
         <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
@@ -405,18 +407,18 @@
             <table class="data-table" id="sampleTable">
               <thead>
                 <tr>
-                  <th scope="col"><button class="sort-th-btn" type="button" data-sort="service">Service <svg class="icon" aria-hidden="true"><use href="#lucide-arrow-up-down"></use></svg></button></th>
-                  <th scope="col">Status</th>
-                  <th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="rpm">RPM <svg class="icon" aria-hidden="true"><use href="#lucide-arrow-up-down"></use></svg></button></th>
-                  <th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="latency">p95 Latency <svg class="icon" aria-hidden="true"><use href="#lucide-arrow-up-down"></use></svg></button></th>
-                  <th class="num" scope="col">Error Rate</th>
-                  <th scope="col" style="text-align: right;">Action</th>
+                  <th scope="col"><button class="sort-th-btn" type="button" data-sort="text">Service <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th>
+                  <th scope="col"><button class="sort-th-btn" type="button" data-sort="severity">Status <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th>
+                  <th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="number">RPM <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th>
+                  <th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="number">p95 Latency <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th>
+                  <th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="number">Error Rate <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th>
+                  <th scope="col" style="text-align: right;"><button class="sort-th-btn" type="button" data-sort="text">Action <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th>
                 </tr>
               </thead>
               <tbody>
                 <tr>
                   <td style="font-weight: 500;">auth-gateway</td>
-                  <td><span class="badge badge-good">Operational</span></td>
+                  <td data-sort-severity="good"><span class="badge badge-good">Operational</span></td>
                   <td class="num">14,280</td>
                   <td class="num">42 ms</td>
                   <td class="num">0.01%</td>
@@ -424,7 +426,7 @@
                 </tr>
                 <tr>
                   <td style="font-weight: 500;">checkout-api</td>
-                  <td><span class="badge badge-caution">Degraded</span></td>
+                  <td data-sort-severity="caution"><span class="badge badge-caution">Degraded</span></td>
                   <td class="num">8,190</td>
                   <td class="num">1,326 ms</td>
                   <td class="num">1.94%</td>
@@ -432,7 +434,7 @@
                 </tr>
                 <tr>
                   <td style="font-weight: 500;">order-queue</td>
-                  <td><span class="badge badge-danger">Worker Backlog</span></td>
+                  <td data-sort-severity="danger"><span class="badge badge-danger">Worker Backlog</span></td>
                   <td class="num">2,410</td>
                   <td class="num">4,812 ms</td>
                   <td class="num">6.20%</td>
@@ -445,6 +447,22 @@
                   <td class="num">180 ms</td>
                   <td class="num">0.00%</td>
                   <td style="text-align: right;"><button class="btn btn-quiet" style="padding: 4px 8px; font-size: 12px;">Inspect</button></td>
+                </tr>
+                <tr>
+                  <td style="font-weight: 500;">session-cache</td>
+                  <td data-sort-severity="good"><span class="badge badge-good">Operational</span></td>
+                  <td class="num">14,280</td>
+                  <td class="num">18 ms</td>
+                  <td class="num">0.00%</td>
+                  <td style="text-align: right;"><button class="btn btn-quiet" type="button" style="padding: 4px 8px; font-size: 12px;">Inspect</button></td>
+                </tr>
+                <tr>
+                  <td style="font-weight: 500;">inventory-api</td>
+                  <td data-sort-severity="caution"><span class="badge badge-caution">Degraded</span></td>
+                  <td class="num">8,190</td>
+                  <td class="num">840 ms</td>
+                  <td class="num">0.72%</td>
+                  <td style="text-align: right;"><button class="btn btn-quiet" type="button" style="padding: 4px 8px; font-size: 12px;">Inspect</button></td>
                 </tr>
               </tbody>
             </table>

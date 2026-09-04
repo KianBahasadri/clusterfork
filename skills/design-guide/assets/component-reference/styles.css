@@ -1021,7 +1021,7 @@ kbd {
 .table-container {
   width: 100%;
   overflow-x: auto;
-  border: 1px solid var(--line);
+  border: none;
   border-radius: var(--radius);
   background: var(--surface);
 }
@@ -1065,6 +1065,23 @@ kbd {
 .sort-th-btn .icon {
   width: 13px;
   height: 13px;
+}
+.sort-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  visibility: hidden;
+}
+.sort-priority {
+  min-width: var(--sort-priority-width, 1ch);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.data-table th[data-sort-direction="ascending"] .sort-indicator,
+.data-table th[data-sort-direction="descending"] .sort-indicator {
+  visibility: visible;
 }
 
 .data-table td {
