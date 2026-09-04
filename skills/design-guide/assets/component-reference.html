@@ -20,6 +20,8 @@
       --faint: #566166;
       --line: #263137;
       --line-strong: #3a4a51;
+      --action-primary: #26343a;
+      --action-primary-hover: #314249;
       --accent: #62c8d8;
       --accent-soft: rgba(98, 200, 216, 0.12);
       --focus: #9cc8ff;
@@ -51,6 +53,8 @@
       --faint: #778287;
       --line: #c8d1d0;
       --line-strong: #9dacab;
+      --action-primary: #d5dcdb;
+      --action-primary-hover: #c5cfce;
       --accent: #006f7c;
       --accent-soft: rgba(0, 111, 124, 0.10);
       --focus: #005fcc;
@@ -416,12 +420,13 @@
     }
 
     .btn-primary {
-      background: var(--ink-strong);
-      color: var(--canvas);
+      background: var(--action-primary);
+      border-color: transparent;
+      color: var(--ink-strong);
       font-weight: 600;
     }
     .btn-primary:hover:not(:disabled) {
-      opacity: 0.88;
+      background: var(--action-primary-hover);
     }
 
     .btn-secondary {
@@ -452,6 +457,43 @@
     .btn-danger:hover:not(:disabled) {
       background: var(--danger);
       color: #ffffff;
+    }
+
+    .btn-danger-dwell {
+      position: relative;
+      overflow: hidden;
+      isolation: isolate;
+      touch-action: manipulation;
+    }
+    .btn-danger-dwell:hover:not(:disabled),
+    .btn-danger-dwell.is-arming,
+    .btn-danger-dwell.is-armed {
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
+    .btn-danger-dwell:active:not(.is-armed) {
+      transform: none;
+    }
+    .btn-danger-dwell-label {
+      position: relative;
+      z-index: 0;
+    }
+    .btn-danger-dwell-fill {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 9px 16px;
+      background: var(--danger);
+      color: #ffffff;
+      clip-path: inset(0 100% 0 0);
+      pointer-events: none;
+    }
+    .btn-danger-dwell.is-arming .btn-danger-dwell-fill {
+      clip-path: inset(0 0 0 0);
+      transition: clip-path 1000ms linear;
     }
 
     .btn-icon {
@@ -872,6 +914,9 @@
 
     @media (prefers-reduced-motion: reduce) {
       .badge-flash { animation: none; }
+      .btn-danger-dwell.is-arming .btn-danger-dwell-fill {
+        transition-timing-function: steps(4, end);
+      }
     }
 
     .meta-tag {
@@ -1522,6 +1567,12 @@
               <button class="btn btn-secondary" type="button">Secondary Button</button>
               <button class="btn btn-quiet" type="button">Quiet Ghost</button>
               <button class="btn btn-danger" type="button">Destructive Action</button>
+              <button class="btn btn-danger btn-danger-dwell" id="btnDwellDanger" type="button" aria-describedby="dwellDangerHint dwellDangerStatus">
+                <span class="btn-danger-dwell-label">Delete Workspace</span>
+                <span class="btn-danger-dwell-fill" aria-hidden="true">Delete Workspace</span>
+              </button>
+              <span class="sr-only" id="dwellDangerHint">Hover or focus this button for one second before activation. On a touch screen, press and hold for one second, then release.</span>
+              <span class="sr-only" id="dwellDangerStatus" aria-live="polite"></span>
               <button class="btn btn-icon" type="button" aria-label="Search items" title="Search">
                 <svg class="icon" aria-hidden="true"><use href="#lucide-search"></use></svg>
               </button>
@@ -2091,6 +2142,22 @@
             </div>
           </div>
           <div class="color-token">
+            <span class="color-swatch" style="--swatch: var(--action-primary);" aria-hidden="true"></span>
+            <div class="color-token-copy">
+              <dt class="color-token-name">--action-primary</dt>
+              <dd class="color-token-meaning">Primary action fill</dd>
+              <dd class="color-token-values"><span>Dark #26343a</span><span>Light #d5dcdb</span></dd>
+            </div>
+          </div>
+          <div class="color-token">
+            <span class="color-swatch" style="--swatch: var(--action-primary-hover);" aria-hidden="true"></span>
+            <div class="color-token-copy">
+              <dt class="color-token-name">--action-primary-hover</dt>
+              <dd class="color-token-meaning">Hovered primary action fill</dd>
+              <dd class="color-token-values"><span>Dark #314249</span><span>Light #c5cfce</span></dd>
+            </div>
+          </div>
+          <div class="color-token">
             <span class="color-swatch" style="--swatch: var(--focus);" aria-hidden="true"></span>
             <div class="color-token-copy">
               <dt class="color-token-name">--focus</dt>
@@ -2628,7 +2695,109 @@
         }, 1200);
       });
 
-      // 4. Searchable accessible comboboxes
+      // 4. Dwell-to-arm destructive button demo
+      var dwellDangerButton = document.getElementById("btnDwellDanger");
+      var dwellDangerStatus = document.getElementById("dwellDangerStatus");
+      var dwellDangerTimer = 0;
+      var dwellDangerMode = "";
+      var dwellDangerPointerId = null;
+      var ignoreNextDwellDangerClick = false;
+
+      function isDwellDangerArmed() {
+        return dwellDangerButton.classList.contains("is-armed");
+      }
+
+      function beginDwellDanger(mode) {
+        if (dwellDangerTimer || isDwellDangerArmed()) return;
+        dwellDangerMode = mode;
+        dwellDangerButton.classList.add("is-arming");
+        dwellDangerStatus.textContent = "Delete Workspace is arming";
+        dwellDangerTimer = window.setTimeout(function () {
+          dwellDangerTimer = 0;
+          dwellDangerButton.classList.add("is-armed");
+          dwellDangerStatus.textContent = mode === "touch"
+            ? "Delete Workspace is ready. Release to activate"
+            : "Delete Workspace is ready. Activate the button to continue";
+        }, 1000);
+      }
+
+      function resetDwellDanger(message) {
+        if (dwellDangerTimer) window.clearTimeout(dwellDangerTimer);
+        dwellDangerTimer = 0;
+        dwellDangerMode = "";
+        dwellDangerPointerId = null;
+        dwellDangerButton.classList.remove("is-arming", "is-armed");
+        dwellDangerStatus.textContent = message || "";
+      }
+
+      function activateDwellDanger() {
+        resetDwellDanger("Delete Workspace activated");
+        spawnToast("Workspace deletion authorized.", false, "danger");
+      }
+
+      dwellDangerButton.addEventListener("pointerenter", function (event) {
+        if (event.pointerType !== "touch") beginDwellDanger("pointer");
+      });
+
+      dwellDangerButton.addEventListener("pointerleave", function () {
+        if (dwellDangerMode === "pointer") resetDwellDanger("Delete Workspace disarmed");
+      });
+
+      dwellDangerButton.addEventListener("focus", function () {
+        if (dwellDangerMode !== "pointer" && dwellDangerMode !== "touch") beginDwellDanger("keyboard");
+      });
+
+      dwellDangerButton.addEventListener("blur", function () {
+        if (dwellDangerMode === "keyboard") resetDwellDanger("Delete Workspace disarmed");
+      });
+
+      dwellDangerButton.addEventListener("pointerdown", function (event) {
+        if (event.pointerType !== "touch") return;
+        event.preventDefault();
+        dwellDangerPointerId = event.pointerId;
+        dwellDangerButton.setPointerCapture(event.pointerId);
+        beginDwellDanger("touch");
+      });
+
+      dwellDangerButton.addEventListener("pointermove", function (event) {
+        if (dwellDangerMode !== "touch" || event.pointerId !== dwellDangerPointerId) return;
+        var bounds = dwellDangerButton.getBoundingClientRect();
+        var isOutside = event.clientX < bounds.left || event.clientX > bounds.right
+          || event.clientY < bounds.top || event.clientY > bounds.bottom;
+        if (isOutside) resetDwellDanger("Delete Workspace disarmed");
+      });
+
+      dwellDangerButton.addEventListener("pointerup", function (event) {
+        if (dwellDangerMode !== "touch" || event.pointerId !== dwellDangerPointerId) return;
+        event.preventDefault();
+        if (dwellDangerButton.hasPointerCapture(event.pointerId)) {
+          dwellDangerButton.releasePointerCapture(event.pointerId);
+        }
+        ignoreNextDwellDangerClick = true;
+        if (isDwellDangerArmed()) activateDwellDanger();
+        else resetDwellDanger("Keep holding for one second");
+        window.setTimeout(function () { ignoreNextDwellDangerClick = false; }, 0);
+      });
+
+      dwellDangerButton.addEventListener("pointercancel", function (event) {
+        if (event.pointerId === dwellDangerPointerId) resetDwellDanger("Delete Workspace disarmed");
+      });
+
+      dwellDangerButton.addEventListener("click", function (event) {
+        if (ignoreNextDwellDangerClick) {
+          event.preventDefault();
+          return;
+        }
+        if (!isDwellDangerArmed()) {
+          event.preventDefault();
+          if (!dwellDangerTimer && document.activeElement === dwellDangerButton) beginDwellDanger("keyboard");
+          dwellDangerStatus.textContent = "Keep the button engaged for one second";
+          return;
+        }
+        activateDwellDanger();
+      });
+
+      // 5. Searchable accessible comboboxes
       var dropdowns = document.querySelectorAll("[data-custom-dropdown]");
       var dropdownStates = new WeakMap();
 
@@ -2916,7 +3085,7 @@
         });
       });
 
-      // 5. Clear search button
+      // 6. Clear search button
       var searchInput = document.getElementById("inputSearch");
       var clearBtn = document.getElementById("btnClearSearch");
       clearBtn.addEventListener("click", function () {
@@ -2924,11 +3093,11 @@
         searchInput.focus();
       });
 
-      // 6. Indeterminate checkbox demo
+      // 7. Indeterminate checkbox demo
       var indeterminateBox = document.getElementById("indeterminateBox");
       if (indeterminateBox) indeterminateBox.indeterminate = true;
 
-      // 7. Table sorting
+      // 8. Table sorting
       var table = document.getElementById("sampleTable");
       var sortBtns = table.querySelectorAll(".sort-th-btn");
       sortBtns.forEach(function (btn) {
@@ -2951,7 +3120,7 @@
         });
       });
 
-      // 8. Modal dialog
+      // 9. Modal dialog
       var dialog = document.getElementById("demoDialog");
       var openModalBtn = document.getElementById("btnOpenModal");
       var closeModalBtn = document.getElementById("btnCloseModal");
@@ -2970,7 +3139,7 @@
         });
       }
 
-      // 9. Tabs
+      // 10. Tabs
       var tabBtns = document.querySelectorAll(".tab-btn");
       var tabPanels = document.querySelectorAll(".tab-panel");
       tabBtns.forEach(function (btn) {
@@ -2988,7 +3157,7 @@
         });
       });
 
-      // 10. Toast notification
+      // 11. Toast notification
       var spawnToastBtn = document.getElementById("btnSpawnToast");
       var toastContainer = document.getElementById("toastContainer");
 
@@ -3025,7 +3194,7 @@
         });
       }
 
-      // 11. Sidebar scroll spy
+      // 12. Sidebar scroll spy
       var sections = document.querySelectorAll(".component-section");
       var tocLinks = document.querySelectorAll(".toc-link");
 

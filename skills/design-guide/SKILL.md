@@ -28,11 +28,13 @@ metadata:
 | `--surface` | `#11171b` | `#f7f8f5` | Form controls and bounded content surfaces |
 | `--surface-raised` | `#151d21` | `#ffffff` | Menus, dialogs, popovers, and hovered neutral rows |
 | `--ink` | `#dbe3e6` | `#172027` | Body text and data values |
-| `--ink-strong` | `#f3f6f5` | `#0a0d0f` | Headings, selected labels, and primary fills |
+| `--ink-strong` | `#f3f6f5` | `#0a0d0f` | Headings, selected labels, and primary-action text |
 | `--muted` | `#849094` | `#536168` | Secondary metadata and inactive labels |
 | `--faint` | `#566166` | `#778287` | Placeholders and inactive icons |
 | `--line` | `#263137` | `#c8d1d0` | Standard borders and row dividers |
 | `--line-strong` | `#3a4a51` | `#9dacab` | Active borders, overlay borders, and tab rules |
+| `--action-primary` | `#26343a` | `#d5dcdb` | Primary action fill |
+| `--action-primary-hover` | `#314249` | `#c5cfce` | Hovered primary action fill |
 | `--focus` | `#9cc8ff` | `#005fcc` | Keyboard focus only |
 | `--accent` | `#62c8d8` | `#006f7c` | One observed chart series |
 | `--accent-soft` | `rgba(98, 200, 216, 0.12)` | `rgba(0, 111, 124, 0.10)` | Soft observed-series treatment |
@@ -45,7 +47,7 @@ metadata:
 | `--derived` | `#b9aaef` | `#63559b` | Estimated, modeled, or synthetic data |
 | `--derived-soft` | `rgba(185, 170, 239, 0.14)` | `rgba(99, 85, 155, 0.12)` | Estimated, modeled, or synthetic surface |
 
-* Use `--canvas`, `--surface`, `--surface-raised`, `--ink`, `--ink-strong`, `--muted`, `--faint`, `--line`, and `--line-strong` for routine interface chrome.
+* Use `--canvas`, `--surface`, `--surface-raised`, `--ink`, `--ink-strong`, `--muted`, `--faint`, `--line`, `--line-strong`, `--action-primary`, and `--action-primary-hover` for routine interface chrome.
 * Use `--good`, `--caution`, `--danger`, and `--derived` only on elements that communicate the corresponding state or data provenance.
 * Pair every semantic color with explicit text and, when the color is on a shaped element, the geometry specified below.
 
@@ -126,10 +128,11 @@ metadata:
 
 * Use a native `<button>` and always set `type="button"`, `type="submit"`, or `type="reset"` explicitly.
 * Use 14px text, weight 500, line-height 1, 8px internal gap, 9px vertical padding, 16px horizontal padding, a 1px transparent base border, and a 6px radius for non-danger text buttons.
-* Primary: use `--ink-strong` fill, `--canvas` text, and weight 600. Place at most one primary action in an action group.
+* Primary: use solid `--action-primary` fill, a transparent 1px border, `--ink-strong` text, and weight 600. On hover, use `--action-primary-hover`. Keep the fill visibly distinct from `--surface` form controls and do not add an input-like outline. Place at most one primary action in an action group.
 * Secondary: use a transparent fill, 1px `--line` border, and `--ink` text. On hover, use `--surface-raised` and `--line-strong`.
 * Quiet: use no border, transparent fill, and `--muted` text. On hover, use `--ink-strong` text and `--surface-raised`.
 * Danger: use `--danger-soft` fill, a danger-tinted 1px border, `--danger` text, and 0px radius. On hover, use `--danger` fill and white text. Every red button remains sharp-edged.
+* Delayed danger: for a high-consequence destructive action, keep the danger button inert until the user deliberately engages it for 1 second. Treat uninterrupted pointer hover, keyboard focus, and touch press-and-hold as equivalent engagement paths. Animate a solid `--danger` fill from left to right over exactly 1000ms while preserving a readable action label; use white text over the filled portion. Reset the fill and disarm immediately on pointer exit, blur, touch cancellation, or touch movement outside the button. Block click, `Enter`, and `Space` until armed; after arming, permit one activation and then reset. Keep the native button focusable, describe the interaction with `aria-describedby`, and announce the arming and ready states through a polite live region. Under `prefers-reduced-motion: reduce`, show the same one-second progress in four discrete fill steps.
 * Icon-only: use a 36×36px visual button with at least a 44×44px touch target. Keep its background, border, and shadow transparent in default, hover, and active states. Use icon color or opacity for hover feedback.
 * On pointer activation, scale an enabled button to 0.98 while pressed. Do not apply the scale to disabled buttons.
 * For native disabled controls, set `disabled`. For custom disabled controls, set `aria-disabled="true"`, block pointer and keyboard activation, use opacity 0.45, and use `cursor: not-allowed`.
@@ -293,11 +296,11 @@ metadata:
 ### 13. Color Semantics
 
 * Add a `Color Semantics` section to every complete component reference. Show every shared color token as a swatch with its exact token name, one short usage label, and both dark- and light-theme values; do not rely on a prose introduction to explain the palette.
-* Include `--canvas`, `--surface`, `--surface-raised`, `--ink`, `--ink-strong`, `--muted`, `--faint`, `--line`, `--line-strong`, `--focus`, `--accent`, `--good`, `--caution`, `--danger`, and `--derived`. Show each semantic token's soft tint in the same swatch and label the tint opacity beside each theme value.
+* Include `--canvas`, `--surface`, `--surface-raised`, `--ink`, `--ink-strong`, `--muted`, `--faint`, `--line`, `--line-strong`, `--action-primary`, `--action-primary-hover`, `--focus`, `--accent`, `--good`, `--caution`, `--danger`, and `--derived`. Show each semantic token's soft tint in the same swatch and label the tint opacity beside each theme value.
 * Lay tokens out in a responsive grid with a 240px minimum column width, 32px column gaps, and 24px row gaps. At narrow widths, collapse to one column without horizontal overflow.
 * Build each token as a 44px swatch beside a text block. Set the token name in 12px semibold `--mono`, the usage label in 13px `--muted`, and theme values in 10.5px `--faint` monospace text that may wrap only between complete values.
 * Keep every swatch and soft-tint region borderless, dividerless, outlineless, and shadowless; the color fill itself provides the shape. Use a 6px default radius, keep good swatches at 6px, caution swatches at 4px, and danger swatches at 0px; never round a red swatch.
-* Use `Viewport background`, `Controls and bounded surfaces`, `Overlays and active rows`, `Body text and data values`, `Headings and selected values`, `Secondary metadata and labels`, `Placeholders and inactive icons`, `Borders and row dividers`, `Active and overlay boundaries`, `Keyboard focus only`, `Observed data`, `Healthy or successful`, `Warning or degraded`, `Error, outage, or destructive`, and `Estimated, modeled, or synthetic` as the corresponding usage labels in token order.
+* Use `Viewport background`, `Controls and bounded surfaces`, `Overlays and active rows`, `Body text and data values`, `Headings and selected values`, `Secondary metadata and labels`, `Placeholders and inactive icons`, `Borders and row dividers`, `Active and overlay boundaries`, `Primary action fill`, `Hovered primary action fill`, `Keyboard focus only`, `Observed data`, `Healthy or successful`, `Warning or degraded`, `Error, outage, or destructive`, and `Estimated, modeled, or synthetic` as the corresponding usage labels in token order.
 
 ## Reference Asset
 
