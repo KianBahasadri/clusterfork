@@ -9,6 +9,7 @@
 * `Escape` closes a dismissible dialog. Closing by any method restores focus to the invoking element without scrolling it out of place.
 * Use an 18px, weight-600 title. Put 16px below the header, 24px below the body, and 12px between footer actions.
 * Align footer actions to the right. Place cancel before confirm in DOM and visual order. Use the danger-button treatment with 0px radius for a destructive confirmation.
+* Let titles wrap without shrinking the close control, and wrap footer actions when they cannot fit side by side. In shortcut dialogs, let the key group move beneath its label and wrap between keycaps or complete shortcut alternatives.
 * Give every icon-only close control a Lucide `X`, accessible name `Close`, and tooltip. Keep its background and border transparent.
 
 ## 9. Tooltips and Popovers
@@ -17,7 +18,7 @@
 * Show it after 150ms on both pointer hover and keyboard focus. Hide it on pointer exit, blur, or `Escape`.
 * Give the bubble `role="tooltip"`, a stable `id`, and connect the trigger with `aria-describedby` while it is visible.
 * Use 12px text, 5px vertical and 10px horizontal padding, `--surface-raised`, `--ink-strong`, a 1px `--line-strong` border, 4px radius, and the small overlay shadow.
-* Keep tooltip content on one line only while it fits within the viewport. Constrain long content and allow normal word wrapping.
+* Remove hidden tooltip bubbles from layout with `hidden`, including their overflow contribution. When visible, use fixed positioning based on the trigger's bounds; prefer 8px above the trigger, flip below when needed, and clamp to a 12px inset within the visual viewport. Reposition on scrolling, resizing, and visual-viewport changes. Cap width at 360px or the available viewport width minus 24px; wrap normal text at spaces and long identifiers only when necessary.
 * Set tooltip pointer events to none. Do not place links, buttons, inputs, or other interactive content inside it.
 * Use a popover for interactive floating content. Move focus into it when required by its task, support expected arrow-key behavior for menus, close on `Escape` and outside activation, and restore focus to its trigger.
 
@@ -28,6 +29,7 @@
 * Give a tab container `role="tablist"`. Give each tab `role="tab"`, a matching `aria-controls`, and accurate `aria-selected`. Give each panel `role="tabpanel"` and `aria-labelledby`.
 * Use roving tab stops: the active tab has `tabindex="0"`; all other tabs have `tabindex="-1"`.
 * Render tabs at 14px with 10px vertical and 4px horizontal padding and 20px between tabs. Use a 1px `--line` rule under the list and a 2px `--ink-strong` underline on the selected tab.
+* Wrap tabs and breadcrumb items when the available width is too narrow. Preserve their reading order, labels, and keyboard behavior without creating horizontal page scrolling.
 * `ArrowRight` and `ArrowLeft` move focus and selection cyclically. `Home` selects the first tab and `End` selects the last. Hide inactive panels with the `hidden` attribute.
 * Use `<nav aria-label="Breadcrumb">` containing an ordered list for breadcrumbs. Mark the current item with `aria-current="page"` and do not link it.
 * Render breadcrumb separators as neutral `/` characters hidden from assistive technology. These separators are allowed only in breadcrumb trails, not component section titles.

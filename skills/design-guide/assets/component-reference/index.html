@@ -405,7 +405,7 @@
             <div class="row-wrap">
               <span class="meta-hash-wrapper" id="commitHashWrapper">
                 <button class="meta-tag meta-tag-copy" id="copyCommitButton" type="button" data-copy-kind="Commit hash" data-copy-value="72f4fb47c444ef3303f3e44f4082aab383ec22da" aria-label="Copy commit hash 72f4fb4">commit:72f4fb4</button>
-                <span class="tooltip-bubble" id="commitHashTooltip" role="tooltip">72f4fb47c444ef3303f3e44f4082aab383ec22da</span>
+                <span class="tooltip-bubble" id="commitHashTooltip" role="tooltip" hidden>72f4fb47c444ef3303f3e44f4082aab383ec22da</span>
               </span>
               <button class="meta-tag meta-tag-copy" type="button" data-copy-kind="Version" data-copy-value="v2.14.0-rc" aria-label="Copy version v2.14.0-rc" title="Copy version">v2.14.0-rc</button>
               <button class="meta-tag meta-tag-copy" type="button" data-copy-kind="IP address" data-copy-value="192.168.1.104" aria-label="Copy IP address 192.168.1.104" title="Copy IP address">192.168.1.104</button>
@@ -536,12 +536,12 @@
               <button class="btn btn-icon" type="button" aria-label="Refresh telemetry data">
                 <svg class="icon" aria-hidden="true"><use href="#lucide-refresh-cw"></use></svg>
               </button>
-              <div class="tooltip-bubble" role="tooltip">Refresh telemetry data</div>
+              <div class="tooltip-bubble" id="refreshTelemetryTooltip" role="tooltip" hidden>Refresh telemetry data</div>
             </div>
 
             <div class="tooltip-wrapper">
               <button class="btn btn-secondary" type="button">Hover or Focus Me</button>
-              <div class="tooltip-bubble" role="tooltip">Explains button context without cluttering UI</div>
+              <div class="tooltip-bubble" id="contextTooltip" role="tooltip" hidden>Explains button context without cluttering UI</div>
             </div>
           </div>
         </div>
@@ -1030,6 +1030,7 @@
   <script src="components/dropdowns.js"></script>
   <script src="components/forms.js"></script>
   <script src="components/badges.js"></script>
+  <script src="components/tooltips.js"></script>
   <script src="components/table-sorting.js"></script>
   <script src="components/tables.js"></script>
   <script src="components/charts-data.js"></script>

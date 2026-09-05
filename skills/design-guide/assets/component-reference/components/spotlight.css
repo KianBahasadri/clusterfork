@@ -139,9 +139,10 @@ dialog.spotlight-dialog::backdrop {
 }
 .shortcut-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
+  gap: 8px 24px;
   padding: 10px 0;
   border-bottom: 1px solid var(--line);
 }
@@ -156,6 +157,9 @@ dialog.spotlight-dialog::backdrop {
 }
 .shortcut-row dd {
   display: inline-flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
   align-items: center;
   justify-content: flex-end;
   gap: 4px;

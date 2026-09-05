@@ -54,3 +54,7 @@
 .chart-tooltip dl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; }
 .chart-tooltip dt { color: var(--muted); }
 .chart-tooltip dd { font-family: var(--mono); text-align: right; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 600px) {
+  .chart-box { padding: 16px 0; }
+}

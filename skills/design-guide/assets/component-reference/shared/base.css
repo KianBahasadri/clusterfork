@@ -1,4 +1,4 @@
-* { box-sizing: border-box; margin: 0; padding: 0; }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 html {
   scroll-behavior: smooth;
@@ -12,7 +12,7 @@ body {
   color: var(--ink);
   background-color: var(--canvas);
   -webkit-font-smoothing: antialiased;
-  min-width: 320px;
+  min-width: 0;
 }
 
 button, input, select, textarea { font: inherit; color: inherit; }

@@ -3,8 +3,9 @@
    ------------------------------------------------------------- */
 .tab-nav {
   display: flex;
+  flex-wrap: wrap;
   border-bottom: 1px solid var(--line);
-  gap: 20px;
+  gap: 0 20px;
 }
 
 .tab-btn {
@@ -43,11 +44,13 @@
 /* Breadcrumbs */
 .breadcrumb-nav {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   font-size: 13px;
   color: var(--muted);
 }
+.breadcrumb-nav > * { min-width: 0; overflow-wrap: anywhere; }
 .breadcrumb-sep {
   color: var(--faint);
 }

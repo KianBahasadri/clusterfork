@@ -2,12 +2,6 @@
   // Copyable metadata
   var metadataCopyButtons = document.querySelectorAll(".meta-tag-copy[data-copy-value]");
   var metadataCopyResetTimers = new Map();
-  var commitHashWrapper = document.getElementById("commitHashWrapper");
-  var copyCommitButton = document.getElementById("copyCommitButton");
-  var commitHashTooltipTimer = 0;
-  var commitHashPointerInside = false;
-  var commitHashFocused = false;
-  var commitHashTooltipSuppressed = false;
 
   function fallbackCopyText(value) {
     var previousFocus = document.activeElement;
@@ -63,46 +57,4 @@
     });
   });
 
-  function hideCommitHashTooltip() {
-    if (commitHashTooltipTimer) window.clearTimeout(commitHashTooltipTimer);
-    commitHashTooltipTimer = 0;
-    commitHashWrapper.classList.remove("is-tooltip-visible");
-    copyCommitButton.removeAttribute("aria-describedby");
-  }
-
-  function updateCommitHashTooltip() {
-    hideCommitHashTooltip();
-    if (commitHashTooltipSuppressed || (!commitHashPointerInside && !commitHashFocused)) return;
-    commitHashTooltipTimer = window.setTimeout(function () {
-      commitHashTooltipTimer = 0;
-      commitHashWrapper.classList.add("is-tooltip-visible");
-      copyCommitButton.setAttribute("aria-describedby", "commitHashTooltip");
-    }, 150);
-  }
-
-  commitHashWrapper.addEventListener("pointerenter", function () {
-    commitHashPointerInside = true;
-    commitHashTooltipSuppressed = false;
-    updateCommitHashTooltip();
-  });
-  commitHashWrapper.addEventListener("pointerleave", function () {
-    commitHashPointerInside = false;
-    if (!commitHashFocused) commitHashTooltipSuppressed = false;
-    updateCommitHashTooltip();
-  });
-  copyCommitButton.addEventListener("focus", function () {
-    commitHashFocused = true;
-    commitHashTooltipSuppressed = false;
-    updateCommitHashTooltip();
-  });
-  copyCommitButton.addEventListener("blur", function () {
-    commitHashFocused = false;
-    if (!commitHashPointerInside) commitHashTooltipSuppressed = false;
-    updateCommitHashTooltip();
-  });
-  copyCommitButton.addEventListener("keydown", function (event) {
-    if (event.key !== "Escape") return;
-    commitHashTooltipSuppressed = true;
-    hideCommitHashTooltip();
-  });
 }(window.ComponentReference.spawnToast));

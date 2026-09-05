@@ -27,9 +27,13 @@ dialog.modal-dialog::backdrop {
   align-items: flex-start;
   justify-content: space-between;
   margin-bottom: 16px;
+  gap: 12px;
 }
+.modal-header .btn-icon { flex-shrink: 0; }
 
 .modal-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 18px;
   font-weight: 600;
   color: var(--ink-strong);
@@ -44,6 +48,7 @@ dialog.modal-dialog::backdrop {
 
 .modal-footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 12px;

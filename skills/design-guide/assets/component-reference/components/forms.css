@@ -6,6 +6,7 @@
   flex-direction: column;
   gap: 6px;
   max-width: 320px;
+  min-width: 0;
   width: 100%;
 }
 
@@ -24,6 +25,7 @@
 
 .input-field {
   width: 100%;
+  min-width: 0;
   background: var(--surface);
   color: var(--ink);
   border: 1px solid var(--line);
@@ -124,7 +126,11 @@
   cursor: pointer;
   user-select: none;
   font-size: 14px;
+  min-width: 0;
+  max-width: 100%;
 }
+.control-row > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.custom-checkbox, .custom-radio, .switch-track { flex-shrink: 0; }
 
 .custom-checkbox {
   width: 18px;

@@ -2,6 +2,7 @@
    COMPONENT 6: Tables & Data Grids
    ------------------------------------------------------------- */
 .table-container {
+  position: relative;
   width: 100%;
   overflow-x: auto;
   border: none;
@@ -17,6 +18,7 @@
 }
 
 .data-table th {
+  position: relative;
   padding: 10px 14px;
   background: transparent;
   border-bottom: 1px solid var(--line-strong);

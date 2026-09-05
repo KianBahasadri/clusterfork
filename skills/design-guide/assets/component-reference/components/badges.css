@@ -101,15 +101,5 @@
   display: inline-flex;
 }
 .meta-hash-wrapper .tooltip-bubble {
-  left: 0;
-  transform: none;
-  width: max-content;
-  max-width: min(360px, calc(100vw - 32px));
-  white-space: normal;
-  overflow-wrap: anywhere;
   font-family: var(--mono);
-}
-.meta-hash-wrapper.is-tooltip-visible .tooltip-bubble {
-  opacity: 1;
-  visibility: visible;
 }

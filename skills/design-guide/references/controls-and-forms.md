@@ -53,6 +53,7 @@
 * Use `--surface`, a 1px `--line` border, 6px radius, 9px vertical padding, 12px horizontal padding, and 14px text for one-line inputs.
 * Use `--mono` at 13px for code, tokens, API keys, and machine identifiers. Do not use monospace for ordinary names, email addresses, search terms, or prose.
 * Give textareas the same border and typography, a minimum height of 96px, and vertical-only resizing unless the surrounding layout supports both axes.
+* Let form groups and their inputs shrink to the available width with `min-width: 0`; a preferred field width must not become a page-width minimum.
 * On hover, change only the border to `--line-strong`. On focus, keep a strong border and render the global 2px focus ring.
 * On disabled controls, set the native `disabled` attribute, opacity 0.5, `cursor: not-allowed`, and `--canvas` fill.
 * Add helper text only for a non-obvious format, constraint, consequence, or recovery step and associate it through `aria-describedby`. Do not include copy that merely restates the label, value, editability, data type, or organizational scope. Specifically omit generic lines such as `Unique identifier within your organization` and `Read-only live credentials token`.
@@ -74,5 +75,6 @@
 * Render switches with a 38×22px pill track and a 16×16px circular thumb inset 3px. Use `--line` for the off track with a `--muted` thumb; on hover, use `--line-strong` for the off track. Use `--control-selected` for the on track with a `--canvas` thumb, use `--control-selected-hover` while the on row is hovered, and translate the thumb 16px when on. Do not use `--ink-strong` for the track or thumb.
 * Use a checkbox with `role="switch"` and maintain `aria-checked` only when native checked semantics do not already expose the required switch role.
 * Put the input and visible label in one clickable row with a 10px gap and a minimum 44px target height. Clicking the text toggles the control.
+* Let long selection labels wrap within the available width while keeping the checkbox, radio, or switch indicator at its specified size.
 * Support `Space` for checkboxes and switches and arrow-key movement within a native radio group.
 * Set the native `disabled` attribute on disabled checkboxes, radios, and switches. Preserve whether the control is checked or unchecked, apply opacity 0.45 and `cursor: not-allowed` to its visible indicator and label, suppress every hover treatment, and prevent toggling. In a complete selection-control reference, show a disabled example of all three control types and include both checked and unchecked disabled states across the set.

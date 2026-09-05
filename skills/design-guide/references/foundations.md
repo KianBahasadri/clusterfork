@@ -4,6 +4,7 @@
 
 * Apply `box-sizing: border-box` to every element and pseudo-element.
 * Set the minimum supported viewport width to 320px. Do not introduce horizontal page scrolling at 320px or at 200% browser zoom; only bounded data regions such as tables may scroll horizontally.
+* Keep the body fluid instead of enforcing a pixel minimum width that excludes scrollbar space. Check the full document width with overlays both hidden and visible, including mobile browser rendering; do not mask overflow by clipping the page or disabling user zoom.
 * Set body text in `--ui` at 15px with a 1.5 line-height. Set buttons, inputs, textareas, and custom comboboxes to inherit the surrounding font and color.
 * Set `--ui` to `"IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif` and `--mono` to `"IBM Plex Mono", Consolas, monospace`.
 * Use `--mono` only for code, tokens, identifiers, keyboard keys, timestamps, aligned numeric data, and compact ordinal headings.
@@ -115,6 +116,7 @@
 
 * On desktop, cap content at 1240px, center it, use 32px top, 24px horizontal, and 80px bottom padding, and use a 240px navigation column plus one flexible content column separated by 40px.
 * Collapse to one column at 900px and below. Hide the component index at that breakpoint unless a mobile navigation replacement is implemented.
-* Set content columns and flex children to `min-width: 0` so long labels cannot force page overflow.
+* At 600px and below, use 16px horizontal page padding and the reserved 68px top space for utilities. Reduce static example wrappers to 16px vertical padding with no extra horizontal inset.
+* Use `minmax(0, 1fr)` for flexible grid tracks and `min-width: 0` on content columns, example groups, and flex children so long labels cannot force page overflow. Cap nested controls at their available width.
 * Mark the active side-navigation row with `--ink-strong`, weight 600, and an optional neutral surface. Do not add a leading stripe or border.
 * When side navigation scrolls, add at least 4px of inner space on every clipped edge around its links. A 2px focus outline with a 2px offset must remain fully visible on the first, last, leftmost, and rightmost focused link; never let an overflow container crop it.

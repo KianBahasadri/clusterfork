@@ -21,6 +21,7 @@
 ## 6. Tables and Data Grids
 
 * Wrap a table in a full-width region with horizontal overflow, a 6px radius, no outer border, and a transparent background. Keep the table and body cells transparent.
+* Establish a positioning context on the scrolling region and column headers so absolutely positioned accessibility descriptions stay inside the table's overflow boundary. Sorting, focusing, or scrolling a wide table must never widen the page or move fixed page utilities offscreen.
 * Use semantic `<table>`, `<thead>`, `<tbody>`, `<th scope="col">`, and `<td>` elements. Supply a caption, visible or screen-reader-only, that names the dataset.
 * Set table text to 13.5px and collapse borders. Use 10px vertical and 14px horizontal header padding and 12px vertical and 14px horizontal cell padding.
 * Use 12px uppercase header text, weight 600, letter-spacing 0.04em, `--muted`, a transparent background, and a 1px `--line-strong` bottom border.
@@ -43,7 +44,7 @@
 
 ## 7. Charts and Data Graphics
 
-* Keep the chart container borderless and transparent so the plot sits on the surrounding page background.
+* Keep the chart container borderless and transparent so the plot sits on the surrounding page background. Use 20px padding by default; at 600px and below, use 16px vertical padding with no additional horizontal inset.
 * Render line and area charts as SVG with a responsive width, a 200px default plot height, neutral `--line` gridlines, and 11px `--mono` axis labels in `--muted`. Size the SVG coordinate system to its rendered dimensions so resizing does not stretch labels or misplace pointer inspection.
 * Keep one source of timestamped numeric samples for the preview, explorer, statistics, exact-data table, and CSV. Treat missing series values as unavailable, preserve gaps, and never replace missing measurements with zero or invent intermediate samples.
 * Include units in axis titles or every applicable tick label. Do not require the surrounding prose to identify a unit.
