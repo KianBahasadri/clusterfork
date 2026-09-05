@@ -80,4 +80,5 @@
 
   reference.toggleTheme = toggleTheme;
   reference.exportMarkdown = exportMarkdown;
+  reference.downloadText = downloadText;
 }(window.ComponentReference));

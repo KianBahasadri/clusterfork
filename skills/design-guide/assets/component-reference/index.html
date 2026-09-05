@@ -17,6 +17,7 @@
   <link rel="stylesheet" href="components/badges.css">
   <link rel="stylesheet" href="components/tables.css">
   <link rel="stylesheet" href="components/charts.css">
+  <link rel="stylesheet" href="components/chart-explorer.css">
   <link rel="stylesheet" href="components/tooltips.css">
   <link rel="stylesheet" href="components/navigation.css">
   <link rel="stylesheet" href="components/metrics.css">
@@ -486,57 +487,14 @@
         </header>
         <div class="chart-box">
           <div class="chart-header">
-            <span class="chart-title">Observed vs Projected Latency (p95 ms)</span>
-            <div class="chart-legend">
-              <div class="legend-item"><span class="legend-line" style="background: var(--accent);"></span> Observed telemetry</div>
-              <div class="legend-item"><span class="legend-line dashed" style="color: var(--derived);"></span> Derived forecast</div>
-            </div>
+            <h3 class="chart-title" id="chartTitle">Observed vs Projected Latency (p95 ms)</h3>
           </div>
-
-          <!-- SVG Chart -->
-          <svg class="chart-svg" id="demoChart" viewBox="0 0 600 200" preserveAspectRatio="none">
-            <!-- Grid lines -->
-            <line class="chart-grid-line" x1="40" y1="20" x2="580" y2="20"></line>
-            <line class="chart-grid-line" x1="40" y1="70" x2="580" y2="70"></line>
-            <line class="chart-grid-line" x1="40" y1="120" x2="580" y2="120"></line>
-            <line class="chart-grid-line" x1="40" y1="170" x2="580" y2="170"></line>
-
-            <!-- Y Axis labels -->
-            <text class="chart-axis-text" x="30" y="24" text-anchor="end">1,500</text>
-            <text class="chart-axis-text" x="30" y="74" text-anchor="end">1,000</text>
-            <text class="chart-axis-text" x="30" y="124" text-anchor="end">500</text>
-            <text class="chart-axis-text" x="30" y="174" text-anchor="end">0</text>
-
-            <!-- X Axis labels -->
-            <text class="chart-axis-text" x="50" y="192" text-anchor="middle">14:00</text>
-            <text class="chart-axis-text" x="180" y="192" text-anchor="middle">14:15</text>
-            <text class="chart-axis-text" x="310" y="192" text-anchor="middle">14:30</text>
-            <text class="chart-axis-text" x="440" y="192" text-anchor="middle">14:45</text>
-            <text class="chart-axis-text" x="570" y="192" text-anchor="middle">15:00</text>
-
-            <!-- Series 1: Observed (solid cyan) -->
-            <polyline fill="none" stroke="var(--accent)" stroke-width="2.5" points="50,150 115,145 180,140 245,110 310,65 375,75 440,82 505,80 570,85"></polyline>
-
-            <!-- Series 2: Derived / Forecast (dashed purple) -->
-            <polyline fill="none" stroke="var(--derived)" stroke-width="2" stroke-dasharray="4 4" points="310,65 375,90 440,115 505,130 570,140"></polyline>
-          </svg>
-
-          <!-- Accessible Fallback -->
-          <details style="margin-top: 16px; font-size: 13px; color: var(--muted);">
-            <summary style="cursor: pointer; font-weight: 500;">Show exact plotted data table</summary>
-            <table class="data-table" style="margin-top: 12px;">
-              <thead>
-                <tr><th>Time</th><th class="num">Observed (ms)</th><th class="num">Forecast (ms)</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>14:00</td><td class="num">180</td><td class="num">—</td></tr>
-                <tr><td>14:15</td><td class="num">260</td><td class="num">—</td></tr>
-                <tr><td>14:30</td><td class="num">1,050</td><td class="num">1,050</td></tr>
-                <tr><td>14:45</td><td class="num">920</td><td class="num">620</td></tr>
-                <tr><td>15:00</td><td class="num">880</td><td class="num">350</td></tr>
-              </tbody>
-            </table>
-          </details>
+          <div class="chart-frame" id="chartPreview">
+            <button class="chart-surface" id="btnExploreChart" type="button" aria-label="Explore latency chart" aria-haspopup="dialog" aria-controls="chartExplorerDialog" aria-describedby="chartPreviewHelp">
+              <svg class="chart-svg" id="demoChart" aria-hidden="true" focusable="false"></svg>
+            </button>
+          </div>
+          <span class="sr-only" id="chartPreviewHelp">Observed and forecast latency from 14:00 to 15:00 UTC on 4 September 2026. Use Left and Right to inspect samples, Home and End to reach the endpoints, and Enter or Space to open chart controls and exact data.</span>
         </div>
       </section>
 
@@ -936,6 +894,10 @@
           <dt>Open selected row details</dt>
           <dd><kbd>Enter</kbd><kbd>Space</kbd></dd>
         </div>
+        <div class="shortcut-row"><dt>Inspect chart samples</dt><dd><kbd>←</kbd><kbd>→</kbd><kbd>Home</kbd><kbd>End</kbd></dd></div>
+        <div class="shortcut-row"><dt>Open chart explorer / pin sample</dt><dd><kbd>Enter</kbd><kbd>Space</kbd></dd></div>
+        <div class="shortcut-row"><dt>Zoom chart explorer</dt><dd><kbd>+</kbd><kbd>−</kbd></dd></div>
+        <div class="shortcut-row"><dt>Pan chart explorer</dt><dd><kbd>Shift</kbd><kbd>←</kbd><kbd>→</kbd></dd></div>
         <div class="shortcut-row">
           <dt>Close the current overlay</dt>
           <dd><kbd>Esc</kbd></dd>
@@ -973,6 +935,88 @@
     </div>
   </dialog>
 
+  <dialog class="modal-dialog chart-explorer-dialog" id="chartExplorerDialog" aria-labelledby="chartExplorerTitle">
+    <div class="modal-header chart-explorer-header">
+      <div>
+        <h2 class="modal-title" id="chartExplorerTitle">Latency explorer</h2>
+        <p class="chart-context">p95 latency · 4 September 2026 · UTC</p>
+      </div>
+      <button class="btn-icon" id="btnCloseChartExplorer" type="button" aria-label="Close" title="Close"><svg class="icon" aria-hidden="true"><use href="#lucide-x"></use></svg></button>
+    </div>
+    <div class="chart-explorer-body">
+      <div class="chart-toolbar">
+        <div class="chart-tabs" role="tablist" aria-label="Chart view">
+          <button class="chart-tab" id="chartPlotTab" type="button" role="tab" aria-selected="true" aria-controls="chartPlotPanel">Chart</button>
+          <button class="chart-tab" id="chartDataTab" type="button" role="tab" aria-selected="false" aria-controls="chartDataPanel" tabindex="-1">Exact data</button>
+        </div>
+        <button class="btn btn-quiet chart-control-button" id="chartReset" type="button">Reset view</button>
+      </div>
+      <div class="chart-range-toolbar">
+        <div class="chart-range-presets" role="group" aria-label="Time range">
+          <button class="chart-preset" type="button" data-chart-window="8" aria-pressed="true">Full range</button>
+          <button class="chart-preset" type="button" data-chart-window="4" aria-pressed="false">Last 30 min</button>
+          <button class="chart-preset" type="button" data-chart-window="2" aria-pressed="false">Last 15 min</button>
+        </div>
+        <div class="chart-zoom-controls" role="group" aria-label="Zoom and pan">
+          <button class="btn btn-quiet chart-control-button" id="chartPanEarlier" type="button">Earlier</button>
+          <button class="btn btn-secondary chart-control-button" id="chartZoomIn" type="button">Zoom in</button>
+          <button class="btn btn-secondary chart-control-button" id="chartZoomOut" type="button">Zoom out</button>
+          <button class="btn btn-quiet chart-control-button" id="chartPanLater" type="button">Later</button>
+        </div>
+      </div>
+      <div class="chart-workspace">
+        <div class="chart-main">
+          <div id="chartPlotPanel" role="tabpanel" aria-labelledby="chartPlotTab">
+            <div class="chart-frame" id="chartDetail">
+              <div class="chart-surface" id="chartDetailSurface" tabindex="0" role="group" aria-label="Explore latency samples" aria-describedby="chartDetailHelp">
+                <svg class="chart-svg" id="chartDetailSvg" role="img" aria-label="Observed and forecast latency in the selected time range"></svg>
+              </div>
+            </div>
+            <span class="sr-only" id="chartDetailHelp">Left and Right inspect samples. Home and End reach the endpoints. Plus and Minus zoom. Shift with Left or Right pans. Enter, Space, or clicking pins the current sample. Escape closes the explorer.</span>
+            <div class="chart-sample-bar">
+              <span id="chartSampleStatus">9 samples</span>
+              <button class="btn btn-quiet chart-control-button" id="chartUnpin" type="button" hidden>Unpin sample</button>
+            </div>
+          </div>
+          <div id="chartDataPanel" role="tabpanel" aria-labelledby="chartDataTab" hidden>
+            <div class="table-container chart-data-container" tabindex="0" role="region" aria-label="Exact latency data">
+              <table class="data-table" id="chartDataTable">
+                <caption class="sr-only">Exact plotted latency samples. Delta is forecast minus observed latency. Missing forecasts are unavailable, not zero.</caption>
+                <thead><tr><th scope="col"><button class="sort-th-btn" type="button" data-sort="text">Time (UTC) <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th><th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="number">Observed (ms) <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th><th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="number">Forecast (ms) <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th><th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="number">Delta (ms) <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="chart-range-fields" role="group" aria-label="Custom time range">
+            <label class="chart-range-field" for="chartRangeStart"><span>From <output id="chartRangeStartLabel" for="chartRangeStart">14:00:00</output></span><input id="chartRangeStart" type="range" min="0" max="7" value="0" step="1"></label>
+            <label class="chart-range-field" for="chartRangeEnd"><span>To <output id="chartRangeEndLabel" for="chartRangeEnd">15:00:00</output></span><input id="chartRangeEnd" type="range" min="1" max="8" value="8" step="1"></label>
+          </div>
+          <dl class="chart-stats" aria-label="Selected range statistics">
+            <div><dt>Observed mean</dt><dd id="chartObservedMean">—</dd></div>
+            <div><dt>Observed peak</dt><dd id="chartObservedPeak">—</dd></div>
+            <div><dt>Forecast mean</dt><dd id="chartForecastMean">—</dd></div>
+            <div><dt>Mean delta</dt><dd id="chartMeanDelta">—</dd></div>
+          </dl>
+        </div>
+        <aside class="chart-options" id="chartPlotOptions" aria-label="Plot controls">
+          <fieldset><legend>Series</legend><label class="control-row chart-choice"><input class="sr-only" type="checkbox" id="chartShowObserved" checked><span class="custom-checkbox" aria-hidden="true"><svg class="icon"><use href="#lucide-check"></use></svg></span><span>Observed</span></label><label class="control-row chart-choice"><input class="sr-only" type="checkbox" id="chartShowForecast" checked><span class="custom-checkbox" aria-hidden="true"><svg class="icon"><use href="#lucide-check"></use></svg></span><span>Forecast</span></label></fieldset>
+          <fieldset><legend>Display</legend><label class="control-row chart-choice"><input class="sr-only" type="radio" name="chartStyle" value="line" checked><span class="custom-radio" aria-hidden="true"></span><span>Line</span></label><label class="control-row chart-choice"><input class="sr-only" type="radio" name="chartStyle" value="area"><span class="custom-radio" aria-hidden="true"></span><span>Area</span></label></fieldset>
+          <fieldset><legend>Y axis</legend><label class="control-row chart-choice"><input class="sr-only" type="radio" name="chartScale" value="zero" checked><span class="custom-radio" aria-hidden="true"></span><span>Start at zero</span></label><label class="control-row chart-choice"><input class="sr-only" type="radio" name="chartScale" value="fit"><span class="custom-radio" aria-hidden="true"></span><span>Fit visible values</span></label></fieldset>
+          <fieldset><legend>Overlays</legend><label class="control-row chart-choice"><input class="sr-only" type="checkbox" id="chartShowGrid" checked><span class="custom-checkbox" aria-hidden="true"><svg class="icon"><use href="#lucide-check"></use></svg></span><span>Gridlines</span></label><label class="control-row chart-choice"><input class="sr-only" type="checkbox" id="chartShowPoints"><span class="custom-checkbox" aria-hidden="true"><svg class="icon"><use href="#lucide-check"></use></svg></span><span>Sample markers</span></label><label class="control-row chart-choice"><input class="sr-only" type="checkbox" id="chartShowTarget"><span class="custom-checkbox" aria-hidden="true"><svg class="icon"><use href="#lucide-check"></use></svg></span><span>Target line</span></label>
+            <label class="chart-target-field" for="chartTargetValue">Target (ms)<input class="input-field mono" id="chartTargetValue" type="number" min="0" max="60000" step="any" value="1000" disabled aria-describedby="chartTargetError"></label>
+            <span class="input-error" id="chartTargetError" role="alert" hidden>Enter a target between 0 and 60,000 ms</span>
+          </fieldset>
+        </aside>
+      </div>
+    </div>
+    <div class="chart-explorer-footer">
+      <span class="chart-range-status" id="chartRangeStatus" role="status">9 samples · 14:00–15:00 UTC</span>
+      <div class="chart-export-actions"><label class="control-row chart-choice"><input class="sr-only" type="checkbox" id="chartExportAll"><span class="custom-checkbox" aria-hidden="true"><svg class="icon"><use href="#lucide-check"></use></svg></span><span>Full dataset</span></label>
+        <button class="btn btn-secondary" id="chartExportCsv" type="button">Export range CSV</button>
+      </div>
+    </div>
+  </dialog>
+
   <!-- Toast Notification Tray -->
   <div class="toast-container" id="toastContainer" aria-live="polite" aria-relevant="additions text"></div>
 
@@ -986,7 +1030,11 @@
   <script src="components/dropdowns.js"></script>
   <script src="components/forms.js"></script>
   <script src="components/badges.js"></script>
+  <script src="components/table-sorting.js"></script>
   <script src="components/tables.js"></script>
+  <script src="components/charts-data.js"></script>
+  <script src="components/charts-plot.js"></script>
+  <script src="components/charts.js"></script>
   <script src="components/dialogs.js"></script>
   <script src="components/navigation.js"></script>
 </body>

@@ -1,64 +1,56 @@
-/* -------------------------------------------------------------
-   COMPONENT 7: Charts & Data Graphics
-   ------------------------------------------------------------- */
+/* Charts share the page surface; inspection feedback is an overlay. */
 .chart-box {
-  border: 1px solid var(--line);
+  border: none;
   border-radius: var(--radius);
-  background: var(--surface);
+  background: transparent;
   padding: 20px;
   position: relative;
 }
-
-.chart-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.chart-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--ink-strong);
-}
-
-.chart-legend {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  font-size: 12px;
-  color: var(--muted);
-}
-.legend-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.legend-line {
-  width: 16px;
-  height: 2px;
-  background: currentColor;
-}
-.legend-line.dashed {
-  border-top: 2px dashed currentColor;
-  background: transparent;
-  height: 0;
-}
-
-.chart-svg {
-  width: 100%;
-  height: 200px;
-  overflow: visible;
+.chart-header { margin-bottom: 16px; }
+.chart-title { font-size: 14px; font-weight: 600; color: var(--ink-strong); }
+.chart-frame { position: relative; min-width: 0; }
+.chart-surface {
   display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: crosshair;
+  touch-action: pan-y;
 }
-
-.chart-grid-line {
-  stroke: var(--line);
-  stroke-dasharray: 2 4;
+.chart-surface:focus-visible { outline-offset: -2px; }
+.chart-svg { width: 100%; height: 200px; overflow: visible; display: block; }
+.chart-grid-line { stroke: var(--line); stroke-dasharray: 2 4; }
+.chart-axis-text { fill: var(--muted); font: 11px var(--mono); }
+.chart-series { fill: none; stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.chart-series[data-series="observed"] { stroke: var(--accent); }
+.chart-series[data-series="forecast"] { stroke: var(--derived); stroke-width: 2; stroke-dasharray: 4 4; }
+.chart-area[data-series="observed"] { fill: var(--accent-soft); }
+.chart-area[data-series="forecast"] { fill: var(--derived-soft); }
+.chart-point { fill: var(--canvas); stroke-width: 2; }
+.chart-point[data-series="observed"] { stroke: var(--accent); }
+.chart-point[data-series="forecast"] { stroke: var(--derived); }
+.chart-crosshair { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart-target-line { stroke: var(--caution); stroke-width: 1; stroke-dasharray: 6 4; }
+.chart-target-label { fill: var(--caution); font: 11px var(--mono); }
+.chart-empty { fill: var(--muted); font: 13px var(--ui); }
+.chart-tooltip {
+  position: absolute;
+  z-index: 3;
+  width: max-content;
+  max-width: calc(100% - 16px);
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--ink-strong);
+  box-shadow: var(--shadow-sm);
+  pointer-events: none;
+  font-size: 12px;
 }
-
-.chart-axis-text {
-  fill: var(--muted);
-  font-size: 11px;
-  font-family: var(--mono);
-}
+.chart-tooltip[hidden] { display: none; }
+.chart-tooltip time { display: block; margin-bottom: 8px; font: 11px var(--mono); color: var(--muted); }
+.chart-tooltip dl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; }
+.chart-tooltip dt { color: var(--muted); }
+.chart-tooltip dd { font-family: var(--mono); text-align: right; font-variant-numeric: tabular-nums; }

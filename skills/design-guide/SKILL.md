@@ -23,8 +23,8 @@ Treat each linked reference as the canonical instruction source for its area. Do
 
 - For the complete interactive catalog, open [Component Reference](assets/component-reference/index.html).
 
-In that catalog, `index.html` owns the semantic markup and explicitly lists stylesheet and script load order. Edit a component's styles and behavior in its matching `components/<name>.css` and `.js` files; keep related state, such as table sorting, row selection, and details, together. Shared tokens, base styles, and page utilities live in `shared/`.
+In that catalog, `index.html` owns the semantic markup and explicitly lists stylesheet and script load order. Edit a component's styles and behavior in its matching `components/<name>.css` and `.js` files. Use matching filename prefixes when a larger component needs separate data, rendering, and interaction modules. Shared tokens, base styles, and page utilities live in `shared/`; shared table sorting lives in `components/table-sorting.js`.
 
-Keep the catalog runnable by opening `index.html` directly, without a build step or local server. Use classic scripts with private scopes, sharing only the icon, toast, theme, and export helpers through `window.ComponentReference`. Load helper providers before their consumers.
+Keep the catalog runnable by opening `index.html` directly, without a build step or local server. Use classic scripts with private scopes, sharing only helpers needed by another module through `window.ComponentReference`. Load helper providers before their consumers.
 
 Keep a runnable reference synchronized with the Markdown file that owns each demonstrated rule. When adding another runnable reference, give it a separate directory under `assets/` with its own entry point and supporting files.
