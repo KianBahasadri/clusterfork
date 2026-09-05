@@ -1,0 +1,26 @@
+<!-- SECTION 8: Dialogs & Modals -->
+<section class="component-section" id="dialogs" aria-labelledby="heading-dialogs">
+  <header class="section-header">
+    <h2 class="section-index" id="heading-dialogs">08 Dialogs &amp; Modals</h2>
+  </header>
+  <div class="showcase-card">
+    <div class="row-wrap">
+      <button class="btn btn-secondary" id="btnOpenModal" type="button">Open Confirmation Dialog</button>
+    </div>
+
+    <!-- Dialog Modal -->
+    <dialog class="modal-dialog" id="demoDialog" aria-labelledby="dialogTitle">
+      <div class="modal-header">
+        <h3 class="modal-title" id="dialogTitle">Rollback Traffic Allocation?</h3>
+        <button class="btn-icon" id="btnCloseModal" type="button" aria-label="Close dialog"><svg class="icon" aria-hidden="true"><use href="#lucide-x"></use></svg></button>
+      </div>
+      <div class="modal-body">
+        This will route all pending traffic from canary instance <strong>canary-9b</strong> back to the stable release cluster. The operation takes approximately 15 seconds to propagate across all edge regions.
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btnCancelModal" type="button">Cancel</button>
+        <button class="btn btn-danger" id="btnConfirmModal" type="button">Confirm Rollback</button>
+      </div>
+    </dialog>
+  </div>
+</section>

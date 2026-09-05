@@ -1,0 +1,48 @@
+<!-- SECTION 3: Inputs -->
+<section class="component-section" id="inputs" aria-labelledby="heading-inputs">
+  <header class="section-header">
+    <h2 class="section-index" id="heading-inputs">03 Form Inputs &amp; Textareas</h2>
+  </header>
+  <div class="showcase-card">
+    <div class="row-wrap" style="align-items: flex-start; gap: 24px;">
+      <!-- Text Input -->
+      <div class="form-group">
+        <label class="form-label" for="inputName">Workspace Name <span class="required-star" aria-hidden="true">*</span></label>
+        <input class="input-field" id="inputName" type="text" placeholder="e.g. clusterfork" value="clusterfork">
+      </div>
+
+      <!-- Monospaced API token -->
+      <div class="form-group">
+        <label class="form-label" for="inputToken">API Secret Key</label>
+        <input class="input-field mono" id="inputToken" type="text" value="cf_live_9a7d83f1240c" readonly>
+      </div>
+
+      <!-- Clearable search input -->
+      <div class="form-group">
+        <label class="form-label" for="inputSearch">Clearable Search</label>
+        <div class="input-with-action">
+          <svg class="icon input-leading-icon" aria-hidden="true"><use href="#lucide-search"></use></svg>
+          <input class="input-field" id="inputSearch" type="text" placeholder="Filter resources..." value="telemetry">
+          <button class="input-clear-btn" id="btnClearSearch" type="button" aria-label="Clear search input"><svg class="icon" aria-hidden="true"><use href="#lucide-x"></use></svg></button>
+        </div>
+      </div>
+
+      <!-- Error State -->
+      <div class="form-group">
+        <label class="form-label" for="inputEmail">Billing Email <span class="required-star" aria-hidden="true">*</span></label>
+        <input class="input-field is-invalid" id="inputEmail" type="email" value="invalid-address" required aria-invalid="true" aria-describedby="email-error">
+        <span class="input-error" id="email-error" role="alert">Enter a valid email address</span>
+      </div>
+
+      <!-- Submit-triggered email validation -->
+      <form class="form-group email-validation-form" id="emailValidationForm" novalidate>
+        <label class="form-label" for="validationEmail">Notification Email <span class="required-star" aria-hidden="true">*</span></label>
+        <div class="email-validation-controls">
+          <input class="input-field" id="validationEmail" name="email" type="email" autocomplete="email" placeholder="name@example.com" required aria-describedby="validationEmailError">
+          <button class="btn btn-secondary" id="validationEmailSubmit" type="submit" aria-busy="false">Validate Email</button>
+        </div>
+        <span class="input-error" id="validationEmailError" role="alert" hidden></span>
+      </form>
+    </div>
+  </div>
+</section>

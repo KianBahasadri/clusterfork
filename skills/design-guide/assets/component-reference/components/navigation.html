@@ -1,0 +1,36 @@
+<!-- SECTION 10: Tabs & Breadcrumbs -->
+<section class="component-section" id="navigation" aria-labelledby="heading-navigation">
+  <header class="section-header">
+    <h2 class="section-index" id="heading-navigation">10 Navigation, Tabs &amp; Breadcrumbs</h2>
+  </header>
+  <div class="showcase-card">
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb-nav" aria-label="Breadcrumb">
+      <a href="#">Clusters</a>
+      <span class="breadcrumb-sep" aria-hidden="true">/</span>
+      <a href="#">us-east-1</a>
+      <span class="breadcrumb-sep" aria-hidden="true">/</span>
+      <span class="breadcrumb-cur" aria-current="page">checkout-api</span>
+    </nav>
+
+    <!-- Tabs -->
+    <div class="tab-group" data-swipe-tabs>
+      <div class="tab-nav" role="tablist" aria-label="Component tabs demo">
+        <button class="tab-btn" id="tab-overview" type="button" role="tab" aria-selected="true" aria-controls="panel-overview" tabindex="0">Overview</button>
+        <button class="tab-btn" id="tab-metrics" type="button" role="tab" aria-selected="false" aria-controls="panel-metrics" tabindex="-1">Metrics</button>
+        <button class="tab-btn" id="tab-deployments" type="button" role="tab" aria-selected="false" aria-controls="panel-deployments" tabindex="-1">Deployments</button>
+      </div>
+      <div class="tab-viewport">
+        <div class="tab-panel active" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
+          <p style="font-size: 14px; color: var(--muted);">Overview summary: cluster is running 34 active tasks across 3 availability zones with 99.98% uptime over the past 30 days.</p>
+        </div>
+        <div class="tab-panel" id="panel-metrics" role="tabpanel" aria-labelledby="tab-metrics" hidden>
+          <p style="font-size: 14px; color: var(--muted);">Metrics panel: real-time memory usage is at 42% and CPU utilization is at 28% across all container instances.</p>
+        </div>
+        <div class="tab-panel" id="panel-deployments" role="tabpanel" aria-labelledby="tab-deployments" hidden>
+          <p style="font-size: 14px; color: var(--muted);">Deployments history: last revision #104 deployed 3 hours ago by deployment-bot with zero rollbacks.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

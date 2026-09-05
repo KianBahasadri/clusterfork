@@ -1,0 +1,23 @@
+<!-- Persistent page utilities -->
+<button class="toc-trigger" id="tocTrigger" type="button" aria-label="Open table of contents" aria-haspopup="dialog" aria-controls="tocDrawer" aria-expanded="false" title="Open table of contents">
+  <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-menu"></use></svg>
+</button>
+<div class="page-tools">
+  <button class="spotlight-trigger" id="spotlightTrigger" type="button" aria-label="Open search and commands" aria-haspopup="dialog" aria-controls="spotlightDialog" aria-expanded="false" aria-keyshortcuts="Control+K Meta+K Control+Space" title="Search and commands">
+    <svg class="icon" aria-hidden="true"><use href="#lucide-search"></use></svg>
+  </button>
+
+  <button class="theme-toggle" id="themeToggleBtn" type="button" aria-label="Switch to light theme" title="Toggle theme">
+    <svg class="icon" id="themeIcon" aria-hidden="true"><use id="themeIconUse" href="#lucide-sun"></use></svg>
+  </button>
+</div>
+
+<dialog class="toc-drawer" id="tocDrawer" aria-labelledby="tocDrawerTitle">
+  <div class="toc-drawer-header">
+    <h2 id="tocDrawerTitle">Table of contents</h2>
+    <button class="toc-close" id="tocClose" type="button" aria-label="Close" title="Close">
+      <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-x"></use></svg>
+    </button>
+  </div>
+  <div class="toc-drawer-body" id="tocDrawerBody"></div>
+</dialog>

@@ -1,0 +1,34 @@
+<!-- SECTION 1: Buttons -->
+<section class="component-section" id="buttons" aria-labelledby="heading-buttons">
+  <header class="section-header">
+    <h2 class="section-index" id="heading-buttons">01 Buttons &amp; Actions</h2>
+  </header>
+  <div class="showcase-card">
+    <div class="showcase-group">
+      <div class="row-wrap">
+        <button class="btn btn-primary" type="button">Primary Action</button>
+        <button class="btn btn-secondary" type="button">Secondary Button</button>
+        <button class="btn btn-quiet" type="button">Quiet Ghost</button>
+        <button class="btn btn-danger" type="button">Destructive Action</button>
+        <button class="btn btn-danger btn-danger-dwell" id="btnDwellDanger" type="button" aria-describedby="dwellDangerHint dwellDangerStatus">
+          <span class="btn-danger-dwell-label">Delete Workspace</span>
+          <span class="btn-danger-dwell-fill" aria-hidden="true">Delete Workspace</span>
+        </button>
+        <span class="sr-only" id="dwellDangerHint">Hover or focus this button for one second before activation. On a touch screen, press and hold for one second, then release.</span>
+        <span class="sr-only" id="dwellDangerStatus" aria-live="polite"></span>
+        <button class="btn btn-icon" type="button" aria-label="Search items" title="Search">
+          <svg class="icon" aria-hidden="true"><use href="#lucide-search"></use></svg>
+        </button>
+      </div>
+    </div>
+    <div class="showcase-group">
+      <div class="row-wrap">
+        <button class="btn btn-primary" type="button" disabled>Primary Disabled</button>
+        <button class="btn btn-secondary" type="button" disabled>Secondary Disabled</button>
+        <button class="btn btn-primary" type="button" id="btnLoadingDemo" aria-busy="false">
+          <span id="btnLoadingText">Click for Loading</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</section>

@@ -1,0 +1,82 @@
+<!-- SECTION 4: Selection Controls -->
+<section class="component-section" id="selection" aria-labelledby="heading-selection">
+  <header class="section-header">
+    <h2 class="section-index" id="heading-selection">04 Selection Controls</h2>
+  </header>
+  <div class="showcase-card">
+    <div class="row-wrap" style="align-items: flex-start; gap: 36px;">
+      <!-- Checkboxes -->
+      <div class="showcase-group">
+        <label class="control-row">
+          <input class="sr-only" type="checkbox" checked>
+          <span class="custom-checkbox" aria-hidden="true"><svg class="icon"><use href="#lucide-check"></use></svg></span>
+          <span>Telemetry logging enabled</span>
+        </label>
+        <label class="control-row">
+          <input class="sr-only" type="checkbox" id="indeterminateBox">
+          <span class="custom-checkbox" aria-hidden="true" id="indeterminateMark"><svg class="icon"><use href="#lucide-minus"></use></svg></span>
+          <span>Mixed regional sync</span>
+        </label>
+        <label class="control-row">
+          <input class="sr-only" type="checkbox">
+          <span class="custom-checkbox" aria-hidden="true"><svg class="icon"><use href="#lucide-check"></use></svg></span>
+          <span>Strict TLS pinning</span>
+        </label>
+        <label class="control-row">
+          <input class="sr-only" type="checkbox" checked disabled>
+          <span class="custom-checkbox" aria-hidden="true"><svg class="icon"><use href="#lucide-check"></use></svg></span>
+          <span>Audit logging required</span>
+        </label>
+      </div>
+
+      <!-- Radios -->
+      <fieldset class="showcase-group" style="border: none; padding: 0;">
+        <legend class="sr-only">Update Cadence</legend>
+        <label class="control-row">
+          <input class="sr-only" type="radio" name="cadence" value="continuous" checked>
+          <span class="custom-radio" aria-hidden="true"></span>
+          <span>Continuous streaming</span>
+        </label>
+        <label class="control-row">
+          <input class="sr-only" type="radio" name="cadence" value="batch">
+          <span class="custom-radio" aria-hidden="true"></span>
+          <span>15-minute batch</span>
+        </label>
+        <label class="control-row">
+          <input class="sr-only" type="radio" name="cadence" value="manual">
+          <span class="custom-radio" aria-hidden="true"></span>
+          <span>Manual verification only</span>
+        </label>
+        <label class="control-row">
+          <input class="sr-only" type="radio" name="cadence" value="legacy" disabled>
+          <span class="custom-radio" aria-hidden="true"></span>
+          <span>Legacy polling unavailable</span>
+        </label>
+      </fieldset>
+
+      <!-- Toggle Switch -->
+      <div class="showcase-group">
+        <label class="control-row">
+          <input class="sr-only switch-input" type="checkbox" role="switch" checked>
+          <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+          <span>Live stream telemetry</span>
+        </label>
+        <label class="control-row">
+          <input class="sr-only switch-input" type="checkbox" role="switch">
+          <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+          <span>Debug verbose trace</span>
+        </label>
+        <label class="control-row">
+          <input class="sr-only switch-input" type="checkbox" role="switch" checked disabled>
+          <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+          <span>Retention lock enforced</span>
+        </label>
+        <label class="control-row">
+          <input class="sr-only switch-input" type="checkbox" role="switch" disabled>
+          <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+          <span>Remote debug unavailable</span>
+        </label>
+      </div>
+    </div>
+  </div>
+</section>

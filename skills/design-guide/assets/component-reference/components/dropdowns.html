@@ -1,0 +1,93 @@
+<!-- SECTION 2: Dropdowns -->
+<section class="component-section" id="dropdowns" aria-labelledby="heading-dropdowns">
+  <header class="section-header">
+    <h2 class="section-index" id="heading-dropdowns">02 Dropdowns &amp; Menus</h2>
+  </header>
+  <div class="showcase-card">
+    <div class="showcase-group">
+      <div class="row-wrap">
+        <div class="dropdown-container" data-custom-dropdown data-allow-custom="false">
+          <label class="sr-only" id="environmentDropdownLabel" for="environmentDropdownInput">Environment</label>
+          <span class="sr-only" id="environmentDropdownHint">Search and choose an available environment.</span>
+          <div class="dropdown-field">
+            <input class="custom-dropdown-input" id="environmentDropdownInput" type="text" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="environmentDropdownMenu" aria-labelledby="environmentDropdownLabel" aria-describedby="environmentDropdownHint" autocomplete="off" spellcheck="false" value="Production (us-east-1)" data-dropdown-input>
+            <svg class="icon chevron" aria-hidden="true"><use href="#lucide-chevron-down"></use></svg>
+          </div>
+          <input type="hidden" name="environment" value="prod" data-dropdown-value>
+          <ul class="dropdown-menu" id="environmentDropdownMenu" role="listbox" tabindex="-1" aria-labelledby="environmentDropdownLabel">
+            <li class="dropdown-item selected" id="environmentOptionProd" role="option" aria-selected="true" data-value="prod" data-label="Production (us-east-1)"><span class="dropdown-option-label">Production (us&#8209;east&#8209;1)</span></li>
+            <li class="dropdown-item" id="environmentOptionStaging" role="option" aria-selected="false" data-value="staging" data-label="Staging (eu-central-1)"><span class="dropdown-option-label">Staging (eu&#8209;central&#8209;1)</span></li>
+            <li class="dropdown-item" id="environmentOptionDev" role="option" aria-selected="false" data-value="dev" data-label="Development (local)"><span class="dropdown-option-label">Development (local)</span></li>
+            <li class="dropdown-empty" role="presentation" hidden>No matching options</li>
+          </ul>
+          <span class="sr-only" aria-live="polite" data-dropdown-status></span>
+        </div>
+
+        <div class="dropdown-container" data-custom-dropdown data-allow-custom="true">
+          <label class="sr-only" id="roleDropdownLabel" for="roleDropdownInput">Role</label>
+          <span class="sr-only" id="roleDropdownHint">Search available roles or enter a custom role.</span>
+          <div class="dropdown-field">
+            <input class="custom-dropdown-input" id="roleDropdownInput" type="text" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="roleDropdownMenu" aria-labelledby="roleDropdownLabel" aria-describedby="roleDropdownHint" autocomplete="off" spellcheck="false" placeholder="Select or enter role…" data-dropdown-input>
+            <svg class="icon chevron" aria-hidden="true"><use href="#lucide-chevron-down"></use></svg>
+          </div>
+          <input type="hidden" name="role" value="" data-dropdown-value>
+          <ul class="dropdown-menu" id="roleDropdownMenu" role="listbox" tabindex="-1" aria-labelledby="roleDropdownLabel">
+            <li class="dropdown-item" id="roleOptionAdmin" role="option" aria-selected="false" data-value="admin" data-label="Administrator"><span class="dropdown-option-label">Administrator</span></li>
+            <li class="dropdown-item" id="roleOptionEditor" role="option" aria-selected="false" data-value="editor" data-label="Technical Editor"><span class="dropdown-option-label">Technical Editor</span></li>
+            <li class="dropdown-item" id="roleOptionViewer" role="option" aria-selected="false" data-value="viewer" data-label="Auditor (View-only)"><span class="dropdown-option-label">Auditor (View&#8209;only)</span></li>
+            <li class="dropdown-item" id="roleOptionBilling" role="option" aria-selected="false" data-value="billing" data-label="Billing Manager"><span class="dropdown-option-label">Billing Manager</span></li>
+            <li class="dropdown-item dropdown-custom-option" id="roleCustomOption" role="option" aria-selected="false" data-value="" data-label="" hidden><span class="dropdown-option-label">“<span data-dropdown-custom-label></span>”</span></li>
+            <li class="dropdown-empty" role="presentation" hidden>No matching options</li>
+          </ul>
+          <span class="sr-only" aria-live="polite" data-dropdown-status></span>
+        </div>
+
+        <div class="dropdown-container" data-custom-dropdown data-allow-custom="false">
+          <label class="sr-only" id="languageDropdownLabel" for="languageDropdownInput">Language</label>
+          <span class="sr-only" id="languageDropdownHint">Search and choose an available language.</span>
+          <div class="dropdown-field">
+            <input class="custom-dropdown-input" id="languageDropdownInput" type="text" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="languageDropdownMenu" aria-labelledby="languageDropdownLabel" aria-describedby="languageDropdownHint" autocomplete="off" spellcheck="false" value="English" data-dropdown-input>
+            <svg class="icon chevron" aria-hidden="true"><use href="#lucide-chevron-down"></use></svg>
+          </div>
+          <input type="hidden" name="language" value="en" data-dropdown-value>
+          <ul class="dropdown-menu" id="languageDropdownMenu" role="listbox" tabindex="-1" aria-labelledby="languageDropdownLabel">
+            <li class="dropdown-item" id="languageOptionAr" role="option" aria-selected="false" data-value="ar" data-label="Arabic"><span class="dropdown-option-label">Arabic</span></li>
+            <li class="dropdown-item" id="languageOptionBn" role="option" aria-selected="false" data-value="bn" data-label="Bengali"><span class="dropdown-option-label">Bengali</span></li>
+            <li class="dropdown-item" id="languageOptionZhHans" role="option" aria-selected="false" data-value="zh-Hans" data-label="Chinese (Simplified)"><span class="dropdown-option-label">Chinese (Simplified)</span></li>
+            <li class="dropdown-item" id="languageOptionZhHant" role="option" aria-selected="false" data-value="zh-Hant" data-label="Chinese (Traditional)"><span class="dropdown-option-label">Chinese (Traditional)</span></li>
+            <li class="dropdown-item" id="languageOptionCs" role="option" aria-selected="false" data-value="cs" data-label="Czech"><span class="dropdown-option-label">Czech</span></li>
+            <li class="dropdown-item" id="languageOptionDa" role="option" aria-selected="false" data-value="da" data-label="Danish"><span class="dropdown-option-label">Danish</span></li>
+            <li class="dropdown-item" id="languageOptionNl" role="option" aria-selected="false" data-value="nl" data-label="Dutch"><span class="dropdown-option-label">Dutch</span></li>
+            <li class="dropdown-item selected" id="languageOptionEn" role="option" aria-selected="true" data-value="en" data-label="English"><span class="dropdown-option-label">English</span></li>
+            <li class="dropdown-item" id="languageOptionFi" role="option" aria-selected="false" data-value="fi" data-label="Finnish"><span class="dropdown-option-label">Finnish</span></li>
+            <li class="dropdown-item" id="languageOptionFr" role="option" aria-selected="false" data-value="fr" data-label="French"><span class="dropdown-option-label">French</span></li>
+            <li class="dropdown-item" id="languageOptionDe" role="option" aria-selected="false" data-value="de" data-label="German"><span class="dropdown-option-label">German</span></li>
+            <li class="dropdown-item" id="languageOptionEl" role="option" aria-selected="false" data-value="el" data-label="Greek"><span class="dropdown-option-label">Greek</span></li>
+            <li class="dropdown-item" id="languageOptionHe" role="option" aria-selected="false" data-value="he" data-label="Hebrew"><span class="dropdown-option-label">Hebrew</span></li>
+            <li class="dropdown-item" id="languageOptionHi" role="option" aria-selected="false" data-value="hi" data-label="Hindi"><span class="dropdown-option-label">Hindi</span></li>
+            <li class="dropdown-item" id="languageOptionHu" role="option" aria-selected="false" data-value="hu" data-label="Hungarian"><span class="dropdown-option-label">Hungarian</span></li>
+            <li class="dropdown-item" id="languageOptionId" role="option" aria-selected="false" data-value="id" data-label="Indonesian"><span class="dropdown-option-label">Indonesian</span></li>
+            <li class="dropdown-item" id="languageOptionIt" role="option" aria-selected="false" data-value="it" data-label="Italian"><span class="dropdown-option-label">Italian</span></li>
+            <li class="dropdown-item" id="languageOptionJa" role="option" aria-selected="false" data-value="ja" data-label="Japanese"><span class="dropdown-option-label">Japanese</span></li>
+            <li class="dropdown-item" id="languageOptionKo" role="option" aria-selected="false" data-value="ko" data-label="Korean"><span class="dropdown-option-label">Korean</span></li>
+            <li class="dropdown-item" id="languageOptionMs" role="option" aria-selected="false" data-value="ms" data-label="Malay"><span class="dropdown-option-label">Malay</span></li>
+            <li class="dropdown-item" id="languageOptionNb" role="option" aria-selected="false" data-value="nb" data-label="Norwegian Bokmål"><span class="dropdown-option-label">Norwegian Bokmål</span></li>
+            <li class="dropdown-item" id="languageOptionPl" role="option" aria-selected="false" data-value="pl" data-label="Polish"><span class="dropdown-option-label">Polish</span></li>
+            <li class="dropdown-item" id="languageOptionPtBr" role="option" aria-selected="false" data-value="pt-BR" data-label="Portuguese (Brazil)"><span class="dropdown-option-label">Portuguese (Brazil)</span></li>
+            <li class="dropdown-item" id="languageOptionPtPt" role="option" aria-selected="false" data-value="pt-PT" data-label="Portuguese (Portugal)"><span class="dropdown-option-label">Portuguese (Portugal)</span></li>
+            <li class="dropdown-item" id="languageOptionRo" role="option" aria-selected="false" data-value="ro" data-label="Romanian"><span class="dropdown-option-label">Romanian</span></li>
+            <li class="dropdown-item" id="languageOptionRu" role="option" aria-selected="false" data-value="ru" data-label="Russian"><span class="dropdown-option-label">Russian</span></li>
+            <li class="dropdown-item" id="languageOptionEs" role="option" aria-selected="false" data-value="es" data-label="Spanish"><span class="dropdown-option-label">Spanish</span></li>
+            <li class="dropdown-item" id="languageOptionSv" role="option" aria-selected="false" data-value="sv" data-label="Swedish"><span class="dropdown-option-label">Swedish</span></li>
+            <li class="dropdown-item" id="languageOptionTh" role="option" aria-selected="false" data-value="th" data-label="Thai"><span class="dropdown-option-label">Thai</span></li>
+            <li class="dropdown-item" id="languageOptionTr" role="option" aria-selected="false" data-value="tr" data-label="Turkish"><span class="dropdown-option-label">Turkish</span></li>
+            <li class="dropdown-item" id="languageOptionUk" role="option" aria-selected="false" data-value="uk" data-label="Ukrainian"><span class="dropdown-option-label">Ukrainian</span></li>
+            <li class="dropdown-item" id="languageOptionVi" role="option" aria-selected="false" data-value="vi" data-label="Vietnamese"><span class="dropdown-option-label">Vietnamese</span></li>
+            <li class="dropdown-empty" role="presentation" hidden>No matching options</li>
+          </ul>
+          <span class="sr-only" aria-live="polite" data-dropdown-status></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

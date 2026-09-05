@@ -1,0 +1,18 @@
+<dialog class="modal-dialog service-details-dialog" id="serviceDetailsDialog" aria-labelledby="serviceDetailsTitle">
+  <div class="modal-header">
+    <h2 class="modal-title" id="serviceDetailsTitle">Service details</h2>
+    <button class="btn btn-icon" id="btnCloseServiceDetails" type="button" aria-label="Close" title="Close"><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-x"></use></svg></button>
+  </div>
+  <div class="modal-body">
+    <dl class="service-details-list" aria-labelledby="serviceDetailsTitle">
+      <div><dt>Status</dt><dd data-service-detail="status"></dd></div>
+      <div><dt>Requests per minute</dt><dd class="service-detail-value" data-service-detail="rpm"></dd></div>
+      <div><dt>p95 latency</dt><dd class="service-detail-value" data-service-detail="latency"></dd></div>
+      <div><dt>Error rate</dt><dd class="service-detail-value" data-service-detail="errorRate"></dd></div>
+      <div><dt>Region</dt><dd class="service-detail-value" data-service-detail="region"></dd></div>
+      <div><dt>Team</dt><dd data-service-detail="team"></dd></div>
+      <div><dt>Release</dt><dd class="service-detail-value" data-service-detail="version"></dd></div>
+      <div><dt>Replicas</dt><dd class="service-detail-value" data-service-detail="replicas"></dd></div>
+    </dl>
+  </div>
+</dialog>
