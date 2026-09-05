@@ -51,6 +51,11 @@
       <symbol id="lucide-chevron-down" viewBox="0 0 24 24">
         <path d="m6 9 6 6 6-6"></path>
       </symbol>
+      <symbol id="lucide-menu" viewBox="0 0 24 24">
+        <path d="M4 5h16"></path>
+        <path d="M4 12h16"></path>
+        <path d="M4 19h16"></path>
+      </symbol>
       <symbol id="lucide-x" viewBox="0 0 24 24">
         <path d="M18 6 6 18"></path>
         <path d="m6 6 12 12"></path>
@@ -87,6 +92,9 @@
   </svg>
 
   <!-- Persistent page utilities -->
+  <button class="toc-trigger" id="tocTrigger" type="button" aria-label="Open table of contents" aria-haspopup="dialog" aria-controls="tocDrawer" aria-expanded="false" title="Open table of contents">
+    <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-menu"></use></svg>
+  </button>
   <div class="page-tools">
     <button class="spotlight-trigger" id="spotlightTrigger" type="button" aria-label="Open search and commands" aria-haspopup="dialog" aria-controls="spotlightDialog" aria-expanded="false" aria-keyshortcuts="Control+K Meta+K Control+Space" title="Search and commands">
       <svg class="icon" aria-hidden="true"><use href="#lucide-search"></use></svg>
@@ -97,10 +105,20 @@
     </button>
   </div>
 
+  <dialog class="toc-drawer" id="tocDrawer" aria-labelledby="tocDrawerTitle">
+    <div class="toc-drawer-header">
+      <h2 id="tocDrawerTitle">Table of contents</h2>
+      <button class="toc-close" id="tocClose" type="button" aria-label="Close" title="Close">
+        <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-x"></use></svg>
+      </button>
+    </div>
+    <div class="toc-drawer-body" id="tocDrawerBody"></div>
+  </dialog>
+
   <div class="layout-container">
     <!-- Sidebar Navigation -->
     <aside class="toc-sidebar" aria-label="Component index">
-      <nav>
+      <nav id="componentIndex" aria-label="Table of contents">
         <ul class="toc-list">
           <li><a class="toc-link" href="#buttons">01 Buttons &amp; Actions</a></li>
           <li><a class="toc-link" href="#dropdowns">02 Dropdowns &amp; Menus</a></li>
@@ -563,20 +581,22 @@
           </nav>
 
           <!-- Tabs -->
-          <div style="margin-top: 12px;">
+          <div class="tab-group" data-swipe-tabs>
             <div class="tab-nav" role="tablist" aria-label="Component tabs demo">
-              <button class="tab-btn" id="tab-overview" role="tab" aria-selected="true" aria-controls="panel-overview" tabindex="0">Overview</button>
-              <button class="tab-btn" id="tab-metrics" role="tab" aria-selected="false" aria-controls="panel-metrics" tabindex="-1">Metrics</button>
-              <button class="tab-btn" id="tab-deployments" role="tab" aria-selected="false" aria-controls="panel-deployments" tabindex="-1">Deployments</button>
+              <button class="tab-btn" id="tab-overview" type="button" role="tab" aria-selected="true" aria-controls="panel-overview" tabindex="0">Overview</button>
+              <button class="tab-btn" id="tab-metrics" type="button" role="tab" aria-selected="false" aria-controls="panel-metrics" tabindex="-1">Metrics</button>
+              <button class="tab-btn" id="tab-deployments" type="button" role="tab" aria-selected="false" aria-controls="panel-deployments" tabindex="-1">Deployments</button>
             </div>
-            <div class="tab-panel active" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
-              <p style="font-size: 14px; color: var(--muted);">Overview summary: cluster is running 34 active tasks across 3 availability zones with 99.98% uptime over the past 30 days.</p>
-            </div>
-            <div class="tab-panel" id="panel-metrics" role="tabpanel" aria-labelledby="tab-metrics">
-              <p style="font-size: 14px; color: var(--muted);">Metrics panel: real-time memory usage is at 42% and CPU utilization is at 28% across all container instances.</p>
-            </div>
-            <div class="tab-panel" id="panel-deployments" role="tabpanel" aria-labelledby="tab-deployments">
-              <p style="font-size: 14px; color: var(--muted);">Deployments history: last revision #104 deployed 3 hours ago by deployment-bot with zero rollbacks.</p>
+            <div class="tab-viewport">
+              <div class="tab-panel active" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
+                <p style="font-size: 14px; color: var(--muted);">Overview summary: cluster is running 34 active tasks across 3 availability zones with 99.98% uptime over the past 30 days.</p>
+              </div>
+              <div class="tab-panel" id="panel-metrics" role="tabpanel" aria-labelledby="tab-metrics" hidden>
+                <p style="font-size: 14px; color: var(--muted);">Metrics panel: real-time memory usage is at 42% and CPU utilization is at 28% across all container instances.</p>
+              </div>
+              <div class="tab-panel" id="panel-deployments" role="tabpanel" aria-labelledby="tab-deployments" hidden>
+                <p style="font-size: 14px; color: var(--muted);">Deployments history: last revision #104 deployed 3 hours ago by deployment-bot with zero rollbacks.</p>
+              </div>
             </div>
           </div>
         </div>

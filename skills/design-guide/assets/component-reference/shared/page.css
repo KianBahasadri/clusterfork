@@ -33,6 +33,63 @@
   height: 17px;
 }
 
+.toc-trigger, .toc-close {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  border-radius: var(--radius);
+}
+.toc-trigger:hover, .toc-close:hover { color: var(--ink-strong); }
+.toc-trigger .icon, .toc-close .icon { width: 18px; height: 18px; }
+.toc-trigger {
+  display: none;
+  position: fixed;
+  top: 16px;
+  left: 20px;
+  z-index: 100;
+}
+
+/* The same component index moves into this modal sidebar on narrow screens. */
+html.toc-open { overflow: hidden; }
+.toc-drawer {
+  position: fixed;
+  inset: 0 auto 0 0;
+  margin: 0;
+  padding: 0;
+  width: min(320px, calc(100vw - 48px));
+  height: 100vh;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  border: 0;
+  border-right: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: var(--surface-raised);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.toc-drawer[open] { display: flex; flex-direction: column; animation: toc-enter 220ms ease-out; }
+.toc-drawer::backdrop { background: rgba(0, 0, 0, 0.65); }
+.toc-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  gap: 12px;
+  padding: 12px 12px 12px 20px;
+}
+.toc-drawer-header h2 { font-size: 18px; font-weight: 600; color: var(--ink-strong); }
+.toc-drawer-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 12px 20px; }
+.toc-drawer .toc-link { min-height: 44px; display: flex; align-items: center; }
+.toc-drawer .toc-link.active { background: var(--surface); }
+@keyframes toc-enter { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+@media (prefers-reduced-motion: reduce) { .toc-drawer[open] { animation: none; } }
+
 /* Layout */
 .layout-container {
   max-width: 1240px;
@@ -46,7 +103,9 @@
 @media (max-width: 900px) {
   .layout-container {
     grid-template-columns: minmax(0, 1fr);
+    padding-top: 80px;
   }
+  .toc-trigger { display: inline-flex; }
   .toc-sidebar {
     display: none;
   }
@@ -57,6 +116,7 @@
     top: 12px;
     right: 12px;
   }
+  .toc-trigger { top: 8px; left: 8px; }
   .layout-container {
     padding: 68px 16px 80px;
   }

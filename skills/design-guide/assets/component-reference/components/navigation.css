@@ -1,6 +1,7 @@
 /* -------------------------------------------------------------
    COMPONENT 10: Navigation & Tabs
    ------------------------------------------------------------- */
+.tab-group { min-width: 0; margin-top: 12px; }
 .tab-nav {
   display: flex;
   flex-wrap: wrap;
@@ -33,12 +34,30 @@
   background: var(--ink-strong);
 }
 
+.tab-viewport { position: relative; min-width: 0; }
+.tab-viewport.is-sliding { overflow: clip; }
+.tab-viewport.is-settling { transition: height 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.tab-viewport.is-settling > .tab-panel { transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+
 .tab-panel {
   padding: 16px 0;
   display: none;
 }
 .tab-panel.active {
   display: block;
+}
+.tab-panel[hidden] { display: none; }
+.tab-panel.is-swipe-preview {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-viewport.is-settling,
+  .tab-viewport.is-settling > .tab-panel { transition: none; }
 }
 
 /* Breadcrumbs */
