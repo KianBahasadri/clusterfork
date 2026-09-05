@@ -1,0 +1,67 @@
+# Realtime Monitoring
+
+Use this component when recent movement and current health must be readable together: CPU, memory, network traffic, queue depth, or periodically checked service status. The [Realtime Monitoring example](../assets/component-reference/index.html#realtime-monitor) combines resource plots and service histories on one rolling clock. Use either group independently when the other adds no useful information.
+
+## Anatomy and Appearance
+
+- Keep the component transparent, borderless, and shadowless. Do not frame each resource in a card. Begin directly with the resource readings; omit the source/connection toolbar, standalone pause controls, demo controls, and status chips. Put source identity in the group's accessible name, and disclose simulated telemetry in that name and the inspection tooltip. Feed freshness describes delivery, independently of monitored service health.
+- Use a resource grid with `repeat(auto-fit, minmax(min(100%, 156px), 1fr))`, 16px gaps, and no container padding. At 600px and below, use 12px column gaps. Let narrow containers collapse to a single column without widening the page.
+- Center a 16px Lucide symbol over each current resource value, using `--muted`: `Cpu`, `MemoryStick`, `Download` for network in, and `Upload` for network out. Omit visible resource-title text; retain the full name in a screen-reader label, icon title, plot name, and inspection tooltip. Use 26px, weight 700, tabular UI numerals in `--muted`, with a 12px monospace unit alongside. Missing readings use an em dash without a unit; inspection and accessible text explicitly say `Unavailable`.
+- Put a 64px SVG history directly below each reading, with no scale, state, or other text underneath. Use a 1.5px solid `--accent` trace with `--accent-soft` area fill for observed measurements. Simulated or modeled resource traces use `--derived`, a `4 2` dashed stroke, and `--derived-soft` fill. Preserve the neutral baseline; omit the plot background, outer border, standalone legend, and decorative grid.
+- Fix the Y axis at zero and a configured maximum. Do not rescale on every update. Put the complete range, unit, and textual state in inspection and accessible text. If supplied, draw the warning threshold as a 1px caution line at 45% opacity with a `3 4` dash pattern; disclose its exact value in the same readouts. Current threshold breaches use caution or danger on the number, paired with `Elevated` or `Critical` in the readout. Ordinary utilization is neutral. A reading above the plot maximum retains its actual numeric value and says `Above scale` or `off scale` in inspection; clip only its plotted position.
+- Place service timelines 16px below resources, in a grid with `repeat(auto-fit, minmax(min(100%, 180px), 1fr))` and 12px gaps. This places the three example services side by side where they fit and stacks them on narrow screens. Put each service name directly above its full-width timeline, in 12px `--muted` UI text with a 20px line-height. Include both name and timeline in one button with a minimum 44px height. Allow long names to wrap. Omit left-side name columns and right-side status chips.
+- Render status history as continuous spans centered in a 24px-high plot, using the same timestamp scale for every service. Merge consecutive observations of the same state; do not draw individual dots, pills, tick marks, or a gap for every sample. Healthy spans are a quiet 3px good line at 70% opacity with 1.5px rounding. Degraded spans are 6px caution bands with 1px rounding, outages are 8px square danger bands, and explicit unknown spans are neutral 1px lines. Pair thickness and color with complete state text in inspection and the plot's accessible name. Unknown data is not an outage.
+- Omit all text and reserved readout space below the timelines, including the window duration and cadence. Keep these facts in the tooltip and accessible text, so they remain available without adding persistent chrome.
+
+## Data and Freshness
+
+- Take timestamped snapshots from the host application, not measurements scraped from the rendered DOM. Resource values and service states in one snapshot share its capture time. The host aligns asynchronous sources and sends `null` for unavailable channels; never carry a missing field forward as if it were freshly measured.
+- Accept finite, nonnegative numeric measurements, including zero. Treat missing fields, nonnumeric values, negative values, and unrecognized service states as unavailable. Never coerce `null`, an empty string, or an unknown status into zero or healthy.
+- Require strictly increasing epoch-millisecond timestamps at or before the supplied clock. Ignore duplicate, out-of-order, invalid, and future timestamps; they must not renew freshness. The host handles clock alignment and rates derived from counters, including counter resets and unit conversion.
+- Bound both elapsed history and sample count. Defaults are a 60-second window, a 1-second expected cadence, and at most 600 snapshots. Draw positions from elapsed time, not array indexes. Break resource traces across missing values or intervals longer than 1.5 times the expected cadence. Never interpolate across a telemetry gap or generate catch-up samples after a suspended tab.
+- Join adjacent status observations when their timestamps are at most 1.5 expected intervals apart, allowing ordinary sampling jitter. Otherwise end the previous state after one expected interval and leave the delivery gap blank. End the latest observed state after at most one interval; never extend a healthy state through a longer unobserved period. An explicit unknown observation forms a neutral span.
+- Start with `Waiting for data`. A received snapshot makes the feed `Live`; after three expected intervals without a fresh capture, mark it `Stale`. Expose feed state and last-sample age in inspection and accessible text: repeated values can still be fresh, repeated timestamps cannot. Support explicit `Disconnected` and `Reconnecting` transport states. A `connected` notification alone must not make an old sample fresh.
+- Retain last-known values when delivery stops, with their capture timestamp available in the tooltip, but do not label them current or replace service states with a fabricated outage. Continue advancing the live time window so missing history is visible. Clear old plotted points when they leave the window. A reconnect resumes from new samples and preserves the intervening gap.
+
+## Inspection and Updates
+
+- Hover a resource or status history to snap to its nearest actual sample and show a shared crosshair. Use the neutral tooltip treatment for the full UTC capture timestamp, channel name, value, unit/state, range, warning threshold, history duration, cadence, and feed freshness; disclose simulated data here. Position it above the inspected history, flipping below when necessary, and clamp it inside the viewport with 12px clearance. Use fixed positioning so it consumes no layout space, and attach `aria-describedby` only while the tooltip is visible. Clear unpinned hover inspection on pointer exit or blur. Keyboard focus exposes the latest sample through the same tooltip.
+- Make each interactive plot a native button. Click/tap or Enter/Space freezes the entire displayed time window and inspects the chosen sample; activating a plot again resumes. Left/Right and Home/End also pause and inspect, stopping at the available endpoints. Escape while a plot is focused resumes and dismisses inspection. Keep normal page shortcuts and vertical touch scrolling available; list these local keys in the catalog's shortcut popup.
+- While paused, freeze readings, plots, and the window endpoint. Continue ingesting into the bounded live buffer. Keep the readout pinned, mark it `Paused`, and include an activation-to-resume hint alongside current feed freshness. Set `aria-pressed` on interactive plots to reflect the frozen view. Resume jumps directly to the newest window without replaying queued animation. Keep each component instance independent.
+- Announce feed-state transitions and user-requested keyboard/activation readouts politely. Do not make the rapidly changing values, sample age, or whole component a live region. Give each plot an accessible name containing its channel, latest shown value, history duration, and warning threshold when present.
+- Coalesce incoming snapshots to one render per animation frame; update freshness once per second even when delivery has stopped. Avoid animated scrolling, easing between readings, pulsing every update, and flash effects. Hidden tabs may defer rendering, but on return must compute freshness from elapsed time. No reduced-motion override is necessary for this nonanimated presentation.
+- For a passive desktop readout, set `interactive: false`: omit inspection handlers, preserve resource symbols/current values and service names, and expose the histories as named images with freshness and units in their accessible names. Do not render inert web controls on a passive surface.
+
+## Copy and Integration
+
+Copy `components/realtime-monitor.css`, the shared tokens/base styles, and `components/tooltips.css`. Include the used Lucide symbols from `shared/icons.html` with their retained license, and load `shared/icons.js` before these classic scripts:
+
+1. `components/realtime-monitor-model.js` — validation, bounded history, freshness, frozen views.
+2. `components/realtime-monitor-plot.js` — resource traces, status geometry, shared crosshair.
+3. `components/realtime-monitor.js` — DOM, controls, keyboard/pointer inspection, lifecycle.
+
+The `realtime-monitor.html` fragment only provides the catalog section and example mount. `realtime-monitor-example.js` owns all fictional data; omit that script in applications. The component itself has no network, polling endpoint, Conky, catalog-ID, or framework dependency.
+
+```js
+const monitor = ComponentReference.createRealtimeMonitor(container, [
+  { id: "cpu", kind: "metric", label: "CPU", icon: "cpu", unit: "%", max: 100,
+    warning: 80, critical: 95, decimals: 0 },
+  { id: "api", kind: "status", label: "API gateway" }
+], {
+  label: "node-01", interval: 1000, windowMs: 60000, staleAfter: 3000,
+  maxSamples: 600, simulated: false, interactive: true
+});
+
+// Call from your polling, WebSocket, or server-sent-event adapter.
+monitor.push({ timestamp: Date.now(), values: { cpu: 42, api: "good" } });
+// Use the actual capture timestamp from your source when it provides one.
+monitor.setConnection("disconnected");
+monitor.setConnection("connecting");
+// A subsequently accepted snapshot restores the connected state.
+```
+
+Channel IDs must be unique. Metric channels require a unit and positive plot maximum, with optional precision from 0–6 decimals and ascending, nonnegative warning/critical thresholds. The `icon` property names an included Lucide symbol in kebab case, defaulting to `activity`; retain `label` as the full accessible and tooltip name. Status channels accept `good`, `caution`, `danger`, or `null`, described as Operational, Degraded, Down, or Unavailable. The maximum is a plotting bound, not an automatically inferred capacity or alert threshold.
+
+`push(snapshot)` returns whether the snapshot was accepted. `pause()`, `resume()`, and `setConnection("connected" | "connecting" | "disconnected")` support host controls. An optional `clock` function supplies epoch milliseconds for deterministic testing; it defaults to `Date.now`. Repeated initialization of the same root returns its existing instance. Mount another root for another monitor. Call `destroy()` to stop its timer, observer, pending render, visibility and tooltip-position listeners, and remove its owned DOM; also close any subscriptions or timers owned by the host adapter. A destroyed instance ignores subsequent pushes.
+
+Run the deterministic history/freshness checks with `node skills/design-guide/scripts/test_realtime_monitor.cjs` from the repository root.

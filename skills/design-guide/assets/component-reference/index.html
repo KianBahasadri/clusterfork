@@ -21,6 +21,7 @@
   <link rel="stylesheet" href="components/charts.css">
   <link rel="stylesheet" href="components/chart-explorer.css">
   <link rel="stylesheet" href="components/budget-map.css">
+  <link rel="stylesheet" href="components/realtime-monitor.css">
   <link rel="stylesheet" href="components/tooltips.css">
   <link rel="stylesheet" href="components/navigation.css">
   <link rel="stylesheet" href="components/metrics.css">
@@ -34,6 +35,34 @@
   <!-- Lucide Static 1.39.0 icons; ISC license in LUCIDE-LICENSE.txt. -->
   <svg class="icon-sprite" aria-hidden="true" focusable="false">
     <defs>
+      <symbol id="lucide-cpu" viewBox="0 0 24 24">
+        <path d="M12 20v2"></path><path d="M12 2v2"></path>
+        <path d="M17 20v2"></path><path d="M17 2v2"></path>
+        <path d="M2 12h2"></path><path d="M2 17h2"></path><path d="M2 7h2"></path>
+        <path d="M20 12h2"></path><path d="M20 17h2"></path><path d="M20 7h2"></path>
+        <path d="M7 20v2"></path><path d="M7 2v2"></path>
+        <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+        <rect x="8" y="8" width="8" height="8" rx="1"></rect>
+      </symbol>
+      <symbol id="lucide-memory-stick" viewBox="0 0 24 24">
+        <path d="M12 12v-2"></path><path d="M12 18v-2"></path>
+        <path d="M16 12v-2"></path><path d="M16 18v-2"></path>
+        <path d="M2 11h1.5"></path><path d="M20 18v-2"></path><path d="M20.5 11H22"></path>
+        <path d="M4 18v-2"></path><path d="M8 12v-2"></path><path d="M8 18v-2"></path>
+        <rect x="2" y="6" width="20" height="10" rx="2"></rect>
+      </symbol>
+      <symbol id="lucide-download" viewBox="0 0 24 24">
+        <path d="M12 15V3"></path>
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+        <path d="m7 10 5 5 5-5"></path>
+      </symbol>
+      <symbol id="lucide-upload" viewBox="0 0 24 24">
+        <path d="M12 3v12"></path><path d="m17 8-5-5-5 5"></path>
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+      </symbol>
+      <symbol id="lucide-activity" viewBox="0 0 24 24">
+        <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"></path>
+      </symbol>
       <symbol id="lucide-search" viewBox="0 0 24 24">
         <path d="m21 21-4.34-4.34"></path>
         <circle cx="11" cy="11" r="8"></circle>
@@ -138,6 +167,7 @@
           <li><a class="toc-link" href="#alerts">12 Alerts &amp; Toasts</a></li>
           <li><a class="toc-link" href="#colors">13 Color Semantics</a></li>
           <li><a class="toc-link" href="#budget-map">14 Budget Map</a></li>
+          <li><a class="toc-link" href="#realtime-monitor">15 Realtime Monitoring</a></li>
         </ul>
       </nav>
     </aside>
@@ -896,6 +926,14 @@
         <div id="budgetMapExample"></div>
       </section>
 
+      <!-- SECTION 15: Realtime Monitoring -->
+      <section class="component-section" id="realtime-monitor" aria-labelledby="heading-realtime-monitor">
+        <header class="section-header">
+          <h2 class="section-index" id="heading-realtime-monitor">15 Realtime Monitoring</h2>
+        </header>
+        <div id="realtimeMonitorExample"></div>
+      </section>
+
     </main>
   </div>
 
@@ -925,6 +963,7 @@
       <li class="spotlight-option" id="spotlightAlerts" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#alerts" data-search="alerts toasts callouts notifications" data-shortcut-code="Digit2" data-shortcut-key="2" data-shortcut-shift="true" hidden><span class="spotlight-option-label">12 Alerts &amp; Toasts</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
       <li class="spotlight-option" id="spotlightColors" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#colors" data-search="colors palette tokens semantics meanings theme" data-shortcut-code="Digit3" data-shortcut-key="3" data-shortcut-shift="true" hidden><span class="spotlight-option-label">13 Color Semantics</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
       <li class="spotlight-option" id="spotlightBudgetMap" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#budget-map" data-search="budget map billing capacity quota spend forecast limit trajectory" data-shortcut-code="Digit4" data-shortcut-key="4" data-shortcut-shift="true" hidden><span class="spotlight-option-label">14 Budget Map</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+      <li class="spotlight-option" id="spotlightRealtimeMonitor" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#realtime-monitor" data-search="realtime live monitoring resources cpu memory network service status telemetry stream health history" data-shortcut-code="Digit5" data-shortcut-key="5" data-shortcut-shift="true" hidden><span class="spotlight-option-label">15 Realtime Monitoring</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
       <li class="spotlight-empty" id="spotlightEmpty" role="presentation" hidden>No matching sections or commands</li>
     </ul>
     <span class="sr-only" id="spotlightStatus" aria-live="polite"></span>
@@ -982,6 +1021,10 @@
           <dd class="shortcut-keys" data-shortcut-key="4" data-shortcut-shift="true"></dd>
         </div>
         <div class="shortcut-row">
+          <dt>Jump to Realtime Monitoring</dt>
+          <dd class="shortcut-keys" data-shortcut-key="5" data-shortcut-shift="true"></dd>
+        </div>
+        <div class="shortcut-row">
           <dt>Previous component</dt>
           <dd class="shortcut-keys" data-shortcut-key="↑"></dd>
         </div>
@@ -1011,6 +1054,9 @@
         <div class="shortcut-row"><dt>Pan chart explorer</dt><dd><kbd>Shift</kbd><kbd>←</kbd><kbd>→</kbd></dd></div>
         <div class="shortcut-row"><dt>Inspect budgets on the map</dt><dd><kbd>←</kbd><kbd>→</kbd><kbd>Home</kbd><kbd>End</kbd></dd></div>
         <div class="shortcut-row"><dt>Open budget details and exact data</dt><dd><kbd>Enter</kbd><kbd>Space</kbd></dd></div>
+        <div class="shortcut-row"><dt>Pause and inspect monitoring history</dt><dd><kbd>←</kbd><kbd>→</kbd><kbd>Home</kbd><kbd>End</kbd></dd></div>
+        <div class="shortcut-row"><dt>Pause / resume monitoring</dt><dd><kbd>Enter</kbd><kbd>Space</kbd></dd></div>
+        <div class="shortcut-row"><dt>Resume monitoring / dismiss its readout</dt><dd><kbd>Esc</kbd></dd></div>
         <div class="shortcut-row">
           <dt>Close the current overlay</dt>
           <dd><kbd>Esc</kbd></dd>
@@ -1155,6 +1201,10 @@
   <script src="components/budget-map-plot.js"></script>
   <script src="components/budget-map.js"></script>
   <script src="components/budget-map-example.js"></script>
+  <script src="components/realtime-monitor-model.js"></script>
+  <script src="components/realtime-monitor-plot.js"></script>
+  <script src="components/realtime-monitor.js"></script>
+  <script src="components/realtime-monitor-example.js"></script>
   <script src="components/dialogs.js"></script>
   <script src="components/cards.js"></script>
   <script src="components/navigation.js"></script>

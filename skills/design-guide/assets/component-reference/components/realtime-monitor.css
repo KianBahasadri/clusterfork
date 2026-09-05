@@ -1,0 +1,38 @@
+/* Resource trends and service history share a bounded, timestamped live window. */
+.realtime-monitor { min-width: 0; position: relative; }
+.realtime-monitor [hidden] { display: none !important; }
+.monitor-resources { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 156px), 1fr)); gap: 16px; }
+.monitor-resource { min-width: 0; }
+.monitor-symbol { display: flex; justify-content: center; height: 16px; color: var(--muted); }
+.monitor-value { display: flex; justify-content: center; align-items: baseline; gap: 5px; margin: 6px 0 4px; color: var(--muted); font: 700 26px/1.1 var(--ui); font-variant-numeric: tabular-nums; }
+.monitor-unit { font: 400 12px/1 var(--mono); }
+.monitor-value[data-tone="caution"] { color: var(--caution); }
+.monitor-value[data-tone="danger"] { color: var(--danger); }
+.monitor-plot { display: block; position: relative; width: 100%; min-width: 0; text-align: left; padding: 0; border-radius: 0; touch-action: pan-y; cursor: crosshair; }
+.monitor-plot:focus-visible { outline-offset: 2px; }
+.monitor-history { display: block; width: 100%; height: 64px; overflow: hidden; }
+.monitor-baseline { fill: none; stroke: var(--line); stroke-width: 1; }
+.monitor-threshold { fill: none; stroke: var(--caution); opacity: 0.45; stroke-width: 1; stroke-dasharray: 3 4; }
+.monitor-area { fill: var(--accent-soft); }
+.monitor-trace { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; }
+.monitor-point { fill: var(--accent); }
+.realtime-monitor[data-provenance="simulated"] .monitor-trace { stroke: var(--derived); stroke-dasharray: 4 2; }
+.realtime-monitor[data-provenance="simulated"] .monitor-area { fill: var(--derived-soft); }
+.realtime-monitor[data-provenance="simulated"] .monitor-point { fill: var(--derived); }
+.monitor-crosshair { fill: none; stroke: var(--ink); stroke-width: 1; stroke-dasharray: 2 2; }
+.monitor-services { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 12px; }
+.monitor-resources:not([hidden]) + .monitor-services { margin-top: 16px; }
+.monitor-service { min-width: 0; }
+.monitor-service .monitor-plot { display: block; min-height: 44px; }
+.monitor-service-name { display: block; font-size: 12px; line-height: 20px; color: var(--muted); font-weight: 400; overflow-wrap: anywhere; }
+.monitor-service .monitor-history { height: 24px; }
+.monitor-state-good { fill: var(--good); opacity: 0.7; }
+.monitor-state-caution { fill: var(--caution); }
+.monitor-state-danger { fill: var(--danger); }
+.monitor-state-unknown { fill: var(--faint); }
+.realtime-monitor .monitor-tooltip { white-space: pre-line; }
+.realtime-monitor[data-feed="Stale"] .monitor-value, .realtime-monitor[data-feed="Disconnected"] .monitor-value { color: var(--muted); }
+@media (max-width: 600px) {
+  .monitor-resources { gap: 16px 12px; }
+}
+@media print { .monitor-tooltip { display: none; } }

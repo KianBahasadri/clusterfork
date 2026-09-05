@@ -15,8 +15,9 @@ Apply the exact specifications in the references relevant to the interface being
 - Read [Controls and Forms](references/controls-and-forms.md) for buttons, action triggers, dropdowns, menus, inputs, search fields, textareas, checkboxes, radios, and switches.
 - Read [Data Display](references/data-display.md) for badges, metadata, tables, charts, metrics, cards, panels, and color semantics.
 - Read [Budget Map](references/budget-map.md) when comparing several budgets, quotas, or capacity limits over a shared period, including current usage and end-of-period forecasts.
+- Read [Realtime Monitoring](references/realtime-monitoring.md) for continuously updating resource readings, recent trends, service-status histories, and feed freshness.
 - Read [Overlays and Feedback](references/overlays-and-feedback.md) for dialogs, modals, tooltips, popovers, navigation, tabs, breadcrumbs, alerts, callouts, and toasts.
-- Read all four references when building or reviewing a complete interface or component catalog.
+- Read every component reference above when building or reviewing a complete component catalog; for other interfaces, read the references for the components they contain.
 - For a dashboard composed from the existing kit, also read [Dashboard Composition](references/dashboard-composition.md) for the sample's scope, reuse, and observed limits.
 
 Treat each linked reference as the canonical instruction source for its area. Do not duplicate its detailed rules in this router.
