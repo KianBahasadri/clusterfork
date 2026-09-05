@@ -1,0 +1,19 @@
+<section class="component-section" id="charts" aria-labelledby="heading-charts">
+  <header class="dashboard-section-heading">
+    <h2 id="heading-charts">Latency</h2>
+    <span class="dashboard-meta" id="chartTitle">Cluster p95 · 14:00–15:00 UTC</span>
+  </header>
+  <div class="chart-box">
+    <div class="chart-frame" id="chartPreview">
+      <button class="chart-surface" id="btnExploreChart" type="button" aria-label="Explore latency chart" aria-haspopup="dialog" aria-controls="chartExplorerDialog" aria-describedby="chartPreviewHelp">
+        <svg class="chart-svg" id="demoChart" aria-hidden="true" focusable="false"></svg>
+      </button>
+    </div>
+    <span class="sr-only" id="chartPreviewHelp">Observed and forecast latency from 14:00 to 15:00 UTC on 4 September 2026. Use Left and Right to inspect samples, Home and End to reach the endpoints, and Enter or Space to open chart controls and exact data.</span>
+  </div>
+  <dl class="dashboard-readouts">
+    <div><dt>Observed mean</dt><dd id="latencyMean">670 ms</dd></div>
+    <div><dt>Observed peak</dt><dd id="latencyPeak">1,050 ms</dd></div>
+    <div><dt>Latest forecast</dt><dd id="latencyForecast">350 ms</dd></div>
+  </dl>
+</section>

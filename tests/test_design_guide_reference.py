@@ -1,4 +1,4 @@
-"""Keep the directly runnable catalog synchronized with its HTML sources."""
+"""Keep directly runnable references synchronized with their HTML sources."""
 
 import shutil
 import subprocess
@@ -43,6 +43,32 @@ class ReferenceBuildTests(unittest.TestCase):
     def test_checked_in_catalog_matches_sources(self):
         result = self.run_builder(BUILDER, "--check")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_checked_in_dashboard_matches_sources(self):
+        result = self.run_builder(BUILDER, "--reference", "dashboard-reference", "--check")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_dashboard_check_detects_shared_catalog_fragment_edits(self):
+        builder, fragment, _ = self.fixture()
+        dashboard = fragment.parents[2] / "dashboard-reference"
+        dashboard.mkdir()
+        (dashboard / "index.template.html").write_text(
+            '<main>\n  <!-- include: ../component-reference/components/example.html -->\n</main>\n', encoding="utf-8"
+        )
+        result = self.run_builder(builder, "--reference", "dashboard-reference")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = dashboard / "index.html"
+        self.assertIn("Latency · 42 ms", output.read_text(encoding="utf-8"))
+        original = output.read_bytes()
+
+        fragment.write_text("<p>Latency · 18 ms</p>\n", encoding="utf-8")
+        result = self.run_builder(builder, "--reference", "dashboard-reference", "--check")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(output.read_bytes(), original)
+
+        result = self.run_builder(builder, "--reference", "dashboard-reference")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Latency · 18 ms", output.read_text(encoding="utf-8"))
 
     def test_check_detects_source_edits_without_rewriting_output(self):
         builder, fragment, output = self.fixture()

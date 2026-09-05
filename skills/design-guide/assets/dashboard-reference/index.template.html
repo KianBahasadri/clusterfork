@@ -1,0 +1,65 @@
+<!doctype html>
+<!-- Generated from index.template.html. Rebuild with:
+     python3 skills/design-guide/scripts/build_reference.py --reference dashboard-reference -->
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta name="description" content="A cluster operations dashboard composed from the design-guide component reference, using a sample snapshot.">
+  <title>Cluster operations | Dashboard reference</title>
+  <link rel="stylesheet" href="../component-reference/shared/tokens.css">
+  <link rel="stylesheet" href="../component-reference/shared/base.css">
+  <link rel="stylesheet" href="../component-reference/shared/page.css">
+  <link rel="stylesheet" href="../component-reference/components/dialogs.css">
+  <link rel="stylesheet" href="../component-reference/components/spotlight.css">
+  <link rel="stylesheet" href="../component-reference/components/buttons.css">
+  <link rel="stylesheet" href="../component-reference/components/forms.css">
+  <link rel="stylesheet" href="../component-reference/components/badges.css">
+  <link rel="stylesheet" href="../component-reference/components/tables.css">
+  <link rel="stylesheet" href="../component-reference/components/charts.css">
+  <link rel="stylesheet" href="../component-reference/components/chart-explorer.css">
+  <link rel="stylesheet" href="../component-reference/components/navigation.css">
+  <link rel="stylesheet" href="../component-reference/components/metrics.css">
+  <link rel="stylesheet" href="../component-reference/components/alerts.css">
+  <link rel="stylesheet" href="../component-reference/components/toasts.css">
+  <link rel="stylesheet" href="shared/dashboard.css">
+</head>
+<body>
+  <!-- include: ../component-reference/shared/icons.html -->
+  <!-- include: ../component-reference/shared/page-tools.html -->
+  <div class="layout-container dashboard-layout">
+    <!-- include: shared/page-sidebar.html -->
+    <main class="spec-content dashboard-content">
+      <section class="component-section dashboard-overview" id="overview" aria-labelledby="heading-overview">
+        <!-- include: shared/page-heading.html -->
+        <!-- include: components/overview.html -->
+      </section>
+      <!-- include: components/tables.html -->
+      <div class="dashboard-secondary">
+        <!-- include: components/charts.html -->
+        <!-- include: components/regions.html -->
+        <!-- include: components/incidents.html -->
+      </div>
+    </main>
+  </div>
+  <!-- include: components/spotlight.html -->
+  <!-- include: components/spotlight-shortcuts.html -->
+  <!-- include: ../component-reference/components/toasts.html -->
+  <!-- include: ../component-reference/components/tables-details.html -->
+  <!-- include: ../component-reference/components/chart-explorer.html -->
+  <div class="toast-container" id="toastContainer" aria-live="polite" aria-relevant="additions text"></div>
+  <script src="../component-reference/shared/icons.js"></script>
+  <script src="shared/page-options.js"></script>
+  <script src="../component-reference/components/toasts.js"></script>
+  <script src="../component-reference/shared/page.js"></script>
+  <script src="../component-reference/components/spotlight.js"></script>
+  <script src="../component-reference/components/table-sorting.js"></script>
+  <script src="../component-reference/components/services-data.js"></script>
+  <script src="../component-reference/components/tables.js"></script>
+  <script src="../component-reference/components/charts-data.js"></script>
+  <script src="../component-reference/components/charts-plot.js"></script>
+  <script src="../component-reference/components/charts.js"></script>
+  <script src="shared/dashboard.js"></script>
+</body>
+</html>

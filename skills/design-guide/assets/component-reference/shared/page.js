@@ -1,5 +1,6 @@
 (function (reference) {
   var spawnToast = reference.spawnToast;
+  var pageOptions = reference.pageOptions || {};
 
   // Theme toggle
   var html = document.documentElement;
@@ -28,9 +29,9 @@
 
   // Page export
   function buildMarkdownExport() {
-    var lines = ["# Component Reference", ""];
+    var lines = ["# " + (pageOptions.title || "Component Reference"), ""];
     document.querySelectorAll(".component-section").forEach(function (section) {
-      var heading = section.querySelector("h2");
+      var heading = section.querySelector("h1, h2");
       if (!heading) return;
 
       var title = heading.textContent.trim();
@@ -57,11 +58,11 @@
   }
 
   function exportMarkdown() {
-    downloadText("component-reference.md", buildMarkdownExport(), "text/markdown;charset=utf-8");
+    downloadText(pageOptions.exportFilename || "component-reference.md", buildMarkdownExport(), "text/markdown;charset=utf-8");
     spawnToast("Markdown export downloaded", false);
   }
 
-  // Share one component index between the desktop column and mobile drawer.
+  // Share one section index between desktop navigation and the mobile drawer.
   var sections = Array.from(document.querySelectorAll(".component-section"));
   var toc = document.getElementById("componentIndex");
   var tocHome = toc.parentElement;
@@ -72,11 +73,24 @@
   var mobileNavigation = window.matchMedia("(max-width: 900px)");
   var tocDestination = null;
 
-  function updateContents() {
+  function currentSection() {
+    // A dense dashboard can show several destinations side by side without scrolling.
+    var destination = sections.find(function (section) { return "#" + section.id === window.location.hash; });
+    if (destination) {
+      var top = destination.getBoundingClientRect().top;
+      if (top >= 0 && top < window.innerHeight) return destination;
+    }
     var current = sections[0];
+    var nearestTop = -Infinity;
     sections.forEach(function (section) {
-      if (section.getBoundingClientRect().top <= 120) current = section;
+      var top = section.getBoundingClientRect().top;
+      if (top <= 120 && top > nearestTop) { current = section; nearestTop = top; }
     });
+    return current;
+  }
+
+  function updateContents() {
+    var current = currentSection();
     tocLinks.forEach(function (link) {
       var selected = link.hash === "#" + current.id;
       link.classList.toggle("active", selected);
@@ -141,7 +155,7 @@
     if (destination) {
       window.history.pushState(null, "", "#" + destination.id);
       destination.scrollIntoView({ block: "start", behavior: "instant" });
-      var heading = destination.querySelector("h2");
+      var heading = destination.querySelector("h1, h2");
       heading.setAttribute("tabindex", "-1");
       heading.focus({ preventScroll: true });
       heading.addEventListener("blur", function () { heading.removeAttribute("tabindex"); }, { once: true });
@@ -157,8 +171,11 @@
   });
   window.addEventListener("scroll", updateContents, { passive: true });
   window.addEventListener("resize", updateContents);
+  window.addEventListener("hashchange", updateContents);
   updateContents();
 
+  reference.currentSection = currentSection;
+  reference.updateContents = updateContents;
   reference.toggleTheme = toggleTheme;
   reference.exportMarkdown = exportMarkdown;
   reference.downloadText = downloadText;

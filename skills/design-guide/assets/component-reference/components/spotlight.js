@@ -1,4 +1,7 @@
 (function (toggleTheme, exportMarkdown) {
+  var pageOptions = window.ComponentReference.pageOptions || {};
+  var destinationName = pageOptions.destinationName || "component";
+  var destinationPlural = pageOptions.destinationPlural || "Components";
   // Spotlight search and action launcher
   var spotlightTrigger = document.getElementById("spotlightTrigger");
   var spotlightDialog = document.getElementById("spotlightDialog");
@@ -91,7 +94,7 @@
     });
 
     spotlightEmpty.hidden = matches.length !== 0;
-    spotlightEmpty.textContent = spotlightMode === "jump" ? "No matching components" : "No matching commands";
+    spotlightEmpty.textContent = spotlightMode === "jump" ? "No matching " + destinationPlural.toLowerCase() : "No matching commands";
     spotlightStatus.textContent = matches.length === 1 ? "1 result available" : matches.length + " results available";
     setActiveSpotlightOption(matches[0] || null);
   }
@@ -99,10 +102,10 @@
   function setSpotlightMode(mode) {
     spotlightMode = mode === "jump" ? "jump" : "commands";
     spotlightInput.value = "";
-    spotlightInput.placeholder = spotlightMode === "jump" ? "Jump to a component" : "Search commands";
+    spotlightInput.placeholder = spotlightMode === "jump" ? "Jump to a " + destinationName : "Search commands";
     spotlightInputLabel.textContent = spotlightInput.placeholder;
-    spotlightDialog.setAttribute("aria-label", spotlightMode === "jump" ? "Jump to a component" : "Search and commands");
-    spotlightResults.setAttribute("aria-label", spotlightMode === "jump" ? "Components" : "Commands");
+    spotlightDialog.setAttribute("aria-label", spotlightMode === "jump" ? "Jump to a " + destinationName : "Search and commands");
+    spotlightResults.setAttribute("aria-label", spotlightMode === "jump" ? destinationPlural : "Commands");
     filterSpotlight();
   }
 
@@ -140,15 +143,11 @@
     if (window.history && window.history.replaceState) {
       window.history.replaceState(null, "", "#" + target.id);
     }
+    window.ComponentReference.updateContents();
   }
 
   function currentComponentIndex() {
-    var viewportAnchor = window.scrollY + Math.min(120, window.innerHeight * 0.25);
-    var currentIndex = 0;
-    componentSections.forEach(function (section, index) {
-      if (section.offsetTop <= viewportAnchor) currentIndex = index;
-    });
-    return currentIndex;
+    return componentSections.indexOf(window.ComponentReference.currentSection());
   }
 
   function moveBetweenComponents(direction) {

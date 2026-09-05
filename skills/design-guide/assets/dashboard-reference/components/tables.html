@@ -1,0 +1,70 @@
+<section class="component-section" id="tables" aria-labelledby="heading-tables">
+  <header class="dashboard-section-heading">
+    <h2 id="heading-tables">Services</h2>
+    <button class="btn btn-secondary" id="exportServices" type="button">Export services CSV</button>
+  </header>
+  <div class="showcase-card" style="padding: 0; overflow: hidden;">
+    <div class="table-container">
+      <table class="data-table" id="sampleTable">
+        <caption class="sr-only">Production services at 15:00 UTC on 4 September 2026, sample data</caption>
+        <thead>
+          <tr>
+            <th scope="col"><button class="sort-th-btn" type="button" data-sort="text">Service <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th>
+            <th scope="col"><button class="sort-th-btn" type="button" data-sort="severity">Status <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th>
+            <th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="number">RPM <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th>
+            <th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="number">p95 Latency <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th>
+            <th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="number">Error Rate <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th>
+            <th scope="col"><button class="sort-th-btn" type="button" data-sort="text">Region <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th>
+            <th class="num" scope="col"><button class="sort-th-btn" type="button" data-sort="number">Replicas <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th>
+            <th scope="col"><button class="sort-th-btn" type="button" data-sort="text">Release <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th>
+            <th scope="col"><button class="sort-th-btn" type="button" data-sort="text">Owner <span class="sort-indicator" aria-hidden="true"><svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span></span></button></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr data-service-id="auth-gateway">
+            <td><button class="table-row-trigger" type="button" aria-label="View details for auth-gateway" aria-haspopup="dialog" aria-controls="serviceDetailsDialog">auth-gateway</button></td>
+            <td data-sort-severity="good"><span class="badge badge-good">Operational</span></td>
+            <td class="num">14,280</td>
+            <td class="num">42 ms</td>
+            <td class="num">0.01%</td>
+          </tr>
+          <tr data-service-id="checkout-api">
+            <td><button class="table-row-trigger" type="button" aria-label="View details for checkout-api" aria-haspopup="dialog" aria-controls="serviceDetailsDialog">checkout-api</button></td>
+            <td data-sort-severity="caution"><span class="badge badge-caution">Degraded</span></td>
+            <td class="num">8,190</td>
+            <td class="num">1,326 ms</td>
+            <td class="num">1.94%</td>
+          </tr>
+          <tr data-service-id="order-queue">
+            <td><button class="table-row-trigger" type="button" aria-label="View details for order-queue" aria-haspopup="dialog" aria-controls="serviceDetailsDialog">order-queue</button></td>
+            <td data-sort-severity="danger"><span class="badge badge-danger">Worker Backlog</span></td>
+            <td class="num">2,410</td>
+            <td class="num">4,812 ms</td>
+            <td class="num">6.20%</td>
+          </tr>
+          <tr data-service-id="prediction-engine">
+            <td><button class="table-row-trigger" type="button" aria-label="View details for prediction-engine" aria-haspopup="dialog" aria-controls="serviceDetailsDialog">prediction-engine</button></td>
+            <td><span class="badge badge-derived">Simulated</span></td>
+            <td class="num">560</td>
+            <td class="num">180 ms</td>
+            <td class="num">0.00%</td>
+          </tr>
+          <tr data-service-id="session-cache">
+            <td><button class="table-row-trigger" type="button" aria-label="View details for session-cache" aria-haspopup="dialog" aria-controls="serviceDetailsDialog">session-cache</button></td>
+            <td data-sort-severity="good"><span class="badge badge-good">Operational</span></td>
+            <td class="num">14,280</td>
+            <td class="num">18 ms</td>
+            <td class="num">0.00%</td>
+          </tr>
+          <tr data-service-id="inventory-api">
+            <td><button class="table-row-trigger" type="button" aria-label="View details for inventory-api" aria-haspopup="dialog" aria-controls="serviceDetailsDialog">inventory-api</button></td>
+            <td data-sort-severity="caution"><span class="badge badge-caution">Degraded</span></td>
+            <td class="num">8,190</td>
+            <td class="num">840 ms</td>
+            <td class="num">0.72%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
