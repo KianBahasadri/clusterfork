@@ -71,7 +71,7 @@ For several items sharing a time period and a meaningful individual limit, use t
 * Lay out three metrics as equal columns with a 32px gap. At 600px and below, use one column with a 24px gap.
 * Set metric labels in `--mono` at 12px, uppercase, letter-spacing 0.08em, and `--muted`. Set metric values at 26px, weight 700, line-height 1, `--muted`, and tabular numerals. Let size and weight establish hierarchy; do not use `--ink-strong` for large metric values.
 * Add a bordered or filled card only for a real interactive, independently stateful, draggable, selectable, collapsible, or semantically bounded object. Do not add one for page-section separation.
-* When a real card boundary is required, use `--surface`, a 1px `--line` border, 6px radius, and no shadow unless the card is temporarily elevated during drag.
+* For a real card boundary, start with a borderless `--surface` fill, 6px radius, and no shadow unless the card is temporarily elevated during drag. For compact issue, task, or work-item records, use the [Task Cards](task-cards.md) layout, state treatments, and inspection behavior.
 
 ## 13. Color Semantics
 
