@@ -114,8 +114,9 @@
       [["Limit", value(item.limit, item.unit)], ["Current · " + format.date(model.now), value(item.current, item.unit)],
         ["Forecast · " + format.date(model.end), value(item.forecast, item.unit)],
         ["Forecast / limit", format.percent(item.forecastPercent)],
-        ["Forecast headroom", item.forecast === null ? "Unavailable" : value(item.limit - item.forecast, item.unit)]].forEach(function (pair) {
+        ["Forecast headroom", item.forecast === null ? "Unavailable" : value(item.limit - item.forecast, item.unit)]].forEach(function (pair, index) {
         var row = element("div");
+        if (index > 0) row.dataset.provenance = index === 1 ? "observed" : "forecast";
         row.append(element("dt", "", pair[0]), element("dd", "", pair[1]));
         list.appendChild(row);
       });
@@ -127,6 +128,7 @@
         var row = element("tr");
         record.forEach(function (entry, index) {
           var cell = element("td", [3, 5, 6].includes(index) ? "num" : "", entry === null ? "—" : entry);
+          if ([1, 2, 3, 4, 6].includes(index) && entry !== null) cell.dataset.provenance = record[2] === "Forecast" ? "forecast" : "observed";
           if ([3, 5, 6].includes(index)) {
             cell.dataset.sortValue = entry === null ? "" : String(entry);
             cell.textContent = entry === null ? "—" : value(entry, "");
@@ -152,7 +154,7 @@
       populatePicker();
       renderDetails();
       renderRecords();
-      feedback.textContent = "All budgets · observed, current, and forecast values";
+      feedback.textContent = "";
       clearInspection();
       dialog.showModal();
       (Array.from(picker.children).find(function (control) { return control.dataset.budgetId === activeId; }) || dialog.querySelector("button")).focus();
@@ -164,19 +166,19 @@
       dialog.setAttribute("aria-labelledby", prefix + "-dialog-title");
       surface.setAttribute("aria-haspopup", "dialog");
       surface.setAttribute("aria-controls", dialog.id);
-      var dialogHeader = element("div", "modal-header");
-      var dialogTitle = element("h2", "modal-title", model.title + " · details");
+      var dialogHeader = element("div", "budget-map-dialog-header");
+      var dialogTitle = element("h2", "modal-title sr-only", model.title + " · details");
       dialogTitle.id = prefix + "-dialog-title";
       var close = button("", "btn-icon");
       close.setAttribute("aria-label", "Close");
       close.title = "Close";
       close.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#lucide-x"></use></svg>';
       close.addEventListener("click", function () { dialog.close(); });
-      dialogHeader.append(dialogTitle, close);
       var body = element("div", "budget-map-dialog-body");
       picker = element("div", "budget-map-picker");
       picker.setAttribute("role", "group");
       picker.setAttribute("aria-label", "Inspect budget");
+      dialogHeader.append(picker, close);
       details = element("div", "budget-map-details");
       tableRegion = element("div", "table-container budget-map-data");
       tableRegion.id = prefix + "-data";
@@ -210,12 +212,12 @@
       dataToggle.setAttribute("aria-controls", tableRegion.id);
       dataToggle.addEventListener("click", function () {
         tableRegion.hidden = !tableRegion.hidden;
+        dialog.dataset.exactData = String(!tableRegion.hidden);
         dataToggle.setAttribute("aria-expanded", String(!tableRegion.hidden));
         dataToggle.textContent = tableRegion.hidden ? "Show exact data" : "Hide exact data";
       });
-      body.append(picker, details, dataToggle, tableRegion);
-      var footer = element("div", "budget-map-dialog-footer");
-      feedback = element("span", "budget-map-context");
+      var actions = element("div", "budget-map-dialog-actions");
+      feedback = element("div", "budget-map-context budget-map-feedback");
       feedback.setAttribute("role", "status");
       var exportButton = button("Export all data CSV", "btn btn-secondary");
       exportButton.addEventListener("click", function () {
@@ -227,8 +229,9 @@
         window.setTimeout(function () { URL.revokeObjectURL(url); }, 0);
         feedback.textContent = "All budget data exported as CSV";
       });
-      footer.append(feedback, exportButton);
-      dialog.append(dialogHeader, body, footer);
+      actions.append(dataToggle, exportButton);
+      body.append(details, actions, feedback, tableRegion);
+      dialog.append(dialogTitle, dialogHeader, body);
       shell.appendChild(dialog);
       dialog.addEventListener("click", function (event) {
         var rect = dialog.getBoundingClientRect();
