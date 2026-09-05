@@ -91,7 +91,7 @@
   flex: 0 0 auto;
   pointer-events: auto;
   background: var(--surface-raised);
-  border: 1px solid var(--line-strong);
+  border: 1px solid transparent;
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   font-size: 13.5px;
@@ -150,7 +150,7 @@
 .toast-undo {
   align-self: stretch;
   padding: 0 16px;
-  border-left: 1px solid var(--line);
+  border-left: 1px solid transparent;
   color: var(--ink-strong);
   font-weight: 600;
   font-size: 13px;

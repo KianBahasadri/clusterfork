@@ -7,6 +7,7 @@
   font-size: 12px;
   font-weight: 500;
   padding: 3px 8px;
+  border: 1px solid transparent;
   border-radius: var(--radius-pill);
   line-height: 1.2;
   letter-spacing: 0.02em;
@@ -15,31 +16,26 @@
 .badge-nominal {
   background: var(--surface-raised);
   color: var(--muted);
-  border: 1px solid var(--line);
 }
 .badge-good {
   background: var(--good-soft);
   color: var(--good);
-  border: 1px solid color-mix(in srgb, var(--good) 30%, transparent);
 }
 .badge-caution {
   --badge-flash-base: var(--caution-soft);
   background: var(--caution-soft);
   color: var(--caution);
-  border: 1px solid color-mix(in srgb, var(--caution) 30%, transparent);
   border-radius: var(--radius-sm);
 }
 .badge-danger {
   --badge-flash-base: var(--danger-soft);
   background: var(--danger-soft);
   color: var(--danger);
-  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
   border-radius: 0;
 }
 .badge-derived {
   background: var(--derived-soft);
   color: var(--derived);
-  border: 1px solid color-mix(in srgb, var(--derived) 30%, transparent);
 }
 
 .badge-flash {
@@ -76,7 +72,7 @@
   border-radius: var(--radius-sm);
   background: var(--surface-raised);
   color: var(--muted);
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
 }
 .meta-tag-copy {
   min-height: 28px;
@@ -84,17 +80,15 @@
   align-items: center;
   white-space: nowrap;
   cursor: copy;
-  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+  transition: color 120ms ease, background 120ms ease;
 }
 .meta-tag-copy:hover {
   color: var(--ink);
   background: var(--surface);
-  border-color: var(--line-strong);
 }
 .meta-tag-copy.is-copied {
   color: var(--ink-strong);
   background: var(--surface-raised);
-  border-color: var(--line-strong);
 }
 .meta-hash-wrapper {
   position: relative;

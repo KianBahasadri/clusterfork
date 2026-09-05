@@ -12,7 +12,7 @@
   padding: 9px 16px;
   border-radius: var(--radius);
   border: 1px solid transparent;
-  transition: background 120ms ease, border-color 120ms ease, transform 80ms ease, opacity 120ms ease;
+  transition: background 120ms ease, transform 80ms ease, opacity 120ms ease;
   white-space: nowrap;
   user-select: none;
 }
@@ -37,12 +37,11 @@
 
 .btn-secondary {
   background: transparent;
-  border-color: var(--line);
+  border-color: color-mix(in srgb, var(--line) 25%, transparent);
   color: var(--ink);
 }
 .btn-secondary:hover:not(:disabled) {
   background: var(--surface-raised);
-  border-color: var(--line-strong);
 }
 
 .btn-quiet {
@@ -56,7 +55,6 @@
 
 .btn-danger {
   background: var(--danger-soft);
-  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
   border-radius: 0;
   color: var(--danger);
 }

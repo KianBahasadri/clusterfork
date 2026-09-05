@@ -2,18 +2,18 @@
   width: 72px;
   height: 36px;
   padding: 0 10px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: var(--radius);
   background: var(--surface);
   color: var(--muted);
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
-  transition: color 120ms ease, border-color 120ms ease, transform 80ms ease;
+  transition: color 120ms ease, background-color 120ms ease, transform 80ms ease;
 }
 .spotlight-trigger:hover {
   color: var(--ink-strong);
-  border-color: var(--line-strong);
+  background: var(--surface-raised);
 }
 .spotlight-trigger:active { transform: scale(0.98); }
 .spotlight-trigger .icon,

@@ -2,20 +2,20 @@
 
 ## 5. Labels, Badges, and Metadata
 
-* Render status badges as inline-flex containers with 12px text, weight 500, line-height 1.2, 3px vertical padding, and 8px horizontal padding.
+* Render status badges as inline-flex containers with 12px text, weight 500, line-height 1.2, 3px vertical padding, and 8px horizontal padding. Keep every variant borderless, retaining a transparent 1px border for consistent sizing.
 * Do not prepend a colored dot or reserve space for one. Put the complete status in visible text.
-* Nominal badge: use `--surface-raised`, `--muted`, a 1px `--line` border, and pill radius.
-* Good badge: use `--good-soft`, `--good`, a 30%-mixed good border, and pill radius.
-* Caution badge: use `--caution-soft`, `--caution`, a 30%-mixed caution border, and 4px radius.
-* Danger badge: use `--danger-soft`, `--danger`, a 30%-mixed danger border, and 0px radius.
-* Derived badge: use `--derived-soft`, `--derived`, a 30%-mixed derived border, and pill radius.
+* Nominal badge: use `--surface-raised`, `--muted`, and pill radius.
+* Good badge: use `--good-soft`, `--good`, and pill radius.
+* Caution badge: use `--caution-soft`, `--caution`, and 4px radius.
+* Danger badge: use `--danger-soft`, `--danger`, and 0px radius.
+* Derived badge: use `--derived-soft`, `--derived`, and pill radius.
 * Apply a slow live-state pulse with a 1600ms `ease-in-out` cycle between the base soft background and a 28% current-color tint. Set iteration count to infinite.
 * Apply a fast live-state flash with a 600ms `steps(1, end)` cycle between the same two backgrounds. Set iteration count to infinite and keep the rate below three flashes per second.
-* Continue either animation while the represented state remains active. Remove the animation immediately when that state clears. Under `prefers-reduced-motion: reduce`, remove the animation and keep the same static text, color, border, and geometry.
-* Render non-status tags, versions, and commit hashes in `--mono` at 12px with 2px vertical and 6px horizontal padding, 4px radius, `--surface-raised`, `--muted`, and a 1px `--line` border.
+* Continue either animation while the represented state remains active. Remove the animation immediately when that state clears. Under `prefers-reduced-motion: reduce`, remove the animation and keep the same static text, color, fill, and geometry.
+* Render non-status tags, versions, and commit hashes in `--mono` at 12px with 2px vertical and 6px horizontal padding, 4px radius, `--surface-raised`, `--muted`, and a transparent 1px border. Keep tags borderless in idle, hover, and copied states; on hover, use `--ink` text and `--surface` fill. Retain the global keyboard focus ring on interactive tags.
 * When a metadata value such as an IP address, version, identifier, commit hash, or token is useful elsewhere, render it as a copyable native button. In a complete reference, make every non-status metadata example copyable. Preserve the plain metadata-tag treatment, give it a minimum 28px height and `cursor: copy`, and provide an action-specific accessible name such as `Copy IP address 192.168.1.104`; use a matching `title` only when the value does not need an expansion tooltip. Do not add a copy icon, and do not make status badges copyable.
 * Display commit hashes in their compact seven-character form. On pointer hover and keyboard focus, reveal the exact full hash after 150ms in the neutral tooltip treatment; hide it on pointer exit, blur, or `Escape`, and connect it through `aria-describedby` only while visible. Keep the tooltip within the viewport. Copy the full hash rather than the compact visible label.
-* Copy the exact underlying value on click, `Enter`, or `Space`. Prefer `navigator.clipboard.writeText` in a secure context and provide a selection-based fallback for non-secure local previews; preserve focus on the copy button when using the fallback. On success, keep the action-oriented accessible name, tag width, visible value, and 4px radius fixed; use only temporary neutral `--ink-strong` text and a `--line-strong` border for 1600ms, without a copy/check icon or green/good styling. Show one non-undoable success toast reading `Copied to clipboard`; rely on the toast stack's polite live region rather than adding a second inline live announcement. On failure, omit the success state and show a non-undoable danger toast reading `Could not copy to clipboard`.
+* Copy the exact underlying value on click, `Enter`, or `Space`. Prefer `navigator.clipboard.writeText` in a secure context and provide a selection-based fallback for non-secure local previews; preserve focus on the copy button when using the fallback. On success, keep the action-oriented accessible name, tag width, visible value, and 4px radius fixed; use only temporary neutral `--ink-strong` text and `--surface-raised` fill for 1600ms, without a visible border, copy/check icon, or green/good styling. Show one non-undoable success toast reading `Copied to clipboard`; rely on the toast stack's polite live region rather than adding a second inline live announcement. On failure, omit the success state and show a non-undoable danger toast reading `Could not copy to clipboard`.
 * Do not place keyboard shortcut labels in badge or metadata rows.
 
 ## 6. Tables and Data Grids

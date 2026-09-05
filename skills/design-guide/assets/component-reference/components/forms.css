@@ -28,18 +28,17 @@
   min-width: 0;
   background: var(--surface);
   color: var(--ink);
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: var(--radius);
   padding: 9px 12px;
   font-size: 14px;
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
 }
 .input-field:hover:not(:disabled) {
-  border-color: var(--line-strong);
+  background: var(--surface-raised);
 }
 .input-field:focus {
   outline: none;
-  border-color: var(--line-strong);
   box-shadow: 0 0 0 2px var(--focus);
 }
 .input-field:disabled {

@@ -74,7 +74,7 @@
 ### Interactive Page Utilities
 
 * On every page containing interactive controls, navigation, or commands, place a utility group at the upper right. Put the search launcher immediately left of the theme toggle with an 8px gap.
-* Size the search launcher to 72×36px. Give it a 1px `--line` border, `--surface` background, 6px radius, and 10px horizontal padding. Place a 15×15px Lucide `Search` icon at the left inset. Leave the rest of the launcher empty.
+* Size the search launcher to 72×36px. Give it a transparent 1px border, `--surface` background, 6px radius, and 10px horizontal padding. On hover, use `--surface-raised` and `--ink-strong` while keeping the border transparent. Place a 15×15px Lucide `Search` icon at the left inset. Leave the rest of the launcher empty.
 * Give the search launcher the accessible name `Open search and commands`. Do not render `Search page`, `Ctrl+K`, `⌘K`, or any other visible text inside or beside it.
 * Size the theme toggle to 36×36px. Use a Lucide `Sun` or `Moon` icon. Keep the toggle background, border, and shadow transparent in every state; change only icon color or opacity on hover and active states.
 * At viewport widths above 600px, position the utility group 20px from the top and 24px from the right. At 600px and below, use 12px top and right offsets and reserve at least 68px above page content.

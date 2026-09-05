@@ -41,13 +41,13 @@
 
 * Start every inline callout with a visible weight-600 status label followed by its message, such as `Telemetry Delay:` or `Outage Detected:`.
 * Do not prepend an info, warning, error, or success icon to an inline callout. Do not reserve an icon column.
-* Use 13.5px text, line-height 1.5, 14px vertical padding, and 16px horizontal padding.
-* Info callout: use `--surface-raised`, a 1px `--line-strong` border, `--ink`, and 6px radius.
-* Caution callout: use `--caution-soft`, a 35%-mixed caution border, `--ink`, and 4px radius.
-* Danger callout: use `--danger-soft`, a 35%-mixed danger border, `--ink`, and 0px radius.
-* Success callout: use `--good-soft`, a 35%-mixed good border, `--ink`, and 6px radius.
+* Use 13.5px text, line-height 1.5, 14px vertical padding, and 16px horizontal padding. Keep callouts borderless, retaining a transparent 1px border for consistent sizing.
+* Info callout: use `--surface-raised`, `--ink`, and 6px radius.
+* Caution callout: use `--caution-soft`, `--ink`, and 4px radius.
+* Danger callout: use `--danger-soft`, `--ink`, and 0px radius.
+* Success callout: use `--good-soft`, `--ink`, and 6px radius.
 * Position toast stacks 24px from the bottom and right with 10px between toasts. At narrow mobile widths, use 12px side offsets and cap each toast to the available width.
-* Size a toast from 280px through 360px, use 12px vertical and 16px horizontal padding, a 1px `--line-strong` border, `--surface-raised`, and the large overlay shadow.
+* Size a toast from 280px through 360px, use 12px vertical and 16px horizontal padding, a transparent 1px border, `--surface-raised`, and the large overlay shadow. Keep its outer edge and action buttons borderless.
 * Use 6px radius for neutral or success toasts, 4px for caution toasts, and 0px for danger toasts.
 * Animate toast entrance over 280ms with `cubic-bezier(0.16, 1, 0.3, 1)`, moving from 16px below its resting position while fading from transparent to opaque. Remove the entrance animation when `prefers-reduced-motion: reduce` matches.
 * Put an operation-specific message and optional neutral `Undo` action in each toast. Make the message area a native button that opens toast history and keep `Undo` as its sibling, never as a nested interactive element. If a status icon is included, use Lucide and apply the same severity geometry; use an angular icon for danger.

@@ -5,9 +5,9 @@
 * Use a native `<button>` and always set `type="button"`, `type="submit"`, or `type="reset"` explicitly.
 * Use 14px text, weight 500, line-height 1, 8px internal gap, 9px vertical padding, 16px horizontal padding, a 1px transparent base border, and a 6px radius for non-danger text buttons.
 * Primary: use solid `--action-primary` fill, a transparent 1px border, `--ink-strong` text, and weight 600. On hover, use `--action-primary-hover`. Keep the fill visibly distinct from `--surface` form controls and do not add an input-like outline. Place at most one primary action in an action group.
-* Secondary: use a transparent fill, 1px `--line` border, and `--ink` text. On hover, use `--surface-raised` and `--line-strong`.
+* Secondary: use a transparent fill, a very faint 1px border made with `color-mix(in srgb, var(--line) 25%, transparent)`, and `--ink` text. On hover, use `--surface-raised` and keep the same faint border color. Retain the global keyboard focus ring.
 * Quiet: use no border, transparent fill, and `--muted` text. On hover, use `--ink-strong` text and `--surface-raised`.
-* Danger: use `--danger-soft` fill, a danger-tinted 1px border, `--danger` text, and 0px radius. On hover, use `--danger` fill and white text. Every red button remains sharp-edged.
+* Danger: use `--danger-soft` fill, a transparent 1px border, `--danger` text, and 0px radius. On hover, use `--danger` fill and white text while keeping the border transparent. Every red button remains sharp-edged.
 * Delayed danger: for a high-consequence destructive action, keep the danger button inert until the user deliberately engages it for 1 second. Treat uninterrupted pointer hover, keyboard focus, and touch press-and-hold as equivalent engagement paths. Animate a solid `--danger` fill from left to right over exactly 1000ms while preserving a readable action label; use white text over the filled portion. Use `cursor: not-allowed` while the button is unarmed or arming, then change to `cursor: pointer` only when it becomes armed. Reset the fill and disarm immediately on pointer exit, blur, touch cancellation, or touch movement outside the button. Block click, `Enter`, and `Space` until armed; after arming, permit one activation and then reset. Keep the native button focusable, describe the interaction with `aria-describedby`, and announce the arming and ready states through a polite live region. Under `prefers-reduced-motion: reduce`, show the same one-second progress in four discrete fill steps.
 * Icon-only: use a 36×36px visual button with at least a 44×44px touch target. Keep its background, border, and shadow transparent in default, hover, and active states. Use icon color or opacity for hover feedback.
 * On pointer activation, scale an enabled button to 0.98 while pressed. Do not apply the scale to disabled buttons.
@@ -27,10 +27,10 @@
 
 ### Geometry and Content
 
-* Use 14px input text, 9px vertical padding, 14px left padding, 36px right padding, a 1px `--line` border, `--surface` fill, and 6px radius.
+* Use 14px input text, 9px vertical padding, 14px left padding, 36px right padding, a transparent 1px border, `--surface` fill, and 6px radius. Keep the field borderless on hover and focus; use `--surface-raised` on hover and retain the global keyboard focus ring.
 * Position the 14×14px chevron 13px from the right edge. Rotate it 180 degrees while expanded.
 * Compute width from the larger of the current input or placeholder width plus 52px and the widest ordinary option label plus 28px. Clamp the result from 176px through 232px and cap it at the available viewport width.
-* Match the popover width to the field. Place it 6px below the field and cap height at 240px with vertical scrolling. Use 2px internal padding, `--surface-raised`, a 1px `--line-strong` border, 6px radius, and the large overlay shadow.
+* Match the popover width to the field. Place it 6px below the field and cap height at 240px with vertical scrolling. Use 2px internal padding, `--surface-raised`, a transparent 1px border, 6px radius, and the large overlay shadow.
 * Render pointer-dense option rows at 13.5px, line-height 1.35, minimum height 28px, 3px vertical padding, and 10px horizontal padding. At coarse-pointer breakpoints, increase rows to at least 44px high with 10px vertical padding.
 * Mark the selected option with `--ink-strong` and weight 600. Do not render a checkmark and do not reserve a trailing checkmark gutter.
 * Wrap option labels at spaces with normal word breaking. Use overflow wrapping only when one token is too long to fit. Do not use `word-break: break-all`.
@@ -50,11 +50,11 @@
 * Pair every form control with a visible `<label>` whose `for` matches the control `id`. Do not use a placeholder as the label.
 * Use 13.5px label text, weight 500, and `--ink-strong`. Put 6px between label, control, and associated message.
 * Mark required controls with visible `(required)` text or an `aria-hidden="true"` symbol plus required state available in the accessible name. Set the control's native `required` attribute when submission requires it.
-* Use `--surface`, a 1px `--line` border, 6px radius, 9px vertical padding, 12px horizontal padding, and 14px text for one-line inputs.
+* Use `--surface`, a transparent 1px border, 6px radius, 9px vertical padding, 12px horizontal padding, and 14px text for one-line inputs.
 * Use `--mono` at 13px for code, tokens, API keys, and machine identifiers. Do not use monospace for ordinary names, email addresses, search terms, or prose.
 * Give textareas the same border and typography, a minimum height of 96px, and vertical-only resizing unless the surrounding layout supports both axes.
 * Let form groups and their inputs shrink to the available width with `min-width: 0`; a preferred field width must not become a page-width minimum.
-* On hover, change only the border to `--line-strong`. On focus, keep a strong border and render the global 2px focus ring.
+* Keep neutral fields borderless on hover and focus. On hover, change the fill to `--surface-raised`. On focus, render the shared 2px `--focus` ring. Preserve the danger border on invalid fields in both states.
 * On disabled controls, set the native `disabled` attribute, opacity 0.5, `cursor: not-allowed`, and `--canvas` fill.
 * Add helper text only for a non-obvious format, constraint, consequence, or recovery step and associate it through `aria-describedby`. Do not include copy that merely restates the label, value, editability, data type, or organizational scope. Specifically omit generic lines such as `Unique identifier within your organization` and `Read-only live credentials token`.
 * For an invalid field, set `aria-invalid="true"`, point `aria-describedby` to its message, use a 1px `--danger` border, and set radius to 0px. Render the correction beneath the field in 12px `--danger` text with `role="alert"`.
