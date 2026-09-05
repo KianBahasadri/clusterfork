@@ -14,6 +14,7 @@ Apply the exact specifications in the references relevant to the interface being
 - Always read [Foundations](references/foundations.md) for shared tokens, typography, geometry, icons, accessibility, page utilities, and layout.
 - Read [Controls and Forms](references/controls-and-forms.md) for buttons, action triggers, dropdowns, menus, inputs, search fields, textareas, checkboxes, radios, and switches.
 - Read [Data Display](references/data-display.md) for badges, metadata, tables, charts, metrics, cards, panels, and color semantics.
+- Read [Budget Map](references/budget-map.md) when comparing several budgets, quotas, or capacity limits over a shared period, including current usage and end-of-period forecasts.
 - Read [Overlays and Feedback](references/overlays-and-feedback.md) for dialogs, modals, tooltips, popovers, navigation, tabs, breadcrumbs, alerts, callouts, and toasts.
 - Read all four references when building or reviewing a complete interface or component catalog.
 - For a dashboard composed from the existing kit, also read [Dashboard Composition](references/dashboard-composition.md) for the sample's scope, reuse, and observed limits.

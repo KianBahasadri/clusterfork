@@ -44,6 +44,8 @@
 
 ## 7. Charts and Data Graphics
 
+For several items sharing a time period and a meaningful individual limit, use the [Budget Map](budget-map.md) when the primary task is spotting relative pressure and projected overruns in one view. It has its own reusable implementation and inspection contract; the line-chart explorer below remains the reference for detailed time-series exploration.
+
 * Keep the chart container borderless and transparent so the plot sits on the surrounding page background. Use 20px padding by default; at 600px and below, use 16px vertical padding with no additional horizontal inset.
 * Render line and area charts as SVG with a responsive width, a 200px default plot height, neutral `--line` gridlines, and 11px `--mono` axis labels in `--muted`. Size the SVG coordinate system to its rendered dimensions so resizing does not stretch labels or misplace pointer inspection.
 * Keep one source of timestamped numeric samples for the preview, explorer, statistics, exact-data table, and CSV. Treat missing series values as unavailable, preserve gaps, and never replace missing measurements with zero or invent intermediate samples.
