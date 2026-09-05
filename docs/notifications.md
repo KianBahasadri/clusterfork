@@ -135,6 +135,25 @@ curl -d 'phone path works' \
   http://100.123.102.71:2586/clusterfork
 ```
 
+If the phone reports `ECONNREFUSED` on port 2586, check both host addresses
+with `/v1/health`. A container can appear `Up` while its network attachment
+and published ports are missing; this failure was observed with empty
+`NetworkSettings.Networks` and `NetworkSettings.Ports` in `docker inspect`.
+Recreate just ntfy from its saved configuration to restore them:
+
+```bash
+docker compose \
+  --env-file ~/.config/clusterfork/notify/settings.env \
+  -f ~/.config/clusterfork/notify/compose.yaml \
+  up -d --no-deps --force-recreate ntfy
+```
+
+[Compose recreation preserves mounted volumes](https://docs.docker.com/reference/cli/docker/compose/up/),
+including the notification cache. Verify health on both `127.0.0.1:2586`
+and `100.123.102.71:2586`, then run `notify test phone`. A successful post
+confirms server acceptance; reopen ntfy on the phone to check receipt if its
+subscription has not reconnected yet.
+
 The server is reversible:
 
 ```bash
