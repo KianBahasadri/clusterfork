@@ -1,50 +1,50 @@
 /* Dense page composition; component colors and interactions come from the catalog. */
-.dashboard-layout { max-width: none; margin-inline: 0; padding: 12px 0 16px; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.dashboard-layout { max-width: none; margin-inline: 0; padding: 12px 16px 16px; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .dashboard-content { gap: 12px; }
 .dashboard-heading, .dashboard-title, .dashboard-context { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.dashboard-heading { justify-content: space-between; }
+.dashboard-heading { justify-content: flex-start; gap: 12px 24px; }
 .dashboard-heading h1 { font-size: 20px; line-height: 1.3; font-weight: 600; color: var(--ink-strong); }
 .dashboard-heading .breadcrumb-nav { list-style: none; margin: 0; font-size: 12px; }
 .dashboard-context, .dashboard-meta { color: var(--muted); font-size: 12px; }
 .dashboard-sidebar-brand { color: var(--ink-strong); font-size: 14px; font-weight: 600; }
-.dashboard-sidebar-note { margin-left: auto; }
-.dashboard-section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.dashboard-section-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 8px; }
 .dashboard-section-heading h2 { font-size: 15px; font-weight: 600; color: var(--ink-strong); }
 .dashboard-overview { position: relative; display: flex; flex-direction: column; gap: 12px; }
-.dashboard-overview .metric-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px; }
-.dashboard-overview .metric-card { justify-content: space-between; }
+.dashboard-overview .metric-grid { grid-template-columns: repeat(6, max-content); gap: 16px; width: max-content; max-width: 100%; }
+.dashboard-overview .metric-card { justify-content: space-between; text-align: center; }
+.dashboard-overview .callout { width: fit-content; max-width: 100%; }
 .dashboard-content .callout { padding: 8px 10px; }
-.dashboard-content .data-table th, .dashboard-content .data-table td { padding: 4px 10px; }
+.dashboard-content .data-table { width: max-content; }
+.dashboard-content .data-table th, .dashboard-content .data-table td { padding: 4px 6px; }
 .dashboard-content .data-table td { white-space: nowrap; }
-.dashboard-content .table-container { width: 100%; scrollbar-color: var(--line-strong) transparent; scrollbar-width: thin; }
+.dashboard-content .table-container { width: fit-content; max-width: 100%; scrollbar-color: var(--line-strong) transparent; scrollbar-width: thin; }
 .dashboard-identifier { font-family: var(--mono); font-size: 13px; }
-.dashboard-secondary { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1.05fr) minmax(0, 0.8fr); align-items: start; gap: 20px; min-width: 0; }
+.dashboard-secondary { display: grid; grid-template-columns: minmax(0, 360px) minmax(0, max-content) minmax(0, 300px); justify-content: start; align-items: start; gap: 12px; min-width: 0; }
 .dashboard-content .chart-box { padding: 0; }
 .dashboard-content .chart-svg { height: 180px; }
-.dashboard-readouts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 8px; }
+.dashboard-readouts { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 8px; }
 .dashboard-readouts dt, .dashboard-incident-details dt { color: var(--muted); font-size: 12px; }
 .dashboard-readouts dd { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
 .dashboard-region-note { margin-top: 8px; }
 .dashboard-incident { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
-.dashboard-incident-details { width: 100%; }
-.dashboard-incident-details > div { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 3px 0; }
+.dashboard-incident-details { width: fit-content; max-width: 100%; }
+.dashboard-incident-details > div { display: grid; grid-template-columns: 60px minmax(0, 1fr); align-items: baseline; gap: 12px; padding: 3px 0; }
 .dashboard-incident-details dd { font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; }
 @media (min-width: 901px) {
   .dashboard-layout .toc-sidebar { position: static; display: flex; align-items: center; gap: 24px; max-height: none; min-height: 44px; padding: 4px 172px 4px 4px; }
   .dashboard-layout #componentIndex { flex: 1; min-width: 0; padding: 4px; }
   .dashboard-layout .toc-list { flex-direction: row; flex-wrap: wrap; align-items: center; }
 }
-@media (max-width: 1200px) {
-  .dashboard-secondary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 1100px) {
+  .dashboard-secondary { grid-template-columns: minmax(0, 360px) minmax(0, max-content); }
   .dashboard-secondary #charts { grid-row: span 2; }
 }
 @media (max-width: 900px) {
   .dashboard-layout { padding-top: 80px; }
   .dashboard-overview .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .dashboard-sidebar-note { margin: 12px 0 0; }
 }
 @media (max-width: 700px) {
-  .dashboard-secondary { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-secondary { grid-template-columns: minmax(0, 360px); }
   .dashboard-secondary #charts { grid-row: auto; }
 }
 @media (max-width: 600px), (pointer: coarse) {
@@ -54,7 +54,7 @@
   .dashboard-content .sort-th-btn, .dashboard-content .btn { min-height: 44px; }
 }
 @media (max-width: 600px) {
-  .dashboard-layout { padding-top: 68px; }
+  .dashboard-layout { padding: 68px 12px 16px; }
   .dashboard-title { gap: 6px 12px; }
 }
 @media (max-width: 420px) {
