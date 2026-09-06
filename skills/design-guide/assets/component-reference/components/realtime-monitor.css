@@ -17,6 +17,8 @@
 .realtime-monitor[data-presentation="heatstrip"] .monitor-plot,
 .realtime-monitor[data-presentation="arc"] .monitor-resource .monitor-plot { min-height: 44px; display: flex; align-items: center; }
 .monitor-catalog-examples { display: flex; flex-direction: column; gap: 40px; }
+.monitor-catalog-example { display: flex; flex-direction: column; gap: 12px; }
+.monitor-catalog-heading { font: 600 14px/1.2 var(--ui); color: var(--ink-strong); }
 .monitor-arc-face { position: relative; width: 132px; height: 132px; margin: 0 auto; }
 .monitor-arc-scale { display: block; width: 132px; height: 132px; overflow: visible; }
 .monitor-arc-readout {
@@ -30,8 +32,8 @@
   pointer-events: none;
   padding-bottom: 10px;
 }
-.monitor-arc-readout .monitor-symbol { height: 14px; }
-.monitor-arc-readout .monitor-symbol .icon { width: 14px; height: 14px; }
+.monitor-arc-readout .monitor-symbol { height: 32px; }
+.monitor-arc-readout .monitor-symbol .icon { width: 32px; height: 32px; }
 .monitor-arc-readout .monitor-value { margin: 0; }
 .monitor-arc-track { fill: none; stroke: var(--line); stroke-width: 10; stroke-linecap: round; }
 .monitor-arc-band { fill: none; stroke-width: 8; stroke-linecap: butt; }
