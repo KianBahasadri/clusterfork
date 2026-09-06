@@ -20,7 +20,7 @@ Apply the exact specifications in the references relevant to the interface being
 - Read every component reference above when building or reviewing a complete component catalog; for other interfaces, read the references for the components they contain.
 - For a dashboard composed from the existing kit, also read [Dashboard Composition](references/dashboard-composition.md) for the sample's scope, reuse, and observed limits.
 
-Treat each linked reference as the canonical instruction source for its area. Do not duplicate its detailed rules in this router.
+Treat each linked reference as the canonical instruction source for its area. Where a dedicated component reference explicitly specifies a different treatment, use that treatment; otherwise inherit the shared rules. Do not duplicate detailed rules in this router.
 
 ## Runnable References
 
