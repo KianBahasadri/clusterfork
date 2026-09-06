@@ -126,8 +126,11 @@ Everything lands in `<repo>/.codeview/`:
   reloads itself via `/api/gen` polling. No restart, no downtime.
 - `modules/` is deliberately not gitignored: dropping a module shows up in
   `git status`, and committing it is the repo owner's call. This repo tracks
-  `.codeview/modules/` and ships `kit.py`, a tab that inventories launchers,
-  skills, scripts, bins, and configs by scanning the tree on each load.
+  `.codeview/modules/` and ships three tabs: `scripts.py` (inventories launch
+  wrappers, rotate helpers, PATH bins, scripts, and configs), `skills.py`
+  (inventories agent skills and slash commands), and `statusline.py`
+  (inventories Claude Code and Cursor status lines, fetchers, and live previews)
+  by scanning the tree on each load.
 
 ## Modules (drop-in tabs)
 

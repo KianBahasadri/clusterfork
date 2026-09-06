@@ -1,4 +1,4 @@
-"""Codeview tab: live inventory of this repo's launchers, skills, scripts, bins."""
+"""Codeview tab: live inventory of this repo's launchers, bins, scripts, configs."""
 from __future__ import annotations
 
 import ast
@@ -6,8 +6,8 @@ import html
 import re
 from pathlib import Path
 
-NAME = "kit"
-DESCRIPTION = "Launchers, skills, scripts, and bins this repo installs"
+NAME = "scripts"
+DESCRIPTION = "Launchers, PATH bins, scripts, and configs this repo installs"
 
 REPO = Path(__file__).resolve().parents[2]
 FUNC_RE = re.compile(
@@ -26,20 +26,17 @@ def register(reg):
 def scan(repo: Path) -> dict:
     launchers = scan_launchers(repo / "shell")
     bins = scan_bins(repo / "bin")
-    skills = scan_skills(repo / "skills")
     scripts = scan_scripts(repo / "scripts")
     configs = scan_configs(repo)
     return {
         "launchers": launchers,
         "bins": bins,
-        "skills": skills,
         "scripts": scripts,
         "configs": configs,
         "counts": {
             "Launch": sum(1 for r in launchers if r["kind"] == "launch"),
             "Rotate": sum(1 for r in launchers if r["kind"] == "rotate"),
             "PATH bins": len(bins),
-            "Skills": len(skills),
             "Scripts": len(scripts),
             "Configs": len(configs),
         },
@@ -162,53 +159,6 @@ def scan_bins(bin_dir: Path) -> list[dict]:
     return rows
 
 
-def scan_skills(skills_dir: Path) -> list[dict]:
-    rows = []
-    if not skills_dir.is_dir():
-        return rows
-    for skill_md in sorted(skills_dir.glob("*/SKILL.md")):
-        name, desc = skill_frontmatter(skill_md)
-        rows.append({
-            "name": name,
-            "source": f"skills/{skill_md.parent.name}/",
-            "runs": desc,
-        })
-    return rows
-
-
-def skill_frontmatter(path: Path) -> tuple[str, str]:
-    text = path.read_text(encoding="utf-8", errors="replace")
-    name = path.parent.name
-    desc = ""
-    if not text.startswith("---"):
-        return name, first_heading(text)
-    end = text.find("\n---", 3)
-    fm = text[3:end] if end != -1 else ""
-    lines = fm.splitlines()
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        if line.startswith("name:"):
-            name = line.split(":", 1)[1].strip().strip("\"'")
-        elif line.startswith("description:"):
-            rest = line.split(":", 1)[1].strip()
-            if rest in (">", ">-", "|", "|-"):
-                block = []
-                i += 1
-                while i < len(lines) and (not lines[i].strip()
-                                          or lines[i][:1] in " \t"):
-                    if lines[i].strip():
-                        block.append(lines[i].strip())
-                    i += 1
-                desc = " ".join(block)
-                continue
-            desc = rest.strip("\"'")
-        i += 1
-    if not desc or desc in (">", "|"):
-        desc = first_heading(text[end + 4:] if end != -1 else text)
-    return name, first_sentence(desc)
-
-
 def scan_scripts(scripts_dir: Path) -> list[dict]:
     rows = []
     if not scripts_dir.is_dir():
@@ -258,9 +208,7 @@ def scan_configs(repo: Path) -> list[dict]:
                     "source": f"agents/{path.name}/",
                     "runs": f"{n} plugin files",
                 })
-    for rel in ("statusline/claude/statusline.sh",
-                "statusline/cursor/statusline.sh",
-                "notify/compose.yaml",
+    for rel in ("notify/compose.yaml",
                 "tmux.conf",
                 "bash_profile.sh"):
         path = repo / rel
@@ -293,21 +241,6 @@ def first_doc(path: Path) -> str:
             return collapse(s.lstrip("#").strip())
         break
     return ""
-
-
-def first_heading(text: str) -> str:
-    for line in text.splitlines():
-        if line.startswith("# "):
-            return collapse(line[2:])
-    return ""
-
-
-def first_sentence(text: str) -> str:
-    text = collapse(text)
-    for sep in (". ", ".\n"):
-        if sep in text:
-            return text.split(sep, 1)[0].rstrip(".") + "."
-    return text
 
 
 def collapse(s: str) -> str:
@@ -345,8 +278,6 @@ def render(data: dict) -> str:
                 data["bins"], "Command"),
         section("Scripts", "install + scripts/*.py",
                 data["scripts"], "Script"),
-        section("Skills", "skills/*/SKILL.md — slash commands",
-                data["skills"], "Skill", wide=True),
         section("Configs", "agent settings, statusline, notify, tmux",
                 data["configs"], "File", wide=True),
     ]
@@ -356,7 +287,7 @@ def render(data: dict) -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
-<title>kit</title>
+<title>scripts</title>
 <link rel="stylesheet" href="/assets/app.css">
 <script>
 (function () {{
@@ -370,23 +301,23 @@ def render(data: dict) -> str:
 }})();
 </script>
 <style>
-  .kit-toolbar {{
+  .scripts-toolbar {{
     display: flex; flex-wrap: wrap; align-items: flex-end;
     justify-content: space-between; gap: 12px 24px;
   }}
-  .kit-search {{ max-width: 320px; margin: 0; }}
-  .kit-board {{
+  .scripts-search {{ max-width: 320px; margin: 0; }}
+  .scripts-board {{
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 16px 24px;
     align-items: start;
   }}
-  .kit-board [data-kit-wide] {{ grid-column: 1 / -1; }}
-  .kit-board .table-container {{ width: 100%; }}
-  .kit-board .data-table {{ width: 100%; }}
-  .kit-board .data-table td.wrap {{ white-space: normal; }}
+  .scripts-board [data-scripts-wide] {{ grid-column: 1 / -1; }}
+  .scripts-board .table-container {{ width: 100%; }}
+  .scripts-board .data-table {{ width: 100%; }}
+  .scripts-board .data-table td.wrap {{ white-space: normal; }}
   @media (max-width: 900px) {{
-    .kit-board {{ grid-template-columns: minmax(0, 1fr); }}
+    .scripts-board {{ grid-template-columns: minmax(0, 1fr); }}
   }}
 </style>
 </head>
@@ -394,33 +325,33 @@ def render(data: dict) -> str:
 <div class="dashboard-layout">
   <header class="dashboard-heading">
     <div class="dashboard-title">
-      <h1>Kit</h1>
+      <h1>Scripts &amp; Launchers</h1>
     </div>
-    <div class="dashboard-context">Scanned from this repo on each load</div>
+    <div class="dashboard-context">Launch wrappers, PATH bins, standalone scripts, and agent configs</div>
   </header>
-  <div class="kit-toolbar">
+  <div class="scripts-toolbar">
     <div class="metric-grid overview-metrics">{metrics}</div>
-    <div class="form-group kit-search">
-      <label class="form-label" for="kit-filter">Filter kit</label>
+    <div class="form-group scripts-search">
+      <label class="form-label" for="scripts-filter">Filter scripts &amp; launchers</label>
       <div class="input-with-action">
         <svg class="icon input-leading-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <path d="m21 21-4.34-4.34" fill="none" stroke="currentColor" stroke-width="2"
             stroke-linecap="round" stroke-linejoin="round"></path>
           <circle cx="11" cy="11" r="8" fill="none" stroke="currentColor" stroke-width="2"></circle>
         </svg>
-        <input class="input-field" type="search" id="kit-filter" autocomplete="off">
+        <input class="input-field" type="search" id="scripts-filter" autocomplete="off">
       </div>
     </div>
   </div>
-  <div class="kit-board">{"".join(sections)}</div>
+  <div class="scripts-board">{"".join(sections)}</div>
 </div>
-<div class="tooltip-bubble" id="kit-tip" role="tooltip" hidden></div>
+<div class="tooltip-bubble" id="scripts-tip" role="tooltip" hidden></div>
 <script>
 (function () {{
-  var input = document.getElementById("kit-filter");
+  var input = document.getElementById("scripts-filter");
   input.addEventListener("input", function () {{
     var q = input.value.toLowerCase();
-    document.querySelectorAll("[data-kit-section]").forEach(function (sec) {{
+    document.querySelectorAll("[data-scripts-section]").forEach(function (sec) {{
       var shown = 0;
       sec.querySelectorAll("tbody tr").forEach(function (tr) {{
         var hit = !q || tr.textContent.toLowerCase().indexOf(q) !== -1;
@@ -433,10 +364,13 @@ def render(data: dict) -> str:
   document.addEventListener("click", function (e) {{
     var btn = e.target.closest("[data-copy]");
     if (!btn) return;
-    navigator.clipboard.writeText(btn.dataset.copy);
+    navigator.clipboard.writeText(btn.dataset.copy).then(function () {{
+      btn.classList.add("is-copied");
+      window.setTimeout(function () {{ btn.classList.remove("is-copied"); }}, 1600);
+    }});
   }});
 
-  var tip = document.getElementById("kit-tip");
+  var tip = document.getElementById("scripts-tip");
   var tipTimer = 0;
   var tipOwner = null;
   function hideTip() {{
@@ -468,7 +402,7 @@ def render(data: dict) -> str:
     tipOwner = el;
     tipTimer = window.setTimeout(function () {{
       tip.hidden = false;
-      el.setAttribute("aria-describedby", "kit-tip");
+      el.setAttribute("aria-describedby", "scripts-tip");
       placeTip(el, clientX);
     }}, 150);
   }}
@@ -508,9 +442,9 @@ def section(title: str, note: str, rows: list[dict], name_label: str,
         f'<td class="wrap"><span class="meta-tag">{esc(r["source"])}</span></td>'
         f'<td class="wrap">{esc(r["runs"])}</td></tr>'
         for r in rows)
-    wide_attr = " data-kit-wide" if wide else ""
+    wide_attr = " data-scripts-wide" if wide else ""
     return f"""
-<section data-kit-section{wide_attr}>
+<section data-scripts-section{wide_attr}>
   <div class="section-heading">
     <h2>{esc(title)}</h2>
     <span class="section-note">{esc(note)}</span>

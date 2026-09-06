@@ -1,8 +1,9 @@
 # Statusline
 
-Clusterfork installs the Claude Code and Cursor Agent status lines currently in
-use on this machine: a colored footer showing model, effort/params, active
-account, context usage, and plan/rate-limit usage.
+Clusterfork documents and installs the terminal status lines currently in use on
+this machine across Claude Code, Cursor Agent, and Codex CLI: colored footers
+showing model, effort/params, active account, context usage, and plan/rate-limit
+usage.
 
 ## What gets installed
 
@@ -68,3 +69,26 @@ Account is the suffix of the resolved `~/.config/cursor/auth.json` symlink
 (e.g. `ida`), with a fallback to the conky usage cache label.
 The installed `cursor-usage-fetch.py` keeps `~/.cursor/.usage-cache.json` fresh
 (conky cache harvest or Cursor dashboard API), throttled by TTL.
+
+## Codex line
+
+Codex CLI implements its status line natively in its Rust TUI via `[tui].status_line`
+in `~/.codex/config.toml`:
+
+```toml
+[tui]
+status_line = ["model-with-reasoning", "context-used", "task-progress", "five-hour-limit"]
+status_line_use_colors = true
+```
+
+Unlike Claude and Cursor — which spawn child-process scripts piped with JSON
+payloads on stdin — Codex renders its status line directly in the TUI without
+external script hooks.
+
+Renders: `model-with-reasoning · context-used · task-progress · five-hour-limit`.
+
+- **model-with-reasoning**: active model and reasoning effort (e.g. `gpt-6-astra (max)`)
+- **context-used**: active context percentage or token budget consumption (e.g. `12% context`)
+- **task-progress**: multi-turn or task step counter
+- **five-hour-limit**: rolling 5-hour rate limit percentage
+
