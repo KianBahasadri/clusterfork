@@ -7,7 +7,8 @@
 #      notify/, scripts/rotate_auth.py, and scripts/codeview/ from repo
 #   3. Overwrites ~/.tmux.conf from repo-local tmux.conf
 #   4. Overwrites agent settings from repo-local agents/ (Grok keeps existing
-#      theme from ~/.grok/config.toml if set; Antigravity hooks.json is included)
+#      theme from ~/.grok/config.toml if set; Antigravity preserves existing
+#      trustedWorkspaces; Antigravity hooks.json is included)
 #   5. Overwrites ~/.qwen/skills/, ~/.grok/skills/, ~/.claude/skills/, and
 #      ~/.codex/skills/ (user skills only; preserves ~/.codex/skills/.system)
 #      from repo-local skills/. Also installs normalized skills for Command
@@ -453,8 +454,39 @@ step "qwen code" "$QWEN_CONFIG_DEST"
 
 [[ -f "$ANTIGRAVITY_CONFIG_SRC" ]] || fail "missing $(tildify "$ANTIGRAVITY_CONFIG_SRC")"
 mkdir -p "$(dirname "$ANTIGRAVITY_CONFIG_DEST")"
-cp "$ANTIGRAVITY_CONFIG_SRC" "$ANTIGRAVITY_CONFIG_DEST"
-step "antigravity" "$ANTIGRAVITY_CONFIG_DEST"
+python3 - "$ANTIGRAVITY_CONFIG_SRC" "$ANTIGRAVITY_CONFIG_DEST" <<'PY'
+import json, sys
+from pathlib import Path
+
+src, dest = map(Path, sys.argv[1:])
+wanted = json.loads(src.read_text(encoding="utf-8"))
+if dest.is_file():
+    try:
+        current = json.loads(dest.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"antigravity config: {dest} is not valid JSON: {exc}")
+    if not isinstance(current, dict):
+        raise SystemExit(f"antigravity config: {dest} must be a JSON object")
+else:
+    current = {}
+
+merged = {**current, **wanted}
+
+wanted_workspaces = wanted.get("trustedWorkspaces", [])
+existing_workspaces = current.get("trustedWorkspaces", [])
+if isinstance(existing_workspaces, list) and isinstance(wanted_workspaces, list):
+    merged_workspaces = list(wanted_workspaces)
+    for ws in existing_workspaces:
+        if isinstance(ws, str) and ws not in merged_workspaces:
+            merged_workspaces.append(ws)
+    merged["trustedWorkspaces"] = merged_workspaces
+elif isinstance(wanted_workspaces, list):
+    merged["trustedWorkspaces"] = list(wanted_workspaces)
+
+if merged != current or not dest.is_file():
+    dest.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+PY
+step "antigravity" "$ANTIGRAVITY_CONFIG_DEST" "preserves trustedWorkspaces"
 
 [[ -f "$ANTIGRAVITY_HOOKS_SRC" ]] || fail "missing $(tildify "$ANTIGRAVITY_HOOKS_SRC")"
 mkdir -p "$(dirname "$ANTIGRAVITY_HOOKS_DEST")"

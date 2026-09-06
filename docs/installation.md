@@ -53,6 +53,7 @@ The installer also:
 - Overwrites `~/.commandcode/mcp.json` from `agents/command-code-mcp.json`, expanding `${ENV}` placeholders from `.env` (full replace)
 - Overwrites `~/.gemini/config/mcp_config.json` from `agents/antigravity-mcp.json`, expanding `${ENV}` placeholders from `.env` (full replace)
 - Ensures `telemetry: false` in `~/.commandcode/config.json` from `agents/command-code.json` (key only; other keys preserved)
+- Merges settings into `~/.gemini/antigravity-cli/settings.json` from `agents/antigravity.json`, preserving existing `trustedWorkspaces` and runtime keys (such as `model`)
 - Best-effort repair of Codex/Cursor/OpenCode shared auth links under `~/.local/share/clusterfork-auth/`. See [Auth Rotation](auth-rotation.md)
 
 ## Installer output
@@ -66,4 +67,4 @@ Each `✓` step line prints the label and destination; a parenthesized detail na
 
 ## Re-running
 
-The installer is idempotent — running it again **overwrites** every mapped destination from the repo (full replace, not merge). It will not add a duplicate `source` line to `~/.bashrc`. Exceptions: `~/.grok/config.toml` is replaced from the repo, but an existing `theme` value is kept; `~/.codex/config.toml` has repo top-level keys, `mcp_servers`, and hook events updated (retired `notify` stripped, Stop notifier `trusted_hash` stamped) while preserving unrelated Codex-managed runtime settings; `~/.commandcode/config.json` and `~/.claude.json`/`~/.cursor/cli-config.json` have only specific keys merged. See [Conventions](conventions.md) for the source-of-truth rule.
+The installer is idempotent — running it again **overwrites** every mapped destination from the repo (full replace, not merge). It will not add a duplicate `source` line to `~/.bashrc`. Exceptions: `~/.grok/config.toml` is replaced from the repo, but an existing `theme` value is kept; `~/.codex/config.toml` has repo top-level keys, `mcp_servers`, and hook events updated (retired `notify` stripped, Stop notifier `trusted_hash` stamped) while preserving unrelated Codex-managed runtime settings; `~/.gemini/antigravity-cli/settings.json` merges repo settings while preserving existing `trustedWorkspaces` and runtime keys; `~/.commandcode/config.json` and `~/.claude.json`/`~/.cursor/cli-config.json` have only specific keys merged. See [Conventions](conventions.md) for the source-of-truth rule.
