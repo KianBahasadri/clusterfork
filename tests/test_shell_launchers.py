@@ -56,7 +56,7 @@ class SourcingTests(unittest.TestCase):
         script = (
             "source bash_profile.sh; "
             "type _cf_tmux >/dev/null; "
-            'for fn in cl cc ca oc occ cmd ag gk; do type "$fn" >/dev/null; done; '
+            'for fn in cl cc ca oc occ cmd ag gk grok; do type "$fn" >/dev/null; done; '
             'echo ok'
         )
         proc = run_bash(script)
@@ -170,18 +170,19 @@ class MockTmuxTests(unittest.TestCase):
             "MOCK_TMUX_LOG": str(self.log),
         }
 
-    def _script_run(self, inner: str, env=None):
+    def _script_run(self, inner: str, env=None, input=None):
         """Run inner bash via script -q for a pty so [[ -t 0 ]] is true."""
         if shutil.which("script") is None:
             self.skipTest("script(1) not available")
         use_env = env or self.base_env
         use_env = {**use_env, "TERM": "xterm"}
-        cmd = ["script", "-q", "-c", f"bash -c {inner!r}", "/dev/null"]
+        cmd = ["script", "-q", "-e", "-c", f"bash -c {inner!r}", "/dev/null"]
         if inner.startswith("'") and inner.endswith("'"):
-            cmd = ["script", "-q", "-c", f"bash -c {inner}", "/dev/null"]
+            cmd = ["script", "-q", "-e", "-c", f"bash -c {inner}", "/dev/null"]
         proc = subprocess.run(
             cmd,
             cwd=str(REPO_ROOT),
+            input=input,
             capture_output=True,
             text=True,
             env=use_env,
@@ -289,6 +290,59 @@ class MockTmuxTests(unittest.TestCase):
         self.assertIn("-s my-project", log)
         self.assertIn("grok --help", log)
         self.assertNotIn("MOCK_TMUX_ERROR", log)
+
+    def test_gk_does_not_prompt(self):
+        self.log.unlink(missing_ok=True)
+        proc = self._script_run("'source bash_profile.sh; PWD=/tmp/my.project gk'")
+        self.assertEqual(proc.returncode, 0)
+        self.assertNotIn("did you mean to launch grok?", proc.stdout)
+        log = self._log()
+        self.assertIn("TMUX_CALL:", log)
+        self.assertIn("-s my-project", log)
+        self.assertIn("grok", log)
+
+    def test_grok_interactive_confirm_yes(self):
+        proc = self._script_run(
+            "'source bash_profile.sh; grok hello'",
+            input="y\n",
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("did you mean to launch grok? y/n", proc.stdout)
+        self.assertIn("FAKE:grok hello", proc.stdout)
+
+    def test_grok_interactive_confirm_no(self):
+        proc = self._script_run(
+            "'source bash_profile.sh; grok hello'",
+            input="n\n",
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("did you mean to launch grok? y/n", proc.stdout)
+        self.assertNotIn("FAKE:grok", proc.stdout)
+
+    def test_grok_headless_flags_bypass(self):
+        for flag in ("-p hi", "--output-format json", "--prompt-file prompt.txt", "agent prompt"):
+            with self.subTest(flag=flag):
+                proc = self._script_run(f"'source bash_profile.sh; grok {flag}'")
+                self.assertEqual(proc.returncode, 0)
+                self.assertNotIn("did you mean to launch grok?", proc.stdout)
+                self.assertIn(f"FAKE:grok {flag}", proc.stdout)
+
+    def test_grok_utility_commands_bypass(self):
+        for flag in ("--version", "--help", "models", "doctor"):
+            with self.subTest(flag=flag):
+                proc = self._script_run(f"'source bash_profile.sh; grok {flag}'")
+                self.assertEqual(proc.returncode, 0)
+                self.assertNotIn("did you mean to launch grok?", proc.stdout)
+                self.assertIn(f"FAKE:grok {flag}", proc.stdout)
+
+    def test_grok_piped_stdin_bypass(self):
+        proc = run_bash(
+            "source bash_profile.sh; echo input | grok hello",
+            env=self.base_env,
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertNotIn("did you mean to launch grok?", proc.stdout)
+        self.assertIn("FAKE:grok hello", proc.stdout)
 
     def test_cmd_default_resume_via_mock(self):
         self.log.unlink(missing_ok=True)

@@ -78,7 +78,16 @@ The Claude statusline detects `occ` from `ANTHROPIC_BASE_URL` and swaps in the O
 
 ## grok.sh
 
-`gk` launches `grok` via `_cf_tmux` — no flags; `agents/grok.toml` ships `permission_mode = "always-approve"` so the CLI already auto-approves. `rotate-grok` switches between saved Grok accounts via symlinks.
+`gk` launches `grok` via `_cf_tmux` directly without prompting — no flags; `agents/grok.toml` ships `permission_mode = "always-approve"` so the CLI already auto-approves. `rotate-grok` switches between saved Grok accounts via symlinks.
+
+Interactive launches of `grok` prompt the user before starting: `did you mean to launch grok? y/n`. If `n`, the command aborts and exits without starting Grok. When confirmed with `y`, `grok` runs the resolved CLI directly. `gk` bypasses this prompt.
+
+Headless and non-interactive invocations bypass the confirmation prompt so external applications and tools (such as `rotate-grok`, automated pipelines, background workers, or scripts) run without interruption. Invocations bypass the prompt when:
+- Stdin or stdout is not a TTY (pipes, redirections, or non-terminal subprocesses).
+- Headless flags are passed (`-p`/`--single`, `--output-format`, `--prompt-file`, `--prompt-json`).
+- Headless subcommands are passed (`agent`).
+- Utility or informational subcommands and flags are invoked (`--version`, `-v`, `--help`, `-h`, `models`, `doctor`, `sessions`, etc.).
+- Headless environment flags are present (`GROK_HEADLESS=1`, `CI=1`, or `NONINTERACTIVE=1`).
 
 ## chrome.sh
 
