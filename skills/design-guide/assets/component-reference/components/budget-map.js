@@ -15,6 +15,30 @@
   function value(number, unit) {
     return number === null ? "Unavailable" : new Intl.NumberFormat("en", { maximumSignificantDigits: 21 }).format(number) + (unit ? " " + unit : "");
   }
+  function estimate(number, unit) {
+    return number === null ? "—" : new Intl.NumberFormat("en", { maximumFractionDigits: 2 }).format(number) + (unit ? " " + unit : "");
+  }
+  function sortableTable(id, caption, names, numeric) {
+    var table = element("table", "data-table");
+    table.id = id;
+    table.appendChild(element("caption", "sr-only", caption));
+    var head = element("thead"), row = element("tr");
+    names.forEach(function (name, index) {
+      var cell = element("th", numeric.includes(index) ? "num" : "");
+      cell.scope = "col";
+      var sort = button(name + " ", "sort-th-btn");
+      sort.dataset.sort = numeric.includes(index) ? "number" : "text";
+      var indicator = element("span", "sort-indicator");
+      indicator.setAttribute("aria-hidden", "true");
+      indicator.innerHTML = '<svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span>';
+      sort.appendChild(indicator);
+      cell.appendChild(sort);
+      row.appendChild(cell);
+    });
+    head.appendChild(row);
+    table.append(head, element("tbody"));
+    return table;
+  }
 
   reference.createBudgetMap = function (root, data, options) {
     options = options || {};
@@ -47,6 +71,7 @@
     root.replaceChildren(shell);
 
     var dialog, picker, details, table, tbody, tableRegion, dataToggle, feedback, sorter;
+    var forecastTable, forecastRegion, forecastSorter, methodNotes;
     function selectedItem() { return model.items.find(function (item) { return item.id === activeId; }); }
     function detailText(item) {
       return item.label + ". " + (item.stale ? "Stale. " : "") + item.status + ". Current " + value(item.current, item.unit)
@@ -104,23 +129,107 @@
 
     function renderDetails() {
       var item = selectedItem();
+      var focused = details.contains(document.activeElement) ? document.activeElement : null;
       details.replaceChildren();
       picker.querySelectorAll("button").forEach(function (control) { control.setAttribute("aria-pressed", String(control.dataset.budgetId === activeId)); });
-      if (!item) { details.appendChild(element("p", "", "No budgets")); return; }
+      if (!item) {
+        details.appendChild(element("p", "", "No budgets"));
+        if (focused) dialog.querySelector("button").focus({ preventScroll: true });
+        return;
+      }
+      var analysis = reference.budgetMapModel.analyze(model, item);
       var heading = element("h3", "budget-map-detail-title", item.label);
       var status = element("span", "budget-map-detail-status", (item.stale ? "Stale · " : "") + item.status);
       status.dataset.severity = item.severity;
-      var list = element("dl", "budget-map-values");
-      [["Limit", value(item.limit, item.unit)], ["Current · " + format.date(model.now), value(item.current, item.unit)],
-        ["Forecast · " + format.date(model.end), value(item.forecast, item.unit)],
-        ["Forecast / limit", format.percent(item.forecastPercent)],
-        ["Forecast headroom", item.forecast === null ? "Unavailable" : value(item.limit - item.forecast, item.unit)]].forEach(function (pair, index) {
-        var row = element("div");
-        if (index > 0) row.dataset.provenance = index === 1 ? "observed" : "forecast";
-        row.append(element("dt", "", pair[0]), element("dd", "", pair[1]));
-        list.appendChild(row);
+      var context = element("p", "budget-map-context budget-map-period", format.date(model.start) + "–" + format.date(model.end)
+        + " UTC · " + estimate(analysis.elapsedDays, "d elapsed") + " · " + estimate(analysis.remainingDays, "d remaining"));
+      var columns = element("div", "budget-map-summary");
+      function group(title, rows) {
+        var section = element("section", "budget-map-summary-group");
+        section.appendChild(element("h4", "budget-map-subheading", title));
+        var list = element("dl", "budget-map-values");
+        rows.forEach(function (pair) {
+          var row = element("div"), label = element("dt", "", pair[0]);
+          if (pair[2] && pair[1] !== "—" && pair[1] !== "Unavailable") row.dataset.provenance = pair[2];
+          if (pair[3]) label.appendChild(element("small", "budget-map-calculation-note", pair[3]));
+          row.append(label, element("dd", "", pair[1]));
+          list.appendChild(row);
+        });
+        section.appendChild(list);
+        columns.appendChild(section);
+      }
+      function rateRow(label, rate) {
+        return [label, estimate(rate.value, item.unit + "/day"), rate.interpolated ? "forecast" : "observed",
+          rate.reason || (rate.interpolated ? "Interpolated window start" : "")];
+      }
+      group("Budget position", [
+        ["Limit", value(item.limit, item.unit)],
+        ["Current · " + format.date(model.now), value(item.current, item.unit), "observed"],
+        ["Current / limit", format.percent(item.currentPercent), "observed"],
+        ["Remaining budget", estimate(analysis.remaining, item.unit), "observed"],
+        ["Sustainable rate", estimate(analysis.sustainable, item.unit + "/day"), "forecast"]
+      ]);
+      group("Usage rates", [
+        rateRow("Period average · " + estimate(analysis.elapsedDays, "d"), analysis.average),
+        rateRow("Last 7 days", analysis.seven), rateRow("Last 3 days", analysis.three),
+        ["3d vs period average", (analysis.change > 0 ? "+" : "") + format.percent(analysis.change), "forecast"],
+        ["Required reduction · 3d", format.percent(analysis.reduction), "forecast"]
+      ]);
+      details.append(heading, status, context, columns);
+      renderForecasts(item, analysis);
+      if (!methodNotes) {
+        methodNotes = element("details", "budget-map-method-notes");
+        methodNotes.appendChild(element("summary", "", "Calculation notes"));
+        methodNotes.appendChild(element("p", "", "Window rate = (current usage − usage at window start) ÷ elapsed days. Period average uses the observed period-start value. Each calculated scenario = current usage + window rate × remaining days. Days are exact 24-hour UTC intervals; amounts and rates display at most 2 decimals, percentages 1 decimal, and estimated dates to the minute."));
+        methodNotes.appendChild(element("p", "", "A missing window boundary is linearly interpolated only between adjacent, available observations and is labelled above. Incomplete windows, explicit gaps, or decreasing usage have no rate. Required reduction compares the 3-day rate with max(0, remaining budget) ÷ remaining days."));
+        methodNotes.appendChild(element("p", "", "Limit dates assume a constant rate from the snapshot. The supplied forecast's daily rate and limit date are implied by its straight-line path. These scenarios do not model seasonality or provide confidence intervals. All calculations use the snapshot, including when marked stale; CSV contains the original supplied data."));
+      }
+      details.appendChild(methodNotes);
+      if (focused && details.contains(focused)) focused.focus({ preventScroll: true });
+    }
+    function renderForecasts(item, analysis) {
+      var heading = element("h4", "budget-map-subheading budget-map-forecast-heading", "Forecast comparison");
+      heading.appendChild(element("span", "budget-map-context", (item.unit ? "Amounts in " + item.unit + " · " : "") + "Period end " + format.date(model.end) + " UTC"));
+      if (!forecastRegion) {
+        forecastRegion = element("div", "table-container budget-map-comparison");
+        forecastRegion.tabIndex = 0;
+        forecastRegion.setAttribute("role", "region");
+      }
+      forecastRegion.setAttribute("aria-label", "Forecast comparison for " + item.label + (item.unit ? " in " + item.unit : ""));
+      if (!forecastTable) forecastTable = sortableTable(prefix + "-forecasts", "Forecast methods and their assumptions", ["Method", "Rate / day", "Period end", "Limit used", "Headroom", "Limit reached"], [1, 2, 3, 4, 5]);
+      forecastTable.querySelector("caption").textContent = item.label + " forecast comparison" + (item.unit ? "; amounts in " + item.unit + ", rates in " + item.unit + " per day" : "") + ". Limit dates use UTC.";
+      var body = forecastTable.querySelector("tbody");
+      body.replaceChildren();
+      analysis.forecasts.forEach(function (forecast) {
+        var row = element("tr");
+        row.dataset.method = forecast.id;
+        var method = element("td", "budget-map-method", forecast.label);
+        method.dataset.sortValue = forecast.label;
+        var rate = analysis[forecast.id];
+        var basis = rate && !rate.reason && !rate.interpolated ? format.date(rate.since) + "–" + format.date(model.now) + " UTC" : forecast.basis;
+        method.appendChild(element("small", "budget-map-calculation-note", basis));
+        row.appendChild(method);
+        [forecast.rate, forecast.total, forecast.percent, forecast.headroom].forEach(function (number, index) {
+          var cell = element("td", "num", index === 2 ? format.percent(number) : estimate(number, ""));
+          cell.dataset.sortValue = number === null ? "" : String(number);
+          if (number !== null) cell.dataset.provenance = "forecast";
+          row.appendChild(cell);
+        });
+        var limit = element("td", "num budget-map-limit-date");
+        limit.dataset.sortValue = forecast.limitAt === null ? "" : String(forecast.limitAt);
+        if (forecast.limitState === "projected") {
+          var at = element("time", "", format.date(forecast.limitAt));
+          at.dateTime = new Date(forecast.limitAt).toISOString();
+          limit.append(at, element("small", "budget-map-calculation-note", new Date(forecast.limitAt).toISOString().slice(11, 16) + " UTC"));
+          limit.dataset.provenance = "forecast";
+        } else limit.textContent = { reached: "Already reached", "not-reached": "Not reached", "after-period": "After period", unavailable: "—" }[forecast.limitState];
+        row.appendChild(limit);
+        body.appendChild(row);
       });
-      details.append(heading, status, list);
+      forecastRegion.appendChild(forecastTable);
+      details.append(heading, forecastRegion);
+      if (forecastSorter) forecastSorter.refresh();
+      else forecastSorter = reference.makeTableSortable(forecastTable);
     }
     function renderRecords() {
       tbody.replaceChildren();
@@ -186,26 +295,8 @@
       tableRegion.setAttribute("role", "region");
       tableRegion.setAttribute("aria-label", "Exact budget data");
       tableRegion.hidden = true;
-      table = element("table", "data-table");
-      table.id = prefix + "-table";
-      table.appendChild(element("caption", "sr-only", "All budget observations, current values, and period-end forecasts. Missing values are unavailable, not zero."));
-      var head = element("thead"), headerRow = element("tr");
-      reference.budgetMapModel.columns.forEach(function (name, index) {
-        var numeric = [3, 5, 6].includes(index);
-        var cell = element("th", numeric ? "num" : "");
-        cell.scope = "col";
-        var sort = button(name + " ", "sort-th-btn");
-        sort.dataset.sort = numeric ? "number" : "text";
-        var indicator = element("span", "sort-indicator");
-        indicator.setAttribute("aria-hidden", "true");
-        indicator.innerHTML = '<svg class="icon"><use href="#lucide-arrow-up"></use></svg><span class="sort-priority"></span>';
-        sort.appendChild(indicator);
-        cell.appendChild(sort);
-        headerRow.appendChild(cell);
-      });
-      head.appendChild(headerRow);
-      tbody = element("tbody");
-      table.append(head, tbody);
+      table = sortableTable(prefix + "-table", "All budget observations, current values, and period-end forecasts. Missing values are unavailable, not zero.", reference.budgetMapModel.columns, [3, 5, 6]);
+      tbody = table.querySelector("tbody");
       tableRegion.appendChild(table);
       dataToggle = button("Show exact data", "btn btn-secondary");
       dataToggle.setAttribute("aria-expanded", "false");
@@ -239,7 +330,7 @@
       });
       dialog.addEventListener("keydown", function (event) {
         if (event.key !== "Tab") return;
-        var controls = Array.from(dialog.querySelectorAll("button, [tabindex='0']")).filter(function (control) { return !control.disabled && control.getClientRects().length; });
+        var controls = Array.from(dialog.querySelectorAll("button, summary, [tabindex='0']")).filter(function (control) { return !control.disabled && control.getClientRects().length; });
         var first = controls[0], last = controls[controls.length - 1];
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }

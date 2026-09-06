@@ -71,6 +71,68 @@
     return rows;
   }
 
+  var day = 86400000;
+  function finite(value) { return Number.isFinite(value) ? value : null; }
+  function windowRate(model, item, since) {
+    var result = { value: null, since: since, interpolated: false, reason: "" };
+    if (since < model.start || since >= model.now) { result.reason = "Window not complete"; return result; }
+    if (item.current === null) { result.reason = "Current usage unavailable"; return result; }
+    var samples = item.history.concat([{ at: model.now, value: item.current }]);
+    var index = samples.findIndex(function (sample) { return sample.at >= since; });
+    if (samples[index].at !== since) index -= 1;
+    if (index < 0) { result.reason = "Missing starting observation"; return result; }
+    var window = samples.slice(index);
+    if (window.some(function (sample) { return sample.value === null; })) { result.reason = "History contains a gap"; return result; }
+    if (window.some(function (sample, i) { return i && sample.value < window[i - 1].value; })) {
+      result.reason = "Usage decreased in window"; return result;
+    }
+    var baseline = window[0].value;
+    if (window[0].at !== since) {
+      result.interpolated = true;
+      baseline += (window[1].value - baseline) * ((since - window[0].at) / (window[1].at - window[0].at));
+    }
+    var rate = (item.current - baseline) / ((model.now - since) / day);
+    if (Number.isFinite(rate)) result.value = rate;
+    else result.reason = "Rate exceeds numeric range";
+    return result;
+  }
+
+  // Analysis is separate from the supplied forecast used by the map and raw export.
+  function analyze(model, item) {
+    var elapsedDays = (model.now - model.start) / day, remainingDays = (model.end - model.now) / day;
+    var remaining = item.current === null ? null : item.limit - item.current;
+    var sustainable = remaining === null ? null : finite(Math.max(0, remaining) / remainingDays);
+    var average = windowRate(model, item, model.start);
+    var seven = windowRate(model, item, model.now - 7 * day);
+    var three = windowRate(model, item, model.now - 3 * day);
+    function scenario(id, label, rate, total, basis) {
+      if (!Number.isFinite(total)) total = null;
+      if (!Number.isFinite(rate)) rate = null;
+      var limitAt = null, limitState = "unavailable";
+      if (item.current !== null && item.current >= item.limit) { limitAt = model.now; limitState = "reached"; }
+      else if (item.current !== null && total !== null && rate !== null) {
+        if (rate <= 0) limitState = "not-reached";
+        else if (total < item.limit) limitState = "after-period";
+        else { limitAt = Math.min(model.end, model.now + (remaining / rate) * day); limitState = "projected"; }
+      }
+      return { id: id, label: label, rate: rate, total: total, basis: basis,
+        percent: total === null ? null : finite(total / item.limit * 100),
+        headroom: total === null ? null : item.limit - total, limitAt: limitAt, limitState: limitState };
+    }
+    var suppliedRate = item.current === null || item.forecast === null ? null : (item.forecast - item.current) / remainingDays;
+    var forecasts = [scenario("supplied", "Supplied forecast", suppliedRate, item.forecast, "Plotted on map · implied rate")];
+    [["average", "Period average", average], ["seven", "7-day average", seven], ["three", "3-day average", three]].forEach(function (entry) {
+      var rate = entry[2];
+      var total = rate.value === null ? null : item.current + rate.value * remainingDays;
+      forecasts.push(scenario(entry[0], entry[1], rate.value, total,
+        rate.reason || (rate.interpolated ? "Interpolated window start" : "Observed window rate")));
+    });
+    return { elapsedDays: elapsedDays, remainingDays: remainingDays, remaining: remaining, sustainable: sustainable,
+      average: average, seven: seven, three: three, forecasts: forecasts,
+      change: average.value > 0 && three.value !== null ? finite((three.value / average.value - 1) * 100) : null,
+      reduction: sustainable === null || three.value === null ? null : three.value === 0 ? 0 : Math.max(0, 1 - sustainable / three.value) * 100 };
+  }
+
   var columns = ["Item", "Time (UTC)", "Kind", "Value", "Unit", "Limit", "Limit used (%)", "Freshness"];
   function csv(model) {
     return [columns].concat(records(model)).map(function (row) {
@@ -80,5 +142,5 @@
     }).join("\r\n") + "\r\n";
   }
 
-  reference.budgetMapModel = { prepare: prepare, records: records, columns: columns, csv: csv };
+  reference.budgetMapModel = { prepare: prepare, analyze: analyze, records: records, columns: columns, csv: csv };
 }(window.ComponentReference = window.ComponentReference || {}));
