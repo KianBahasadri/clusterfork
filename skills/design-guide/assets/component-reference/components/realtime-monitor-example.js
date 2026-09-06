@@ -1,6 +1,9 @@
 (function (reference) {
-  var root = document.getElementById("realtimeMonitorExample");
-  if (!root) return;
+  var mounts = [
+    { id: "realtimeMonitorExample", presentation: "sparkline" },
+    { id: "realtimeMonitorHeatstripExample", presentation: "heatstrip" },
+    { id: "realtimeMonitorArcExample", presentation: "arc" }
+  ];
   var channels = [
     { id: "cpu", kind: "metric", label: "CPU", icon: "cpu", unit: "%", max: 100, warning: 80, critical: 95 },
     { id: "memory", kind: "metric", label: "Memory", icon: "memory-stick", unit: "GiB", max: 32, decimals: 1, warning: 25.6, critical: 30.4 },
@@ -10,7 +13,13 @@
     { id: "workers", kind: "status", label: "Workers" },
     { id: "database", kind: "status", label: "Database" }
   ];
-  var monitor = reference.createRealtimeMonitor(root, channels, { label: "node-01", simulated: true });
+  var monitors = mounts.map(function (mount) {
+    var root = document.getElementById(mount.id);
+    return root ? reference.createRealtimeMonitor(root, channels, {
+      label: "node-01", simulated: true, presentation: mount.presentation
+    }) : null;
+  }).filter(Boolean);
+  if (!monitors.length) return;
   var origin = Date.now();
   function sample(timestamp) {
     var second = (timestamp - origin) / 1000;
@@ -25,9 +34,12 @@
       database: phase > 26 && phase < 30 ? null : "good"
     } };
   }
-  for (var offset = -60; offset <= 0; offset++) monitor.push(sample(origin + offset * 1000));
+  function pushAll(snapshot) {
+    monitors.forEach(function (monitor) { monitor.push(snapshot); });
+  }
+  for (var offset = -60; offset <= 0; offset++) pushAll(sample(origin + offset * 1000));
   setInterval(function () {
     // A suspended tab leaves a real gap; the demo never fabricates missed samples.
-    if (!document.hidden) monitor.push(sample(Date.now()));
+    if (!document.hidden) pushAll(sample(Date.now()));
   }, 1000);
 }(window.ComponentReference = window.ComponentReference || {}));

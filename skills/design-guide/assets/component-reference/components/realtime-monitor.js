@@ -13,23 +13,29 @@
     if (value === null || value === undefined) return "Unavailable";
     return channel.kind === "status" ? stateLabels[value] : value.toFixed(channel.decimals) + " " + channel.unit;
   }
-  function severity(channel, value) {
+  function severity(channel, value, presentation) {
     if (value === null) return { label: "Unavailable", tone: "nominal" };
     if (channel.kind === "status") return { label: stateLabels[value], tone: value };
-    if (Number.isFinite(channel.critical) && value >= channel.critical) return { label: "Critical", tone: "danger" };
-    if (Number.isFinite(channel.warning) && value >= channel.warning) return { label: "Elevated", tone: "caution" };
-    return { label: value > channel.max ? "Above scale" : "Nominal", tone: "nominal" };
+    var zone = reference.realtimeMonitorZone(channel, value);
+    var label = zone === "danger" ? "Critical" : zone === "caution" ? "Elevated" : value > channel.max ? "Above scale" : "Nominal";
+    var colored = presentation === "arc" || presentation === "heatstrip";
+    var tone = zone === "unknown" || zone === "nominal" || (zone === "good" && !colored) ? "nominal" : zone;
+    return { label: label, tone: tone };
   }
 
   reference.createRealtimeMonitor = function (root, channels, options) {
     if (instances.has(root)) return instances.get(root);
     options = options || {};
+    var presentation = options.presentation || "sparkline";
+    if (!["sparkline", "heatstrip", "arc"].includes(presentation)) throw new Error("Invalid monitoring presentation");
     var model = reference.createRealtimeMonitorModel(channels, options);
     var interactive = options.interactive !== false, selection = null, destroyed = false, frame = null;
     var monitor = element("div", "realtime-monitor");
     monitor.dataset.provenance = options.simulated ? "simulated" : "observed";
+    monitor.dataset.presentation = presentation;
     monitor.setAttribute("role", "group");
-    monitor.setAttribute("aria-label", (options.label || "System monitor") + (options.simulated ? ", simulated telemetry" : ""));
+    var presentationName = { sparkline: "", heatstrip: ", heat strip", arc: ", arc gauge" };
+    monitor.setAttribute("aria-label", (options.label || "System monitor") + presentationName[presentation] + (options.simulated ? ", simulated telemetry" : ""));
     var resources = element("div", "monitor-resources"), services = element("div", "monitor-services");
     var tooltip = element("div", "tooltip-bubble monitor-tooltip");
     do { tooltip.id = "monitor-tooltip-" + (++sequence); } while (document.getElementById(tooltip.id));
@@ -63,7 +69,19 @@
       svg.setAttribute("aria-hidden", "true");
       svg.setAttribute("focusable", "false");
       plot.appendChild(svg);
-      if (metric) {
+      var arcSvg = null;
+      if (metric && presentation === "arc") {
+        var face = element("div", "monitor-arc-face");
+        arcSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        arcSvg.setAttribute("class", "monitor-arc-scale");
+        arcSvg.setAttribute("aria-hidden", "true");
+        arcSvg.setAttribute("focusable", "false");
+        var readout = element("div", "monitor-arc-readout");
+        readout.append(label, value);
+        face.append(arcSvg, readout);
+        row.append(face, plot);
+        resources.appendChild(row);
+      } else if (metric) {
         row.append(label, value, plot);
         resources.appendChild(row);
       } else {
@@ -103,7 +121,7 @@
           announceInspection();
         });
       }
-      return { channel: channel, plot: plot, svg: svg, number: number, unit: unit, value: value };
+      return { channel: channel, plot: plot, svg: svg, arcSvg: arcSvg, number: number, unit: unit, value: value };
     });
     resources.hidden = !resources.children.length;
     services.hidden = !services.children.length;
@@ -148,7 +166,7 @@
       monitor.dataset.paused = String(view.paused);
       rows.forEach(function (row) {
         var channel = row.channel, value = view.latest ? view.latest.values[channel.id] : null;
-        var status = severity(channel, value);
+        var status = severity(channel, value, presentation);
         var historic = view.paused || view.feed !== "Live";
         row.number.textContent = value === null ? "—" : channel.kind === "metric" ? value.toFixed(channel.decimals) : "";
         row.unit.hidden = value === null;
@@ -158,14 +176,15 @@
         if (interactive) row.plot.setAttribute("aria-pressed", String(view.paused));
         if (selection && selection.channel === channel) row.plot.setAttribute("aria-describedby", tooltip.id);
         else row.plot.removeAttribute("aria-describedby");
-        reference.drawRealtimeMonitorPlot(row.svg, channel, view, inspected);
+        if (row.arcSvg) reference.drawRealtimeMonitorArc(row.arcSvg, channel, value);
+        reference.drawRealtimeMonitorPlot(row.svg, channel, view, inspected, presentation);
       });
       tooltip.hidden = !selection;
       if (selection) {
         var channel = selection.channel, sample = inspected || view.latest;
         var value = sample ? sample.values[channel.id] : null;
         var lines = [channel.label + ": " + format(channel, value), (sample ? timeLabel(sample.timestamp) : "No samples received") + (options.simulated ? " · Simulated" : "")];
-        if (channel.kind === "metric") lines.push("0–" + channel.max + " " + channel.unit + " · " + severity(channel, value).label + (value > channel.max ? " · off scale" : "") + (Number.isFinite(channel.warning) ? " · Warning at " + channel.warning + " " + channel.unit : ""));
+        if (channel.kind === "metric") lines.push("0–" + channel.max + " " + channel.unit + " · " + severity(channel, value, presentation).label + (value > channel.max ? " · off scale" : "") + (Number.isFinite(channel.warning) ? " · Warning at " + channel.warning + " " + channel.unit : ""));
         lines.push(model.windowMs / 1000 + "s history · " + model.interval / 1000 + "s cadence · " + describeFeed(view));
         if (view.paused) lines.push("Paused · Activate again to resume");
         tooltip.textContent = lines.join("\n");

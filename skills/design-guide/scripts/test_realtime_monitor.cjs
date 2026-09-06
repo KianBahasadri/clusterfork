@@ -5,7 +5,9 @@ const path = require('node:path');
 const vm = require('node:vm');
 const context = vm.createContext({ window: {} });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../assets/component-reference/components/realtime-monitor-model.js'), 'utf8'), context);
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../assets/component-reference/components/realtime-monitor-plot.js'), 'utf8'), context);
 const create = context.window.ComponentReference.createRealtimeMonitorModel;
+const zone = context.window.ComponentReference.realtimeMonitorZone;
 const channels = [
   { id: 'cpu', label: 'CPU', kind: 'metric', unit: '%', max: 100 },
   { id: 'api', label: 'API', kind: 'status' }
@@ -77,6 +79,13 @@ assert.equal(model.view().latest.values.cpu, null, 'Instances must not share sam
 for (const options of [{ interval: 0 }, { windowMs: Infinity }, { maxSamples: 0 }, { staleAfter: 10 }]) {
   assert.throws(() => create(channels, options));
 }
+assert.equal(zone({ kind: 'metric', max: 100, warning: 80, critical: 95 }, 10), 'good');
+assert.equal(zone({ kind: 'metric', max: 100, warning: 80, critical: 95 }, 80), 'caution');
+assert.equal(zone({ kind: 'metric', max: 100, warning: 80, critical: 95 }, 95), 'danger');
+assert.equal(zone({ kind: 'metric', max: 20, decimals: 1 }, 6.5), 'nominal');
+assert.equal(zone({ kind: 'metric', max: 20 }, null), 'unknown');
+assert.equal(zone({ kind: 'status' }, 'good'), 'good');
+assert.equal(zone({ kind: 'status' }, null), 'unknown');
 assert.throws(() => create([channels[0], channels[0]]));
 assert.throws(() => create([{ ...channels[0], decimals: 100 }]));
 assert.throws(() => create([{ ...channels[0], warning: 90, critical: 80 }]));
