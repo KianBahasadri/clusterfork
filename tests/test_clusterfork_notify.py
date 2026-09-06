@@ -549,12 +549,12 @@ class NotifyCommandTests(NotifyFixture):
     def test_volume_sets_mpv_and_survives_all_off(self):
         proc = self.run_cli("volume", "40")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(proc.stdout, "  ✓  volume  40%\n")
+        self.assertEqual(proc.stdout, "  ✓  volume  100% → 40%\n")
         self.assertIn("volume=40\n", (self.cf_dir / "notify-prefs").read_text())
 
         percent = self.run_cli("volume", "25%")
         self.assertEqual(percent.returncode, 0, percent.stderr)
-        self.assertEqual(percent.stdout, "  ✓  volume  25%\n")
+        self.assertEqual(percent.stdout, "  ✓  volume  40% → 25%\n")
 
         hook = self.run_notifier()
         self.assertEqual(hook.returncode, 0)
@@ -625,7 +625,7 @@ class NotifyCommandTests(NotifyFixture):
 
         vol = self.run_cli("volume", "40", extra_env={"CLICOLOR_FORCE": "1"})
         self.assertEqual(vol.returncode, 0, vol.stderr)
-        self.assertEqual(vol.stdout, "  \033[1;32m✓\033[0m  \033[1mvolume\033[0m  40%\n")
+        self.assertEqual(vol.stdout, "  \033[1;32m✓\033[0m  \033[1mvolume\033[0m  100% → 40%\n")
 
     def test_colored_errors(self):
         proc = self.run_cli("particle", extra_env={"CLICOLOR_FORCE": "1"})

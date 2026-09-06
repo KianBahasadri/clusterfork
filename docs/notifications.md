@@ -54,7 +54,8 @@ notify log 100          # choose a history length, up to 200
 
 Targets: `bell`, `phone`, `claude`, `codex`, `command-code`, `grok`,
 `antigravity`. `all` sets every switch at once and requires `on` or `off`.
-`volume` is 0–100 (default 100) and is not changed by `all`. Those five
+`volume` is 0–100 (default 100) and is not changed by `all`; setting it
+reports the previous and new volume (e.g. `100% → 40%`). Those five
 agents are the Stop hooks that call `clusterfork-notify`. Disabling an agent
 skips both the bell and the phone path for that source. Disabling both
 channels leaves the hook silent for every agent. Missing keys default to on,

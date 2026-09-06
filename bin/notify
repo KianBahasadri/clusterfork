@@ -492,7 +492,7 @@ notify_set_all() {
 }
 
 notify_main() {
-  local dir target value
+  local dir target value prev_volume
   dir="$(notify_clusterfork_dir)"
   notify_init_colors
   notify_load_env "$dir"
@@ -538,9 +538,10 @@ notify_main() {
       notify_err "expected 0-100, not $2"
       return 1
     fi
+    prev_volume="$NOTIFY_VOLUME"
     NOTIFY_VOLUME="$value"
     notify_save_prefs "$dir"
-    notify_ok "volume" "${NOTIFY_VOLUME}%"
+    notify_ok "volume" "${prev_volume}% → ${NOTIFY_VOLUME}%"
     return 0
   fi
 
