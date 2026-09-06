@@ -125,7 +125,9 @@ Everything lands in `<repo>/.codeview/`:
   stale sections in place — the generation counter bumps and the browser
   reloads itself via `/api/gen` polling. No restart, no downtime.
 - `modules/` is deliberately not gitignored: dropping a module shows up in
-  `git status`, and committing it is the repo owner's call.
+  `git status`, and committing it is the repo owner's call. This repo tracks
+  `.codeview/modules/` and ships `kit.py`, a tab that inventories launchers,
+  skills, scripts, bins, and configs by scanning the tree on each load.
 
 ## Modules (drop-in tabs)
 

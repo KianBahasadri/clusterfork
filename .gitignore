@@ -4,4 +4,6 @@ auth.json*
 __pycache__/
 *.py[cod]
 .commandcode/taste/
-.codeview/
+.codeview/*
+!.codeview/modules/
+!.codeview/modules/**
