@@ -65,7 +65,10 @@ class AppState:
 
 def log_line(state: AppState, msg: str) -> None:
     """Append a timestamped lifecycle event to the in-memory log ring."""
-    ts = time.strftime("%H:%M:%S")
+    local = time.localtime()
+    hour = local.tm_hour % 12 or 12
+    meridiem = "PM" if local.tm_hour >= 12 else "AM"
+    ts = f"{hour}:{local.tm_min:02d}:{local.tm_sec:02d} {meridiem}"
     with state.lock:
         state.logs.append(f"[{ts}] {msg}")
 

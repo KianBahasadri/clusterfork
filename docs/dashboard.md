@@ -47,13 +47,14 @@ codeview open
 ## What it shows
 
 Header: repo name, branch, a Dirty badge when the tree is unclean, a CI
-badge (`CI passing` / `CI failing` / `CI running`), and last-scan time.
+badge (`CI passing` / `CI failing` / `CI running`), and the last-scan time
+with a live age (`Last scan: ... (5m ago)`) so cache staleness is visible.
 The CI state is the GitHub Actions check-run verdict for HEAD, fetched via
 the `gh` CLI (logged-in auth) in the background (eager on boot, refreshed
 ~60 s and on HEAD changes). It is hidden when `gh` is missing, origin
 isn't GitHub, or HEAD has no check runs. The commit hash is not shown in
-the header. All dates render with three-letter months ("Aug 28 2026
-15:24").
+the header. All displayed dates render with three-letter months and
+12-hour times ("Aug 28 2026 3:24 PM").
 
 The page is a design-guide dashboard: IBM Plex, dark/light theme, compact
 metrics (label + value, no cards), sortable tables, and copyable commit

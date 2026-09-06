@@ -230,6 +230,7 @@ kbd {
 .dashboard-context time {
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .section-heading {

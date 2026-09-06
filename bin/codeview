@@ -209,7 +209,11 @@ def http_post_json(port: int, path: str, timeout: float = 300.0) -> dict | None:
 def fmt_ts(ts: float | None) -> str:
     if not ts:
         return "unknown"
-    return time.strftime("%b %d %Y %H:%M", time.localtime(ts))
+    local = time.localtime(ts)
+    hour = local.tm_hour % 12 or 12
+    meridiem = "PM" if local.tm_hour >= 12 else "AM"
+    return (time.strftime("%b %d %Y", local)
+            + f" {hour}:{local.tm_min:02d} {meridiem}")
 
 
 def fmt_age(ts: float | None) -> str:

@@ -14,8 +14,29 @@ function fmtDate(iso) {
   const m = String(iso || "").match(
     /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/);
   if (!m) return String(iso || "—");
+  const hour24 = Number(m[4]);
+  const clock = m[4]
+    ? `${hour24 % 12 || 12}:${m[5]} ${hour24 >= 12 ? "PM" : "AM"}`
+    : "";
   return `${MONTHS[+m[2] - 1]} ${+m[3]} ${m[1]}`
-    + (m[4] ? ` ${m[4]}:${m[5]}` : "");
+    + (clock ? ` ${clock}` : "");
+}
+
+function fmtAge(isoOrTs) {
+  if (!isoOrTs) return "";
+  const ts = typeof isoOrTs === "number"
+    ? (isoOrTs < 1e11 ? isoOrTs * 1000 : isoOrTs)
+    : Date.parse(isoOrTs);
+  if (Number.isNaN(ts)) return "";
+  const secs = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (secs < 60) return `${secs}s ago`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+  if (secs < 86400) {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    return `${h}h ${m}m ago`;
+  }
+  return `${Math.floor(secs / 86400)}d ago`;
 }
 
 function esc(s) {
@@ -711,7 +732,22 @@ async function api(path, opts) {
   return res.json();
 }
 
-const state = { gen: null, tabs: [], active: null };
+const state = { gen: null, tabs: [], active: null, scannedAt: null };
+
+function updateScanTime() {
+  const scan = $("#scan-time");
+  if (!scan) return;
+  if (!state.scannedAt) {
+    scan.hidden = true;
+    return;
+  }
+  scan.dateTime = state.scannedAt;
+  const age = fmtAge(state.scannedAt);
+  scan.textContent = `Last scan: ${fmtDate(state.scannedAt)}${age ? ` (${age})` : ""}`;
+  scan.setAttribute("aria-label", `Last repository scan${age ? ` ${age}` : ""}`);
+  scan.title = `Last repo scan: ${fmtDate(state.scannedAt)} UTC (${state.scannedAt})`;
+  scan.hidden = false;
+}
 
 function tabKey(tab) {
   return tab.kind === "core" ? tab.name : `m:${tab.name}`;
@@ -836,13 +872,12 @@ async function refresh() {
   const dirty = $("#dirty-badge");
   dirty.hidden = !m.dirty;
   ciBadge(summary.ci);
-  const scan = $("#scan-time");
   if (m.scanned_at_iso) {
-    scan.dateTime = m.scanned_at_iso;
-    scan.textContent = fmtDate(m.scanned_at_iso);
-    scan.hidden = false;
+    state.scannedAt = m.scanned_at_iso;
+    updateScanTime();
   } else {
-    scan.hidden = true;
+    state.scannedAt = null;
+    updateScanTime();
   }
   if (state.active === "overview" || !state.active) await renderOverview(summary);
   else if (state.active === "logs") await renderLogs();
@@ -1362,6 +1397,10 @@ async function pollGeneration() {
       return;
     }
     state.gen = gen.generation;
+    if (!state.scannedAt && gen.rescanned_at) {
+      state.scannedAt = new Date(gen.rescanned_at * 1000).toISOString();
+      updateScanTime();
+    }
     $("#stale-banner").hidden = true;
   } catch {
     $("#stale-banner").hidden = false;
@@ -1686,6 +1725,7 @@ renderSpotlightOptions();
   else activateTab(initial);
   setInterval(refresh, 15000);
   setInterval(pollGeneration, 4000);
+  setInterval(updateScanTime, 1000);
   await pollGeneration();
 
   document.addEventListener("click", ev => {
