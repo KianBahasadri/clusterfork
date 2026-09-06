@@ -7,3 +7,5 @@ __pycache__/
 .codeview/*
 !.codeview/modules/
 !.codeview/modules/**
+.codeview/modules/**/__pycache__/
+.codeview/modules/**/*.py[cod]
