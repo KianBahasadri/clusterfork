@@ -19,6 +19,7 @@ def run_bash(script: str, env=None, cwd=None, timeout=5):
     return subprocess.run(
         ["bash", "-c", script],
         cwd=str(cwd or REPO_ROOT),
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         env=env,
@@ -163,7 +164,11 @@ class MockTmuxTests(unittest.TestCase):
             )
             (self.fake_bin / name).chmod(0o755)
 
-        env_no_tmux = {k: v for k, v in os.environ.items() if k != "TMUX"}
+        env_no_tmux = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("TMUX", "CI", "GROK_HEADLESS", "NONINTERACTIVE")
+        }
         self.base_env = {
             **env_no_tmux,
             "PATH": f"{self.mock_bin}:{self.fake_bin}:{os.environ.get('PATH','')}",
@@ -326,6 +331,14 @@ class MockTmuxTests(unittest.TestCase):
                 self.assertEqual(proc.returncode, 0)
                 self.assertNotIn("did you mean to launch grok?", proc.stdout)
                 self.assertIn(f"FAKE:grok {flag}", proc.stdout)
+
+    def test_grok_headless_env_bypass(self):
+        for var in ("GROK_HEADLESS=1", "CI=true", "NONINTERACTIVE=1"):
+            with self.subTest(var=var):
+                proc = self._script_run(f"'source bash_profile.sh; export {var}; grok hello'")
+                self.assertEqual(proc.returncode, 0)
+                self.assertNotIn("did you mean to launch grok?", proc.stdout)
+                self.assertIn("FAKE:grok hello", proc.stdout)
 
     def test_grok_utility_commands_bypass(self):
         for flag in ("--version", "--help", "models", "doctor"):
