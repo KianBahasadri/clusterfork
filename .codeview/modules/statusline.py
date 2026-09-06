@@ -120,16 +120,17 @@ def get_line_specs(_repo: Path) -> list[dict]:
         {
             "name": "Codex CLI",
             "mode": "Native TUI",
-            "format": "model-with-reasoning · context-used · task-progress · five-hour-limit",
+            "format": "model-with-reasoning · context-used · task-progress · five-hour-limit · weekly-limit",
             "source": "agents/codex.toml / ~/.codex/config.toml",
             "dest": "~/.codex/config.toml",
             "wiring": "~/.codex/config.toml ([tui].status_line)",
-            "summary": "Built-in TUI statusline showing active model, reasoning effort, context percentage, task progress, and 5h rate limit.",
+            "summary": "Built-in TUI statusline showing active model, reasoning effort, context percentage, task progress, 5h rate limit, and weekly rate limit.",
             "preview_html": render_preview_codex(
                 codex_info.get("model", "gpt-6-astra"),
                 codex_info.get("effort", "max"),
                 12,
                 15,
+                18,
             ),
         },
     ]
@@ -221,7 +222,7 @@ def detect_codex_info() -> dict:
             "model": data.get("model", "gpt-6-astra"),
             "effort": data.get("model_reasoning_effort", "max"),
             "status_line": tui.get("status_line", [
-                "model-with-reasoning", "context-used", "task-progress", "five-hour-limit"
+                "model-with-reasoning", "context-used", "task-progress", "five-hour-limit", "weekly-limit"
             ]),
             "use_colors": tui.get("status_line_use_colors", True),
         }
@@ -317,13 +318,14 @@ def render_preview_cursor(model: str, effort: str, acct: str, ctx: int, auto: in
     )
 
 
-def render_preview_codex(model: str, effort: str, ctx: int, h5: int) -> str:
+def render_preview_codex(model: str, effort: str, ctx: int, h5: int, wk: int = 18) -> str:
     effort_part = f" ({esc(effort)})" if effort else ""
     return (
         f'<span class="term-model">{esc(model)}{effort_part}</span>'
         f'<span class="term-sep"> · </span>{pct_span(ctx, "context")}'
         f'<span class="term-sep"> · </span><span class="term-dim">[1/3]</span>'
         f'<span class="term-sep"> · </span>{pct_span(h5, "5h")}'
+        f'<span class="term-sep"> · </span>{pct_span(wk, "wk")}'
     )
 
 

@@ -131,6 +131,8 @@ class CustomModulesTests(unittest.TestCase):
         self.assertIn("Claude Code (occ)", line_names)
         self.assertIn("Cursor Agent", line_names)
         self.assertIn("Codex CLI", line_names)
+        codex_line = next(l for l in data["lines"] if l["name"] == "Codex CLI")
+        self.assertIn("weekly-limit", codex_line["format"])
         self.assertEqual(data["counts"]["Statuslines"], 3)
         self.assertEqual(data["counts"]["Modes"], 4)
         self.assertEqual(data["counts"]["Scripts"], 4)

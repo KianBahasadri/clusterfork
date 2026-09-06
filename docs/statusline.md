@@ -77,7 +77,7 @@ in `~/.codex/config.toml`:
 
 ```toml
 [tui]
-status_line = ["model-with-reasoning", "context-used", "task-progress", "five-hour-limit"]
+status_line = ["model-with-reasoning", "context-used", "task-progress", "five-hour-limit", "weekly-limit"]
 status_line_use_colors = true
 ```
 
@@ -85,10 +85,11 @@ Unlike Claude and Cursor — which spawn child-process scripts piped with JSON
 payloads on stdin — Codex renders its status line directly in the TUI without
 external script hooks.
 
-Renders: `model-with-reasoning · context-used · task-progress · five-hour-limit`.
+Renders: `model-with-reasoning · context-used · task-progress · five-hour-limit · weekly-limit`.
 
 - **model-with-reasoning**: active model and reasoning effort (e.g. `gpt-6-astra (max)`)
 - **context-used**: active context percentage or token budget consumption (e.g. `12% context`)
 - **task-progress**: multi-turn or task step counter
 - **five-hour-limit**: rolling 5-hour rate limit percentage
+- **weekly-limit**: rolling 7-day rate limit percentage
 
