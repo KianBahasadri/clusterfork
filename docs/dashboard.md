@@ -46,23 +46,32 @@ codeview open
 
 ## What it shows
 
-Header: `repo · branch · dirty · ci ✓|✗|…` — the CI state is the GitHub
-Actions check-run verdict for HEAD, fetched via the `gh` CLI (logged-in
-auth) in the background (eager on boot, refreshed ~60 s and on HEAD
-changes). It is hidden when `gh` is missing, origin isn't GitHub, or HEAD
-has no check runs. The commit hash is not shown. All dates render with
-three-letter months ("Aug 28 2026 15:24").
+Header: repo name, branch, a Dirty badge when the tree is unclean, a CI
+badge (`CI passing` / `CI failing` / `CI running`), and last-scan time.
+The CI state is the GitHub Actions check-run verdict for HEAD, fetched via
+the `gh` CLI (logged-in auth) in the background (eager on boot, refreshed
+~60 s and on HEAD changes). It is hidden when `gh` is missing, origin
+isn't GitHub, or HEAD has no check runs. The commit hash is not shown in
+the header. All dates render with three-letter months ("Aug 28 2026
+15:24").
+
+The page is a design-guide dashboard: IBM Plex, dark/light theme, compact
+metrics (label + value, no cards), sortable tables, and copyable commit
+hashes. A command palette (`Ctrl+K` / `⌘K` / `Ctrl+Space`) jumps between
+views, toggles theme, and exports the current tab as Markdown or PDF
+(print). `Alt+1`–`Alt+6` open the six core tabs; the URL hash follows the
+active tab (`#history`, `#m:hello`, …).
 
 Six core tabs, built from git + manifest scanning (stdlib; no pip
 dependencies anywhere in the tool):
 
 - **Overview** — file/line/commit counts, lines by top-level dir, lines by language
 - **History** — cumulative LOC over commit history (`git log --numstat`
-  aggregates, capped at `--max-commits`, default 1000); hovering the graph
-  snaps to the nearest commit and shows its date, short hash, and exact
-  cumulative LOC. Click pins that tooltip (click again, click outside, or
-  Esc to dismiss) so the sha can be copied. Also most-changed dirs and
-  recent commits
+  aggregates, capped at `--max-commits`, default 1000); hovering or arrow
+  keys on the graph snap to the nearest commit and show its date, short
+  hash, and exact cumulative LOC. Click pins that tooltip (click again,
+  click outside, or Esc to dismiss). Recent-commit hashes are copyable.
+  Also most-changed dirs and a sortable recent-commits table
 - **Churn** — ranks file hotspots over the same bounded commit window by
   lines touched (additions + deletions, so same-size rewrites do not disappear
   as they would with net LOC). Shows total churn, top-level directories, and

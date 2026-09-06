@@ -433,7 +433,8 @@ MIME_BY_SUFFIX = {".html": CONTENT_TYPES["html"],
                   ".js": CONTENT_TYPES["js"], ".css": CONTENT_TYPES["css"],
                   ".json": "application/json; charset=utf-8",
                   ".svg": "image/svg+xml", ".png": "image/png",
-                  ".ico": "image/x-icon", ".woff2": "font/woff2"}
+                  ".ico": "image/x-icon", ".woff2": "font/woff2",
+                  ".txt": "text/plain; charset=utf-8"}
 
 
 class DashHandler(BaseHTTPRequestHandler):
@@ -537,7 +538,7 @@ class DashHandler(BaseHTTPRequestHandler):
             return True
         suffix = target.suffix.lower().lstrip(".")
         allowed = {"html", "js", "css", "svg", "png", "ico", "woff2",
-                   "json", "map"}
+                   "json", "map", "txt"}
         if suffix not in allowed or target.name.startswith("."):
             self.send_error_page(404, "missing asset")
             return True

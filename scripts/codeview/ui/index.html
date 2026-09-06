@@ -1,28 +1,237 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
 <title>codeview</title>
 <link rel="icon" type="image/png" href="/assets/favicon.png">
 <link rel="stylesheet" href="/assets/app.css">
+<script>
+(function () {
+  try {
+    var stored = localStorage.getItem("codeview-theme");
+    if (stored === "light" || stored === "dark") {
+      document.documentElement.dataset.theme = stored;
+    } else if (window.matchMedia("(prefers-color-scheme: light)").matches) {
+      document.documentElement.dataset.theme = "light";
+    }
+  } catch (err) { /* private mode */ }
+})();
+</script>
 </head>
 <body>
-<header id="topbar">
-  <span id="repo-name">…</span>
-  <span id="head-info"></span>
-  <span id="ci-info" hidden></span>
-  <span id="stale-banner" hidden>cache stale</span>
-</header>
-<nav id="tabs" role="tablist" aria-label="Repository views"></nav>
-<main id="panels">
-  <section class="panel" id="panel-overview" data-panel="overview" role="tabpanel" aria-labelledby="tab-overview"><div class="loading">loading…</div></section>
-  <section class="panel" id="panel-history" data-panel="history" role="tabpanel" aria-labelledby="tab-history" hidden><div class="loading">loading…</div></section>
-  <section class="panel" id="panel-churn" data-panel="churn" role="tabpanel" aria-labelledby="tab-churn" hidden><div class="loading">loading…</div></section>
-  <section class="panel" id="panel-files" data-panel="files" role="tabpanel" aria-labelledby="tab-files" hidden><div class="loading">loading…</div></section>
-  <section class="panel" id="panel-deps" data-panel="deps" role="tabpanel" aria-labelledby="tab-deps" hidden><div class="loading">loading…</div></section>
-  <section class="panel" id="panel-logs" data-panel="logs" role="tabpanel" aria-labelledby="tab-logs" hidden><div class="loading">loading…</div></section>
-</main>
+<!-- Lucide Static 1.39.0 icons; ISC license in /assets/LUCIDE-LICENSE.txt. -->
+<svg class="icon-sprite" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="lucide-search" viewBox="0 0 24 24">
+      <path d="m21 21-4.34-4.34"></path>
+      <circle cx="11" cy="11" r="8"></circle>
+    </symbol>
+    <symbol id="lucide-sun" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="4"></circle>
+      <path d="M12 2v2"></path>
+      <path d="M12 20v2"></path>
+      <path d="m4.93 4.93 1.41 1.41"></path>
+      <path d="m17.66 17.66 1.41 1.41"></path>
+      <path d="M2 12h2"></path>
+      <path d="M20 12h2"></path>
+      <path d="m6.34 17.66-1.41 1.41"></path>
+      <path d="m19.07 4.93-1.41 1.41"></path>
+    </symbol>
+    <symbol id="lucide-moon" viewBox="0 0 24 24">
+      <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"></path>
+    </symbol>
+    <symbol id="lucide-x" viewBox="0 0 24 24">
+      <path d="M18 6 6 18"></path>
+      <path d="m6 6 12 12"></path>
+    </symbol>
+    <symbol id="lucide-arrow-up" viewBox="0 0 24 24">
+      <path d="m5 12 7-7 7 7"></path>
+      <path d="M12 19V5"></path>
+    </symbol>
+    <symbol id="lucide-arrow-down" viewBox="0 0 24 24">
+      <path d="M12 5v14"></path>
+      <path d="m19 12-7 7-7-7"></path>
+    </symbol>
+    <symbol id="lucide-check" viewBox="0 0 24 24">
+      <path d="M20 6 9 17l-5-5"></path>
+    </symbol>
+    <symbol id="lucide-octagon-x" viewBox="0 0 24 24">
+      <path d="m15 9-6 6"></path>
+      <path d="M2.586 16.726A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2h6.624a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586z"></path>
+      <path d="m9 9 6 6"></path>
+    </symbol>
+  </defs>
+</svg>
+
+<div class="page-tools">
+  <button class="spotlight-trigger" id="spotlightTrigger" type="button"
+    aria-label="Open search and commands" aria-haspopup="dialog"
+    aria-controls="spotlightDialog" aria-expanded="false"
+    aria-keyshortcuts="Control+K Meta+K Control+Space"
+    title="Search and commands">
+    <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-search"></use></svg>
+  </button>
+  <button class="theme-toggle" id="themeToggleBtn" type="button"
+    aria-label="Switch to light theme" title="Switch to light theme">
+    <svg class="icon" aria-hidden="true" focusable="false">
+      <use id="themeIconUse" href="#lucide-sun"></use>
+    </svg>
+  </button>
+</div>
+
+<div class="dashboard-layout">
+  <header class="dashboard-heading">
+    <div class="dashboard-title">
+      <h1 id="repo-name">codeview</h1>
+      <nav aria-label="Breadcrumb">
+        <ol class="breadcrumb-nav" id="head-info">
+          <li class="breadcrumb-cur" id="branch-label">(detached)</li>
+        </ol>
+      </nav>
+    </div>
+    <div class="dashboard-context" id="head-context">
+      <span id="dirty-badge" class="badge badge-caution" hidden>Dirty</span>
+      <span id="ci-info" class="badge" hidden></span>
+      <time id="scan-time" datetime=""></time>
+    </div>
+  </header>
+
+  <div id="stale-banner" class="callout callout-caution" hidden>
+    <strong>Connection lost:</strong> the dashboard server is not responding.
+  </div>
+
+  <div class="tab-group">
+    <nav id="tabs" class="tab-nav" role="tablist" aria-label="Repository views"></nav>
+    <div class="tab-viewport" id="panels">
+      <section class="panel tab-panel active" id="panel-overview" data-panel="overview"
+        role="tabpanel" aria-labelledby="tab-overview">
+        <div class="loading">Loading…</div>
+      </section>
+      <section class="panel tab-panel" id="panel-history" data-panel="history"
+        role="tabpanel" aria-labelledby="tab-history" hidden>
+        <div class="loading">Loading…</div>
+      </section>
+      <section class="panel tab-panel" id="panel-churn" data-panel="churn"
+        role="tabpanel" aria-labelledby="tab-churn" hidden>
+        <div class="loading">Loading…</div>
+      </section>
+      <section class="panel tab-panel" id="panel-files" data-panel="files"
+        role="tabpanel" aria-labelledby="tab-files" hidden>
+        <div class="loading">Loading…</div>
+      </section>
+      <section class="panel tab-panel" id="panel-deps" data-panel="deps"
+        role="tabpanel" aria-labelledby="tab-deps" hidden>
+        <div class="loading">Loading…</div>
+      </section>
+      <section class="panel tab-panel" id="panel-logs" data-panel="logs"
+        role="tabpanel" aria-labelledby="tab-logs" hidden>
+        <div class="loading">Loading…</div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<dialog class="spotlight-dialog" id="spotlightDialog" aria-label="Search and commands">
+  <div class="spotlight-search-field">
+    <label class="sr-only" id="spotlightInputLabel" for="spotlightInput">Search commands</label>
+    <svg class="icon spotlight-search-icon" aria-hidden="true" focusable="false">
+      <use href="#lucide-search"></use>
+    </svg>
+    <input class="spotlight-input" id="spotlightInput" type="search" role="combobox"
+      aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false"
+      aria-controls="spotlightResults" autocomplete="off" spellcheck="false"
+      placeholder="Search commands">
+  </div>
+  <ul class="spotlight-results" id="spotlightResults" role="listbox" aria-label="Commands"></ul>
+  <span class="sr-only" id="spotlightStatus" aria-live="polite"></span>
+</dialog>
+
+<dialog class="modal-dialog shortcut-dialog" id="shortcutDialog" aria-labelledby="shortcutDialogTitle">
+  <div class="modal-header">
+    <h2 class="modal-title" id="shortcutDialogTitle">Keyboard shortcuts</h2>
+    <button class="btn-icon" id="btnCloseShortcuts" type="button"
+      aria-label="Close" title="Close">
+      <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-x"></use></svg>
+    </button>
+  </div>
+  <div class="modal-body">
+    <dl class="shortcut-list">
+      <div class="shortcut-row">
+        <dt>Open search and commands</dt>
+        <dd class="shortcut-keys" data-shortcut-key="K" data-shortcut-modifier="command"
+          data-control-space-alternative="true"></dd>
+      </div>
+      <div class="shortcut-row">
+        <dt>Jump to a view</dt>
+        <dd class="shortcut-keys" data-shortcut-key="J"></dd>
+      </div>
+      <div class="shortcut-row">
+        <dt>Export as Markdown</dt>
+        <dd class="shortcut-keys" data-shortcut-key="M" data-shortcut-shift="true"></dd>
+      </div>
+      <div class="shortcut-row">
+        <dt>Export as PDF</dt>
+        <dd class="shortcut-keys" data-shortcut-key="P" data-shortcut-shift="true"></dd>
+      </div>
+      <div class="shortcut-row">
+        <dt>Toggle theme</dt>
+        <dd class="shortcut-keys" data-shortcut-key="T" data-shortcut-shift="true"></dd>
+      </div>
+      <div class="shortcut-row">
+        <dt>Open shortcut reference</dt>
+        <dd class="shortcut-keys" data-shortcut-key="/"></dd>
+      </div>
+      <div class="shortcut-row">
+        <dt>Jump to core views 1–6</dt>
+        <dd class="shortcut-keys" data-shortcut-key="1–6"></dd>
+      </div>
+      <div class="shortcut-row">
+        <dt>Move through search results</dt>
+        <dd><kbd>↑</kbd><kbd>↓</kbd></dd>
+      </div>
+      <div class="shortcut-row">
+        <dt>Activate selected result</dt>
+        <dd><kbd>Enter</kbd></dd>
+      </div>
+      <div class="shortcut-row">
+        <dt>Move between tabs</dt>
+        <dd><kbd>←</kbd><kbd>→</kbd><kbd>Home</kbd><kbd>End</kbd></dd>
+      </div>
+      <div class="shortcut-row">
+        <dt>Move between table rows</dt>
+        <dd><kbd>↑</kbd><kbd>↓</kbd></dd>
+      </div>
+      <div class="shortcut-row">
+        <dt>Open selected row details</dt>
+        <dd><kbd>Enter</kbd><kbd>Space</kbd></dd>
+      </div>
+      <div class="shortcut-row">
+        <dt>Inspect chart samples</dt>
+        <dd><kbd>←</kbd><kbd>→</kbd><kbd>Home</kbd><kbd>End</kbd></dd>
+      </div>
+    </dl>
+  </div>
+</dialog>
+
+<dialog class="modal-dialog toast-history-dialog" id="toastHistoryDialog"
+  aria-labelledby="toastHistoryTitle">
+  <div class="modal-header">
+    <h2 class="modal-title" id="toastHistoryTitle">Notification history</h2>
+    <button class="btn-icon" id="btnCloseToastHistory" type="button"
+      aria-label="Close" title="Close">
+      <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-x"></use></svg>
+    </button>
+  </div>
+  <div class="modal-body">
+    <ol class="toast-history-list" id="toastHistoryList"></ol>
+  </div>
+</dialog>
+
+<div class="toast-container" id="toastContainer" aria-live="polite"
+  aria-relevant="additions text"></div>
+
 <script src="/assets/app.js"></script>
 </body>
 </html>
