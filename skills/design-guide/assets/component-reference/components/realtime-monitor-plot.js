@@ -29,13 +29,17 @@
     return null;
   }
 
-  function drawSparkline(nodes, channel, view, width, height, x) {
+  function drawSparkline(nodes, channel, view, width, height, x, zone) {
     var bottom = height - 4, top = 4;
     var y = function (value) { return bottom - Math.min(1, value / channel.max) * (bottom - top); };
     nodes.push(svgElement("path", { d: "M0 " + bottom + "H" + width, class: "monitor-baseline" }));
     if (Number.isFinite(channel.warning) && channel.warning <= channel.max) {
       nodes.push(svgElement("path", { d: "M0 " + y(channel.warning) + "H" + width, class: "monitor-threshold" }));
     }
+    var suffix = zone === "unknown" ? "nominal" : (zone || "nominal");
+    var traceClass = "monitor-trace monitor-trace-" + suffix;
+    var areaClass = "monitor-area monitor-area-" + suffix;
+    var pointClass = "monitor-point monitor-point-" + suffix;
     var segments = [], segment = [], previous = null;
     view.samples.forEach(function (sample) {
       var value = sample.values[channel.id];
@@ -50,10 +54,10 @@
     segments.forEach(function (points) {
       var line = points.map(function (point, index) { return (index ? "L" : "M") + point.join(" "); }).join(" ");
       if (points.length > 1) {
-        nodes.push(svgElement("path", { d: line + "L" + points[points.length - 1][0] + " " + bottom + "L" + points[0][0] + " " + bottom + "Z", class: "monitor-area" }));
-        nodes.push(svgElement("path", { d: line, class: "monitor-trace" }));
+        nodes.push(svgElement("path", { d: line + "L" + points[points.length - 1][0] + " " + bottom + "L" + points[0][0] + " " + bottom + "Z", class: areaClass }));
+        nodes.push(svgElement("path", { d: line, class: traceClass }));
       } else {
-        nodes.push(svgElement("circle", { cx: points[0][0], cy: points[0][1], r: 2, class: "monitor-point" }));
+        nodes.push(svgElement("circle", { cx: points[0][0], cy: points[0][1], r: 2, class: pointClass }));
       }
     });
     return y;
@@ -134,7 +138,6 @@
     if (hasBands) {
       var warn = Number.isFinite(channel.warning) ? channel.warning : (Number.isFinite(channel.critical) ? channel.critical : channel.max);
       var crit = Number.isFinite(channel.critical) ? channel.critical : channel.max;
-      if (warn > 0) nodes.push(svgElement("path", { d: arcPath(toDeg(0, channel.max), toDeg(warn, channel.max), ARC_R), class: "monitor-arc-band monitor-arc-band-good" }));
       if (crit > warn) nodes.push(svgElement("path", { d: arcPath(toDeg(warn, channel.max), toDeg(crit, channel.max), ARC_R), class: "monitor-arc-band monitor-arc-band-caution" }));
       if (channel.max > crit) nodes.push(svgElement("path", { d: arcPath(toDeg(crit, channel.max), toDeg(channel.max, channel.max), ARC_R), class: "monitor-arc-band monitor-arc-band-danger" }));
     }
@@ -146,8 +149,6 @@
     if (value !== null && Number.isFinite(value)) {
       var fillClass = "monitor-arc-fill monitor-arc-fill-" + (zone === "unknown" ? "nominal" : zone);
       nodes.push(svgElement("path", { d: arcPath(ARC_START, toDeg(value, channel.max), ARC_R), class: fillClass }));
-      var knob = polar(toDeg(value, channel.max), ARC_R);
-      nodes.push(svgElement("circle", { cx: knob.x.toFixed(2), cy: knob.y.toFixed(2), r: 4, class: "monitor-arc-knob monitor-arc-fill-" + (zone === "unknown" ? "nominal" : zone) }));
     }
     svg.replaceChildren.apply(svg, nodes);
   };
@@ -161,15 +162,20 @@
     var nodes = [];
     var y = null;
     svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+    var activeSample = inspected || view.latest;
+    var activeValue = activeSample ? activeSample.values[channel.id] : null;
+    var zone = reference.realtimeMonitorZone(channel, activeValue);
     if (metric && presentation === "heatstrip") drawHeatstrip(nodes, channel, view, width, height, x);
-    else if (metric) y = drawSparkline(nodes, channel, view, width, height, x);
+    else if (metric) y = drawSparkline(nodes, channel, view, width, height, x, zone);
     else if (presentation === "heatstrip") drawHeatstrip(nodes, channel, view, width, height, x);
     else drawStatusSpans(nodes, channel, view, height, x);
     if (inspected && inspected.timestamp >= view.start && inspected.timestamp <= view.end) {
       nodes.push(svgElement("path", { d: "M" + x(inspected.timestamp) + " 0V" + height, class: "monitor-crosshair" }));
       var value = inspected.values[channel.id];
       if (metric && presentation !== "heatstrip" && value !== null && y) {
-        nodes.push(svgElement("circle", { cx: x(inspected.timestamp), cy: y(value), r: 3, class: "monitor-point" }));
+        var inspectZone = reference.realtimeMonitorZone(channel, value);
+        var inspectSuffix = inspectZone === "unknown" ? "nominal" : inspectZone;
+        nodes.push(svgElement("circle", { cx: x(inspected.timestamp), cy: y(value), r: 3, class: "monitor-point monitor-point-" + inspectSuffix }));
       }
     }
     svg.replaceChildren.apply(svg, nodes);

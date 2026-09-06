@@ -6,7 +6,7 @@
 .monitor-symbol { display: flex; justify-content: center; height: 16px; color: var(--muted); }
 .monitor-value { display: flex; justify-content: center; align-items: baseline; gap: 5px; margin: 6px 0 4px; color: var(--muted); font: 700 26px/1.1 var(--ui); font-variant-numeric: tabular-nums; }
 .monitor-unit { font: 400 12px/1 var(--mono); }
-.monitor-value[data-tone="good"] { color: var(--good); }
+.monitor-value[data-tone="good"] { color: var(--good); opacity: 0.6; }
 .monitor-value[data-tone="caution"] { color: var(--caution); }
 .monitor-value[data-tone="danger"] { color: var(--danger); }
 .monitor-plot { display: block; position: relative; width: 100%; min-width: 0; text-align: left; padding: 0; border-radius: 0; touch-action: pan-y; cursor: crosshair; }
@@ -24,48 +24,68 @@
 .monitor-arc-readout {
   position: absolute;
   inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
   pointer-events: none;
-  padding-bottom: 10px;
 }
-.monitor-arc-readout .monitor-symbol { height: 32px; }
-.monitor-arc-readout .monitor-symbol .icon { width: 32px; height: 32px; }
-.monitor-arc-readout .monitor-value { margin: 0; }
+.monitor-arc-readout .monitor-symbol {
+  position: absolute;
+  top: 22px;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  height: 24px;
+}
+.monitor-arc-readout .monitor-symbol .icon { width: 24px; height: 24px; }
+.monitor-arc-readout .monitor-value {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  transform: translateY(-50%);
+  margin: 0;
+  display: flex;
+  justify-content: center;
+  align-items: baseline;
+  gap: 5px;
+}
 .monitor-arc-track { fill: none; stroke: var(--line); stroke-width: 10; stroke-linecap: round; }
 .monitor-arc-band { fill: none; stroke-width: 8; stroke-linecap: butt; }
-.monitor-arc-band-good { stroke: var(--good); }
-.monitor-arc-band-caution { stroke: var(--caution); }
-.monitor-arc-band-danger { stroke: var(--danger); }
+.monitor-arc-band-good { stroke: var(--good); opacity: 0.22; }
+.monitor-arc-band-caution { stroke: var(--caution); opacity: 0.6; }
+.monitor-arc-band-danger { stroke: var(--danger); opacity: 0.8; }
 .monitor-arc-tick { stroke: var(--ink-strong); stroke-width: 2; stroke-linecap: square; }
-.monitor-arc-fill { fill: none; stroke-width: 3; stroke-linecap: round; }
-.monitor-arc-knob { stroke: var(--canvas); stroke-width: 1.5; }
-.monitor-arc-fill-good { stroke: var(--good); }
+.monitor-arc-fill { fill: none; stroke-width: 8; stroke-linecap: round; }
+.monitor-arc-fill-good { stroke: var(--good); opacity: 0.6; }
 .monitor-arc-fill-caution { stroke: var(--caution); }
 .monitor-arc-fill-danger { stroke: var(--danger); }
 .monitor-arc-fill-nominal { stroke: var(--accent); }
-.monitor-arc-knob.monitor-arc-fill-good { fill: var(--good); }
-.monitor-arc-knob.monitor-arc-fill-caution { fill: var(--caution); }
-.monitor-arc-knob.monitor-arc-fill-danger { fill: var(--danger); }
-.monitor-arc-knob.monitor-arc-fill-nominal { fill: var(--accent); }
-.monitor-heat-good { fill: var(--good); }
+.monitor-heat-good { fill: var(--good); opacity: 0.45; }
 .monitor-heat-caution { fill: var(--caution); }
 .monitor-heat-danger { fill: var(--danger); }
 .monitor-heat-accent { fill: var(--accent); }
 .realtime-monitor[data-provenance="simulated"] .monitor-heat-accent { fill: var(--derived); }
 .realtime-monitor[data-provenance="simulated"] .monitor-arc-fill-nominal { stroke: var(--derived); }
-.realtime-monitor[data-provenance="simulated"] .monitor-arc-knob.monitor-arc-fill-nominal { fill: var(--derived); }
 .monitor-baseline { fill: none; stroke: var(--line); stroke-width: 1; }
 .monitor-threshold { fill: none; stroke: var(--caution); opacity: 0.45; stroke-width: 1; stroke-dasharray: 3 4; }
 .monitor-area { fill: var(--accent-soft); }
 .monitor-trace { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; }
 .monitor-point { fill: var(--accent); }
-.realtime-monitor[data-provenance="simulated"] .monitor-trace { stroke: var(--derived); stroke-dasharray: 4 2; }
-.realtime-monitor[data-provenance="simulated"] .monitor-area { fill: var(--derived-soft); }
-.realtime-monitor[data-provenance="simulated"] .monitor-point { fill: var(--derived); }
+.monitor-trace.monitor-trace-good { stroke: var(--good); opacity: 0.5; }
+.monitor-trace.monitor-trace-caution { stroke: var(--caution); }
+.monitor-trace.monitor-trace-danger { stroke: var(--danger); }
+.monitor-trace.monitor-trace-nominal { stroke: var(--accent); }
+.monitor-area.monitor-area-good { fill: var(--good-soft); opacity: 0.35; }
+.monitor-area.monitor-area-caution { fill: var(--caution-soft); }
+.monitor-area.monitor-area-danger { fill: var(--danger-soft); }
+.monitor-area.monitor-area-nominal { fill: var(--accent-soft); }
+.monitor-point.monitor-point-good { fill: var(--good); opacity: 0.55; }
+.monitor-point.monitor-point-caution { fill: var(--caution); }
+.monitor-point.monitor-point-danger { fill: var(--danger); }
+.monitor-point.monitor-point-nominal { fill: var(--accent); }
+.realtime-monitor[data-provenance="simulated"] .monitor-trace { stroke-dasharray: 4 2; }
+.realtime-monitor[data-provenance="simulated"] .monitor-trace:not(.monitor-trace-good):not(.monitor-trace-caution):not(.monitor-trace-danger) { stroke: var(--derived); }
+.realtime-monitor[data-provenance="simulated"] .monitor-area:not(.monitor-area-good):not(.monitor-area-caution):not(.monitor-area-danger) { fill: var(--derived-soft); }
+.realtime-monitor[data-provenance="simulated"] .monitor-point:not(.monitor-point-good):not(.monitor-point-caution):not(.monitor-point-danger) { fill: var(--derived); }
 .monitor-crosshair { fill: none; stroke: var(--ink); stroke-width: 1; stroke-dasharray: 2 2; }
 .monitor-services { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 12px; }
 .monitor-resources:not([hidden]) + .monitor-services { margin-top: 16px; }
@@ -73,7 +93,7 @@
 .monitor-service .monitor-plot { display: block; min-height: 44px; }
 .monitor-service-name { display: block; font-size: 12px; line-height: 20px; color: var(--muted); font-weight: 400; overflow-wrap: anywhere; }
 .monitor-service .monitor-history { height: 24px; }
-.monitor-state-good { fill: var(--good); opacity: 0.7; }
+.monitor-state-good { fill: var(--good); opacity: 0.45; }
 .monitor-state-caution { fill: var(--caution); }
 .monitor-state-danger { fill: var(--danger); }
 .monitor-state-unknown { fill: var(--faint); }

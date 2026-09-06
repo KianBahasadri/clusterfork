@@ -18,7 +18,7 @@
     if (channel.kind === "status") return { label: stateLabels[value], tone: value };
     var zone = reference.realtimeMonitorZone(channel, value);
     var label = zone === "danger" ? "Critical" : zone === "caution" ? "Elevated" : value > channel.max ? "Above scale" : "Nominal";
-    var colored = presentation === "arc" || presentation === "heatstrip";
+    var colored = presentation === "arc" || presentation === "heatstrip" || presentation === "sparkline";
     var tone = zone === "unknown" || zone === "nominal" || (zone === "good" && !colored) ? "nominal" : zone;
     return { label: label, tone: tone };
   }
