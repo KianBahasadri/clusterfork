@@ -931,22 +931,22 @@
         <header class="section-header">
           <h2 class="section-index" id="heading-realtime-monitor">15 Realtime Monitoring</h2>
         </header>
-        <div class="monitor-catalog-controls" role="region" aria-label="Simulation controls">
+        <form class="monitor-catalog-controls" role="region" aria-label="Simulation controls" autocomplete="off" onsubmit="return false;">
           <label class="monitor-control-field" for="monitorTickspeed">
             <span class="monitor-control-header">
               <span class="monitor-control-label">Tick speed</span>
               <output class="monitor-control-output" id="monitorTickspeedOutput" for="monitorTickspeed">1.0x (1.0s)</output>
             </span>
-            <input class="monitor-control-slider" id="monitorTickspeed" type="range" min="0" max="4" step="1" value="2" aria-valuetext="1.0x (1.0s)">
+            <input class="monitor-control-slider" id="monitorTickspeed" type="range" min="0" max="4" step="1" value="2" autocomplete="off" aria-valuetext="1.0x (1.0s)">
           </label>
           <label class="monitor-control-field" for="monitorEventFreq">
             <span class="monitor-control-header">
               <span class="monitor-control-label">Severe events</span>
               <output class="monitor-control-output" id="monitorEventFreqOutput" for="monitorEventFreq">Normal</output>
             </span>
-            <input class="monitor-control-slider" id="monitorEventFreq" type="range" min="0" max="4" step="1" value="2" aria-valuetext="Normal">
+            <input class="monitor-control-slider" id="monitorEventFreq" type="range" min="0" max="4" step="1" value="2" autocomplete="off" aria-valuetext="Normal">
           </label>
-        </div>
+        </form>
         <div class="monitor-catalog-examples">
           <div class="monitor-catalog-example">
             <h3 class="monitor-catalog-heading" id="heading-realtime-sparkline">Sparkline</h3>

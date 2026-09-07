@@ -114,6 +114,40 @@
   var eventFreqInput = document.getElementById("monitorEventFreq");
   var eventFreqOutput = document.getElementById("monitorEventFreqOutput");
 
+  function resetControls() {
+    currentSpeedLevel = 2;
+    currentInterval = speedLevels[2].interval;
+    currentFreqLevel = 2;
+    if (tickspeedInput) {
+      tickspeedInput.value = "2";
+      tickspeedInput.setAttribute("aria-valuetext", "1.0x (1.0s)");
+    }
+    if (tickspeedOutput) {
+      tickspeedOutput.textContent = "1.0x (1.0s)";
+    }
+    if (eventFreqInput) {
+      eventFreqInput.value = "2";
+      eventFreqInput.setAttribute("aria-valuetext", "Normal");
+    }
+    if (eventFreqOutput) {
+      eventFreqOutput.textContent = "Normal";
+    }
+  }
+
+  resetControls();
+  window.addEventListener("pageshow", resetControls);
+  window.addEventListener("load", resetControls);
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", resetControls);
+  }
+
+  var controlsForm = document.querySelector(".monitor-catalog-controls");
+  if (controlsForm) {
+    controlsForm.addEventListener("reset", function () {
+      setTimeout(resetControls, 0);
+    });
+  }
+
   if (tickspeedInput) {
     tickspeedInput.addEventListener("input", function () {
       var level = Math.max(0, Math.min(speedLevels.length - 1, Math.round(Number(tickspeedInput.value) || 0)));
