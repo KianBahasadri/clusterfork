@@ -89,4 +89,44 @@ assert.equal(zone({ kind: 'status' }, null), 'unknown');
 assert.throws(() => create([channels[0], channels[0]]));
 assert.throws(() => create([{ ...channels[0], decimals: 100 }]));
 assert.throws(() => create([{ ...channels[0], warning: 90, critical: 80 }]));
-console.log('Realtime monitor: telemetry validity, freshness, freeze/resume, bounded history, and isolation passed.');
+
+// Check setInterval and reset
+model.setInterval(200);
+assert.equal(model.interval, 200, 'model.interval reflects updated interval');
+assert.equal(model.view().interval, 200, 'view.interval reflects updated interval');
+assert.throws(() => model.setInterval(-10), 'Negative interval rejected');
+assert.throws(() => model.setInterval(0), 'Zero interval rejected');
+model.reset();
+assert.equal(model.view().samples.length, 0, 'Reset clears sample history');
+assert.equal(model.view().latest, null, 'Reset clears latest snapshot');
+assert.equal(model.view().feed, 'Waiting for data', 'Reset restores initial feed state');
+
+const drawArc = context.window.ComponentReference.drawRealtimeMonitorArc;
+const svgMock = {
+  attributes: {},
+  children: [],
+  setAttribute: (k, v) => { svgMock.attributes[k] = v; },
+  replaceChildren: function () { svgMock.children = Array.from(arguments); }
+};
+context.document = {
+  createElementNS: (_ns, tag) => ({
+    tag,
+    attributes: {},
+    setAttribute: function (k, v) { this.attributes[k] = v; }
+  })
+};
+drawArc(svgMock, { id: 'rx', kind: 'metric', max: 20, warning: 16, critical: 19 }, 12);
+assert.equal(svgMock.children.some(c => c.tag === 'line'), false, 'Standard arc gauge must not draw tick line');
+assert.equal(svgMock.children.some(c => (c.attributes.class || '').includes('monitor-arc-tick')), false, 'Standard arc gauge must not have monitor-arc-tick');
+assert(svgMock.children.some(c => (c.attributes.class || '').includes('monitor-arc-band-caution')), 'Arc gauge retains caution band');
+assert(svgMock.children.some(c => (c.attributes.class || '').includes('monitor-arc-cap-danger')), 'Arc gauge has danger cap at terminal');
+assert(svgMock.children.some(c => (c.attributes.class || '').includes('monitor-arc-fill')), 'Arc gauge has fill');
+
+// Test arc gauge with peakValue (peak hold)
+drawArc(svgMock, { id: 'rx', kind: 'metric', max: 20, warning: 16, critical: 19 }, 12, 16);
+assert.equal(svgMock.children.some(c => c.tag === 'line'), true, 'Arc gauge with peak hold must draw tick line');
+const tickLine = svgMock.children.find(c => (c.attributes.class || '').includes('monitor-arc-tick'));
+assert(tickLine, 'Arc gauge with peak hold has monitor-arc-tick');
+assert(tickLine.attributes.x1 && tickLine.attributes.y1 && tickLine.attributes.x2 && tickLine.attributes.y2, 'Tick line has coordinates');
+
+console.log('Realtime monitor: telemetry validity, freshness, freeze/resume, bounded history, arc rendering, and isolation passed.');

@@ -51,9 +51,20 @@
       };
     }
 
-    return {
-      channels: Object.freeze(channels), interval: interval, windowMs: windowMs,
+    var model = {
+      channels: Object.freeze(channels), windowMs: windowMs,
       push: push, view: view,
+      setInterval: function (newInterval) {
+        if (!Number.isFinite(newInterval) || newInterval <= 0) throw new Error("Invalid monitoring interval");
+        interval = newInterval;
+        staleAfter = options.staleAfter === undefined ? interval * 3 : options.staleAfter;
+      },
+      reset: function () {
+        samples = [];
+        latest = null;
+        frozen = null;
+        connection = "connecting";
+      },
       pause: function () { if (!frozen) frozen = { samples: samples.slice(), latest: latest, end: clock() }; },
       resume: function () { frozen = null; },
       setConnection: function (state) {
@@ -61,5 +72,11 @@
         connection = state;
       }
     };
+    Object.defineProperty(model, "interval", {
+      get: function () { return interval; },
+      enumerable: true,
+      configurable: true
+    });
+    return model;
   };
 }(window.ComponentReference = window.ComponentReference || {}));

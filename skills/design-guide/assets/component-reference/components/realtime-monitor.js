@@ -28,13 +28,15 @@
     options = options || {};
     var presentation = options.presentation || "sparkline";
     if (!["sparkline", "heatstrip", "arc"].includes(presentation)) throw new Error("Invalid monitoring presentation");
+    var peakHold = Boolean(options.peakHold);
     var model = reference.createRealtimeMonitorModel(channels, options);
     var interactive = options.interactive !== false, selection = null, destroyed = false, frame = null;
+    var peaks = Object.create(null), decayFrame = null, lastDecayTime = null;
     var monitor = element("div", "realtime-monitor");
     monitor.dataset.provenance = options.simulated ? "simulated" : "observed";
     monitor.dataset.presentation = presentation;
     monitor.setAttribute("role", "group");
-    var presentationName = { sparkline: "", heatstrip: ", heat strip", arc: ", arc gauge" };
+    var presentationName = { sparkline: "", heatstrip: ", heat strip", arc: peakHold ? ", arc gauge with peak hold" : ", arc gauge" };
     monitor.setAttribute("aria-label", (options.label || "System monitor") + presentationName[presentation] + (options.simulated ? ", simulated telemetry" : ""));
     var resources = element("div", "monitor-resources"), services = element("div", "monitor-services");
     var tooltip = element("div", "tooltip-bubble monitor-tooltip");
@@ -60,16 +62,7 @@
       } else label.textContent = channel.label;
       var value = element("div", "monitor-value"), number = element("span"), unit = element("span", "monitor-unit", channel.unit || "");
       value.append(number, unit);
-      var plot = element(interactive ? "button" : "div", "monitor-plot");
-      if (interactive) plot.type = "button";
-      else plot.setAttribute("role", "img");
-      if (interactive) plot.setAttribute("aria-description", "Use Left and Right arrows, Home, or End to pause and inspect samples. Activate again or press Escape to resume the live view.");
-      var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      svg.setAttribute("class", "monitor-history");
-      svg.setAttribute("aria-hidden", "true");
-      svg.setAttribute("focusable", "false");
-      plot.appendChild(svg);
-      var arcSvg = null;
+      var plot = null, svg = null, arcSvg = null;
       if (metric && presentation === "arc") {
         var face = element("div", "monitor-arc-face");
         arcSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -79,17 +72,28 @@
         var readout = element("div", "monitor-arc-readout");
         readout.append(label, value);
         face.append(arcSvg, readout);
-        row.append(face, plot);
-        resources.appendChild(row);
-      } else if (metric) {
-        row.append(label, value, plot);
+        row.append(face);
         resources.appendChild(row);
       } else {
-        plot.prepend(label);
-        row.appendChild(plot);
-        services.appendChild(row);
+        plot = element(interactive ? "button" : "div", "monitor-plot");
+        if (interactive) plot.type = "button";
+        else plot.setAttribute("role", "img");
+        if (interactive) plot.setAttribute("aria-description", "Use Left and Right arrows, Home, or End to pause and inspect samples. Activate again or press Escape to resume the live view.");
+        svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("class", "monitor-history");
+        svg.setAttribute("aria-hidden", "true");
+        svg.setAttribute("focusable", "false");
+        plot.appendChild(svg);
+        if (metric) {
+          row.append(label, value, plot);
+          resources.appendChild(row);
+        } else {
+          plot.prepend(label);
+          row.appendChild(plot);
+          services.appendChild(row);
+        }
       }
-      if (interactive) {
+      if (interactive && plot) {
         plot.addEventListener("pointermove", function (event) { if (event.pointerType !== "touch") inspect(channel, plot, event); });
         plot.addEventListener("pointerleave", clearHover);
         plot.addEventListener("focus", function () { inspect(channel, plot, null); });
@@ -145,6 +149,7 @@
       var height = viewport ? viewport.height : window.innerHeight;
       tooltip.style.maxWidth = Math.min(360, width - 24) + "px";
       var row = rows.find(function (candidate) { return candidate.channel === selection.channel; });
+      if (!row || !row.svg) return;
       var rect = row.svg.getBoundingClientRect(), bubble = tooltip.getBoundingClientRect();
       var fraction = selection.timestamp === null ? 1 : (selection.timestamp - view.start) / model.windowMs;
       var x = rect.left + Math.max(0, Math.min(1, fraction)) * rect.width - bubble.width / 2;
@@ -155,6 +160,61 @@
     }
     function describeFeed(view) {
       return view.feed + (view.age === null ? "" : " · Last sample " + Math.floor(view.age / 1000) + "s ago");
+    }
+    function stepDecay(now) {
+      decayFrame = null;
+      if (destroyed || !peakHold) return;
+      var view = model.view();
+      if (view.paused) {
+        lastDecayTime = null;
+        return;
+      }
+      var dt = lastDecayTime !== null ? Math.min(0.2, Math.max(0, (now - lastDecayTime) / 1000)) : 0;
+      lastDecayTime = now;
+
+      var stillDecaying = false;
+      rows.forEach(function (row) {
+        if (!row.arcSvg || row.channel.kind !== "metric") return;
+        var channel = row.channel;
+        var curVal = (view.latest && view.latest.values[channel.id] !== null) ? view.latest.values[channel.id] : 0;
+        var currentPeak = peaks[channel.id] !== undefined ? peaks[channel.id] : curVal;
+
+        if (curVal >= currentPeak) {
+          peaks[channel.id] = curVal;
+        } else if (dt > 0) {
+          var decayRate = channel.max * 0.25;
+          peaks[channel.id] = Math.max(curVal, currentPeak - decayRate * dt);
+        }
+
+        if (peaks[channel.id] > curVal) {
+          stillDecaying = true;
+        }
+        reference.drawRealtimeMonitorArc(row.arcSvg, channel, (view.latest ? view.latest.values[channel.id] : null), peaks[channel.id]);
+      });
+
+      if (stillDecaying && typeof requestAnimationFrame === "function") {
+        decayFrame = requestAnimationFrame(stepDecay);
+      } else {
+        lastDecayTime = null;
+      }
+    }
+    function checkDecay() {
+      if (!peakHold || destroyed) return;
+      var view = model.view();
+      if (view.paused) return;
+      var needsDecay = false;
+      rows.forEach(function (row) {
+        if (!row.arcSvg || row.channel.kind !== "metric") return;
+        var channel = row.channel;
+        var curVal = (view.latest && view.latest.values[channel.id] !== null) ? view.latest.values[channel.id] : 0;
+        if (peaks[channel.id] !== undefined && peaks[channel.id] > curVal) {
+          needsDecay = true;
+        }
+      });
+      if (needsDecay && decayFrame === null && typeof requestAnimationFrame === "function") {
+        lastDecayTime = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+        decayFrame = requestAnimationFrame(stepDecay);
+      }
     }
     function render() {
       if (destroyed) return;
@@ -168,17 +228,25 @@
         var channel = row.channel, value = view.latest ? view.latest.values[channel.id] : null;
         var status = severity(channel, value, presentation);
         var historic = view.paused || view.feed !== "Live";
+        if (peakHold && channel.kind === "metric" && value !== null) {
+          if (peaks[channel.id] === undefined || value > peaks[channel.id]) {
+            peaks[channel.id] = value;
+          }
+        }
         row.number.textContent = value === null ? "—" : channel.kind === "metric" ? value.toFixed(channel.decimals) : "";
         row.unit.hidden = value === null;
         row.value.dataset.tone = status.tone;
-        var scale = channel.kind === "metric" ? " Scale 0–" + channel.max + " " + channel.unit + ". " + status.label + (value > channel.max ? ", off scale" : "") + "." : "";
-        row.plot.setAttribute("aria-label", channel.label + ": " + (historic ? "last shown " : "") + format(channel, value) + ". " + (options.simulated ? "Simulated. " : "") + describeFeed(view) + ". " + model.windowMs / 1000 + " seconds of history; " + model.interval / 1000 + " second cadence." + scale + (Number.isFinite(channel.warning) ? " Warning at " + channel.warning + " " + channel.unit + "." : "") + (interactive ? view.paused ? " Activate to resume." : " Activate to pause and inspect." : ""));
-        if (interactive) row.plot.setAttribute("aria-pressed", String(view.paused));
-        if (selection && selection.channel === channel) row.plot.setAttribute("aria-describedby", tooltip.id);
-        else row.plot.removeAttribute("aria-describedby");
-        if (row.arcSvg) reference.drawRealtimeMonitorArc(row.arcSvg, channel, value);
-        reference.drawRealtimeMonitorPlot(row.svg, channel, view, inspected, presentation);
+        if (row.plot) {
+          var scale = channel.kind === "metric" ? " Scale 0–" + channel.max + " " + channel.unit + ". " + status.label + (value > channel.max ? ", off scale" : "") + "." : "";
+          row.plot.setAttribute("aria-label", channel.label + ": " + (historic ? "last shown " : "") + format(channel, value) + ". " + (options.simulated ? "Simulated. " : "") + describeFeed(view) + ". " + model.windowMs / 1000 + " seconds of history; " + model.interval / 1000 + " second cadence." + scale + (Number.isFinite(channel.warning) ? " Warning at " + channel.warning + " " + channel.unit + "." : "") + (interactive ? view.paused ? " Activate to resume." : " Activate to pause and inspect." : ""));
+          if (interactive) row.plot.setAttribute("aria-pressed", String(view.paused));
+          if (selection && selection.channel === channel) row.plot.setAttribute("aria-describedby", tooltip.id);
+          else row.plot.removeAttribute("aria-describedby");
+        }
+        if (row.arcSvg) reference.drawRealtimeMonitorArc(row.arcSvg, channel, value, peakHold ? peaks[channel.id] : undefined);
+        if (row.svg) reference.drawRealtimeMonitorPlot(row.svg, channel, view, inspected, presentation);
       });
+      checkDecay();
       tooltip.hidden = !selection;
       if (selection) {
         var channel = selection.channel, sample = inspected || view.latest;
@@ -195,7 +263,13 @@
       if (destroyed || frame !== null || document.hidden) return;
       frame = requestAnimationFrame(function () { frame = null; render(); });
     }
-    function resume() { model.resume(); selection = null; render(); announcement.textContent = "Live view resumed. " + model.view().feed; }
+    function resume() {
+      model.resume();
+      selection = null;
+      render();
+      checkDecay();
+      announcement.textContent = "Live view resumed. " + model.view().feed;
+    }
     var observer = new ResizeObserver(schedule);
     observer.observe(monitor);
     var timer = setInterval(schedule, 1000);
@@ -211,10 +285,25 @@
       setConnection: function (state) { if (!destroyed) { model.setConnection(state); render(); } },
       pause: function () { if (!destroyed) { model.pause(); render(); } },
       resume: function () { if (!destroyed) resume(); },
+      setInterval: function (ms) { if (!destroyed) { model.setInterval(ms); render(); } },
+      reset: function () {
+        if (!destroyed) {
+          peaks = Object.create(null);
+          if (decayFrame !== null && typeof cancelAnimationFrame === "function") {
+            cancelAnimationFrame(decayFrame);
+            decayFrame = null;
+          }
+          lastDecayTime = null;
+          model.reset();
+          render();
+        }
+      },
       destroy: function () {
         destroyed = true;
         clearInterval(timer);
-        if (frame !== null) cancelAnimationFrame(frame);
+        if (frame !== null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(frame);
+        if (decayFrame !== null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(decayFrame);
+        decayFrame = null;
         observer.disconnect();
         document.removeEventListener("visibilitychange", schedule);
         window.removeEventListener("scroll", positionTooltip, true);
