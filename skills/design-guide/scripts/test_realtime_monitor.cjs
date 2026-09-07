@@ -129,4 +129,24 @@ const tickLine = svgMock.children.find(c => (c.attributes.class || '').includes(
 assert(tickLine, 'Arc gauge with peak hold has monitor-arc-tick');
 assert(tickLine.attributes.x1 && tickLine.attributes.y1 && tickLine.attributes.x2 && tickLine.attributes.y2, 'Tick line has coordinates');
 
-console.log('Realtime monitor: telemetry validity, freshness, freeze/resume, bounded history, arc rendering, and isolation passed.');
+// Test heat strip bar count invariance (must always remain exactly 40 bars)
+const drawPlot = context.window.ComponentReference.drawRealtimeMonitorPlot;
+const heatSvg = {
+  attributes: {},
+  children: [],
+  setAttribute: (k, v) => { heatSvg.attributes[k] = v; },
+  replaceChildren: function () { heatSvg.children = Array.from(arguments); },
+  getBoundingClientRect: () => ({ width: 300, height: 24 })
+};
+for (const testInterval of [4000, 2000, 1000, 500, 100]) {
+  const testSamples = [];
+  for (let t = now - 60000; t <= now; t += testInterval) {
+    testSamples.push({ timestamp: t, values: { cpu: 50 } });
+  }
+  const testView = { start: now - 60000, end: now, interval: testInterval, samples: testSamples };
+  drawPlot(heatSvg, { id: 'cpu', kind: 'metric', max: 100 }, testView, null, 'heatstrip');
+  const rects = heatSvg.children.filter(c => c.tag === 'rect');
+  assert.equal(rects.length, 40, `Heat strip must always have exactly 40 bars (tested interval: ${testInterval})`);
+}
+
+console.log('Realtime monitor: telemetry validity, freshness, freeze/resume, bounded history, arc rendering, heatstrip invariant 40 bars, and isolation passed.');

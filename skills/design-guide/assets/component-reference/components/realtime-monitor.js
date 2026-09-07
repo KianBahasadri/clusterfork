@@ -182,7 +182,7 @@
         if (curVal >= currentPeak) {
           peaks[channel.id] = curVal;
         } else if (dt > 0) {
-          var decayRate = channel.max * 0.25;
+          var decayRate = channel.max * 0.05;
           peaks[channel.id] = Math.max(curVal, currentPeak - decayRate * dt);
         }
 

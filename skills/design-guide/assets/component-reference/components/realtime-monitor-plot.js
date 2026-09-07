@@ -90,27 +90,89 @@
     return y;
   }
 
-  function drawHeatstrip(nodes, channel, view, width, height, x) {
+  function drawHeatstrip(nodes, channel, view, width, height) {
     var metric = channel.kind === "metric";
-    var cellH = metric ? 18 : 18;
+    var cellH = 18;
     var y = (height - cellH) / 2;
-    var slot = Math.max(1, view.interval / (view.end - view.start) * width);
+    var numBars = 40;
+    var slot = width / numBars;
     var gap = slot >= 3 ? 1 : 0;
     var cellW = Math.max(0.5, slot - gap);
-    view.samples.forEach(function (sample) {
-      var value = sample.values[channel.id];
-      if (metric && value === null) return;
-      var zone = reference.realtimeMonitorZone(channel, value);
-      var cls = metric ? heatClass(zone) : "monitor-state monitor-state-" + (value || "unknown");
-      if (!cls) return;
-      var t = metric && Number.isFinite(value) ? Math.max(0, Math.min(1, value / channel.max)) : 1;
+    var windowSpan = view.end - view.start;
+    var bucketDuration = windowSpan / numBars;
+
+    for (var i = 0; i < numBars; i++) {
+      var barStart = view.start + i * bucketDuration;
+      var barEnd = barStart + bucketDuration;
+      var barMid = (barStart + barEnd) / 2;
+
+      var matchingSamples = [];
+      for (var s = 0; s < view.samples.length; s++) {
+        var sample = view.samples[s];
+        var isLast = (i === numBars - 1);
+        if (sample.timestamp >= barStart && (isLast ? sample.timestamp <= barEnd : sample.timestamp < barEnd)) {
+          matchingSamples.push(sample);
+        }
+      }
+
+      var chosenValue = null;
+      if (matchingSamples.length > 0) {
+        if (metric) {
+          var worstZone = "good";
+          var maxVal = null;
+          for (var m = 0; m < matchingSamples.length; m++) {
+            var v = matchingSamples[m].values[channel.id];
+            if (v !== null && Number.isFinite(v)) {
+              var z = reference.realtimeMonitorZone(channel, v);
+              if (z === "danger") { worstZone = "danger"; maxVal = v; }
+              else if (z === "caution" && worstZone !== "danger") { worstZone = "caution"; maxVal = v; }
+              else if (maxVal === null || v > maxVal) { maxVal = v; }
+            }
+          }
+          chosenValue = maxVal;
+        } else {
+          var worstState = null;
+          for (var m = 0; m < matchingSamples.length; m++) {
+            var st = matchingSamples[m].values[channel.id];
+            if (st === "danger") worstState = "danger";
+            else if (st === "caution" && worstState !== "danger") worstState = "caution";
+            else if (st === "good" && !worstState) worstState = "good";
+          }
+          chosenValue = worstState;
+        }
+      } else {
+        var nearest = null;
+        var minDist = Infinity;
+        for (var s = 0; s < view.samples.length; s++) {
+          var sample = view.samples[s];
+          var dist = Math.abs(sample.timestamp - barMid);
+          if (dist < minDist) {
+            minDist = dist;
+            nearest = sample;
+          }
+        }
+        var maxTolerance = Math.max(bucketDuration, view.interval) * 1.5;
+        if (nearest && minDist <= maxTolerance) {
+          chosenValue = nearest.values[channel.id];
+        }
+      }
+
+      if (chosenValue === null || chosenValue === undefined) continue;
+
+      var zone = reference.realtimeMonitorZone(channel, chosenValue);
+      var cls = metric ? heatClass(zone) : "monitor-state monitor-state-" + (chosenValue || "unknown");
+      if (!cls) continue;
+
+      var t = metric && Number.isFinite(chosenValue) ? Math.max(0, Math.min(1, chosenValue / channel.max)) : 1;
       var opacity = metric && (zone === "good" || zone === "nominal") ? (0.22 + 0.78 * t).toFixed(2) : "1";
-      var rx = !metric && value === "good" ? 1.5 : !metric && value === "caution" ? 1 : 0;
+      var rx = !metric && chosenValue === "good" ? 1.5 : !metric && chosenValue === "caution" ? 1 : 0;
+      var barX = i * slot;
+
       nodes.push(svgElement("rect", {
-        x: x(sample.timestamp), y: y, width: cellW, height: cellH, rx: rx,
+        x: barX.toFixed(2), y: y, width: cellW.toFixed(2), height: cellH, rx: rx,
         class: cls, "fill-opacity": opacity
       }));
-    });
+    }
   }
 
   function drawStatusSpans(nodes, channel, view, height, x) {
@@ -187,8 +249,10 @@
       }
     }
     if (hasFill) {
+      var isPeakGauge = (peakValue !== undefined && peakValue !== null);
+      var fillDeg = isPeakGauge ? Math.max(ARC_START, toDeg(value, channel.max) - 4.41) : toDeg(value, channel.max);
       var fillClass = "monitor-arc-fill monitor-arc-fill-" + (zone === "unknown" ? "nominal" : zone);
-      nodes.push(svgElement("path", { d: arcPath(ARC_START, toDeg(value, channel.max), ARC_R), class: fillClass }));
+      nodes.push(svgElement("path", { d: arcPath(ARC_START, fillDeg, ARC_R), class: fillClass }));
     }
     if (peakValue !== undefined && peakValue !== null && Number.isFinite(peakValue) && peakValue > 0) {
       var peakDeg = toDeg(peakValue, channel.max);
