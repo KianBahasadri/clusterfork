@@ -18,6 +18,10 @@ Commits and pushes staged changes to the current branch. Invoked via the `/commi
 
 Backfills characterization tests and a hardened GitHub Actions workflow on a public repo using standard hosted runners (Actions minutes are free there). Auto-rejects billed or unknown CI until the user explicitly approves. Invoked via `/create-github-action-tests`.
 
+## add-codeview-module
+
+Adds a drop-in codeview dashboard tab: a Python module in the current repo's `.codeview/modules/` that appears as an extra `/m/<name>/` tab. Follows whatever modules the target repo already ships and the codeview module contract; carries the page template, host CSS classes, and the sandboxed-frame constraints. Invoked via `/add-codeview-module`.
+
 ## generate_docs
 
 Regenerates `AGENTS.md` and the `docs/` directory from the current state of the repo. Reads all source files, creates one doc per topic with no repeated information, and writes a slim `AGENTS.md` with process rules for reading and maintaining `docs/` (not topic detail). Invoked via the `/generate_docs` slash command in Qwen Code, Grok, Claude Code, or Codex. OpenCode and Antigravity receive the compatible `generate-docs` skill name.
