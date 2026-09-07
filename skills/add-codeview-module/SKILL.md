@@ -204,15 +204,25 @@ def render(data: dict) -> str:
 <link rel="stylesheet" href="/assets/app.css">
 <script>
 (function () {{
-  // localStorage throws in the dashboard's sandboxed frame (opaque origin);
-  // this only takes effect when /m/my-tab/ is opened directly.
-  try {{
-    var stored = localStorage.getItem("codeview-theme");
-    if (stored === "light" || stored === "dark")
-      document.documentElement.dataset.theme = stored;
-    else if (window.matchMedia("(prefers-color-scheme: light)").matches)
-      document.documentElement.dataset.theme = "light";
-  }} catch (err) {{}}
+  var root = document.documentElement;
+  function setTheme(t) {{ if (t === "light" || t === "dark") root.dataset.theme = t; }}
+  // Framed by the dashboard, this page has an opaque origin and cannot read
+  // localStorage, so the host hands the theme over: in the src for first
+  // paint, then by postMessage on every toggle. The stored value and the OS
+  // preference only apply when /m/<slug>/ is opened directly.
+  var handed = new URLSearchParams(location.search).get("theme");
+  if (handed) {{
+    setTheme(handed);
+  }} else {{
+    var stored = null;
+    try {{ stored = localStorage.getItem("codeview-theme"); }} catch (err) {{ /* */ }}
+    if (stored) setTheme(stored);
+    else if (window.matchMedia("(prefers-color-scheme: light)").matches) setTheme("light");
+  }}
+  window.addEventListener("message", function (e) {{
+    if (e.source === window.parent && e.data && e.data.type === "codeview-theme")
+      setTheme(e.data.theme);
+  }});
 }})();
 </script>
 <style>

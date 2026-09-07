@@ -154,5 +154,59 @@ class CustomModulesTests(unittest.TestCase):
         self.assertIn("term-model", body)
 
 
+class ThemeHandoffTests(unittest.TestCase):
+    """The dashboard frames module tabs with sandbox="allow-scripts
+    allow-forms" and no allow-same-origin, so a module page has an opaque
+    origin and localStorage raises SecurityError there. The host therefore
+    hands the theme over — in the frame src for first paint, then by
+    postMessage on every toggle. Both halves have to stay in step, so assert
+    them together."""
+
+    APP_JS = REPO_ROOT / "scripts" / "codeview" / "ui" / "app.js"
+    INDEX = REPO_ROOT / "scripts" / "codeview" / "ui" / "index.html"
+    MODULES = (SCRIPTS_PATH, SKILLS_PATH, STATUSLINE_PATH)
+
+    def test_host_sends_theme_to_module_frames(self):
+        js = self.APP_JS.read_text(encoding="utf-8")
+        self.assertIn("?theme=${theme}", js)
+        self.assertIn('type: "codeview-theme"', js)
+        self.assertIn("broadcastTheme", js)
+        # The sandbox must stay narrow: granting allow-same-origin would
+        # "fix" the theme by dissolving the isolation instead.
+        self.assertIn('"sandbox", "allow-scripts allow-forms"', js)
+
+    def test_modules_accept_the_handoff(self):
+        for path in self.MODULES:
+            with self.subTest(module=path.name):
+                mod = load_module(path.stem, path)
+                page = mod.render(mod.scan(REPO_ROOT))
+                self.assertIn('URLSearchParams(location.search).get("theme")',
+                              page)
+                self.assertIn('addEventListener("message"', page)
+                self.assertIn('"codeview-theme"', page)
+
+    def test_os_preference_stays_reachable_when_storage_throws(self):
+        """The localStorage read must not wrap the prefers-color-scheme
+        fallback: storage throws in the frame and in private mode, which
+        would otherwise strand the page on its default theme."""
+        paths = (self.INDEX,) + self.MODULES
+        for path in paths:
+            with self.subTest(file=path.name):
+                text = path.read_text(encoding="utf-8")
+                read = text.index("localStorage.getItem")
+                guarded = text[text.rindex("try", 0, read):
+                               text.index("catch", read)]
+                self.assertIn("localStorage.getItem", guarded)
+                self.assertNotIn("prefers-color-scheme", guarded)
+
+    def test_esc_keeps_falsy_values(self):
+        for path in self.MODULES:
+            with self.subTest(module=path.name):
+                mod = load_module(path.stem, path)
+                self.assertEqual(mod.esc(0), "0")
+                self.assertEqual(mod.esc(False), "False")
+                self.assertEqual(mod.esc(None), "")
+
+
 if __name__ == "__main__":
     unittest.main()

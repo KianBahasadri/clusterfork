@@ -291,13 +291,25 @@ def render(data: dict) -> str:
 <link rel="stylesheet" href="/assets/app.css">
 <script>
 (function () {{
-  try {{
-    var stored = localStorage.getItem("codeview-theme");
-    if (stored === "light" || stored === "dark")
-      document.documentElement.dataset.theme = stored;
-    else if (window.matchMedia("(prefers-color-scheme: light)").matches)
-      document.documentElement.dataset.theme = "light";
-  }} catch (err) {{}}
+  var root = document.documentElement;
+  function setTheme(t) {{ if (t === "light" || t === "dark") root.dataset.theme = t; }}
+  // Framed by the dashboard, this page has an opaque origin and cannot read
+  // localStorage, so the host hands the theme over: in the src for first
+  // paint, then by postMessage on every toggle. The stored value and the OS
+  // preference only apply when /m/<slug>/ is opened directly.
+  var handed = new URLSearchParams(location.search).get("theme");
+  if (handed) {{
+    setTheme(handed);
+  }} else {{
+    var stored = null;
+    try {{ stored = localStorage.getItem("codeview-theme"); }} catch (err) {{ /* */ }}
+    if (stored) setTheme(stored);
+    else if (window.matchMedia("(prefers-color-scheme: light)").matches) setTheme("light");
+  }}
+  window.addEventListener("message", function (e) {{
+    if (e.source === window.parent && e.data && e.data.type === "codeview-theme")
+      setTheme(e.data.theme);
+  }});
 }})();
 </script>
 <style>
@@ -367,7 +379,7 @@ def render(data: dict) -> str:
     navigator.clipboard.writeText(btn.dataset.copy).then(function () {{
       btn.classList.add("is-copied");
       window.setTimeout(function () {{ btn.classList.remove("is-copied"); }}, 1600);
-    }});
+    }}).catch(function () {{ /* never leave this rejection unhandled */ }});
   }});
 
   var tip = document.getElementById("scripts-tip");
@@ -475,4 +487,5 @@ def copy_btn(name: str) -> str:
 
 
 def esc(s: object) -> str:
-    return html.escape(str(s or ""), quote=True)
+    """Escape for HTML. Only None is empty — 0 and False must still render."""
+    return "" if s is None else html.escape(str(s), quote=True)

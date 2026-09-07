@@ -68,6 +68,25 @@ const htmlEl = document.documentElement;
 const themeToggle = $("#themeToggleBtn");
 const themeIconUse = $("#themeIconUse");
 
+function currentTheme() {
+  return htmlEl.dataset.theme === "light" ? "light" : "dark";
+}
+
+// Module tabs are sandboxed without allow-same-origin, so their frames have an
+// opaque origin and cannot read the stored theme themselves — localStorage
+// throws in there. The host hands the theme over instead: in the frame's src
+// for first paint, then by postMessage on every toggle.
+function postTheme(frame, theme) {
+  try {
+    frame.contentWindow.postMessage({ type: "codeview-theme", theme }, "*");
+  } catch { /* frame not ready yet; its load handler re-sends */ }
+}
+
+function broadcastTheme(theme) {
+  document.querySelectorAll("iframe.module-frame")
+    .forEach(frame => postTheme(frame, theme));
+}
+
 function applyTheme(theme) {
   htmlEl.dataset.theme = theme;
   const light = theme === "light";
@@ -76,6 +95,7 @@ function applyTheme(theme) {
   themeToggle.setAttribute("aria-label", label);
   themeToggle.setAttribute("title", label);
   try { localStorage.setItem("codeview-theme", theme); } catch { /* */ }
+  broadcastTheme(theme);
 }
 
 function toggleTheme() {
@@ -777,9 +797,16 @@ function showPanel(name) {
 function loadModuleTab(name) {
   const slug = name.slice(2);
   const panel = document.querySelector(`.panel[data-panel="${name}"]`);
-  panel.innerHTML =
-    `<iframe class="module-frame" src="/m/${encodeURIComponent(slug)}/"
-       sandbox="allow-scripts allow-forms" title="${esc(slug)}"></iframe>`;
+  const theme = currentTheme();
+  const frame = document.createElement("iframe");
+  frame.className = "module-frame";
+  frame.title = slug;
+  frame.setAttribute("sandbox", "allow-scripts allow-forms");
+  // A toggle fired while the frame is still loading lands before the module's
+  // listener exists, so re-send the current theme once it is ready.
+  frame.addEventListener("load", () => postTheme(frame, currentTheme()));
+  frame.src = `/m/${encodeURIComponent(slug)}/?theme=${theme}`;
+  panel.replaceChildren(frame);
 }
 
 function activateTab(key) {

@@ -158,6 +158,19 @@ def register(reg):
   full control of their page HTML (the core UI is plain HTML/JS; no shared
   frontend framework to target).
 
+Theme handoff: module pages are framed with `sandbox="allow-scripts
+allow-forms"` and no `allow-same-origin`, so a module document has an opaque
+origin — `localStorage` raises `SecurityError` in there and the host page is
+unreachable. Since the chosen theme lives in `localStorage`, the host hands it
+over instead: the current theme rides in the frame's `src`
+(`/m/<name>/?theme=dark`) for first paint, and every toggle is delivered to
+live frames as a `{type: "codeview-theme", theme}` `postMessage`, which
+repaints them without a reload. Modules opt in by reading the query parameter
+and listening for that message; the three shipped tabs do, and the
+`add-codeview-module` skill's template carries it. A module that ignores both
+still renders — it just stays on its default theme, which is what all three
+tabs did before the handoff existed.
+
 Failure behavior: a module that fails to import or register becomes a
 "⚠ broken" tab showing its traceback — it never breaks the server or the
 other tabs. Changes to the module set (files added/removed/modified) are

@@ -9,14 +9,15 @@
 <link rel="stylesheet" href="/assets/app.css">
 <script>
 (function () {
-  try {
-    var stored = localStorage.getItem("codeview-theme");
-    if (stored === "light" || stored === "dark") {
-      document.documentElement.dataset.theme = stored;
-    } else if (window.matchMedia("(prefers-color-scheme: light)").matches) {
-      document.documentElement.dataset.theme = "light";
-    }
-  } catch (err) { /* private mode */ }
+  var stored = null;
+  // Storage access throws in private mode; the OS preference below is the
+  // fallback, so it has to stay outside the try.
+  try { stored = localStorage.getItem("codeview-theme"); } catch (err) { /* */ }
+  if (stored === "light" || stored === "dark") {
+    document.documentElement.dataset.theme = stored;
+  } else if (window.matchMedia("(prefers-color-scheme: light)").matches) {
+    document.documentElement.dataset.theme = "light";
+  }
 })();
 </script>
 </head>
