@@ -924,8 +924,41 @@
           <h2 class="section-index" id="heading-budget-map">14 Budget Map</h2>
         </header>
         <div class="budget-map-examples">
-          <div id="budgetMapExample"></div>
           <div id="budgetMapWithinLimitExample"></div>
+          <div id="budgetMapExample"></div>
+          <div id="budgetMapOverrunIncrementsExample"></div>
+        </div>
+        <div class="budget-map-demo-header">
+          <div class="budget-map-demo-title-row">
+            <h3 class="budget-map-demo-heading">Dynamic perspective</h3>
+            <div class="budget-map-demo-controls">
+              <label class="budget-map-slider-wrap" for="tiltSlider1">
+                <span class="budget-map-slider-label">Overage tilt:</span>
+                <input type="range" class="budget-map-slider" id="tiltSlider1" min="0" max="1000" value="100" step="5" autocomplete="off" aria-label="Overage tilt intensity for dynamic perspective" />
+                <output class="budget-map-slider-val" id="tiltVal1" for="tiltSlider1">100%</output>
+              </label>
+              <label class="budget-map-slider-wrap" for="compressSlider1">
+                <span class="budget-map-slider-label">Bar compression:</span>
+                <input type="range" class="budget-map-slider" id="compressSlider1" min="0" max="1000" value="100" step="5" autocomplete="off" aria-label="Baseline bar compression for dynamic perspective" />
+                <output class="budget-map-slider-val" id="compressVal1" for="compressSlider1">100%</output>
+              </label>
+              <label class="budget-map-slider-wrap" for="severitySlider1">
+                <span class="budget-map-slider-label">Overage severity:</span>
+                <input type="range" class="budget-map-slider" id="severitySlider1" min="0" max="1000" value="100" step="5" autocomplete="off" aria-label="Overage severity relationship strength with bar compression" />
+                <output class="budget-map-slider-val" id="severityVal1" for="severitySlider1">100%</output>
+              </label>
+              <label class="control-row budget-map-toggle-wrap" for="compressNonOverage1">
+                <input class="sr-only switch-input" type="checkbox" role="switch" id="compressNonOverage1" checked autocomplete="off" />
+                <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+                <span class="budget-map-toggle-label">Compress non-overages</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="budget-map-examples budget-map-demo-row">
+          <div id="budgetMapDemoWithinLimitExample"></div>
+          <div id="budgetMapDemoExample"></div>
+          <div id="budgetMapDemoOverrunIncrementsExample"></div>
         </div>
       </section>
 

@@ -1,5 +1,16 @@
 /* Budget map: an unlabelled time/limit plane in low perspective, with the bottom edge nearest. */
-.budget-map-examples { display: grid; gap: 32px; }
+.budget-map-examples { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.budget-map-demo-header { margin-top: 32px; margin-bottom: 8px; }
+.budget-map-demo-title-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; }
+.budget-map-demo-heading { font-size: 13.5px; font-weight: 600; color: var(--ink); margin: 0; }
+.budget-map-demo-controls { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; }
+.budget-map-slider-wrap { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.budget-map-slider-label { user-select: none; }
+.budget-map-slider-val { font-family: var(--mono); color: var(--ink); font-weight: 500; min-width: 48px; display: inline-block; }
+.budget-map-slider { width: 200px; max-width: 100%; height: 4px; accent-color: var(--accent); cursor: pointer; vertical-align: middle; }
+.budget-map-toggle-wrap { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+.budget-map-toggle-wrap:hover { color: var(--ink); }
+.budget-map-toggle-label { user-select: none; }
 .budget-map { min-width: 0; position: relative; }
 .budget-map-context { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .budget-map-frame { position: relative; min-width: 0; }
@@ -12,7 +23,7 @@ button.budget-map-surface { cursor: crosshair; touch-action: pan-y; }
 .budget-map-overrun { fill: var(--danger-soft); opacity: 0.35; }
 .budget-map-limit { stroke: var(--danger); stroke-width: 1.5; opacity: 0.4; }
 .budget-map-pace { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 5; opacity: 0.5; }
-.budget-map-now { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 5 4; }
+.budget-map-now { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 5 4; opacity: 0.25; }
 .budget-map-observed, .budget-map-forecast { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .budget-map-observed { stroke: var(--accent); }
 .budget-map-forecast { stroke: var(--derived); stroke-dasharray: 5 5; }
@@ -20,10 +31,10 @@ button.budget-map-surface { cursor: crosshair; touch-action: pan-y; }
 .budget-map-history-point, .budget-map-current { fill: var(--accent); }
 .budget-map-current { stroke: var(--canvas); stroke-width: 2; }
 .budget-map-logo { fill: none; stroke: none; color: var(--ink-strong); overflow: visible; }
-.budget-map-endpoint { fill: var(--canvas); stroke: var(--muted); stroke-width: 2; }
-.budget-map-item[data-severity="good"] .budget-map-endpoint { stroke: var(--good); }
-.budget-map-item[data-severity="caution"] .budget-map-endpoint { stroke: var(--caution); }
-.budget-map-item[data-severity="danger"] .budget-map-endpoint { stroke: var(--danger); }
+.budget-map-endpoint { fill: var(--muted); stroke: none; }
+.budget-map-item[data-severity="good"] .budget-map-endpoint { fill: var(--good); }
+.budget-map-item[data-severity="caution"] .budget-map-endpoint { fill: var(--caution); }
+.budget-map-item[data-severity="danger"] .budget-map-endpoint { fill: var(--danger); }
 [data-severity="caution"].budget-map-detail-status, [data-severity="caution"].budget-map-tooltip-status { color: var(--caution); }
 [data-severity="danger"].budget-map-detail-status, [data-severity="danger"].budget-map-tooltip-status { color: var(--danger); }
 .budget-map-item { --budget-map-opacity: 1; opacity: var(--budget-map-opacity); transition: opacity 120ms ease; }
@@ -87,7 +98,9 @@ dialog.budget-map-dialog { width: min(880px, calc(100% - 24px)); max-width: 880p
   .budget-map-dialog .btn-icon { min-width: 44px; }
   dialog.budget-map-dialog { padding: 16px; }
   .budget-map-method-notes summary { min-height: 44px; padding: 12px 0; }
+  .budget-map-slider { width: 140px; }
 }
+@media (max-width: 900px) { .budget-map-examples { grid-template-columns: 1fr; gap: 32px; } }
 @media (max-width: 700px) { .budget-map-summary { grid-template-columns: minmax(0, 1fr); gap: 24px; } }
 @media (prefers-reduced-motion: reduce) { .budget-map-item { transition: none; } }
 @media print { .budget-map-tooltip { display: none; } .budget-map-item.is-muted, .budget-map-item.is-active { opacity: 1; } }

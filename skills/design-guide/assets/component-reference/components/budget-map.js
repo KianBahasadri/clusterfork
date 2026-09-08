@@ -114,7 +114,16 @@
     function draw() {
       if (destroyed) return;
       frameRequest = 0;
-      drawing = reference.drawBudgetMap(svg, model, { width: frame.clientWidth, logos: logos });
+      drawing = reference.drawBudgetMap(svg, model, {
+        width: frame.clientWidth,
+        logos: logos,
+        dynamicPerspective: options.dynamicPerspective === true,
+        dynamicCamera: options.dynamicCamera === true,
+        tiltIntensity: options.tiltIntensity !== undefined ? options.tiltIntensity : 1,
+        compressionIntensity: options.compressionIntensity !== undefined ? options.compressionIntensity : 1,
+        severityIntensity: options.severityIntensity !== undefined ? options.severityIntensity : 1,
+        compressNonOverage: options.compressNonOverage !== false
+      });
       if (hit) inspect(itemHit(activeId), false);
     }
     function renderContext() {
@@ -122,7 +131,8 @@
       availability.textContent = unavailable.length ? "Unavailable: " + unavailable.map(function (item) { return item.label; }).join(", ") : "";
       availability.hidden = !unavailable.length;
       surface.setAttribute("aria-label", (interactive ? "Explore " : "") + model.title);
-      help.textContent = (model.sample ? "Illustrative sample data. " : "") + "Budgets share a time and percentage-of-limit plane viewed in perspective. Time advances from left to right; usage increases from the near bottom edge toward the narrower far top edge. The red boundary is the 100% limit. The plotted range is 0 to " + model.maximum + "% of each limit, from " + new Date(model.start).toISOString() + " to " + new Date(model.end).toISOString() + ". Solid trails are observed; dashed trails end at the period forecast. As of "
+      var minPlotted = (drawing && drawing.baseUsage !== undefined) ? drawing.baseUsage : 0;
+      help.textContent = (model.sample ? "Illustrative sample data. " : "") + "Budgets share a time and percentage-of-limit plane viewed in perspective. Time advances from left to right; usage increases from the near bottom edge toward the narrower far top edge. The red boundary is the 100% limit. The plotted range is " + minPlotted + " to " + model.maximum + "% of each limit, from " + new Date(model.start).toISOString() + " to " + new Date(model.end).toISOString() + ". Solid trails are observed; dashed trails end at the period forecast. As of "
         + new Date(model.now).toISOString() + ". " + (model.items.length ? model.items.map(detailText).join(" ") : "No budgets.")
         + (interactive ? " Left and Right inspect budgets; Home and End reach the first and last. Enter or Space opens details and exact data." : "");
     }
@@ -374,7 +384,7 @@
       if (!frameRequest) frameRequest = requestAnimationFrame(draw);
     });
     observer.observe(frame);
-    renderContext(); draw();
+    draw(); renderContext();
     document.fonts.ready.then(draw);
     return {
       update: function (nextData) {
@@ -382,7 +392,7 @@
         var next = reference.budgetMapModel.prepare(nextData);
         model = next;
         if (!selectedItem()) activeId = model.items.length ? model.items[0].id : null;
-        clearInspection(); renderContext(); draw();
+        clearInspection(); draw(); renderContext();
         if (dialog) {
           dialog.querySelector(".modal-title").textContent = model.title + " · details";
           if (dialog.open) {
@@ -394,6 +404,11 @@
             }
           }
         }
+      },
+      setOption: function (key, value) {
+        if (destroyed) return;
+        options[key] = value;
+        draw();
       },
       destroy: function () {
         destroyed = true;

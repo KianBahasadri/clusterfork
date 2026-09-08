@@ -16,7 +16,7 @@
   function prepare(data) {
     var start = time(data.start, "start"), end = time(data.end, "end"), now = time(data.asOf, "asOf");
     if (end <= start || now < start || now >= end) throw new RangeError("Use start <= asOf < end");
-    var warningAt = data.warningAt === undefined ? 90 : data.warningAt;
+    var warningAt = data.warningAt === undefined ? 75 : data.warningAt;
     if (!Number.isFinite(warningAt) || warningAt <= 0 || warningAt >= 100) throw new RangeError("warningAt must be between 0 and 100");
     var ids = new Set();
     var items = data.items.map(function (source) {
@@ -39,7 +39,7 @@
       var severity = "neutral", status = "No forecast";
       if (currentPercent !== null && currentPercent > 100) { severity = "danger"; status = "Over limit now"; }
       else if (forecastPercent !== null && forecastPercent > 100) { severity = "danger"; status = "Forecast over limit"; }
-      else if (forecastPercent !== null && forecastPercent >= warningAt) { severity = "caution"; status = "Near limit"; }
+      else if (forecastPercent !== null && forecastPercent > warningAt) { severity = "caution"; status = "Near limit"; }
       else if (forecastPercent !== null) { severity = "good"; status = "Within limit"; }
       else if (current === null) status = "Unavailable";
       return {
@@ -48,7 +48,7 @@
         history: history, stale: source.stale === true, severity: severity, status: status
       };
     });
-    var values = [105];
+    var values = [100];
     items.forEach(function (item) {
       values.push(item.currentPercent || 0, item.forecastPercent || 0);
       item.history.forEach(function (sample) { if (sample.value !== null) values.push(sample.value / item.limit * 100); });
