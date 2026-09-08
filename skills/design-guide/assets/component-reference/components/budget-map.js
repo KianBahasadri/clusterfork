@@ -119,10 +119,10 @@
         logos: logos,
         dynamicPerspective: options.dynamicPerspective === true,
         dynamicCamera: options.dynamicCamera === true,
-        tiltIntensity: options.tiltIntensity !== undefined ? options.tiltIntensity : 1,
-        compressionIntensity: options.compressionIntensity !== undefined ? options.compressionIntensity : 1,
-        severityIntensity: options.severityIntensity !== undefined ? options.severityIntensity : 1,
-        compressNonOverage: options.compressNonOverage !== false
+        tiltIntensity: options.tiltIntensity !== undefined ? options.tiltIntensity : 0.2,
+        compressionIntensity: options.compressionIntensity !== undefined ? options.compressionIntensity : 0,
+        severityIntensity: options.severityIntensity !== undefined ? options.severityIntensity : 0.8,
+        compressNonOverage: options.compressNonOverage !== undefined ? Boolean(options.compressNonOverage) : false
       });
       if (hit) inspect(itemHit(activeId), false);
     }

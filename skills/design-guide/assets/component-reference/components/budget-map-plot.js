@@ -32,7 +32,7 @@
       }
     }
     var overageRatio = Math.max(0, (model.maximum - 100) / 100);
-    var tiltIntensity = options.tiltIntensity !== undefined ? options.tiltIntensity : 1;
+    var tiltIntensity = options.tiltIntensity !== undefined ? options.tiltIntensity : 0.2;
     var perspective;
     if (options.perspective !== undefined) {
       perspective = options.perspective;
@@ -47,9 +47,9 @@
     } else {
       perspective = 0.4;
     }
-    var compressionIntensity = options.compressionIntensity !== undefined ? Math.max(0, options.compressionIntensity) : 1;
-    var severityIntensity = options.severityIntensity !== undefined ? Math.max(0, options.severityIntensity) : 1;
-    var compressNonOverage = options.compressNonOverage !== false;
+    var compressionIntensity = options.compressionIntensity !== undefined ? Math.max(0, options.compressionIntensity) : 0;
+    var severityIntensity = options.severityIntensity !== undefined ? Math.max(0, options.severityIntensity) : 0.8;
+    var compressNonOverage = options.compressNonOverage !== undefined ? Boolean(options.compressNonOverage) : false;
     var kCompress = isDynamic ? (compressionIntensity + severityIntensity * 0.6 * Math.min(5, overageRatio)) : 0;
     var dNon = Math.max(0, 100 - baseUsage);
     var dOver = Math.max(0, model.maximum - 100);
@@ -121,7 +121,9 @@
     [0, 0.25, 0.5, 0.75, 1].forEach(function (t) { line(ground, point(t, baseUsage), point(t, model.maximum), "budget-map-grid"); });
     var ticks = [];
     var startTick = Math.ceil(baseUsage / 25) * 25;
-    for (var tick = startTick; tick <= model.maximum; tick += 25) ticks.push(tick);
+    for (var tick = startTick; tick <= model.maximum; tick += 25) {
+      if (tick <= 300 || (tick - 100) % 100 === 0) ticks.push(tick);
+    }
     if (ticks.length === 0 || ticks[0] > baseUsage) ticks.unshift(baseUsage);
     if (ticks[ticks.length - 1] < model.maximum) ticks.push(model.maximum);
     ticks.forEach(function (value) {

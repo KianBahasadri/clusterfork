@@ -93,4 +93,44 @@ assert.equal(analysis(fixture({ forecast: null })).forecasts[0].total, null);
 assert.equal(analysis(fixture({ stale: true })).three.value, 500, 'Stale snapshots use their own as-of time');
 const overflow = analysis(fixture({ current: Number.MAX_VALUE, history: [sample(1, 0)] }));
 assert.equal(overflow.forecasts[1].total, null, 'Numeric overflow is unavailable, never Infinity');
-console.log('Budget map: rates, projections, limit dates, gaps, resets, zero usage, and supplied-data isolation passed.');
+
+// Verify usage gridlines and milestone markers in plot rendering
+const createElement = (tag) => {
+  const attrs = {};
+  const children = [];
+  return {
+    tagName: tag,
+    setAttribute: (k, v) => attrs[k] = String(v),
+    getAttribute: (k) => attrs[k],
+    replaceChildren: () => children.length = 0,
+    appendChild: (child) => children.push(child),
+    style: {},
+    children,
+    attrs,
+    classList: { add: () => {} }
+  };
+};
+const mockDoc = { createElementNS: (ns, tag) => createElement(tag) };
+const plotContext = vm.createContext({
+  window: {},
+  document: mockDoc,
+  Math, Object, Date, Intl
+});
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../assets/component-reference/components/budget-map-model.js'), 'utf8'), plotContext);
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../assets/component-reference/components/budget-map-plot.js'), 'utf8'), plotContext);
+const plotApi = plotContext.window.ComponentReference;
+
+const svg = createElement("svg");
+const overrunModel = plotApi.budgetMapModel.prepare({
+  start: at(1), end: at(31), asOf: at(16),
+  items: [{ id: "c", label: "Compute", limit: 10000, current: 30000, forecast: 60000, history: [] }]
+});
+plotApi.drawBudgetMap(svg, overrunModel, { width: 720 });
+const ground = svg.children.find(c => c.attrs.class === "budget-map-ground");
+const limitLines = ground.children.filter(c => c.tagName === "line" && c.attrs.class === "budget-map-limit");
+const gridLines = ground.children.filter(c => c.tagName === "line" && c.attrs.class === "budget-map-grid" && c.attrs.y1 === c.attrs.y2);
+
+assert.equal(limitLines.length, 6, "There should be 6 red milestone limit lines (100, 200, 300, 400, 500, 600)");
+assert.equal(gridLines.length, 10, "There should be 10 neutral horizontal grid lines (0, 25, 50, 75, 125, 150, 175, 225, 250, 275)");
+
+console.log('Budget map: rates, projections, limit dates, gaps, resets, zero usage, and plot ticks passed.');

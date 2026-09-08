@@ -36,14 +36,23 @@
     item("openrouter", "OpenRouter", "USD", 100, 4, 36, [0, 1.2, 2.4, 2.6, 3.4, 3.6])
   ];
 
-  mount("budgetMapWithinLimitExample", "within limits", withinLimits);
-  mount("budgetMapExample", "forecast overruns", overruns);
-  mount("budgetMapOverrunIncrementsExample", "overrun increments", increments);
+  var tiltInput = document.getElementById("tiltSlider1");
+  var compressInput = document.getElementById("compressSlider1");
+  var severityInput = document.getElementById("severitySlider1");
+  var compressToggle = document.getElementById("compressNonOverage1");
+
+  var demoOptions = {
+    dynamicPerspective: true,
+    tiltIntensity: tiltInput ? Number(tiltInput.value) / 100 : 0.2,
+    compressionIntensity: compressInput ? Number(compressInput.value) / 100 : 0,
+    severityIntensity: severityInput ? Number(severityInput.value) / 100 : 0.8,
+    compressNonOverage: compressToggle ? compressToggle.checked : false
+  };
 
   var demoMaps = [
-    mount("budgetMapDemoWithinLimitExample", "within limits (dynamic perspective)", withinLimits, { dynamicPerspective: true }),
-    mount("budgetMapDemoExample", "forecast overruns (dynamic perspective)", overruns, { dynamicPerspective: true }),
-    mount("budgetMapDemoOverrunIncrementsExample", "overrun increments (dynamic perspective)", increments, { dynamicPerspective: true })
+    mount("budgetMapWithinLimitExample", "within limits", withinLimits, demoOptions),
+    mount("budgetMapExample", "forecast overruns", overruns, demoOptions),
+    mount("budgetMapOverrunIncrementsExample", "overrun increments", increments, demoOptions)
   ].filter(Boolean);
 
   function bindSlider(sliderId, outputId, optionKey, maps) {
