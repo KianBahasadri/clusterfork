@@ -10,18 +10,18 @@
   function date(at) { return new Date(at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", timeZone: "UTC" }); }
   function percent(value) { return value === null ? "—" : new Intl.NumberFormat("en", { maximumFractionDigits: 1 }).format(value) + "%"; }
 
-  // Original billing-map camera: the time-zero left edge is near; time recedes right.
+  // Low perspective camera: time runs right; the usage plane narrows into the distance.
   reference.drawBudgetMap = function (svg, model, options) {
     var width = Math.max(240, options.width);
-    var scale = Math.min(width - 32, 720) / 305;
-    var rise = 94 * 0.82 * scale;
-    var height = rise * 2 + 32;
-    var origin = { x: (width - 15 * scale) / 2, y: height - 16 };
-    var timeVector = { x: 160 * scale, y: -rise };
-    var usageVector = { x: -145 * scale, y: -rise };
+    var planeWidth = Math.min(width - 32, 720);
+    var depth = planeWidth * 0.34;
+    var perspective = 0.4;
+    var height = depth + 32;
     function point(t, value) {
-      return { x: origin.x + timeVector.x * t + usageVector.x * value / model.maximum,
-        y: origin.y + timeVector.y * t + usageVector.y * value / model.maximum };
+      var usage = value / model.maximum;
+      var distance = 1 + perspective * usage;
+      return { x: width / 2 + (t - 0.5) * planeWidth / distance,
+        y: height - 16 - depth * usage * (1 + perspective) / distance };
     }
     function coordinates(p) { return p.x + "," + p.y; }
     function line(parent, a, b, className) {
@@ -56,7 +56,7 @@
     ticks.forEach(function (value) {
       line(ground, point(0, value), point(1, value), value === 100 ? "budget-map-limit" : "budget-map-grid");
     });
-    line(ground, point(0, model.maximum), point(0, 0), "budget-map-near-edge");
+    line(ground, point(0, 0), point(1, 0), "budget-map-near-edge");
     line(ground, point(0, 0), point(1, 100), "budget-map-pace");
     line(ground, point(model.elapsed, 0), point(model.elapsed, model.maximum), "budget-map-now");
 

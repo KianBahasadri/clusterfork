@@ -1,4 +1,5 @@
-/* Budget map: an unlabelled time/limit plane with the left edge nearest. */
+/* Budget map: an unlabelled time/limit plane in low perspective, with the bottom edge nearest. */
+.budget-map-examples { display: grid; gap: 32px; }
 .budget-map { min-width: 0; position: relative; }
 .budget-map-context { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .budget-map-frame { position: relative; min-width: 0; }
@@ -8,8 +9,8 @@ button.budget-map-surface { cursor: crosshair; touch-action: pan-y; }
 .budget-map-svg { display: block; width: 100%; overflow: visible; }
 .budget-map-grid { stroke: var(--line); stroke-width: 1; fill: none; }
 .budget-map-near-edge { stroke: var(--line-strong); stroke-width: 1.5; }
-.budget-map-overrun { fill: var(--danger-soft); }
-.budget-map-limit { stroke: var(--danger); stroke-width: 1.5; }
+.budget-map-overrun { fill: var(--danger-soft); opacity: 0.35; }
+.budget-map-limit { stroke: var(--danger); stroke-width: 1.5; opacity: 0.4; }
 .budget-map-pace { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 5; opacity: 0.5; }
 .budget-map-now { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 5 4; }
 .budget-map-observed, .budget-map-forecast { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
@@ -25,8 +26,9 @@ button.budget-map-surface { cursor: crosshair; touch-action: pan-y; }
 .budget-map-item[data-severity="danger"] .budget-map-endpoint { stroke: var(--danger); }
 [data-severity="caution"].budget-map-detail-status, [data-severity="caution"].budget-map-tooltip-status { color: var(--caution); }
 [data-severity="danger"].budget-map-detail-status, [data-severity="danger"].budget-map-tooltip-status { color: var(--danger); }
-.budget-map-item { transition: opacity 120ms ease; }
-.budget-map-item.is-stale { opacity: 0.6; }
+.budget-map-item { --budget-map-opacity: 1; opacity: var(--budget-map-opacity); transition: opacity 120ms ease; }
+.budget-map-item[data-severity="good"], .budget-map-item[data-severity="caution"] { --budget-map-opacity: 0.45; }
+.budget-map-item.is-stale { opacity: calc(var(--budget-map-opacity) * 0.6); }
 .budget-map-item.is-muted { opacity: 0.2; }
 .budget-map-item.is-active { opacity: 1; }
 .budget-map-empty { fill: var(--muted); font: 14px var(--ui); }
