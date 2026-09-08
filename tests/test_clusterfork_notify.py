@@ -240,6 +240,38 @@ class NotifierTests(NotifyFixture):
         self.assertNotIn("wrong-cwd", args)
         self.assertEqual(self.curl_stdin.read_text(), "")
 
+    def test_grok_notifies_only_on_end_turn(self):
+        project = self.root / "secret-project"
+        project.mkdir()
+
+        # Session shutdown or channel closed events (app exit) must be silent
+        for exit_reason in ("channel_closed", "shutdown"):
+            quiet = self.run_notifier(
+                "grok",
+                dotenv=f"CLUSTERFORK_NTFY_URL={PHONE_URL}\n",
+                stdin=json.dumps({"hookEventName": "stop", "reason": exit_reason}),
+                cwd=project,
+            )
+            self.assertEqual(quiet.returncode, 0)
+            self.assertEqual((quiet.stdout, quiet.stderr), ("", ""))
+            self.assertFalse(self.mpv_log.exists())
+            self.assertFalse(self.curl_log.exists())
+
+        # Genuine turn completion notifies
+        proc = self.run_notifier(
+            "grok",
+            dotenv=f"CLUSTERFORK_NTFY_URL={PHONE_URL}\n",
+            stdin=json.dumps({"hookEventName": "stop", "reason": "end_turn"}),
+            cwd=project,
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual((proc.stdout, proc.stderr), ("", ""))
+        self.assertTrue(self.mpv_log.exists())
+        args = self.curl_log.read_text()
+        self.assertIn("X-Title: Grok finished", args)
+        self.assertIn("Turn complete in secret-project", args)
+        self.assertEqual(self.curl_stdin.read_text(), "")
+
 
 class HookWiringTests(unittest.TestCase):
     def test_every_existing_stop_hook_uses_shared_notifier(self):

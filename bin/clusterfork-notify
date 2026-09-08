@@ -49,8 +49,31 @@ print(name)
 '
 }
 
+# Grok Stop fires on turn completions (reason: "end_turn") and on session
+# teardown/exit (reason: "channel_closed" or "shutdown"). Gate on
+# reason == "end_turn" so exiting Grok does not fire the completion notifier.
+# Stdin is inspected locally, never forwarded.
+grok_gate() {
+  python3 -c '
+import json, sys
+raw = sys.stdin.read().strip()
+if not raw.startswith("{"):
+    sys.exit(0)
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError:
+    sys.exit(0)
+reason = data.get("reason")
+if reason is not None and reason != "end_turn":
+    sys.exit(1)
+'
+}
+
 if [[ "$agent" == antigravity ]]; then
   project="$(antigravity_gate 2>/dev/null)" || exit 0
+elif [[ "$agent" == grok ]]; then
+  grok_gate 2>/dev/null || exit 0
+  project="$(basename "${PWD:-workspace}")"
 else
   project="$(basename "${PWD:-workspace}")"
 fi

@@ -18,9 +18,11 @@ agent without removing the Stop hook.
 The notification is deliberately small: its title identifies the agent and
 its body contains only the current directory's basename (Antigravity uses the
 basename of `workspacePaths[0]`, because its hook cwd is the `hooks.json`
-directory). Hook stdin is never forwarded. Other agents do not read it.
-Antigravity Stop also fires on tool yields and subagent cycles, so that path
-reads stdin locally and notifies only when `fullyIdle` is true.
+directory). Hook stdin is never forwarded. Other agents do not read it, except
+for Antigravity and Grok which inspect stdin locally: Antigravity Stop also
+fires on tool yields and subagent cycles, so that path notifies only when
+`fullyIdle` is true; Grok Stop also fires on session exit (`channel_closed` or
+`shutdown`), so that path notifies only when `reason == "end_turn"`.
 
 Codex keeps the notifier on root `Stop` with `async = true`; it does not
 register `SubagentStop`, so thread-spawned subagents stay quiet. Its upstream
@@ -77,8 +79,8 @@ installer destination, so reinstalling clusterfork does not reset it.
 Trigger history lives in `~/.config/clusterfork/notify-history`, which is also
 not overwritten on reinstall. The helper records enabled channels when it
 dispatches a notification; the history is not a delivery receipt. Disabled
-agents and Antigravity events rejected by the `fullyIdle` gate do not create a
-row. Writes are serialized when `flock` is available, logging failures remain
+agents, Antigravity events rejected by the `fullyIdle` gate, and Grok events
+rejected by the `end_turn` gate do not create a row. Writes are serialized when `flock` is available, logging failures remain
 silent, and only the newest 200 rows are retained. `notify log` displays 50 by
 default, accepts a count from 1 through 200, and—like the five-row status
 summary—prints newest first.
