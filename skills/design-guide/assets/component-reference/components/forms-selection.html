@@ -77,6 +77,48 @@
           <span>Remote debug unavailable</span>
         </label>
       </div>
+
+      <!-- Sliders -->
+      <div class="showcase-group range-group">
+        <div class="range-control">
+          <div class="range-control-heading">
+            <label for="alertThreshold">Alert threshold</label>
+            <output class="range-output" id="alertThresholdValue" for="alertThreshold">72%</output>
+          </div>
+          <input class="range-slider" id="alertThreshold" type="range" min="0" max="100" step="1" value="72" autocomplete="off" data-range-output="alertThresholdValue" data-range-suffix="%" data-range-aria-unit="percent" aria-valuetext="72 percent">
+        </div>
+        <div class="range-control">
+          <div class="range-control-heading">
+            <label for="workerReplicas">Worker replicas</label>
+            <output class="range-output" id="workerReplicasValue" for="workerReplicas">3</output>
+          </div>
+          <div class="range-stepped">
+            <input class="range-slider" id="workerReplicas" type="range" min="1" max="5" step="1" value="3" autocomplete="off" data-range-output="workerReplicasValue">
+            <div class="range-step-labels" aria-hidden="true">
+              <span>1</span><span>2</span><span>3</span><span>4</span><span>5</span>
+            </div>
+          </div>
+        </div>
+        <div class="range-control">
+          <div class="range-control-heading">
+            <label for="capacityLimit">Capacity limit</label>
+            <span class="range-control-values">
+              <span class="range-scrub-rate" id="capacityScrubRate" aria-hidden="true">Scrub 1×</span>
+              <output class="range-output range-output-wide" id="capacityLimitValue" for="capacityLimit">250,000 req/s</output>
+            </span>
+          </div>
+          <input class="range-slider range-slider-precision" id="capacityLimit" type="range" min="0" max="1000000" step="100" value="250000" autocomplete="off" data-range-output="capacityLimitValue" data-range-suffix=" req/s" data-range-aria-unit="requests per second" data-range-grouped data-range-scrub-rate="capacityScrubRate" data-range-scrub-status="capacityScrubStatus" aria-valuetext="250000 requests per second" aria-describedby="capacityLimitHint">
+          <span class="sr-only" id="capacityLimitHint">While dragging, move up or down for finer adjustment</span>
+          <span class="sr-only" id="capacityScrubStatus" aria-live="polite">Normal scrub speed</span>
+        </div>
+        <div class="range-control range-control-disabled">
+          <div class="range-control-heading">
+            <label for="retentionWindow">Retention window</label>
+            <output class="range-output" id="retentionWindowValue" for="retentionWindow">90 days</output>
+          </div>
+          <input class="range-slider" id="retentionWindow" type="range" min="30" max="180" step="30" value="90" autocomplete="off" data-range-output="retentionWindowValue" data-range-suffix=" days" data-range-aria-unit="days" aria-valuetext="90 days" disabled>
+        </div>
+      </div>
     </div>
   </div>
 </section>
