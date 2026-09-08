@@ -52,7 +52,7 @@
     if (!slider || !output) return;
     slider.addEventListener("input", function () {
       var val = Number(slider.value);
-      output.textContent = val + "%";
+      output.value = val + "%";
       var intensity = val / 100;
       maps.forEach(function (map) {
         map.setOption(optionKey, intensity);

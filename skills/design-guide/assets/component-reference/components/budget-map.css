@@ -3,12 +3,10 @@
 .budget-map-demo-header { margin-top: 32px; margin-bottom: 8px; }
 .budget-map-demo-title-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; }
 .budget-map-demo-heading { font-size: 13.5px; font-weight: 600; color: var(--ink); margin: 0; }
-.budget-map-demo-controls { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; }
-.budget-map-slider-wrap { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
-.budget-map-slider-label { user-select: none; }
-.budget-map-slider-val { font-family: var(--mono); color: var(--ink); font-weight: 500; min-width: 48px; display: inline-block; }
-.budget-map-slider { width: 200px; max-width: 100%; height: 4px; accent-color: var(--accent); cursor: pointer; vertical-align: middle; }
-.budget-map-toggle-wrap { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+.budget-map-demo-controls { display: inline-flex; align-items: flex-end; flex-wrap: wrap; gap: 12px 20px; }
+.budget-map-range-control { width: 210px; max-width: 100%; font-size: 12px; }
+.budget-map-range-control .range-output { min-width: 44px; }
+.budget-map-toggle-wrap { display: inline-flex; align-items: center; gap: 8px; height: 44px; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
 .budget-map-toggle-wrap:hover { color: var(--ink); }
 .budget-map-toggle-label { user-select: none; }
 .budget-map { min-width: 0; position: relative; }
@@ -98,7 +96,7 @@ dialog.budget-map-dialog { width: min(880px, calc(100% - 24px)); max-width: 880p
   .budget-map-dialog .btn-icon { min-width: 44px; }
   dialog.budget-map-dialog { padding: 16px; }
   .budget-map-method-notes summary { min-height: 44px; padding: 12px 0; }
-  .budget-map-slider { width: 140px; }
+  .budget-map-range-control { width: 100%; max-width: 240px; }
 }
 @media (max-width: 900px) { .budget-map-examples { grid-template-columns: 1fr; gap: 32px; } }
 @media (max-width: 700px) { .budget-map-summary { grid-template-columns: minmax(0, 1fr); gap: 24px; } }

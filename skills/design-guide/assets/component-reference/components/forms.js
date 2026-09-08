@@ -92,26 +92,115 @@
   });
 
   // Large-range pointer scrubbing: vertical distance selects a finer horizontal rate.
+  // The rate popup sits above the thumb while dragging; double-click or Enter types a value.
   Array.prototype.forEach.call(document.querySelectorAll(".range-slider-precision"), function (slider) {
-    var scrubRate = document.getElementById(slider.getAttribute("data-range-scrub-rate"));
     var scrubStatus = document.getElementById(slider.getAttribute("data-range-scrub-status"));
+    var popup = document.createElement("div");
+    var rateLabel = document.createElement("span");
+    var valueInput = document.createElement("input");
+    var sliderLabel = slider.id ? document.querySelector("label[for=\"" + slider.id + "\"]") : null;
     var activePointer = null;
     var dragValue = Number(slider.value);
     var initialValue = slider.value;
     var lastX = 0;
     var originY = 0;
     var unitsPerPixel = 1;
+    var editing = false;
+    var dragMoved = false;
+    var startedOnThumb = false;
+    var pendingThumbClick = false;
+    var pendingThumbAt = 0;
+    var pendingThumbX = 0;
+    var inputWidthCh = Math.max(4, Math.max(String(slider.min).length, String(slider.max).length) + 1);
 
-    function scrubBand(distance) {
-      if (distance <= 24) return { multiplier: 1, label: "Scrub 1×", status: "Normal scrub speed" };
-      if (distance <= 72) return { multiplier: 0.25, label: "Scrub 0.25×", status: "Quarter scrub speed" };
-      if (distance <= 144) return { multiplier: 0.1, label: "Scrub 0.1×", status: "Tenth scrub speed" };
-      return { multiplier: 0.02, label: "Scrub 0.02×", status: "Fine scrub speed" };
+    popup.className = "range-thumb-popup";
+    popup.hidden = true;
+    popup.setAttribute("aria-hidden", "true");
+    rateLabel.className = "range-thumb-popup-rate";
+    valueInput.className = "range-thumb-popup-input";
+    valueInput.type = "text";
+    valueInput.inputMode = "decimal";
+    valueInput.autocomplete = "off";
+    valueInput.spellcheck = false;
+    valueInput.hidden = true;
+    valueInput.style.width = inputWidthCh + "ch";
+    valueInput.setAttribute("aria-label", (sliderLabel ? sliderLabel.textContent : "Value") + " value");
+    popup.appendChild(rateLabel);
+    popup.appendChild(valueInput);
+    slider.parentNode.appendChild(popup);
+
+    function trackGeometry() {
+      var minimum = Number(slider.min);
+      var maximum = Number(slider.max);
+      var bounds = slider.getBoundingClientRect();
+      var trackInset = 9;
+      var trackStart = bounds.left + trackInset;
+      var trackWidth = Math.max(1, bounds.width - trackInset * 2);
+      var ratio = maximum === minimum ? 0 : (Number(slider.value) - minimum) / (maximum - minimum);
+      return {
+        minimum: minimum,
+        maximum: maximum,
+        bounds: bounds,
+        trackStart: trackStart,
+        trackWidth: trackWidth,
+        thumbX: trackStart + ratio * trackWidth,
+        thumbY: bounds.top + bounds.height / 2
+      };
     }
 
-    function updateScrubBand(band) {
-      if (scrubRate && scrubRate.textContent !== band.label) scrubRate.textContent = band.label;
+    function isOnThumb(event) {
+      var geometry = trackGeometry();
+      return Math.abs(event.clientX - geometry.thumbX) <= 12
+        && Math.abs(event.clientY - geometry.thumbY) <= geometry.bounds.height / 2;
+    }
+
+    function positionPopup() {
+      if (popup.hidden) return;
+      var geometry = trackGeometry();
+      var viewport = window.visualViewport;
+      var viewLeft = viewport ? viewport.offsetLeft : 0;
+      var viewTop = viewport ? viewport.offsetTop : 0;
+      var viewWidth = viewport ? viewport.width : document.documentElement.clientWidth;
+      var viewHeight = viewport ? viewport.height : window.innerHeight;
+      var width = popup.offsetWidth;
+      var height = popup.offsetHeight;
+      var x = geometry.thumbX - width / 2;
+      var y = geometry.thumbY - 9 - 8 - height;
+      if (y < viewTop + 12) y = geometry.thumbY + 9 + 8;
+      popup.style.left = Math.max(viewLeft + 12, Math.min(viewLeft + viewWidth - width - 12, x)) + "px";
+      popup.style.top = Math.max(viewTop + 12, Math.min(viewTop + viewHeight - height - 12, y)) + "px";
+    }
+
+    function scrubBand(distance) {
+      if (distance <= 24) return { multiplier: 1, label: "Speed 1×", status: "Normal speed" };
+      if (distance <= 72) return { multiplier: 0.25, label: "Speed 0.25×", status: "Quarter speed" };
+      if (distance <= 144) return { multiplier: 0.1, label: "Speed 0.1×", status: "Tenth speed" };
+      return { multiplier: 0.02, label: "Speed 0.02×", status: "Fine speed" };
+    }
+
+    function showRatePopup(band) {
+      if (editing) return;
+      if (rateLabel.textContent !== band.label) rateLabel.textContent = band.label;
       if (scrubStatus && scrubStatus.textContent !== band.status) scrubStatus.textContent = band.status;
+      valueInput.hidden = true;
+      rateLabel.hidden = false;
+      popup.classList.remove("is-editing");
+      popup.style.visibility = "hidden";
+      popup.hidden = false;
+      popup.setAttribute("aria-hidden", "true");
+      positionPopup();
+      popup.style.visibility = "";
+    }
+
+    function hideRatePopup() {
+      if (editing) return;
+      popup.hidden = true;
+      popup.style.visibility = "";
+      popup.classList.remove("is-editing");
+      popup.setAttribute("aria-hidden", "true");
+      var rest = scrubBand(0);
+      if (rateLabel.textContent !== rest.label) rateLabel.textContent = rest.label;
+      if (scrubStatus && scrubStatus.textContent !== rest.status) scrubStatus.textContent = rest.status;
     }
 
     function setSliderValue(value) {
@@ -128,55 +217,155 @@
       slider.dispatchEvent(new Event("input", { bubbles: true }));
     }
 
+    function parseEnteredValue(text) {
+      var match = String(text).replace(/,/g, "").match(/[+-]?\d*\.?\d+/);
+      if (!match) return null;
+      var parsed = Number(match[0]);
+      return isFinite(parsed) ? parsed : null;
+    }
+
+    function closeEditor(restoreFocus) {
+      if (!editing) return;
+      editing = false;
+      valueInput.hidden = true;
+      rateLabel.hidden = false;
+      popup.classList.remove("is-editing");
+      popup.hidden = true;
+      popup.style.visibility = "";
+      popup.setAttribute("aria-hidden", "true");
+      document.removeEventListener("pointerdown", onDocumentPointerDown, true);
+      if (restoreFocus) slider.focus({ preventScroll: true });
+    }
+
+    function commitEditor() {
+      if (!editing) return;
+      var parsed = parseEnteredValue(valueInput.value);
+      var previous = slider.value;
+      closeEditor(true);
+      if (parsed == null) return;
+      setSliderValue(parsed);
+      if (slider.value !== previous) slider.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    function cancelEditor() {
+      if (!editing) return;
+      closeEditor(true);
+    }
+
+    function onDocumentPointerDown(event) {
+      if (!editing || popup.contains(event.target)) return;
+      commitEditor();
+    }
+
+    function openEditor() {
+      if (slider.disabled || editing) return;
+      if (activePointer !== null) return;
+      editing = true;
+      rateLabel.hidden = true;
+      valueInput.hidden = false;
+      valueInput.value = slider.value;
+      popup.classList.add("is-editing");
+      popup.style.visibility = "hidden";
+      popup.hidden = false;
+      popup.removeAttribute("aria-hidden");
+      document.addEventListener("pointerdown", onDocumentPointerDown, true);
+      positionPopup();
+      popup.style.visibility = "";
+      valueInput.focus({ preventScroll: true });
+      valueInput.select();
+    }
+
     slider.addEventListener("pointerdown", function (event) {
       if (slider.disabled || event.button !== 0) return;
+      if (editing) {
+        event.preventDefault();
+        return;
+      }
+      if (isOnThumb(event) && pendingThumbClick
+          && event.timeStamp - pendingThumbAt <= 500
+          && Math.abs(event.clientX - pendingThumbX) <= 8) {
+        event.preventDefault();
+        pendingThumbClick = false;
+        openEditor();
+        return;
+      }
+      pendingThumbClick = false;
       event.preventDefault();
 
-      var minimum = Number(slider.min);
-      var maximum = Number(slider.max);
-      var bounds = slider.getBoundingClientRect();
-      var trackInset = 9;
-      var trackStart = bounds.left + trackInset;
-      var trackWidth = Math.max(1, bounds.width - trackInset * 2);
-      var pointerRatio = Math.max(0, Math.min(1, (event.clientX - trackStart) / trackWidth));
-      var currentRatio = (Number(slider.value) - minimum) / (maximum - minimum);
-      var currentX = trackStart + currentRatio * trackWidth;
+      var geometry = trackGeometry();
+      var pointerRatio = Math.max(0, Math.min(1, (event.clientX - geometry.trackStart) / geometry.trackWidth));
 
       activePointer = event.pointerId;
       initialValue = slider.value;
-      dragValue = Math.abs(event.clientX - currentX) <= 12
+      startedOnThumb = isOnThumb(event);
+      dragMoved = false;
+      dragValue = startedOnThumb
         ? Number(slider.value)
-        : minimum + pointerRatio * (maximum - minimum);
+        : geometry.minimum + pointerRatio * (geometry.maximum - geometry.minimum);
       lastX = event.clientX;
       originY = event.clientY;
-      unitsPerPixel = (maximum - minimum) / trackWidth;
+      unitsPerPixel = (geometry.maximum - geometry.minimum) / geometry.trackWidth;
 
       slider.focus({ preventScroll: true });
       slider.setPointerCapture(event.pointerId);
       setSliderValue(dragValue);
-      updateScrubBand(scrubBand(0));
+      showRatePopup(scrubBand(0));
     });
 
     slider.addEventListener("pointermove", function (event) {
       if (event.pointerId !== activePointer) return;
       event.preventDefault();
+      if (Math.abs(event.clientX - lastX) > 3 || Math.abs(event.clientY - originY) > 3) dragMoved = true;
       var band = scrubBand(Math.abs(event.clientY - originY));
       dragValue += (event.clientX - lastX) * unitsPerPixel * band.multiplier;
       lastX = event.clientX;
       setSliderValue(dragValue);
-      updateScrubBand(band);
+      showRatePopup(band);
     });
 
     function finishScrub(event) {
       if (event.pointerId !== activePointer) return;
+      var wasClickOnThumb = startedOnThumb && !dragMoved && event.type !== "pointercancel";
       activePointer = null;
       if (slider.hasPointerCapture(event.pointerId)) slider.releasePointerCapture(event.pointerId);
       if (slider.value !== initialValue) slider.dispatchEvent(new Event("change", { bubbles: true }));
-      updateScrubBand(scrubBand(0));
+      hideRatePopup();
+      pendingThumbClick = wasClickOnThumb;
+      pendingThumbAt = event.timeStamp;
+      pendingThumbX = event.clientX;
     }
 
+    popup.addEventListener("pointerdown", function (event) {
+      if (event.target !== valueInput) event.preventDefault();
+    });
     slider.addEventListener("pointerup", finishScrub);
     slider.addEventListener("pointercancel", finishScrub);
     slider.addEventListener("lostpointercapture", finishScrub);
+    slider.addEventListener("keydown", function (event) {
+      if (slider.disabled || editing || event.key !== "Enter" || event.repeat) return;
+      event.preventDefault();
+      openEditor();
+    });
+    valueInput.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        commitEditor();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        cancelEditor();
+      }
+    });
+    valueInput.addEventListener("blur", function () {
+      if (!editing) return;
+      window.setTimeout(function () {
+        if (editing && document.activeElement !== valueInput) commitEditor();
+      }, 0);
+    });
+    window.addEventListener("resize", positionPopup);
+    window.addEventListener("scroll", positionPopup, true);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", positionPopup);
+      window.visualViewport.addEventListener("scroll", positionPopup);
+    }
   });
 }(window.ComponentReference.createLucideIcon, window.ComponentReference.spawnToast));

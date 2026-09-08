@@ -12,21 +12,33 @@
     <div class="budget-map-demo-title-row">
       <h3 class="budget-map-demo-heading">Dynamic perspective</h3>
       <div class="budget-map-demo-controls">
-        <label class="budget-map-slider-wrap" for="tiltSlider1">
-          <span class="budget-map-slider-label">Overage tilt:</span>
-          <input type="range" class="budget-map-slider" id="tiltSlider1" min="0" max="1000" value="100" step="5" autocomplete="off" aria-label="Overage tilt intensity for dynamic perspective" />
-          <output class="budget-map-slider-val" id="tiltVal1" for="tiltSlider1">100%</output>
-        </label>
-        <label class="budget-map-slider-wrap" for="compressSlider1">
-          <span class="budget-map-slider-label">Bar compression:</span>
-          <input type="range" class="budget-map-slider" id="compressSlider1" min="0" max="1000" value="100" step="5" autocomplete="off" aria-label="Baseline bar compression for dynamic perspective" />
-          <output class="budget-map-slider-val" id="compressVal1" for="compressSlider1">100%</output>
-        </label>
-        <label class="budget-map-slider-wrap" for="severitySlider1">
-          <span class="budget-map-slider-label">Overage severity:</span>
-          <input type="range" class="budget-map-slider" id="severitySlider1" min="0" max="1000" value="100" step="5" autocomplete="off" aria-label="Overage severity relationship strength with bar compression" />
-          <output class="budget-map-slider-val" id="severityVal1" for="severitySlider1">100%</output>
-        </label>
+        <div class="range-control budget-map-range-control">
+          <div class="range-control-heading">
+            <label for="tiltSlider1">Overage tilt</label>
+            <output class="range-output" id="tiltVal1" for="tiltSlider1">100%</output>
+          </div>
+          <input class="range-slider range-slider-precision" id="tiltSlider1" type="range" min="0" max="1000" step="5" value="100" autocomplete="off" data-range-output="tiltVal1" data-range-suffix="%" data-range-aria-unit="percent" data-range-scrub-status="tiltScrubStatus1" aria-label="Overage tilt intensity for dynamic perspective" aria-valuetext="100 percent" aria-describedby="tiltSliderHint1">
+          <span class="sr-only" id="tiltSliderHint1">While dragging, move up or down for finer adjustment. Double-click the thumb or press Enter to type a value</span>
+          <span class="sr-only" id="tiltScrubStatus1" aria-live="polite">Normal speed</span>
+        </div>
+        <div class="range-control budget-map-range-control">
+          <div class="range-control-heading">
+            <label for="compressSlider1">Bar compression</label>
+            <output class="range-output" id="compressVal1" for="compressSlider1">100%</output>
+          </div>
+          <input class="range-slider range-slider-precision" id="compressSlider1" type="range" min="0" max="1000" step="5" value="100" autocomplete="off" data-range-output="compressVal1" data-range-suffix="%" data-range-aria-unit="percent" data-range-scrub-status="compressScrubStatus1" aria-label="Baseline bar compression for dynamic perspective" aria-valuetext="100 percent" aria-describedby="compressSliderHint1">
+          <span class="sr-only" id="compressSliderHint1">While dragging, move up or down for finer adjustment. Double-click the thumb or press Enter to type a value</span>
+          <span class="sr-only" id="compressScrubStatus1" aria-live="polite">Normal speed</span>
+        </div>
+        <div class="range-control budget-map-range-control">
+          <div class="range-control-heading">
+            <label for="severitySlider1">Overage severity</label>
+            <output class="range-output" id="severityVal1" for="severitySlider1">100%</output>
+          </div>
+          <input class="range-slider range-slider-precision" id="severitySlider1" type="range" min="0" max="1000" step="5" value="100" autocomplete="off" data-range-output="severityVal1" data-range-suffix="%" data-range-aria-unit="percent" data-range-scrub-status="severityScrubStatus1" aria-label="Overage severity relationship strength with bar compression" aria-valuetext="100 percent" aria-describedby="severitySliderHint1">
+          <span class="sr-only" id="severitySliderHint1">While dragging, move up or down for finer adjustment. Double-click the thumb or press Enter to type a value</span>
+          <span class="sr-only" id="severityScrubStatus1" aria-live="polite">Normal speed</span>
+        </div>
         <label class="control-row budget-map-toggle-wrap" for="compressNonOverage1">
           <input class="sr-only switch-input" type="checkbox" role="switch" id="compressNonOverage1" checked autocomplete="off" />
           <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>

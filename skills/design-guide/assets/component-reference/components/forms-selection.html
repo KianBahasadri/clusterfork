@@ -99,17 +99,16 @@
             </div>
           </div>
         </div>
+      </div>
+      <div class="showcase-group range-group">
         <div class="range-control">
           <div class="range-control-heading">
             <label for="capacityLimit">Capacity limit</label>
-            <span class="range-control-values">
-              <span class="range-scrub-rate" id="capacityScrubRate" aria-hidden="true">Scrub 1×</span>
-              <output class="range-output range-output-wide" id="capacityLimitValue" for="capacityLimit">250,000 req/s</output>
-            </span>
+            <output class="range-output range-output-wide" id="capacityLimitValue" for="capacityLimit">250,000 req/s</output>
           </div>
-          <input class="range-slider range-slider-precision" id="capacityLimit" type="range" min="0" max="1000000" step="100" value="250000" autocomplete="off" data-range-output="capacityLimitValue" data-range-suffix=" req/s" data-range-aria-unit="requests per second" data-range-grouped data-range-scrub-rate="capacityScrubRate" data-range-scrub-status="capacityScrubStatus" aria-valuetext="250000 requests per second" aria-describedby="capacityLimitHint">
-          <span class="sr-only" id="capacityLimitHint">While dragging, move up or down for finer adjustment</span>
-          <span class="sr-only" id="capacityScrubStatus" aria-live="polite">Normal scrub speed</span>
+          <input class="range-slider range-slider-precision" id="capacityLimit" type="range" min="0" max="1000000" step="100" value="250000" autocomplete="off" data-range-output="capacityLimitValue" data-range-suffix=" req/s" data-range-aria-unit="requests per second" data-range-grouped data-range-scrub-status="capacityScrubStatus" aria-valuetext="250000 requests per second" aria-describedby="capacityLimitHint">
+          <span class="sr-only" id="capacityLimitHint">While dragging, move up or down for finer adjustment. Double-click the thumb or press Enter to type a value</span>
+          <span class="sr-only" id="capacityScrubStatus" aria-live="polite">Normal speed</span>
         </div>
         <div class="range-control range-control-disabled">
           <div class="range-control-heading">
