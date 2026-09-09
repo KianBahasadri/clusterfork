@@ -22,54 +22,64 @@
       <p class="sr-only" id="taskCardsHint">Illustrative tasks as of 05 September 2026. Activate a card to read its full title, project, date, and details.</p>
       <ul class="task-card-grid" aria-label="Example tasks" aria-describedby="taskCardsHint">
         <li>
-          <button class="task-card" type="button" data-task-card data-tone="neutral" aria-haspopup="dialog">
-            <span class="task-card-header"><span class="task-card-project">Core Platform</span><span class="task-card-state">In progress</span></span>
+          <button class="task-card" type="button" data-task-card data-tone="neutral" data-state="In progress" aria-haspopup="dialog">
+            <span class="task-card-header">
+              <span class="task-card-source"><span class="task-card-icon" aria-hidden="true">🌀</span><span class="task-card-project">Core Platform</span><span class="task-card-sep" aria-hidden="true">·</span><span class="task-card-id">ENG-248</span></span>
+              <span class="task-card-state"></span>
+            </span>
             <span class="task-card-title">Reduce retries during gateway failover</span>
-            <span class="task-card-footer"><span class="task-card-id">ENG-248</span><span class="task-card-meta">Reliability</span></span>
           </button>
           <template data-task-details>
             <p>Cap retry bursts while the gateway switches to a healthy region. Keep requests within their original timeout and record how many retries were avoided.</p>
-            <dl class="task-card-facts"><div><dt>Owner</dt><dd>Platform team</dd></div><div><dt>Next step</dt><dd>Verify failover under load</dd></div></dl>
+            <dl class="task-card-facts"><div><dt>Owner</dt><dd>Platform team</dd></div><div><dt>Status</dt><dd>In progress (bright title contrast)</dd></div><div><dt>Next step</dt><dd>Verify failover under load</dd></div></dl>
           </template>
         </li>
         <li>
-          <button class="task-card" type="button" data-task-card data-tone="neutral" aria-haspopup="dialog">
-            <span class="task-card-header"><span class="task-card-project">Developer Tools</span><span class="task-card-state">Todo</span></span>
+          <button class="task-card" type="button" data-task-card data-tone="neutral" data-state="Todo" aria-haspopup="dialog">
+            <span class="task-card-header">
+              <span class="task-card-source"><span class="task-card-project">Developer Tools</span><span class="task-card-sep" aria-hidden="true">·</span><span class="task-card-id">ENG-253</span></span>
+              <span class="task-card-state"></span>
+            </span>
             <span class="task-card-title">Preview configuration changes before applying them</span>
-            <span class="task-card-footer"><span class="task-card-id">ENG-253</span><span class="task-card-meta">Feature</span></span>
           </button>
           <template data-task-details>
             <p>Show the files and settings affected by a configuration update before the user applies it. Include additions, changes, and removals in the preview.</p>
-            <dl class="task-card-facts"><div><dt>Owner</dt><dd>Developer experience team</dd></div><div><dt>Next step</dt><dd>Review the proposed interaction</dd></div></dl>
+            <dl class="task-card-facts"><div><dt>Owner</dt><dd>Developer experience team</dd></div><div><dt>Status</dt><dd>Todo (muted title contrast)</dd></div><div><dt>Next step</dt><dd>Review the proposed interaction</dd></div></dl>
           </template>
         </li>
         <li>
-          <button class="task-card" type="button" data-task-card data-tone="caution" aria-haspopup="dialog">
-            <span class="task-card-header"><span class="task-card-project">API Platform</span><span class="task-card-state">Due soon</span></span>
+          <button class="task-card" type="button" data-task-card data-tone="caution" data-state="Urgent" aria-haspopup="dialog">
+            <span class="task-card-header">
+              <span class="task-card-source"><span class="task-card-icon" aria-hidden="true">⚡</span><span class="task-card-project">API Platform</span><span class="task-card-sep" aria-hidden="true">·</span><span class="task-card-id">OPS-84</span></span>
+              <span class="task-card-state">Due <time datetime="2026-09-08">08 Sep</time></span>
+            </span>
             <span class="task-card-title">Rotate staging service credentials</span>
-            <span class="task-card-footer"><span class="task-card-id">OPS-84</span><span class="task-card-meta">Due <time datetime="2026-09-08">08 Sep</time></span></span>
           </button>
           <template data-task-details>
             <p>Replace the staging credentials, verify each service can authenticate, and revoke the old credentials after the rollout is confirmed.</p>
-            <dl class="task-card-facts"><div><dt>Owner</dt><dd>Platform team</dd></div><div><dt>Next step</dt><dd>Schedule the rotation</dd></div></dl>
+            <dl class="task-card-facts"><div><dt>Owner</dt><dd>Platform team</dd></div><div><dt>Due date</dt><dd><time datetime="2026-09-08">08 Sep 2026</time></dd></div><div><dt>Next step</dt><dd>Schedule the rotation</dd></div></dl>
           </template>
         </li>
         <li>
-          <button class="task-card" type="button" data-task-card data-tone="danger" aria-haspopup="dialog">
-            <span class="task-card-header"><span class="task-card-project">Billing</span><span class="task-card-state">Overdue</span></span>
+          <button class="task-card" type="button" data-task-card data-tone="danger" data-state="Due today" aria-haspopup="dialog">
+            <span class="task-card-header">
+              <span class="task-card-source"><span class="task-card-icon" aria-hidden="true">💳</span><span class="task-card-project">Billing</span><span class="task-card-sep" aria-hidden="true">·</span><span class="task-card-id">OPS-91</span></span>
+              <span class="task-card-state">Due today</span>
+            </span>
             <span class="task-card-title">Restore invoice exports for the support team</span>
-            <span class="task-card-footer"><span class="task-card-id">OPS-91</span><span class="task-card-meta">Due <time datetime="2026-09-04">04 Sep</time></span></span>
           </button>
           <template data-task-details>
             <p>Invoice exports are failing for the support workspace. Restore the export job and verify that the resulting file includes every invoice in the selected period.</p>
-            <dl class="task-card-facts"><div><dt>Owner</dt><dd>Billing team</dd></div><div><dt>Priority</dt><dd>Urgent</dd></div><div><dt>Next step</dt><dd>Deploy the export fix</dd></div></dl>
+            <dl class="task-card-facts"><div><dt>Owner</dt><dd>Billing team</dd></div><div><dt>Priority</dt><dd>Due today (urgent)</dd></div><div><dt>Next step</dt><dd>Deploy the export fix</dd></div></dl>
           </template>
         </li>
         <li>
-          <button class="task-card" type="button" data-task-card data-tone="danger" aria-haspopup="dialog">
-            <span class="task-card-header"><span class="task-card-project">API Platform</span><span class="task-card-state">Blocked</span></span>
+          <button class="task-card" type="button" data-task-card data-tone="danger" data-state="Blocked" aria-haspopup="dialog">
+            <span class="task-card-header">
+              <span class="task-card-source"><span class="task-card-project">API Platform</span><span class="task-card-sep" aria-hidden="true">·</span><span class="task-card-id">ENG-251</span></span>
+              <span class="task-card-state">Blocked</span>
+            </span>
             <span class="task-card-title">Unblock the production schema migration</span>
-            <span class="task-card-footer"><span class="task-card-id">ENG-251</span><span class="task-card-meta">Dependency</span></span>
           </button>
           <template data-task-details>
             <p>The migration is waiting for a verified database backup. Keep the rollout paused until recovery has been tested and the database owner clears the dependency.</p>
@@ -77,10 +87,12 @@
           </template>
         </li>
         <li>
-          <button class="task-card" type="button" data-task-card data-tone="good" aria-haspopup="dialog">
-            <span class="task-card-header"><span class="task-card-project">Developer Tools</span><span class="task-card-state">Done</span></span>
+          <button class="task-card" type="button" data-task-card data-tone="good" data-state="Done" aria-haspopup="dialog">
+            <span class="task-card-header">
+              <span class="task-card-source"><span class="task-card-icon" aria-hidden="true">🧪</span><span class="task-card-project">Developer Tools</span><span class="task-card-sep" aria-hidden="true">·</span><span class="task-card-id">ENG-239</span></span>
+              <span class="task-card-state"></span>
+            </span>
             <span class="task-card-title">Navigate service rows with arrow keys</span>
-            <span class="task-card-footer"><span class="task-card-id">ENG-239</span><span class="task-card-meta">Done <time datetime="2026-09-04">04 Sep</time></span></span>
           </button>
           <template data-task-details>
             <p>Arrow keys now move focus through the service table in its current sorted order. Enter opens the focused service, and closing its details restores focus to that row.</p>

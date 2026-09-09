@@ -12,13 +12,14 @@
   --task-card-fill: var(--surface);
   --task-card-state: var(--muted);
   display: grid;
-  grid-template-rows: auto minmax(40px, 1fr) auto;
-  gap: 4px;
+  grid-template-rows: 16px 20px;
+  gap: 2px;
   width: 100%;
-  height: 100%;
-  min-height: 104px;
+  height: 50px;
+  min-height: 50px;
   min-width: 0;
-  padding: 12px;
+  padding: 6px 12px;
+  overflow: hidden;
   border: 0;
   border-radius: var(--radius);
   background: var(--task-card-fill);
@@ -27,17 +28,17 @@
   transition: background-color 120ms ease, transform 80ms ease;
 }
 .task-card[data-tone="caution"] {
-  --task-card-fill: var(--caution-soft);
+  --task-card-fill: color-mix(in srgb, var(--caution) 14%, var(--surface));
   --task-card-state: var(--caution);
   border-radius: var(--radius-sm);
 }
 .task-card[data-tone="danger"] {
-  --task-card-fill: var(--danger-soft);
+  --task-card-fill: color-mix(in srgb, var(--danger) 14%, var(--surface));
   --task-card-state: var(--danger);
   border-radius: 0;
 }
 .task-card[data-tone="good"] {
-  --task-card-fill: var(--good-soft);
+  --task-card-fill: color-mix(in srgb, var(--good) 14%, var(--surface));
   --task-card-state: var(--good);
 }
 @media (hover: hover) {
@@ -48,35 +49,84 @@
 button.task-card:active:not(:disabled) { transform: scale(0.98); }
 .task-card:focus-visible { outline-offset: -2px; }
 button.task-card:disabled { opacity: 0.45; cursor: not-allowed; }
-.task-card-header, .task-card-footer {
+
+.task-card-header {
+  font-size: 11px;
+  line-height: 16px;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
-  font-size: 12px;
-  line-height: 16px;
   color: var(--muted);
 }
-.task-card-project { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-card-state { flex-shrink: 0; max-width: 55%; color: var(--task-card-state); font-weight: 500; overflow-wrap: anywhere; }
-.task-card-title {
+.task-card-source {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
   min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.task-card-icon {
+  font-size: 11px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.task-card-project {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.task-card-sep {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.task-card-id {
+  font-family: var(--mono);
+  color: var(--muted);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.task-card-state {
+  flex-shrink: 0;
+  max-width: 55%;
+  color: var(--task-card-state);
+  font-weight: 500;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-card-title {
+  display: block;
   font-size: 15px;
   font-weight: 500;
   line-height: 20px;
-  overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  white-space: nowrap;
   overflow: hidden;
-  align-self: start;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  align-self: center;
 }
-.task-card:not(button):not(a) .task-card-title { display: block; overflow: visible; }
-.task-card-footer { flex-wrap: wrap; gap: 4px 8px; }
-.task-card-id { font-family: var(--mono); overflow-wrap: anywhere; max-width: 100%; }
-.task-card-meta { min-width: 0; margin-left: auto; text-align: right; overflow-wrap: anywhere; }
-.task-card-meta time { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.task-card[data-state="In progress"] .task-card-title,
+.task-card[data-state="in-progress" i] .task-card-title,
+.task-card[data-workflow="in-progress" i] .task-card-title,
+.task-card.is-in-progress .task-card-title,
+.task-card[data-state="Due today"] .task-card-title,
+.task-card[data-state="due-today" i] .task-card-title,
+.task-card[data-state="due today" i] .task-card-title,
+.task-card.is-due-today .task-card-title,
+.task-card[data-state="Overdue"] .task-card-title,
+.task-card[data-state="overdue" i] .task-card-title,
+.task-card.is-overdue .task-card-title {
+  color: var(--ink);
+}
+
 dialog.task-card-dialog { width: min(480px, calc(100% - 24px)); max-height: calc(100dvh - 24px); overflow-y: auto; }
 .task-card-dialog-heading { min-width: 0; }
 .task-card-dialog-context { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; margin-bottom: 8px; }

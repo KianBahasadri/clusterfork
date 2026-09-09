@@ -7,6 +7,18 @@
     if (text !== undefined) node.textContent = text;
     return node;
   }
+  function adjustStreamlinedTitles(root) {
+    var titles = root.querySelectorAll(".task-card .task-card-title, .task-card-title");
+    titles.forEach(function (title) {
+      title.style.fontSize = "";
+      if (title.scrollWidth > title.clientWidth) {
+        title.style.fontSize = "14px";
+        if (title.scrollWidth > title.clientWidth) {
+          title.style.fontSize = "13px";
+        }
+      }
+    });
+  }
 
   reference.initTaskCards = function (root) {
     if (instances.has(root)) return instances.get(root);
@@ -38,9 +50,14 @@
       trigger = card;
       card.setAttribute("aria-controls", dialog.id);
       title.textContent = card.querySelector(".task-card-title").textContent;
-      context.replaceChildren(card.querySelector(".task-card-id").cloneNode(true),
-        document.createTextNode(card.querySelector(".task-card-project").textContent));
-      var status = element("span", "badge badge-" + (tones[card.dataset.tone] || "nominal"), card.querySelector(".task-card-state").textContent);
+      var idNode = card.querySelector(".task-card-id");
+      var projectNode = card.querySelector(".task-card-project");
+      context.replaceChildren();
+      if (idNode) context.appendChild(idNode.cloneNode(true));
+      if (projectNode) context.appendChild(document.createTextNode(projectNode.textContent));
+      var stateNode = card.querySelector(".task-card-state");
+      var stateLabel = (stateNode && stateNode.textContent.trim()) || card.dataset.state || "";
+      var status = element("span", "badge badge-" + (tones[card.dataset.tone] || "nominal"), stateLabel || (tones[card.dataset.tone] || "nominal"));
       summary.replaceChildren(status);
       var metadata = card.querySelector(".task-card-meta");
       if (metadata) {
@@ -53,6 +70,17 @@
       if (template) body.appendChild(template.content.cloneNode(true));
       dialog.showModal();
       close.focus();
+    }
+
+    adjustStreamlinedTitles(root);
+    var resizeObserver = null;
+    var onResize = null;
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(function () { adjustStreamlinedTitles(root); });
+      resizeObserver.observe(root);
+    } else if (typeof window !== "undefined") {
+      onResize = function () { adjustStreamlinedTitles(root); };
+      window.addEventListener("resize", onResize);
     }
 
     root.addEventListener("click", open);
@@ -73,15 +101,20 @@
     dialog.addEventListener("close", function () {
       if (!dialog.open && trigger && trigger.isConnected) trigger.focus({ preventScroll: true });
     });
-    var instance = { destroy: function () {
-      root.removeEventListener("click", open);
-      if (dialog.open) dialog.close();
-      root.querySelectorAll("[aria-controls]").forEach(function (control) {
-        if (control.getAttribute("aria-controls") === dialog.id) control.removeAttribute("aria-controls");
-      });
-      dialog.remove();
-      instances.delete(root);
-    } };
+    var instance = {
+      adjustTitles: function () { adjustStreamlinedTitles(root); },
+      destroy: function () {
+        if (resizeObserver) resizeObserver.disconnect();
+        else if (onResize && typeof window !== "undefined") window.removeEventListener("resize", onResize);
+        root.removeEventListener("click", open);
+        if (dialog.open) dialog.close();
+        root.querySelectorAll("[aria-controls]").forEach(function (control) {
+          if (control.getAttribute("aria-controls") === dialog.id) control.removeAttribute("aria-controls");
+        });
+        dialog.remove();
+        instances.delete(root);
+      }
+    };
     instances.set(root, instance);
     return instance;
   };
