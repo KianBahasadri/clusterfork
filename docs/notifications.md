@@ -105,12 +105,21 @@ docker compose \
   -f ~/.config/clusterfork/notify/compose.yaml up -d
 ```
 
-The container binds port 2586 only on localhost and the laptop's stable
-Tailscale address (`100.123.102.71`), not on its LAN address. The hook
-publishes through localhost; the phone's persistent instant-delivery
-connection travels directly over Tailscale's encrypted WireGuard path. HTTP
-is intentional here: there are no application credentials, and the service
-is not reachable outside the Tailnet.
+The container binds port 2586 on localhost and the laptop's stable Tailscale
+address (`100.123.102.71`). Binding that address alone does not enforce
+Tailscale ingress: Docker can forward specifically routed LAN packets to it.
+On this laptop, the root-managed `laptop-guard.service` loads
+`/etc/nftables/laptop-guard.nft`; its pre-DNAT rule drops connections to that
+publication arriving outside `lo` or `tailscale0`. This host configuration is
+separate from the Compose installer and must be retained when deploying or
+moving the service. Reload it with `sudo systemctl reload laptop-guard.service`.
+
+The hook publishes through localhost; the phone's persistent instant-delivery
+connection uses Tailscale's encrypted WireGuard path with its existing URL.
+HTTP is intentional here: there are no application credentials, and access is
+restricted by the Tailscale policy plus the host ingress guard. Live checks on
+September 10 verified both health URLs and blocked a connection routed through
+an isolated test interface, with the guard's drop counter advancing.
 
 On the Pixel, install the native ntfy Android app, add
 `http://100.123.102.71:2586` as an HTTP server (or open
@@ -122,7 +131,7 @@ VPN changes and replays anything still in the server cache. See ntfy's
 [Android setup and `ntfy://` link formats](https://docs.ntfy.sh/subscribe/phone/).
 
 The Tailnet is currently the access boundary: ntfy application auth is not
-enabled, so any device admitted to this Tailnet can reach the server. If the
+enabled, so any device permitted by the Tailnet access policy can reach the server. If the
 Tailnet gains untrusted members, enable ntfy access control and put a dedicated
 publisher token in the gitignored clusterfork `.env` as
 `CLUSTERFORK_NTFY_TOKEN`; the helper already sends that token when present.
