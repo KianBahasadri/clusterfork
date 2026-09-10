@@ -9,7 +9,7 @@
 }
 .task-card-grid > li { min-width: 0; }
 .task-card {
-  --task-card-fill: var(--surface);
+  --task-card-fill: color-mix(in srgb, var(--surface) 50%, transparent);
   --task-card-state: var(--muted);
   display: grid;
   grid-template-rows: 16px 20px;
@@ -28,17 +28,17 @@
   transition: background-color 120ms ease, transform 80ms ease;
 }
 .task-card[data-tone="caution"] {
-  --task-card-fill: color-mix(in srgb, var(--caution) 14%, var(--surface));
+  --task-card-fill: color-mix(in srgb, var(--caution) 7%, transparent);
   --task-card-state: var(--caution);
   border-radius: var(--radius-sm);
 }
 .task-card[data-tone="danger"] {
-  --task-card-fill: color-mix(in srgb, var(--danger) 14%, var(--surface));
+  --task-card-fill: color-mix(in srgb, var(--danger) 7%, transparent);
   --task-card-state: var(--danger);
   border-radius: 0;
 }
 .task-card[data-tone="good"] {
-  --task-card-fill: color-mix(in srgb, var(--good) 14%, var(--surface));
+  --task-card-fill: color-mix(in srgb, var(--good) 7%, transparent);
   --task-card-state: var(--good);
 }
 @media (hover: hover) {

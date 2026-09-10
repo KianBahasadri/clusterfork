@@ -8,20 +8,20 @@ Use these cards for independently identifiable tasks or issues whose project, ti
 - Give each card 6px vertical and 12px horizontal padding, a 50px compact height, no border, and no shadow. The layout uses two rows separated by 2px (`grid-template-rows: 16px 20px`): upstairs header metadata and task title.
 - **Upstairs metadata row (16px line-height):**
   - Left-aligned source group: displays the project name/acronym, a separator dot (`·`), and the issue ID in 11px text and `--muted`, with 4px gaps. The ID renders in `--mono`. An optional project icon/emoji may precede the project name. The project name truncates with an ellipsis if space is constrained; keep the icon, separator, and issue ID from shrinking.
-  - Right-aligned state text: displays urgency states (`Urgent`, `Due today`, `Blocked`) or deadline text (`Due 08 Sep`) in 11px text with weight 500 colored by tone. Separate it from the source group by 8px, cap it at 55% of the header width, and ellipsize overflow. Explicit workflow state labels (`In progress`, `Todo`) and `Done` labels are omitted from the preview header; retain the actual state in `data-state`, including `Due today` when the visible label is `Today`.
+  - Right-aligned state text: displays urgency states (`Urgent`, `Today`, `Blocked`) or deadline text (`Today`, `Tomorrow`, `08 Sep`) in 11px text with weight 500 colored by tone. Omit the redundant `Due` prefix; combine urgency and a date as `Urgent · 08 Sep` when both apply. Separate it from the source group by 8px, cap it at 55% of the header width, and ellipsize overflow. Explicit workflow state labels (`In progress`, `Todo`) and `Done` labels are omitted from the preview header; retain the actual state in `data-state`, including `Due today` when the visible label is `Today`.
 - **Title and progress contrast row (20px line-height):**
   - Single-line title starting at 15px UI text (weight 500) that progressively steps down to 14px, then 13px when overflowing before truncating with an ellipsis.
   - Title contrast is independent of the card's fill tone. `In progress`, `Due today`, and `Overdue` use `--ink` in either theme; other states, including `Todo`, `Done`, `Backlog`, `Urgent`, and `Blocked`, use the default `--muted`. The styles also recognize the corresponding hyphenated `data-state` values and `is-in-progress`, `is-due-today`, and `is-overdue` classes; `data-workflow="in-progress"` enables the active title treatment independently of the header label.
-- Use the full card's opaque soft fill and its visible state text together. Omit decorative rails, inset frames, separator rules, status dots, and duplicate state badges inside the card.
+- Use the full card's translucent soft fill and its visible state text together. Apply opacity to the background color only: neutral fills use 50% opacity and semantic tints 7%, with the surrounding page showing through. Keep title and metadata opacity independent of the fill. Omit decorative rails, inset frames, separator rules, status dots, and duplicate state badges inside the card.
 
 ## State Treatments
 
 | `data-tone` | Fill | State text | Radius | Typical use |
 | --- | --- | --- | --- | --- |
-| `neutral` or omitted | `--surface` | `--muted` | 6px | Todo, in progress, ordinary workflow state |
-| `caution` | `color-mix(in srgb, var(--caution) 14%, var(--surface))` | `--caution` | 4px | Due soon or elevated priority |
-| `danger` | `color-mix(in srgb, var(--danger) 14%, var(--surface))` | `--danger` | 0px | Overdue, blocked, or work requiring immediate attention |
-| `good` | `color-mix(in srgb, var(--good) 14%, var(--surface))` | `--good` | 6px | Confirmed completion |
+| `neutral` or omitted | `color-mix(in srgb, var(--surface) 50%, transparent)` | `--muted` | 6px | Todo, in progress, ordinary workflow state |
+| `caution` | `color-mix(in srgb, var(--caution) 7%, transparent)` | `--caution` | 4px | Due soon or elevated priority |
+| `danger` | `color-mix(in srgb, var(--danger) 7%, transparent)` | `--danger` | 0px | Overdue, blocked, or work requiring immediate attention |
+| `good` | `color-mix(in srgb, var(--good) 7%, transparent)` | `--good` | 6px | Confirmed completion |
 
 Choose the tone from the record's actual state and the product's deadline policy. A workflow state such as `In progress` is neutral, not a warning or forecast. Keep the title and metadata readable on every fill. Do not fade completed cards, hide other work, reorder records, or infer deadlines as part of the card component; those lifecycle decisions belong to the host application.
 
