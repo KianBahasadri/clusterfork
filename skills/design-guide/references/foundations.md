@@ -29,8 +29,8 @@
 | `--line-strong` | `#3a4a51` | `#9dacab` | Active borders, overlay borders, and tab rules |
 | `--action-primary` | `#26343a` | `#d5dcdb` | Primary action fill |
 | `--action-primary-hover` | `#314249` | `#c5cfce` | Hovered primary action fill |
-| `--control-selected` | `#66777e` | `#596970` | Selected checkbox, radio, and switch fill |
-| `--control-selected-hover` | `#74868d` | `#4b5c64` | Hovered selected checkbox, radio, and switch fill |
+| `--control-selected` | `#66777e` | `#596970` | Selected checkbox, radio, and switch fill; slider fill and thumb |
+| `--control-selected-hover` | `#74868d` | `#4b5c64` | Hovered selected controls and sliders |
 | `--focus` | `#9cc8ff` | `#005fcc` | Keyboard focus only |
 | `--accent` | `#62c8d8` | `#006f7c` | One observed chart series |
 | `--accent-soft` | `rgba(98, 200, 216, 0.12)` | `rgba(0, 111, 124, 0.10)` | Soft observed-series treatment |

@@ -1,6 +1,6 @@
 # Dashboard Composition
 
-The [dashboard reference](../assets/dashboard-reference/index.html) exercises the existing component kit as a cluster operations page. Use it to evaluate whether the kit supports a concrete workflow before adding component types. Component treatments and interaction rules remain owned by the four main specification references.
+The [dashboard reference](../assets/dashboard-reference/index.html) exercises the existing component kit as a cluster operations page. Use it to evaluate whether the kit supports a concrete workflow before adding component types. Component treatments and interaction rules remain owned by the specification references linked from the [Design Guide](../SKILL.md).
 
 ## Scope and Data
 

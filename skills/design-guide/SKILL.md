@@ -12,8 +12,9 @@ Apply the exact specifications in the references relevant to the interface being
 ## Read the Relevant Specifications
 
 - Always read [Foundations](references/foundations.md) for shared tokens, typography, geometry, icons, accessibility, page utilities, and layout.
-- Read [Controls and Forms](references/controls-and-forms.md) for buttons, action triggers, dropdowns, menus, inputs, search fields, textareas, checkboxes, radios, and switches.
+- Read [Controls and Forms](references/controls-and-forms.md) for buttons, action triggers, dropdowns, menus, inputs, search fields, textareas, checkboxes, radios, switches, and sliders with precision scrubbing and typed-value entry.
 - Read [Data Display](references/data-display.md) for badges, metadata, tables, charts, metrics, cards, panels, and color semantics.
+- Read [Task Cards](references/task-cards.md) for compact task or issue records, project/deadline metadata, workflow contrast, and details dialogs.
 - Read [Budget Map](references/budget-map.md) when comparing several budgets, quotas, or capacity limits over a shared period, including current usage and end-of-period forecasts.
 - Read [Realtime Monitoring](references/realtime-monitoring.md) for continuously updating resource readings, recent trends, service-status histories, and feed freshness.
 - Read [Overlays and Feedback](references/overlays-and-feedback.md) for dialogs, modals, tooltips, popovers, navigation, tabs, breadcrumbs, alerts, callouts, and toasts.
