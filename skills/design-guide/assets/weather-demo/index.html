@@ -1,0 +1,663 @@
+<!doctype html>
+<!-- Editable weather exploration. Open this file directly; no server is needed.
+     Shared styling and commands come from the sibling component-reference.
+     Weather values are illustrative, with fixed local sunrise/sunset times. -->
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Weather explorations · Design Guide</title>
+  <link rel="stylesheet" href="../component-reference/shared/tokens.css">
+  <link rel="stylesheet" href="../component-reference/shared/base.css">
+  <link rel="stylesheet" href="../component-reference/shared/page.css">
+  <link rel="stylesheet" href="../component-reference/components/buttons.css">
+  <link rel="stylesheet" href="../component-reference/components/dialogs.css">
+  <link rel="stylesheet" href="../component-reference/components/spotlight.css">
+  <link rel="stylesheet" href="weather.css">
+  <link rel="stylesheet" href="relative-weather.css">
+  <link rel="stylesheet" href="glyph-placement.css">
+</head>
+<body>
+  <!-- Lucide icons, ISC licensed. See LUCIDE-LICENSE.txt.
+       Source: https://github.com/lucide-icons/lucide/tree/main/icons -->
+  <svg class="icon-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="lucide-sun" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="4" />
+  <path d="M12 2v2" />
+  <path d="M12 20v2" />
+  <path d="m4.93 4.93 1.41 1.41" />
+  <path d="m17.66 17.66 1.41 1.41" />
+  <path d="M2 12h2" />
+  <path d="M20 12h2" />
+  <path d="m6.34 17.66-1.41 1.41" />
+  <path d="m19.07 4.93-1.41 1.41" />
+    </symbol>
+    <symbol id="lucide-moon" viewBox="0 0 24 24">
+      <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401" />
+    </symbol>
+    <symbol id="lucide-cloud-sun" viewBox="0 0 24 24">
+      <path d="M12 2v2" />
+  <path d="m4.93 4.93 1.41 1.41" />
+  <path d="M20 12h2" />
+  <path d="m19.07 4.93-1.41 1.41" />
+  <path d="M15.947 12.65a4 4 0 0 0-5.925-4.128" />
+  <path d="M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z" />
+    </symbol>
+    <symbol id="lucide-cloud-rain" viewBox="0 0 24 24">
+      <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242" />
+  <path d="M16 14v6" />
+  <path d="M8 14v6" />
+  <path d="M12 16v6" />
+    </symbol>
+    <symbol id="lucide-cloud-moon" viewBox="0 0 24 24">
+      <path d="M13 16a3 3 0 0 1 0 6H7a5 5 0 1 1 4.9-6z" />
+  <path d="M18.376 14.512a6 6 0 0 0 3.461-4.127c.148-.625-.659-.97-1.248-.714a4 4 0 0 1-5.259-5.26c.255-.589-.09-1.395-.716-1.248a6 6 0 0 0-4.594 5.36" />
+    </symbol>
+    <symbol id="lucide-snowflake" viewBox="0 0 24 24">
+      <path d="m10 20-1.25-2.5L6 18" />
+  <path d="M10 4 8.75 6.5 6 6" />
+  <path d="m14 20 1.25-2.5L18 18" />
+  <path d="m14 4 1.25 2.5L18 6" />
+  <path d="m17 21-3-6h-4" />
+  <path d="m17 3-3 6 1.5 3" />
+  <path d="M2 12h6.5L10 9" />
+  <path d="m20 10-1.5 2 1.5 2" />
+  <path d="M22 12h-6.5L14 15" />
+  <path d="m4 10 1.5 2L4 14" />
+  <path d="m7 21 3-6-1.5-3" />
+  <path d="m7 3 3 6h4" />
+    </symbol>
+    <symbol id="lucide-sunrise" viewBox="0 0 24 24">
+      <path d="M12 2v8" />
+  <path d="m4.93 10.93 1.41 1.41" />
+  <path d="M2 18h2" />
+  <path d="M20 18h2" />
+  <path d="m19.07 10.93-1.41 1.41" />
+  <path d="M22 22H2" />
+  <path d="m8 6 4-4 4 4" />
+  <path d="M16 18a4 4 0 0 0-8 0" />
+    </symbol>
+    <symbol id="lucide-sunset" viewBox="0 0 24 24">
+      <path d="M12 10V2" />
+  <path d="m4.93 10.93 1.41 1.41" />
+  <path d="M2 18h2" />
+  <path d="M20 18h2" />
+  <path d="m19.07 10.93-1.41 1.41" />
+  <path d="M22 22H2" />
+  <path d="m16 6-4 4-4-4" />
+  <path d="M16 18a4 4 0 0 0-8 0" />
+    </symbol>
+    <symbol id="lucide-thermometer" viewBox="0 0 24 24">
+      <path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z" />
+    </symbol>
+    <symbol id="lucide-search" viewBox="0 0 24 24">
+      <path d="m21 21-4.34-4.34" />
+  <circle cx="11" cy="11" r="8" />
+    </symbol>
+    <symbol id="lucide-x" viewBox="0 0 24 24">
+      <path d="M18 6 6 18" />
+  <path d="m6 6 12 12" />
+    </symbol>
+  </svg>
+
+  <div class="page-tools">
+    <button class="spotlight-trigger" id="spotlightTrigger" type="button" aria-label="Open search and commands" title="Open search and commands" aria-haspopup="dialog" aria-controls="spotlightDialog" aria-expanded="false" aria-keyshortcuts="Control+K Meta+K Control+Space">
+      <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-search"></use></svg>
+    </button>
+    <button class="theme-toggle" id="themeToggleBtn" type="button" aria-label="Switch to light theme" title="Switch to light theme">
+      <svg class="icon" aria-hidden="true" focusable="false"><use id="themeIconUse" href="#lucide-sun"></use></svg>
+    </button>
+  </div>
+
+  <!-- Quantitative thermometer geometry; the weather glyphs above are Lucide. -->
+  <svg class="icon-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="relative-gauge-body" viewBox="0 0 76 184">
+      <path class="relative-gauge-outline" d="M30 142V16a8 8 0 0 1 16 0v126a20 20 0 1 1-16 0Z"></path>
+    </symbol>
+  </svg>
+
+  <main class="weather-page">
+    <header class="page-heading"><h1>Weather</h1></header>
+
+    <div class="demo-controls" aria-label="Weather preview controls">
+      <div class="preset-control">
+        <span class="control-label" id="sampleLabel">Sample weather</span>
+        <div class="preset-options" role="group" aria-labelledby="sampleLabel">
+          <button class="preset" type="button" data-preset="sunny" aria-pressed="false"><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sun"></use></svg>Sunny</button>
+          <button class="preset" type="button" data-preset="cloudy" aria-pressed="true"><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-cloud-sun"></use></svg>Cloudy</button>
+          <button class="preset" type="button" data-preset="rain" aria-pressed="false"><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-cloud-rain"></use></svg>Rain</button>
+          <button class="preset" type="button" data-preset="snow" aria-pressed="false"><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-snowflake"></use></svg>Snow</button>
+          <button class="preset" type="button" data-preset="night" aria-pressed="false"><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-moon"></use></svg>Night</button>
+        </div>
+      </div>
+      <div class="clock-control">
+        <div class="control-heading"><label class="control-label" for="previewTime">Time of day</label><output for="previewTime" id="previewTimeOutput" data-time-output>14:30</output></div>
+        <input class="time-slider" id="previewTime" data-time-control type="range" min="0" max="1425" step="15" value="870" aria-valuetext="14:30">
+      </div>
+      <div class="unit-control">
+        <span class="control-label" id="unitLabel">Units</span>
+        <div class="unit-options" role="group" aria-labelledby="unitLabel">
+          <button type="button" data-unit="C" aria-label="Celsius" aria-pressed="true">°C</button>
+          <button type="button" data-unit="F" aria-label="Fahrenheit" aria-pressed="false">°F</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="weather-layout">
+      <section class="component-section strip-section" id="weather-strip" aria-labelledby="stripTitle">
+        <h2 id="stripTitle">01 Compact strip</h2>
+        <article class="weather-strip weather-surface" aria-label="Compact weather overview">
+          <div class="strip-temperature">
+            <svg class="icon thermometer-icon" aria-hidden="true" focusable="false"><use href="#lucide-thermometer"></use></svg>
+            <div class="temperature-block"><span class="eyebrow">Temperature</span><span class="temperature" data-temperature>22°C</span></div>
+          </div>
+          <div class="strip-condition">
+            <svg class="icon condition-icon" aria-hidden="true" focusable="false"><use data-condition-icon href="#lucide-cloud-sun"></use></svg>
+            <div><span class="condition-name" data-condition>Partly cloudy</span><span class="weather-clock">Today <time data-clock datetime="14:30">14:30</time></span></div>
+          </div>
+          <dl class="sun-event"><dt><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunrise"></use></svg>Sunrise</dt><dd><time datetime="06:30">06:30</time></dd></dl>
+          <dl class="sun-event"><dt><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunset"></use></svg>Sunset</dt><dd><time datetime="19:00">19:00</time></dd></dl>
+        </article>
+      </section>
+
+      <section class="component-section" id="weather-arc" aria-labelledby="arcTitle">
+        <h2 id="arcTitle">02 Daylight arc</h2>
+        <article class="weather-arc weather-surface" aria-label="Weather with a daylight arc">
+          <div class="arc-current">
+            <div class="arc-temperature">
+              <div class="eyebrow"><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-thermometer"></use></svg>Temperature</div>
+              <span class="temperature" data-temperature>22°C</span>
+              <span class="condition-name" data-condition>Partly cloudy</span>
+            </div>
+            <svg class="icon hero-glyph" aria-hidden="true" focusable="false"><use data-condition-icon href="#lucide-cloud-sun"></use></svg>
+          </div>
+          <div class="daylight-plot">
+            <svg id="daylightArc" viewBox="0 0 400 128" role="img" aria-labelledby="daylightArcTitle">
+              <title id="daylightArcTitle">Daylight from 06:30 to 19:00; current time 14:30</title>
+              <path class="arc-horizon" d="M12 112 H388"></path>
+              <path class="arc-track" d="M20 112 Q200 -64 380 112"></path>
+              <path class="arc-elapsed" id="arcElapsed" d="M20 112 Q200 -64 380 112" pathLength="1"></path>
+              <circle class="arc-endpoint" cx="20" cy="112" r="3"></circle>
+              <circle class="arc-endpoint" cx="380" cy="112" r="3"></circle>
+              <g id="arcSun" transform="translate(250.4 30.9)">
+                <circle class="sun-knockout" r="17"></circle>
+                <svg class="icon arc-sun-icon" x="-12" y="-12" width="24" height="24" aria-hidden="true" focusable="false"><use href="#lucide-sun"></use></svg>
+              </g>
+            </svg>
+            <div class="arc-time" id="arcTimeLabel">14:30</div>
+          </div>
+          <div class="sun-endpoints">
+            <dl class="sun-event"><dt><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunrise"></use></svg>Sunrise</dt><dd><time datetime="06:30">06:30</time></dd></dl>
+            <dl class="sun-event"><dt><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunset"></use></svg>Sunset</dt><dd><time datetime="19:00">19:00</time></dd></dl>
+          </div>
+          <p class="next-event" data-next-event>Sunset in 4h 30m</p>
+        </article>
+      </section>
+
+      <section class="component-section" id="weather-thermometer" aria-labelledby="thermometerTitle">
+        <h2 id="thermometerTitle">03 Vertical thermometer</h2>
+        <article class="weather-instrument weather-surface" aria-label="Weather with a temperature gauge">
+          <div class="instrument-main">
+            <div class="thermometer-chart" role="img" id="temperatureGauge" aria-label="Temperature 22 degrees Celsius on a scale from minus 10 to 40 degrees Celsius">
+              <div class="thermometer-ticks" aria-hidden="true"><span data-tick="40">40°</span><span data-tick="30">30°</span><span data-tick="20">20°</span><span data-tick="10">10°</span><span data-tick="0">0°</span><span data-tick="-10">−10°</span></div>
+              <div class="thermometer-tube" aria-hidden="true"><div class="thermometer-fill" id="thermometerFill"></div></div>
+              <div class="thermometer-bulb" aria-hidden="true"></div>
+            </div>
+            <div class="instrument-reading">
+              <div class="instrument-heading"><span class="eyebrow">Temperature</span><time class="weather-clock" data-clock datetime="14:30">14:30</time></div>
+              <span class="temperature" data-temperature>22°C</span>
+              <div class="instrument-condition"><svg class="icon condition-icon" aria-hidden="true" focusable="false"><use data-condition-icon href="#lucide-cloud-sun"></use></svg><span class="condition-name" data-condition>Partly cloudy</span></div>
+            </div>
+          </div>
+          <div class="daylight-line" role="img" id="daylightLine" aria-label="Daylight from 06:30 to 19:00; current time 14:30">
+            <div class="daylight-line-fill" id="daylightFill"></div>
+            <div class="daylight-line-marker" id="daylightMarker"></div>
+          </div>
+          <div class="sun-endpoints">
+            <dl class="sun-event"><dt><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunrise"></use></svg>Sunrise</dt><dd><time datetime="06:30">06:30</time></dd></dl>
+            <dl class="sun-event"><dt><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunset"></use></svg>Sunset</dt><dd><time datetime="19:00">19:00</time></dd></dl>
+          </div>
+          <p class="next-event" data-next-event>Sunset in 4h 30m</p>
+        </article>
+      </section>
+    </div>
+    <div class="relative-exploration" id="relative-weather">
+      <div class="relative-demo-controls" aria-label="Visual weather preview controls">
+        <div class="relative-mode-control">
+          <span class="control-label" id="relativeModeLabel">Temperature compared with last week</span>
+          <div class="relative-mode-options" role="group" aria-labelledby="relativeModeLabel">
+            <button class="preset" type="button" data-relative-mode="0" aria-pressed="false">Far below average</button>
+            <button class="preset" type="button" data-relative-mode="1" aria-pressed="false">Below average</button>
+            <button class="preset" type="button" data-relative-mode="2" aria-pressed="true">Around average</button>
+            <button class="preset" type="button" data-relative-mode="3" aria-pressed="false">Above average</button>
+            <button class="preset" type="button" data-relative-mode="4" aria-pressed="false">Far above average</button>
+          </div>
+        </div>
+        <div class="relative-secondary-controls">
+          <div class="sky-control">
+            <span class="control-label" id="relativeSkyLabel">Weather</span>
+            <div class="preset-options" role="group" aria-labelledby="relativeSkyLabel">
+              <button class="preset sky-preset" type="button" data-sky="clear" aria-label="Clear sky" title="Clear sky" aria-pressed="false"><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sun"></use></svg></button>
+              <button class="preset sky-preset" type="button" data-sky="cloudy" aria-label="Partly cloudy" title="Partly cloudy" aria-pressed="true"><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-cloud-sun"></use></svg></button>
+              <button class="preset sky-preset" type="button" data-sky="rain" aria-label="Rain" title="Rain" aria-pressed="false"><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-cloud-rain"></use></svg></button>
+              <button class="preset sky-preset" type="button" data-sky="snow" aria-label="Snow" title="Snow" aria-pressed="false"><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-snowflake"></use></svg></button>
+            </div>
+          </div>
+          <div class="clock-control relative-clock-control">
+            <div class="control-heading"><label class="control-label" for="relativeTime">Time of day</label><output for="relativeTime" id="relativeTimeOutput" data-time-output>14:30</output></div>
+            <input class="time-slider" id="relativeTime" data-time-control type="range" min="0" max="1425" step="15" value="870" aria-valuetext="14:30">
+          </div>
+        </div>
+      </div>
+
+      <div class="relative-weather-layout">
+        <section class="component-section" id="weather-relative-track" aria-labelledby="relativeTrackTitle">
+          <h2 id="relativeTrackTitle">04 Daylight track</h2>
+          <article class="weather-surface relative-weather-card" aria-label="Relative temperature and weather with a daylight track">
+            <div class="relative-current" data-relative-reading role="img" aria-label="Around average compared with the previous seven days. Partly cloudy.">
+              <svg class="relative-thermometer" viewBox="0 0 76 184" aria-hidden="true" focusable="false">
+                <use href="#relative-gauge-body"></use>
+                <rect class="relative-mercury" data-relative-fill x="35" y="80" width="6" height="80" rx="3"></rect>
+                <circle class="relative-mercury" cx="38" cy="160" r="11"></circle>
+              </svg>
+              <svg class="icon relative-weather-glyph" aria-hidden="true" focusable="false"><use data-condition-icon href="#lucide-cloud-sun"></use></svg>
+            </div>
+            <div class="relative-daylight-track relative-daylight-display" data-relative-daylight role="img" aria-label="Daytime. Sunrise at 06:30 and sunset at 19:00.">
+              <svg viewBox="0 0 280 116" aria-hidden="true" focusable="false">
+                <path class="relative-track-night" d="M20 58H260"></path>
+                <rect class="relative-track-day" id="relativeDayBand" x="85" y="56" width="125" height="4" rx="2"></rect>
+                <g id="relativeDawnMarker" transform="translate(85 0)">
+                  <path class="relative-event-tick" d="M0 50v16"></path>
+                  <svg class="icon relative-event-icon" x="-10" y="20" width="20" height="20"><use href="#lucide-sunrise"></use></svg>
+                </g>
+                <g id="relativeDuskMarker" transform="translate(210 0)">
+                  <path class="relative-event-tick" d="M0 50v16"></path>
+                  <svg class="icon relative-event-icon" x="-10" y="20" width="20" height="20"><use href="#lucide-sunset"></use></svg>
+                </g>
+                <g id="relativeNowMarker" transform="translate(165 58)">
+                  <circle class="relative-track-now" r="3"></circle>
+                  <path class="relative-now-stem" d="M0 8v6"></path>
+                  <svg class="icon relative-now-icon" x="-9" y="22" width="18" height="18"><use id="relativeNowIcon" href="#lucide-sun"></use></svg>
+                </g>
+              </svg>
+            </div>
+          </article>
+        </section>
+
+        <section class="component-section" id="weather-relative-rings" aria-labelledby="relativeRingsTitle">
+          <h2 id="relativeRingsTitle">05 Event rings</h2>
+          <article class="weather-surface relative-weather-card" aria-label="Relative temperature and weather with sunrise and sunset rings">
+            <div class="relative-current" data-relative-reading role="img" aria-label="Around average compared with the previous seven days. Partly cloudy.">
+              <svg class="relative-thermometer" viewBox="0 0 76 184" aria-hidden="true" focusable="false">
+                <use href="#relative-gauge-body"></use>
+                <rect class="relative-mercury" data-relative-fill x="35" y="80" width="6" height="80" rx="3"></rect>
+                <circle class="relative-mercury" cx="38" cy="160" r="11"></circle>
+              </svg>
+              <svg class="icon relative-weather-glyph" aria-hidden="true" focusable="false"><use data-condition-icon href="#lucide-cloud-sun"></use></svg>
+            </div>
+            <div class="relative-event-rings relative-daylight-display">
+              <div class="event-ring" id="sunriseRing" role="img" aria-label="Time until sunrise">
+                <svg viewBox="0 0 88 88" aria-hidden="true" focusable="false">
+                  <circle class="event-ring-track" cx="44" cy="44" r="32"></circle>
+                  <circle class="event-ring-progress" cx="44" cy="44" r="32" pathLength="1" transform="rotate(-90 44 44)" stroke-dasharray="0.333 1"></circle>
+                  <circle class="event-ring-marker" cx="72" cy="60" r="3"></circle>
+                  <svg class="icon ring-event-icon" x="32" y="32" width="24" height="24"><use href="#lucide-sunrise"></use></svg>
+                </svg>
+              </div>
+              <div class="event-ring" id="sunsetRing" role="img" aria-label="Time until sunset">
+                <svg viewBox="0 0 88 88" aria-hidden="true" focusable="false">
+                  <circle class="event-ring-track" cx="44" cy="44" r="32"></circle>
+                  <circle class="event-ring-progress" cx="44" cy="44" r="32" pathLength="1" transform="rotate(-90 44 44)" stroke-dasharray="0.8125 1"></circle>
+                  <circle class="event-ring-marker" cx="14" cy="32" r="3"></circle>
+                  <svg class="icon ring-event-icon" x="32" y="32" width="24" height="24"><use href="#lucide-sunset"></use></svg>
+                </svg>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <section class="component-section" id="weather-relative-dial" aria-labelledby="relativeDialTitle">
+          <h2 id="relativeDialTitle">06 Sun &amp; moon dial</h2>
+          <article class="weather-surface relative-weather-card" aria-label="Relative temperature and weather with a turning sun and moon dial">
+            <div class="relative-current" data-relative-reading role="img" aria-label="Around average compared with the previous seven days. Partly cloudy.">
+              <svg class="relative-thermometer" viewBox="0 0 76 184" aria-hidden="true" focusable="false">
+                <use href="#relative-gauge-body"></use>
+                <rect class="relative-mercury" data-relative-fill x="35" y="80" width="6" height="80" rx="3"></rect>
+                <circle class="relative-mercury" cx="38" cy="160" r="11"></circle>
+              </svg>
+              <svg class="icon relative-weather-glyph" aria-hidden="true" focusable="false"><use data-condition-icon href="#lucide-cloud-sun"></use></svg>
+            </div>
+            <div class="relative-day-night relative-daylight-display" id="dayNightDial" data-relative-daylight role="img" aria-label="A sun and moon turn across a fixed horizon">
+              <svg viewBox="0 0 208 152" aria-hidden="true" focusable="false">
+                <g transform="translate(104 76)">
+                  <g id="dayNightRotor" transform="rotate(115.2)">
+                    <circle class="dial-night-half" r="60"></circle>
+                    <path class="dial-day-half" d="M0 -60A60 60 0 0 0 0 60Z"></path>
+                    <g transform="translate(-36 0)"><g data-dial-upright transform="rotate(-115.2)"><svg class="icon dial-sun" x="-12" y="-12" width="24" height="24"><use href="#lucide-sun"></use></svg></g></g>
+                    <g transform="translate(36 0)"><g data-dial-upright transform="rotate(-115.2)"><svg class="icon dial-moon" x="-12" y="-12" width="24" height="24"><use href="#lucide-moon"></use></svg></g></g>
+                  </g>
+                  <circle class="dial-outline" r="60"></circle>
+                </g>
+                <path class="dial-horizon" d="M32 76H176"></path>
+                <svg class="icon dial-event-icon" x="4" y="66" width="20" height="20"><use href="#lucide-sunrise"></use></svg>
+                <svg class="icon dial-event-icon" x="184" y="66" width="20" height="20"><use href="#lucide-sunset"></use></svg>
+              </svg>
+            </div>
+          </article>
+        </section>
+      </div>
+    </div>
+    <div class="glyph-placement-exploration" id="glyph-placements">
+      <div class="relative-demo-controls glyph-placement-controls" aria-label="Glyph placement preview controls">
+        <div class="relative-mode-control">
+          <span class="control-label" id="glyphModeLabel">Temperature compared with last week</span>
+          <div class="relative-mode-options" role="group" aria-labelledby="glyphModeLabel">
+            <button class="preset" type="button" data-relative-mode="0" aria-pressed="false">Far below average</button>
+            <button class="preset" type="button" data-relative-mode="1" aria-pressed="false">Below average</button>
+            <button class="preset" type="button" data-relative-mode="2" aria-pressed="true">Around average</button>
+            <button class="preset" type="button" data-relative-mode="3" aria-pressed="false">Above average</button>
+            <button class="preset" type="button" data-relative-mode="4" aria-pressed="false">Far above average</button>
+          </div>
+        </div>
+        <div class="relative-secondary-controls">
+          <div class="sky-control">
+            <span class="control-label" id="glyphSkyLabel">Weather</span>
+            <div class="preset-options" role="group" aria-labelledby="glyphSkyLabel">
+              <button class="preset sky-preset" type="button" data-sky="clear" aria-label="Clear sky" title="Clear sky" aria-pressed="false"><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sun"></use></svg></button>
+              <button class="preset sky-preset" type="button" data-sky="cloudy" aria-label="Partly cloudy" title="Partly cloudy" aria-pressed="true"><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-cloud-sun"></use></svg></button>
+              <button class="preset sky-preset" type="button" data-sky="rain" aria-label="Rain" title="Rain" aria-pressed="false"><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-cloud-rain"></use></svg></button>
+              <button class="preset sky-preset" type="button" data-sky="snow" aria-label="Snow" title="Snow" aria-pressed="false"><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-snowflake"></use></svg></button>
+            </div>
+          </div>
+          <div class="clock-control relative-clock-control">
+            <div class="control-heading"><label class="control-label" for="glyphTime">Time of day</label><output for="glyphTime" id="glyphTimeOutput" data-time-output>14:30</output></div>
+            <input class="time-slider" id="glyphTime" data-time-control type="range" min="0" max="1425" step="15" value="870" aria-valuetext="14:30">
+          </div>
+          <div class="clock-control relative-clock-control">
+            <div class="control-heading"><label class="control-label" for="glyphSize">Weather glyph size</label><output for="glyphSize" id="glyphSizeOutput">100%</output></div>
+            <input class="time-slider" id="glyphSize" type="range" min="50" max="200" step="5" value="100" aria-valuetext="100 percent">
+          </div>
+        </div>
+      </div>
+
+      <div class="glyph-placement-grid">
+        <section class="component-section glyph-placement-section" id="weather-glyph-close-right" aria-labelledby="glyphTitle7">
+          <h2 id="glyphTitle7">07 Close right</h2>
+          <article class="weather-surface glyph-placement-card" aria-label="Compact weather with the glyph close right">
+            <div class="glyph-placement-stage">
+              <div class="glyph-composition placement-right" data-relative-reading role="img" aria-label="Around average compared with the previous seven days. Partly cloudy.">
+                <svg class="placement-thermometer" viewBox="14 0 48 184" aria-hidden="true" focusable="false">
+                  <use href="#relative-gauge-body" x="0" y="0" width="76" height="184"></use>
+                  <rect class="relative-mercury" data-relative-fill x="35" y="80" width="6" height="80" rx="3"></rect>
+                  <circle class="relative-mercury" cx="38" cy="160" r="11"></circle>
+                </svg>
+                <svg class="icon placed-glyph" aria-hidden="true" focusable="false"><use data-condition-icon href="#lucide-cloud-sun"></use></svg>
+              </div>
+            </div>
+            <div class="placement-daylight" data-relative-daylight role="img" aria-label="Daytime. Sunrise at 06:30 and sunset at 19:00.">
+              <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunrise"></use></svg>
+              <svg class="placement-daylight-track" viewBox="0 0 72 24" aria-hidden="true" focusable="false">
+                <path class="placement-daylight-base" d="M4 12H68"></path>
+                <path class="placement-daylight-fill" data-placement-daylight-fill d="M4 12H45"></path>
+                <circle class="placement-daylight-marker" data-placement-daylight-marker cx="45" cy="12" r="2.5"></circle>
+                <svg class="icon placement-night-icon" data-placement-night x="28" y="4" width="16" height="16" style="display:none"><use href="#lucide-moon"></use></svg>
+              </svg>
+              <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunset"></use></svg>
+            </div>
+          </article>
+        </section>
+
+        <section class="component-section glyph-placement-section" id="weather-glyph-close-left" aria-labelledby="glyphTitle8">
+          <h2 id="glyphTitle8">08 Close left</h2>
+          <article class="weather-surface glyph-placement-card" aria-label="Compact weather with the glyph close left">
+            <div class="glyph-placement-stage">
+              <div class="glyph-composition placement-left" data-relative-reading role="img" aria-label="Around average compared with the previous seven days. Partly cloudy.">
+                <svg class="placement-thermometer" viewBox="14 0 48 184" aria-hidden="true" focusable="false">
+                  <use href="#relative-gauge-body" x="0" y="0" width="76" height="184"></use>
+                  <rect class="relative-mercury" data-relative-fill x="35" y="80" width="6" height="80" rx="3"></rect>
+                  <circle class="relative-mercury" cx="38" cy="160" r="11"></circle>
+                </svg>
+                <svg class="icon placed-glyph" aria-hidden="true" focusable="false"><use data-condition-icon href="#lucide-cloud-sun"></use></svg>
+              </div>
+            </div>
+            <div class="placement-daylight" data-relative-daylight role="img" aria-label="Daytime. Sunrise at 06:30 and sunset at 19:00.">
+              <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunrise"></use></svg>
+              <svg class="placement-daylight-track" viewBox="0 0 72 24" aria-hidden="true" focusable="false">
+                <path class="placement-daylight-base" d="M4 12H68"></path>
+                <path class="placement-daylight-fill" data-placement-daylight-fill d="M4 12H45"></path>
+                <circle class="placement-daylight-marker" data-placement-daylight-marker cx="45" cy="12" r="2.5"></circle>
+                <svg class="icon placement-night-icon" data-placement-night x="28" y="4" width="16" height="16" style="display:none"><use href="#lucide-moon"></use></svg>
+              </svg>
+              <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunset"></use></svg>
+            </div>
+          </article>
+        </section>
+
+        <section class="component-section glyph-placement-section" id="weather-glyph-upper-corner" aria-labelledby="glyphTitle9">
+          <h2 id="glyphTitle9">09 Upper corner</h2>
+          <article class="weather-surface glyph-placement-card" aria-label="Compact weather with the glyph upper corner">
+            <div class="glyph-placement-stage">
+              <div class="glyph-composition placement-upper" data-relative-reading role="img" aria-label="Around average compared with the previous seven days. Partly cloudy.">
+                <svg class="placement-thermometer" viewBox="14 0 48 184" aria-hidden="true" focusable="false">
+                  <use href="#relative-gauge-body" x="0" y="0" width="76" height="184"></use>
+                  <rect class="relative-mercury" data-relative-fill x="35" y="80" width="6" height="80" rx="3"></rect>
+                  <circle class="relative-mercury" cx="38" cy="160" r="11"></circle>
+                </svg>
+                <svg class="icon placed-glyph" aria-hidden="true" focusable="false"><use data-condition-icon href="#lucide-cloud-sun"></use></svg>
+              </div>
+            </div>
+            <div class="placement-daylight" data-relative-daylight role="img" aria-label="Daytime. Sunrise at 06:30 and sunset at 19:00.">
+              <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunrise"></use></svg>
+              <svg class="placement-daylight-track" viewBox="0 0 72 24" aria-hidden="true" focusable="false">
+                <path class="placement-daylight-base" d="M4 12H68"></path>
+                <path class="placement-daylight-fill" data-placement-daylight-fill d="M4 12H45"></path>
+                <circle class="placement-daylight-marker" data-placement-daylight-marker cx="45" cy="12" r="2.5"></circle>
+                <svg class="icon placement-night-icon" data-placement-night x="28" y="4" width="16" height="16" style="display:none"><use href="#lucide-moon"></use></svg>
+              </svg>
+              <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunset"></use></svg>
+            </div>
+          </article>
+        </section>
+
+        <section class="component-section glyph-placement-section" id="weather-glyph-beside-bulb" aria-labelledby="glyphTitle10">
+          <h2 id="glyphTitle10">10 Beside the bulb</h2>
+          <article class="weather-surface glyph-placement-card" aria-label="Compact weather with the glyph beside the bulb">
+            <div class="glyph-placement-stage">
+              <div class="glyph-composition placement-lower" data-relative-reading role="img" aria-label="Around average compared with the previous seven days. Partly cloudy.">
+                <svg class="placement-thermometer" viewBox="14 0 48 184" aria-hidden="true" focusable="false">
+                  <use href="#relative-gauge-body" x="0" y="0" width="76" height="184"></use>
+                  <rect class="relative-mercury" data-relative-fill x="35" y="80" width="6" height="80" rx="3"></rect>
+                  <circle class="relative-mercury" cx="38" cy="160" r="11"></circle>
+                </svg>
+                <svg class="icon placed-glyph" aria-hidden="true" focusable="false"><use data-condition-icon href="#lucide-cloud-sun"></use></svg>
+              </div>
+            </div>
+            <div class="placement-daylight" data-relative-daylight role="img" aria-label="Daytime. Sunrise at 06:30 and sunset at 19:00.">
+              <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunrise"></use></svg>
+              <svg class="placement-daylight-track" viewBox="0 0 72 24" aria-hidden="true" focusable="false">
+                <path class="placement-daylight-base" d="M4 12H68"></path>
+                <path class="placement-daylight-fill" data-placement-daylight-fill d="M4 12H45"></path>
+                <circle class="placement-daylight-marker" data-placement-daylight-marker cx="45" cy="12" r="2.5"></circle>
+                <svg class="icon placement-night-icon" data-placement-night x="28" y="4" width="16" height="16" style="display:none"><use href="#lucide-moon"></use></svg>
+              </svg>
+              <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunset"></use></svg>
+            </div>
+          </article>
+        </section>
+
+        <section class="component-section glyph-placement-section" id="weather-glyph-overlapping-bulb" aria-labelledby="glyphTitle11">
+          <h2 id="glyphTitle11">11 Overlapping bulb</h2>
+          <article class="weather-surface glyph-placement-card" aria-label="Compact weather with the glyph overlapping bulb">
+            <div class="glyph-placement-stage">
+              <div class="glyph-composition placement-attached" data-relative-reading role="img" aria-label="Around average compared with the previous seven days. Partly cloudy.">
+                <svg class="placement-thermometer" viewBox="14 0 48 184" aria-hidden="true" focusable="false">
+                  <use href="#relative-gauge-body" x="0" y="0" width="76" height="184"></use>
+                  <rect class="relative-mercury" data-relative-fill x="35" y="80" width="6" height="80" rx="3"></rect>
+                  <circle class="relative-mercury" cx="38" cy="160" r="11"></circle>
+                </svg>
+                <svg class="icon placed-glyph" aria-hidden="true" focusable="false"><use data-condition-icon href="#lucide-cloud-sun"></use></svg>
+              </div>
+            </div>
+            <div class="placement-daylight" data-relative-daylight role="img" aria-label="Daytime. Sunrise at 06:30 and sunset at 19:00.">
+              <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunrise"></use></svg>
+              <svg class="placement-daylight-track" viewBox="0 0 72 24" aria-hidden="true" focusable="false">
+                <path class="placement-daylight-base" d="M4 12H68"></path>
+                <path class="placement-daylight-fill" data-placement-daylight-fill d="M4 12H45"></path>
+                <circle class="placement-daylight-marker" data-placement-daylight-marker cx="45" cy="12" r="2.5"></circle>
+                <svg class="icon placement-night-icon" data-placement-night x="28" y="4" width="16" height="16" style="display:none"><use href="#lucide-moon"></use></svg>
+              </svg>
+              <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunset"></use></svg>
+            </div>
+          </article>
+        </section>
+
+        <section class="component-section glyph-placement-section" id="weather-glyph-inside-bulb" aria-labelledby="glyphTitle12">
+          <h2 id="glyphTitle12">12 Inside the bulb</h2>
+          <article class="weather-surface glyph-placement-card" aria-label="Compact weather with the glyph inside the bulb">
+            <div class="glyph-placement-stage">
+              <div class="glyph-composition placement-in-bulb" data-relative-reading role="img" aria-label="Around average compared with the previous seven days. Partly cloudy.">
+                <svg class="placement-thermometer" viewBox="14 0 48 184" aria-hidden="true" focusable="false">
+                  <use href="#relative-gauge-body" x="0" y="0" width="76" height="184"></use>
+                  <rect class="relative-mercury" data-relative-fill x="35" y="80" width="6" height="80" rx="3"></rect>
+                  <circle class="relative-mercury" cx="38" cy="160" r="11"></circle>
+                </svg>
+                <svg class="icon placed-glyph" aria-hidden="true" focusable="false"><use data-condition-icon href="#lucide-cloud-sun"></use></svg>
+              </div>
+            </div>
+            <div class="placement-daylight" data-relative-daylight role="img" aria-label="Daytime. Sunrise at 06:30 and sunset at 19:00.">
+              <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunrise"></use></svg>
+              <svg class="placement-daylight-track" viewBox="0 0 72 24" aria-hidden="true" focusable="false">
+                <path class="placement-daylight-base" d="M4 12H68"></path>
+                <path class="placement-daylight-fill" data-placement-daylight-fill d="M4 12H45"></path>
+                <circle class="placement-daylight-marker" data-placement-daylight-marker cx="45" cy="12" r="2.5"></circle>
+                <svg class="icon placement-night-icon" data-placement-night x="28" y="4" width="16" height="16" style="display:none"><use href="#lucide-moon"></use></svg>
+              </svg>
+              <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunset"></use></svg>
+            </div>
+          </article>
+        </section>
+
+        <section class="component-section glyph-placement-section" id="weather-glyph-above-tube" aria-labelledby="glyphTitle13">
+          <h2 id="glyphTitle13">13 Above the tube</h2>
+          <article class="weather-surface glyph-placement-card" aria-label="Compact weather with the glyph above the tube">
+            <div class="glyph-placement-stage">
+              <div class="glyph-composition placement-above" data-relative-reading role="img" aria-label="Around average compared with the previous seven days. Partly cloudy.">
+                <svg class="placement-thermometer" viewBox="14 0 48 184" aria-hidden="true" focusable="false">
+                  <use href="#relative-gauge-body" x="0" y="0" width="76" height="184"></use>
+                  <rect class="relative-mercury" data-relative-fill x="35" y="80" width="6" height="80" rx="3"></rect>
+                  <circle class="relative-mercury" cx="38" cy="160" r="11"></circle>
+                </svg>
+                <svg class="icon placed-glyph" aria-hidden="true" focusable="false"><use data-condition-icon href="#lucide-cloud-sun"></use></svg>
+              </div>
+            </div>
+            <div class="placement-daylight" data-relative-daylight role="img" aria-label="Daytime. Sunrise at 06:30 and sunset at 19:00.">
+              <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunrise"></use></svg>
+              <svg class="placement-daylight-track" viewBox="0 0 72 24" aria-hidden="true" focusable="false">
+                <path class="placement-daylight-base" d="M4 12H68"></path>
+                <path class="placement-daylight-fill" data-placement-daylight-fill d="M4 12H45"></path>
+                <circle class="placement-daylight-marker" data-placement-daylight-marker cx="45" cy="12" r="2.5"></circle>
+                <svg class="icon placement-night-icon" data-placement-night x="28" y="4" width="16" height="16" style="display:none"><use href="#lucide-moon"></use></svg>
+              </svg>
+              <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunset"></use></svg>
+            </div>
+          </article>
+        </section>
+
+        <section class="component-section glyph-placement-section" id="weather-glyph-below-bulb" aria-labelledby="glyphTitle14">
+          <h2 id="glyphTitle14">14 Below the bulb</h2>
+          <article class="weather-surface glyph-placement-card" aria-label="Compact weather with the glyph below the bulb">
+            <div class="glyph-placement-stage">
+              <div class="glyph-composition placement-below" data-relative-reading role="img" aria-label="Around average compared with the previous seven days. Partly cloudy.">
+                <svg class="placement-thermometer" viewBox="14 0 48 184" aria-hidden="true" focusable="false">
+                  <use href="#relative-gauge-body" x="0" y="0" width="76" height="184"></use>
+                  <rect class="relative-mercury" data-relative-fill x="35" y="80" width="6" height="80" rx="3"></rect>
+                  <circle class="relative-mercury" cx="38" cy="160" r="11"></circle>
+                </svg>
+                <svg class="icon placed-glyph" aria-hidden="true" focusable="false"><use data-condition-icon href="#lucide-cloud-sun"></use></svg>
+              </div>
+            </div>
+            <div class="placement-daylight" data-relative-daylight role="img" aria-label="Daytime. Sunrise at 06:30 and sunset at 19:00.">
+              <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunrise"></use></svg>
+              <svg class="placement-daylight-track" viewBox="0 0 72 24" aria-hidden="true" focusable="false">
+                <path class="placement-daylight-base" d="M4 12H68"></path>
+                <path class="placement-daylight-fill" data-placement-daylight-fill d="M4 12H45"></path>
+                <circle class="placement-daylight-marker" data-placement-daylight-marker cx="45" cy="12" r="2.5"></circle>
+                <svg class="icon placement-night-icon" data-placement-night x="28" y="4" width="16" height="16" style="display:none"><use href="#lucide-moon"></use></svg>
+              </svg>
+              <svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-sunset"></use></svg>
+            </div>
+          </article>
+        </section>
+      </div>
+    </div>
+    <p class="sr-only" id="previewStatus" role="status"></p>
+    <p class="export-status" id="exportStatus" role="status"></p>
+  </main>
+
+  <dialog class="spotlight-dialog" id="spotlightDialog" aria-label="Search and commands">
+  <div class="spotlight-search-field">
+    <label class="sr-only" id="spotlightInputLabel" for="spotlightInput">Search commands</label>
+    <svg class="icon spotlight-search-icon" aria-hidden="true"><use href="#lucide-search"></use></svg>
+    <input class="spotlight-input" id="spotlightInput" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="spotlightResults" autocomplete="off" spellcheck="false" placeholder="Search commands">
+  </div>
+  <ul class="spotlight-results" id="spotlightResults" role="listbox" aria-label="Commands">
+    <li class="spotlight-option" id="spotlightJumpTo" role="option" aria-selected="false" data-spotlight-mode="commands" data-spotlight-action="jump-to" data-search="jump go navigate component section" data-shortcut-code="KeyJ" data-shortcut-key="J"><span class="spotlight-option-label">Jump to…</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+    <li class="spotlight-option" id="spotlightExportMarkdown" role="option" aria-selected="false" data-spotlight-mode="commands" data-spotlight-action="export-markdown" data-search="export download markdown md" data-shortcut-code="KeyM" data-shortcut-key="M" data-shortcut-shift="true"><span class="spotlight-option-label">Export as Markdown</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+    <li class="spotlight-option" id="spotlightExportPdf" role="option" aria-selected="false" data-spotlight-mode="commands" data-spotlight-action="export-pdf" data-search="export download print pdf" data-shortcut-code="KeyP" data-shortcut-key="P" data-shortcut-shift="true"><span class="spotlight-option-label">Export as PDF</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+    <li class="spotlight-option" id="spotlightToggleTheme" role="option" aria-selected="false" data-spotlight-mode="commands" data-spotlight-action="toggle-theme" data-search="toggle switch dark light theme appearance" data-shortcut-code="KeyT" data-shortcut-key="T" data-shortcut-shift="true"><span class="spotlight-option-label">Toggle theme</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+    <li class="spotlight-option" id="spotlightShortcuts" role="option" aria-selected="false" data-spotlight-mode="commands" data-spotlight-action="shortcuts" data-search="keyboard shortcuts keys commands help" data-shortcut-code="Slash" data-shortcut-key="/"><span class="spotlight-option-label">Keyboard shortcuts</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+    <li class="spotlight-option" id="spotlightWeather1" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#weather-strip" data-search="weather compact strip" data-shortcut-code="Digit1" data-shortcut-key="1" hidden><span class="spotlight-option-label">01 Compact strip</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+    <li class="spotlight-option" id="spotlightWeather2" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#weather-arc" data-search="weather daylight arc" data-shortcut-code="Digit2" data-shortcut-key="2" hidden><span class="spotlight-option-label">02 Daylight arc</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+    <li class="spotlight-option" id="spotlightWeather3" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#weather-thermometer" data-search="weather vertical thermometer" data-shortcut-code="Digit3" data-shortcut-key="3" hidden><span class="spotlight-option-label">03 Vertical thermometer</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+    <li class="spotlight-option" id="spotlightWeather4" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#weather-relative-track" data-search="weather five modes relative temperature last week daylight track" data-shortcut-code="Digit4" data-shortcut-key="4" hidden><span class="spotlight-option-label">04 Daylight track</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+    <li class="spotlight-option" id="spotlightWeather5" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#weather-relative-rings" data-search="weather five modes relative temperature last week sunrise sunset event rings" data-shortcut-code="Digit5" data-shortcut-key="5" hidden><span class="spotlight-option-label">05 Event rings</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+    <li class="spotlight-option" id="spotlightWeather6" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#weather-relative-dial" data-search="weather five modes relative temperature last week sun moon turning rotation dial" data-shortcut-code="Digit6" data-shortcut-key="6" hidden><span class="spotlight-option-label">06 Sun &amp; moon dial</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+    <li class="spotlight-option" id="spotlightWeather7" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#weather-glyph-close-right" data-search="weather compact glyph placement close right" data-shortcut-code="Digit7" data-shortcut-key="7" hidden><span class="spotlight-option-label">07 Close right</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+    <li class="spotlight-option" id="spotlightWeather8" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#weather-glyph-close-left" data-search="weather compact glyph placement close left" data-shortcut-code="Digit8" data-shortcut-key="8" hidden><span class="spotlight-option-label">08 Close left</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+    <li class="spotlight-option" id="spotlightWeather9" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#weather-glyph-upper-corner" data-search="weather compact glyph placement upper corner" data-shortcut-code="Digit9" data-shortcut-key="9" hidden><span class="spotlight-option-label">09 Upper corner</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+    <li class="spotlight-option" id="spotlightWeather10" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#weather-glyph-beside-bulb" data-search="weather compact glyph placement beside the bulb" data-shortcut-code="Digit0" data-shortcut-key="0" hidden><span class="spotlight-option-label">10 Beside the bulb</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+    <li class="spotlight-option" id="spotlightWeather11" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#weather-glyph-overlapping-bulb" data-search="weather compact glyph placement overlapping bulb" data-shortcut-code="Digit1" data-shortcut-key="1" data-shortcut-shift="true" hidden><span class="spotlight-option-label">11 Overlapping bulb</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+    <li class="spotlight-option" id="spotlightWeather12" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#weather-glyph-inside-bulb" data-search="weather compact glyph placement inside the bulb" data-shortcut-code="Digit2" data-shortcut-key="2" data-shortcut-shift="true" hidden><span class="spotlight-option-label">12 Inside the bulb</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+    <li class="spotlight-option" id="spotlightWeather13" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#weather-glyph-above-tube" data-search="weather compact glyph placement above the tube" data-shortcut-code="Digit3" data-shortcut-key="3" data-shortcut-shift="true" hidden><span class="spotlight-option-label">13 Above the tube</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+    <li class="spotlight-option" id="spotlightWeather14" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#weather-glyph-below-bulb" data-search="weather compact glyph placement below the bulb" data-shortcut-code="Digit4" data-shortcut-key="4" data-shortcut-shift="true" hidden><span class="spotlight-option-label">14 Below the bulb</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+    <li class="spotlight-empty" id="spotlightEmpty" role="presentation" hidden>No matching sections or commands</li>
+  </ul>
+  <span class="sr-only" id="spotlightStatus" aria-live="polite"></span>
+</dialog>
+  <dialog class="modal-dialog shortcut-dialog" id="shortcutDialog" aria-labelledby="shortcutDialogTitle">
+    <div class="modal-header"><h2 class="modal-title" id="shortcutDialogTitle">Keyboard shortcuts</h2><button class="btn-icon" id="btnCloseShortcuts" type="button" aria-label="Close keyboard shortcuts" title="Close keyboard shortcuts"><svg class="icon" aria-hidden="true" focusable="false"><use href="#lucide-x"></use></svg></button></div>
+    <div class="modal-body"><dl class="shortcut-list">
+      <div class="shortcut-row"><dt>Open search and commands</dt><dd><kbd>Ctrl</kbd><kbd>K</kbd><span>/</span><kbd>⌘</kbd><kbd>K</kbd><span>/</span><kbd>Ctrl</kbd><kbd>Space</kbd></dd></div>
+      <div class="shortcut-row"><dt>Jump to a component</dt><dd class="shortcut-keys" data-shortcut-key="J"></dd></div>
+      <div class="shortcut-row"><dt>Compact strip</dt><dd class="shortcut-keys" data-shortcut-key="1"></dd></div>
+      <div class="shortcut-row"><dt>Daylight arc</dt><dd class="shortcut-keys" data-shortcut-key="2"></dd></div>
+      <div class="shortcut-row"><dt>Vertical thermometer</dt><dd class="shortcut-keys" data-shortcut-key="3"></dd></div>
+      <div class="shortcut-row"><dt>Daylight track</dt><dd class="shortcut-keys" data-shortcut-key="4"></dd></div>
+      <div class="shortcut-row"><dt>Event rings</dt><dd class="shortcut-keys" data-shortcut-key="5"></dd></div>
+      <div class="shortcut-row"><dt>Sun &amp; moon dial</dt><dd class="shortcut-keys" data-shortcut-key="6"></dd></div>
+      <div class="shortcut-row"><dt>Close right</dt><dd class="shortcut-keys" data-shortcut-key="7"></dd></div>
+      <div class="shortcut-row"><dt>Close left</dt><dd class="shortcut-keys" data-shortcut-key="8"></dd></div>
+      <div class="shortcut-row"><dt>Upper corner</dt><dd class="shortcut-keys" data-shortcut-key="9"></dd></div>
+      <div class="shortcut-row"><dt>Beside the bulb</dt><dd class="shortcut-keys" data-shortcut-key="0"></dd></div>
+      <div class="shortcut-row"><dt>Overlapping bulb</dt><dd class="shortcut-keys" data-shortcut-key="1" data-shortcut-shift="true"></dd></div>
+      <div class="shortcut-row"><dt>Inside the bulb</dt><dd class="shortcut-keys" data-shortcut-key="2" data-shortcut-shift="true"></dd></div>
+      <div class="shortcut-row"><dt>Above the tube</dt><dd class="shortcut-keys" data-shortcut-key="3" data-shortcut-shift="true"></dd></div>
+      <div class="shortcut-row"><dt>Below the bulb</dt><dd class="shortcut-keys" data-shortcut-key="4" data-shortcut-shift="true"></dd></div>
+      <div class="shortcut-row"><dt>Previous / next component</dt><dd class="shortcut-keys" data-shortcut-key="↑ / ↓"></dd></div>
+      <div class="shortcut-row"><dt>Export as Markdown</dt><dd class="shortcut-keys" data-shortcut-key="M" data-shortcut-shift="true"></dd></div>
+      <div class="shortcut-row"><dt>Export as PDF</dt><dd class="shortcut-keys" data-shortcut-key="P" data-shortcut-shift="true"></dd></div>
+      <div class="shortcut-row"><dt>Toggle theme</dt><dd class="shortcut-keys" data-shortcut-key="T" data-shortcut-shift="true"></dd></div>
+      <div class="shortcut-row"><dt>Open keyboard shortcuts</dt><dd class="shortcut-keys" data-shortcut-key="/"></dd></div>
+      <div class="shortcut-row"><dt>Move through results</dt><dd><kbd>↑</kbd><kbd>↓</kbd></dd></div>
+      <div class="shortcut-row"><dt>Choose a result</dt><dd><kbd>Enter</kbd></dd></div>
+      <div class="shortcut-row"><dt>Adjust time or glyph size</dt><dd><kbd>←</kbd><kbd>→</kbd><kbd>Home</kbd><kbd>End</kbd></dd></div>
+      <div class="shortcut-row"><dt>Close an overlay</dt><dd><kbd>Esc</kbd></dd></div>
+    </dl></div>
+  </dialog>
+
+  <script src="relative-weather.js"></script>
+  <script src="weather.js"></script>
+  <script src="../component-reference/components/spotlight.js"></script>
+</body>
+</html>

@@ -1,0 +1,127 @@
+/* Weather design exploration; foundational tokens live in component-reference. */
+html { color-scheme: dark; }
+html[data-theme="light"] { color-scheme: light; }
+.weather-page { max-width: 1088px; margin: 0 auto; padding: 72px 24px 80px; }
+.page-heading { margin-bottom: 32px; }
+.page-heading h1 { font-size: 28px; font-weight: 500; letter-spacing: -0.025em; color: var(--ink-strong); }
+.demo-controls { display: flex; flex-wrap: wrap; align-items: start; gap: 24px 32px; margin-bottom: 56px; }
+.control-label { display: block; font-size: 12px; color: var(--muted); }
+.preset-options { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.preset { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; padding: 8px 12px; border-radius: var(--radius-sm); color: var(--muted); font-size: 13px; transition: color 120ms, background 120ms; }
+.preset:hover { color: var(--ink-strong); background: var(--surface); }
+.preset[aria-pressed="true"] { color: var(--ink-strong); background: var(--action-primary); }
+.preset .icon { width: 14px; height: 14px; }
+.clock-control { flex: 1 1 160px; max-width: 240px; min-width: 0; }
+.control-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.control-heading output { font: 12px var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+.time-slider { --range-progress: 61.05%; display: block; appearance: none; width: 100%; min-width: 0; max-width: 320px; height: 44px; margin-top: 4px; border: 0; background: transparent; cursor: pointer; }
+.time-slider::-webkit-slider-runnable-track { height: 4px; border-radius: var(--radius-pill); background: linear-gradient(to right, var(--control-selected) 0 var(--range-progress), var(--line-strong) var(--range-progress) 100%); }
+.time-slider::-webkit-slider-thumb { appearance: none; width: 18px; height: 18px; margin-top: -7px; border: 0; border-radius: 50%; background: var(--control-selected); }
+.time-slider::-moz-range-track { height: 4px; border-radius: var(--radius-pill); background: var(--line-strong); }
+.time-slider::-moz-range-progress { height: 4px; border-radius: var(--radius-pill); background: var(--control-selected); }
+.time-slider::-moz-range-thumb { width: 18px; height: 18px; border: 0; border-radius: 50%; background: var(--control-selected); }
+.time-slider:hover { --control-selected: var(--control-selected-hover); }
+.unit-control { margin-left: auto; }
+.unit-options { display: flex; gap: 4px; margin-top: 8px; }
+.unit-options button { width: 40px; height: 36px; border-radius: var(--radius-sm); font-size: 13px; color: var(--muted); transition: background 120ms, color 120ms; }
+.unit-options button:hover { background: var(--surface); color: var(--ink-strong); }
+.unit-options button[aria-pressed="true"] { background: var(--action-primary); color: var(--ink-strong); }
+.weather-layout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 56px 32px; }
+.weather-layout > .component-section { display: flex; flex-direction: column; }
+.strip-section { grid-column: 1 / -1; }
+.component-section > h2 { margin-bottom: 20px; font-family: var(--mono); font-size: 12px; line-height: 1.5; font-weight: 400; color: var(--muted); }
+.weather-surface { flex: 1; min-width: 0; padding: 24px; border-radius: var(--radius); background: var(--surface); }
+.weather-strip { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(200px, 1.5fr) minmax(92px, 0.7fr) minmax(92px, 0.7fr); align-items: center; gap: 24px; }
+.strip-temperature, .strip-condition { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.temperature-block, .strip-condition > div { display: grid; gap: 8px; }
+.eyebrow { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.temperature { display: block; font-family: var(--mono); font-size: 26px; line-height: 1; font-weight: 600; letter-spacing: -0.04em; font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+.thermometer-icon { width: 24px; height: 24px; color: var(--muted); }
+.condition-icon { width: 32px; height: 32px; color: var(--ink); }
+.condition-name { display: block; font-size: 14px; font-weight: 500; color: var(--ink); }
+.weather-clock { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
+.weather-clock time, time.weather-clock { font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums; }
+.weather-clock time { margin-left: 8px; }
+.sun-event { display: grid; gap: 8px; min-width: 0; }
+.sun-event dt { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.sun-event dd { font-family: var(--mono); font-size: 14px; font-variant-numeric: tabular-nums; line-height: 1.2; color: var(--ink); }
+.weather-arc, .weather-instrument { display: flex; flex-direction: column; min-height: 368px; }
+.arc-current { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.arc-temperature { display: grid; gap: 12px; }
+.hero-glyph { width: 56px; height: 56px; color: var(--ink); }
+.daylight-plot { position: relative; flex: 0 0 128px; margin-top: auto; height: 128px; min-height: 128px; padding-top: 0; }
+.daylight-plot > svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.arc-horizon, .arc-track, .arc-elapsed { fill: none; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.arc-horizon { stroke: var(--line); }
+.arc-track { stroke: var(--line-strong); stroke-dasharray: 3 5; }
+.arc-elapsed { stroke: var(--muted); }
+.arc-endpoint { fill: var(--muted); }
+.sun-knockout { fill: var(--surface); }
+.arc-sun-icon { color: var(--ink-strong); width: 24px; height: 24px; }
+.arc-time { position: absolute; transform: translate(-50%, -100%); color: var(--muted); font: 10px var(--mono); font-variant-numeric: tabular-nums; pointer-events: none; }
+.sun-endpoints { display: flex; align-items: start; justify-content: space-between; gap: 24px; margin-top: 8px; }
+.sun-endpoints .sun-event:last-child { text-align: right; }
+.sun-endpoints .sun-event:last-child dt { justify-content: flex-end; }
+.next-event { margin-top: 20px; color: var(--muted); font-size: 12px; text-align: center; }
+.instrument-main { display: grid; grid-template-columns: 92px minmax(0, 1fr); align-items: center; gap: 24px; height: 220px; }
+.thermometer-chart { position: relative; height: 204px; width: 92px; }
+.thermometer-ticks { position: absolute; top: 12px; left: 0; width: 48px; height: 160px; display: flex; flex-direction: column; justify-content: space-between; }
+.thermometer-ticks span { display: flex; align-items: center; justify-content: end; gap: 8px; height: 0; color: var(--muted); font: 10px var(--mono); font-variant-numeric: tabular-nums; }
+.thermometer-ticks span::after { content: ""; display: block; width: 8px; height: 1px; background: var(--line-strong); }
+.thermometer-tube { position: absolute; top: 8px; bottom: 20px; left: 60px; width: 16px; padding: 4px; background: var(--surface-raised); border: 1px solid var(--line-strong); border-radius: 12px 12px 0 0; }
+.thermometer-fill { position: absolute; left: 4px; right: 4px; bottom: 0; height: 65%; background: var(--accent); border-radius: 4px 4px 0 0; }
+.thermometer-bulb { position: absolute; left: 52px; bottom: 4px; width: 32px; height: 32px; border: 1px solid var(--line-strong); border-radius: 50%; background: var(--surface-raised); }
+.thermometer-bulb::after { content: ""; position: absolute; inset: 6px; border-radius: 50%; background: var(--accent); }
+.instrument-reading { display: grid; gap: 16px; min-width: 0; }
+.instrument-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+.instrument-condition { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+.daylight-line { height: 4px; position: relative; margin: 20px 4px 16px; background: var(--line-strong); border-radius: var(--radius-pill); }
+.daylight-line-fill { position: absolute; inset: 0 auto 0 0; width: 64%; background: var(--muted); border-radius: inherit; }
+.daylight-line-marker { position: absolute; top: 50%; left: 64%; width: 10px; height: 10px; border: 2px solid var(--surface); outline: 1px solid var(--ink); border-radius: 50%; background: var(--ink); transform: translate(-50%, -50%); }
+.weather-instrument .sun-endpoints { margin-top: 0; }
+.weather-instrument .next-event { margin-top: 20px; }
+.export-status { margin-top: 24px; font-size: 12px; color: var(--muted); }
+.export-status:empty { display: none; }
+.spotlight-input:focus-visible { outline: 2px solid var(--focus); outline-offset: -4px; }
+.shortcut-dialog { width: min(480px, calc(100vw - 32px)); }
+[hidden] { display: none !important; }
+@media (max-width: 900px) {
+  .weather-page { padding-top: 80px; }
+  .demo-controls { gap: 24px; }
+  .preset-control { flex: 1 1 100%; }
+  .clock-control { flex: 1 1 240px; }
+  .unit-control { margin-left: 0; }
+  .weather-strip { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px 32px; }
+  .weather-layout { column-gap: 24px; }
+  .instrument-main { grid-template-columns: 84px minmax(0, 1fr); gap: 12px; }
+}
+@media (max-width: 680px) {
+  .weather-layout { grid-template-columns: minmax(0, 1fr); }
+  .weather-arc, .weather-instrument { min-height: 0; }
+  .weather-surface { padding: 24px; }
+  .instrument-main { grid-template-columns: 92px minmax(0, 1fr); gap: 24px; }
+}
+@media (max-width: 600px) {
+  .weather-page { padding: 68px 16px 56px; }
+  .page-heading { margin-bottom: 24px; }
+  .demo-controls { margin-bottom: 40px; }
+  .clock-control { flex: 1 1 140px; }
+  .weather-surface { padding: 20px; }
+  .weather-strip { gap: 24px 16px; }
+  .strip-temperature, .strip-condition { gap: 8px; }
+  .strip-condition .condition-icon { width: 24px; height: 24px; }
+  .instrument-main { grid-template-columns: 84px minmax(0, 1fr); gap: 12px; }
+  .preset { padding: 8px; }
+  .condition-name { font-size: 13px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+@media print {
+  .page-tools, .demo-controls, dialog, .export-status { display: none !important; }
+  .weather-page { padding: 0; }
+  .weather-layout { gap: 32px; }
+  .component-section { break-inside: avoid; }
+  body { print-color-adjust: exact; }
+}

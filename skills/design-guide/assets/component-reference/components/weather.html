@@ -1,0 +1,56 @@
+<!-- SECTION 16: Weather -->
+<section class="component-section" id="weather" aria-labelledby="heading-weather">
+  <header class="section-header">
+    <h2 class="section-index" id="heading-weather">16 Weather</h2>
+  </header>
+  <div class="weather-catalog-layout">
+    <div class="weather-catalog-preview" id="weatherExample"></div>
+    <form class="weather-catalog-controls" aria-label="Weather preview controls" autocomplete="off">
+      <fieldset class="weather-catalog-field">
+        <legend>Weather</legend>
+        <div class="weather-catalog-choices">
+          <button class="btn btn-secondary" type="button" data-weather-condition="clear" aria-pressed="true">Clear</button>
+          <button class="btn btn-secondary" type="button" data-weather-condition="cloudy" aria-pressed="false">Cloudy</button>
+          <button class="btn btn-secondary" type="button" data-weather-condition="rain" aria-pressed="false">Rain</button>
+          <button class="btn btn-secondary" type="button" data-weather-condition="snow" aria-pressed="false">Snow</button>
+        </div>
+      </fieldset>
+      <div class="weather-catalog-ranges">
+        <div class="range-control">
+          <div class="range-control-heading">
+            <label for="weatherTime">Time of day</label>
+            <output class="range-output" id="weatherTimeOutput" for="weatherTime">14:00</output>
+          </div>
+          <input class="range-slider" id="weatherTime" type="range" min="0" max="1425" step="15" value="840" autocomplete="off" aria-describedby="weatherDaylightReference">
+          <span class="weather-catalog-hint" id="weatherDaylightReference">Sunrise 06:30 · Sunset 19:00</span>
+        </div>
+        <div class="range-control">
+          <div class="range-control-heading">
+            <label for="weatherTemperature">Temperature</label>
+            <output class="range-output" id="weatherTemperatureOutput" for="weatherTemperature">21°C</output>
+          </div>
+          <input class="range-slider" id="weatherTemperature" type="range" min="0" max="40" step="1" value="21" autocomplete="off" aria-describedby="weatherAverageReference">
+          <span class="weather-catalog-hint" id="weatherAverageReference">Previous 7 days: 21°C average</span>
+        </div>
+      </div>
+      <div class="range-control weather-catalog-size">
+        <div class="range-control-heading">
+          <label for="weatherGlyphSize">Weather glyph size</label>
+          <output class="range-output" id="weatherGlyphSizeOutput" for="weatherGlyphSize">100%</output>
+        </div>
+        <input class="range-slider" id="weatherGlyphSize" type="range" min="50" max="200" step="5" value="100" autocomplete="off">
+      </div>
+      <fieldset class="weather-catalog-field">
+        <legend>Placement</legend>
+        <div class="weather-catalog-placements">
+          <button class="btn btn-secondary" type="button" data-weather-placement="close-right" aria-pressed="true">Close right</button>
+          <button class="btn btn-secondary" type="button" data-weather-placement="close-left" aria-pressed="false">Close left</button>
+          <button class="btn btn-secondary" type="button" data-weather-placement="beside-right" aria-pressed="false">Beside right</button>
+          <button class="btn btn-secondary" type="button" data-weather-placement="beside-left" aria-pressed="false">Beside left</button>
+          <button class="btn btn-secondary" type="button" data-weather-placement="above" aria-pressed="false">Above</button>
+          <button class="btn btn-secondary" type="button" data-weather-placement="below" aria-pressed="false">Below</button>
+        </div>
+      </fieldset>
+    </form>
+  </div>
+</section>

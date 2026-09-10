@@ -22,6 +22,7 @@
   <link rel="stylesheet" href="components/chart-explorer.css">
   <link rel="stylesheet" href="components/budget-map.css">
   <link rel="stylesheet" href="components/realtime-monitor.css">
+  <link rel="stylesheet" href="components/weather.css">
   <link rel="stylesheet" href="components/tooltips.css">
   <link rel="stylesheet" href="components/navigation.css">
   <link rel="stylesheet" href="components/metrics.css">
@@ -122,6 +123,58 @@
         <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
       </symbol>
     </defs>
+      <symbol id="lucide-cloud-sun" viewBox="0 0 24 24">
+        <path d="M12 2v2" />
+        <path d="m4.93 4.93 1.41 1.41" />
+        <path d="M20 12h2" />
+        <path d="m19.07 4.93-1.41 1.41" />
+        <path d="M15.947 12.65a4 4 0 0 0-5.925-4.128" />
+        <path d="M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z" />
+      </symbol>
+      <symbol id="lucide-cloud-moon" viewBox="0 0 24 24">
+        <path d="M13 16a3 3 0 0 1 0 6H7a5 5 0 1 1 4.9-6z" />
+        <path d="M18.376 14.512a6 6 0 0 0 3.461-4.127c.148-.625-.659-.97-1.248-.714a4 4 0 0 1-5.259-5.26c.255-.589-.09-1.395-.716-1.248a6 6 0 0 0-4.594 5.36" />
+      </symbol>
+      <symbol id="lucide-cloud-rain" viewBox="0 0 24 24">
+        <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242" />
+        <path d="M16 14v6" />
+        <path d="M8 14v6" />
+        <path d="M12 16v6" />
+      </symbol>
+      <symbol id="lucide-snowflake" viewBox="0 0 24 24">
+        <path d="m10 20-1.25-2.5L6 18" />
+        <path d="M10 4 8.75 6.5 6 6" />
+        <path d="m14 20 1.25-2.5L18 18" />
+        <path d="m14 4 1.25 2.5L18 6" />
+        <path d="m17 21-3-6h-4" />
+        <path d="m17 3-3 6 1.5 3" />
+        <path d="M2 12h6.5L10 9" />
+        <path d="m20 10-1.5 2 1.5 2" />
+        <path d="M22 12h-6.5L14 15" />
+        <path d="m4 10 1.5 2L4 14" />
+        <path d="m7 21 3-6-1.5-3" />
+        <path d="m7 3 3 6h4" />
+      </symbol>
+      <symbol id="lucide-sunrise" viewBox="0 0 24 24">
+        <path d="M12 2v8" />
+        <path d="m4.93 10.93 1.41 1.41" />
+        <path d="M2 18h2" />
+        <path d="M20 18h2" />
+        <path d="m19.07 10.93-1.41 1.41" />
+        <path d="M22 22H2" />
+        <path d="m8 6 4-4 4 4" />
+        <path d="M16 18a4 4 0 0 0-8 0" />
+      </symbol>
+      <symbol id="lucide-sunset" viewBox="0 0 24 24">
+        <path d="M12 10V2" />
+        <path d="m4.93 10.93 1.41 1.41" />
+        <path d="M2 18h2" />
+        <path d="M20 18h2" />
+        <path d="m19.07 10.93-1.41 1.41" />
+        <path d="M22 22H2" />
+        <path d="m16 6-4 4-4-4" />
+        <path d="M16 18a4 4 0 0 0-8 0" />
+      </symbol>
   </svg>
 
   <!-- Persistent page utilities -->
@@ -168,6 +221,7 @@
           <li><a class="toc-link" href="#colors">13 Color Semantics</a></li>
           <li><a class="toc-link" href="#budget-map">14 Budget Map</a></li>
           <li><a class="toc-link" href="#realtime-monitor">15 Realtime Monitoring</a></li>
+          <li><a class="toc-link" href="#weather">16 Weather</a></li>
         </ul>
       </nav>
     </aside>
@@ -1066,6 +1120,63 @@
         </div>
       </section>
 
+      <!-- SECTION 16: Weather -->
+      <section class="component-section" id="weather" aria-labelledby="heading-weather">
+        <header class="section-header">
+          <h2 class="section-index" id="heading-weather">16 Weather</h2>
+        </header>
+        <div class="weather-catalog-layout">
+          <div class="weather-catalog-preview" id="weatherExample"></div>
+          <form class="weather-catalog-controls" aria-label="Weather preview controls" autocomplete="off">
+            <fieldset class="weather-catalog-field">
+              <legend>Weather</legend>
+              <div class="weather-catalog-choices">
+                <button class="btn btn-secondary" type="button" data-weather-condition="clear" aria-pressed="true">Clear</button>
+                <button class="btn btn-secondary" type="button" data-weather-condition="cloudy" aria-pressed="false">Cloudy</button>
+                <button class="btn btn-secondary" type="button" data-weather-condition="rain" aria-pressed="false">Rain</button>
+                <button class="btn btn-secondary" type="button" data-weather-condition="snow" aria-pressed="false">Snow</button>
+              </div>
+            </fieldset>
+            <div class="weather-catalog-ranges">
+              <div class="range-control">
+                <div class="range-control-heading">
+                  <label for="weatherTime">Time of day</label>
+                  <output class="range-output" id="weatherTimeOutput" for="weatherTime">14:00</output>
+                </div>
+                <input class="range-slider" id="weatherTime" type="range" min="0" max="1425" step="15" value="840" autocomplete="off" aria-describedby="weatherDaylightReference">
+                <span class="weather-catalog-hint" id="weatherDaylightReference">Sunrise 06:30 · Sunset 19:00</span>
+              </div>
+              <div class="range-control">
+                <div class="range-control-heading">
+                  <label for="weatherTemperature">Temperature</label>
+                  <output class="range-output" id="weatherTemperatureOutput" for="weatherTemperature">21°C</output>
+                </div>
+                <input class="range-slider" id="weatherTemperature" type="range" min="0" max="40" step="1" value="21" autocomplete="off" aria-describedby="weatherAverageReference">
+                <span class="weather-catalog-hint" id="weatherAverageReference">Previous 7 days: 21°C average</span>
+              </div>
+            </div>
+            <div class="range-control weather-catalog-size">
+              <div class="range-control-heading">
+                <label for="weatherGlyphSize">Weather glyph size</label>
+                <output class="range-output" id="weatherGlyphSizeOutput" for="weatherGlyphSize">100%</output>
+              </div>
+              <input class="range-slider" id="weatherGlyphSize" type="range" min="50" max="200" step="5" value="100" autocomplete="off">
+            </div>
+            <fieldset class="weather-catalog-field">
+              <legend>Placement</legend>
+              <div class="weather-catalog-placements">
+                <button class="btn btn-secondary" type="button" data-weather-placement="close-right" aria-pressed="true">Close right</button>
+                <button class="btn btn-secondary" type="button" data-weather-placement="close-left" aria-pressed="false">Close left</button>
+                <button class="btn btn-secondary" type="button" data-weather-placement="beside-right" aria-pressed="false">Beside right</button>
+                <button class="btn btn-secondary" type="button" data-weather-placement="beside-left" aria-pressed="false">Beside left</button>
+                <button class="btn btn-secondary" type="button" data-weather-placement="above" aria-pressed="false">Above</button>
+                <button class="btn btn-secondary" type="button" data-weather-placement="below" aria-pressed="false">Below</button>
+              </div>
+            </fieldset>
+          </form>
+        </div>
+      </section>
+
     </main>
   </div>
 
@@ -1096,6 +1207,7 @@
       <li class="spotlight-option" id="spotlightColors" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#colors" data-search="colors palette tokens semantics meanings theme" data-shortcut-code="Digit3" data-shortcut-key="3" data-shortcut-shift="true" hidden><span class="spotlight-option-label">13 Color Semantics</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
       <li class="spotlight-option" id="spotlightBudgetMap" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#budget-map" data-search="budget map billing capacity quota spend forecast limit trajectory" data-shortcut-code="Digit4" data-shortcut-key="4" data-shortcut-shift="true" hidden><span class="spotlight-option-label">14 Budget Map</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
       <li class="spotlight-option" id="spotlightRealtimeMonitor" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#realtime-monitor" data-search="realtime live monitoring resources cpu memory network service status telemetry stream health history" data-shortcut-code="Digit5" data-shortcut-key="5" data-shortcut-shift="true" hidden><span class="spotlight-option-label">15 Realtime Monitoring</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
+      <li class="spotlight-option" id="spotlightWeather" role="option" aria-selected="false" data-spotlight-mode="jump" data-spotlight-target="#weather" data-search="weather thermometer temperature average forecast sun moon sunrise sunset glyph placement" data-shortcut-code="Digit6" data-shortcut-key="6" data-shortcut-shift="true" hidden><span class="spotlight-option-label">16 Weather</span><span class="spotlight-shortcut" aria-hidden="true"></span></li>
       <li class="spotlight-empty" id="spotlightEmpty" role="presentation" hidden>No matching sections or commands</li>
     </ul>
     <span class="sr-only" id="spotlightStatus" aria-live="polite"></span>
@@ -1155,6 +1267,10 @@
         <div class="shortcut-row">
           <dt>Jump to Realtime Monitoring</dt>
           <dd class="shortcut-keys" data-shortcut-key="5" data-shortcut-shift="true"></dd>
+        </div>
+        <div class="shortcut-row">
+          <dt>Jump to Weather</dt>
+          <dd class="shortcut-keys" data-shortcut-key="6" data-shortcut-shift="true"></dd>
         </div>
         <div class="shortcut-row">
           <dt>Previous component</dt>
@@ -1337,6 +1453,8 @@
   <script src="components/realtime-monitor-plot.js"></script>
   <script src="components/realtime-monitor.js"></script>
   <script src="components/realtime-monitor-example.js"></script>
+  <script src="components/weather.js"></script>
+  <script src="components/weather-example.js"></script>
   <script src="components/dialogs.js"></script>
   <script src="components/cards.js"></script>
   <script src="components/navigation.js"></script>
