@@ -5,7 +5,7 @@ Apply [Foundations](foundations.md) and the relevant [Controls and Forms](contro
 ## Purpose and Anatomy
 
 * Combine a thermometer, a weather glyph, and optional compact rows for sunrise/sunset times, UV index, and rain chance into one weather summary. Keep personal training and weight progress in separate components.
-* Show temperature relative to the arithmetic mean of the previous seven complete days, excluding today. Use representative temperatures from the same location and the same daily sampling method.
+* Show temperature relative to the arithmetic mean of the previous three complete days, excluding today. Use representative temperatures from the same location and the same daily sampling method.
 * Keep the temperature comparison visual, with no persistent temperature text or numbers. Show enabled details as values to the right of their glyphs. The summary's accessible name and hover title report the temperature mode, weather, local time, and day/night state, plus the enabled details and next sun transition when sun times are shown.
 * Render the summary as a labelled `role="img"` with decorative SVG descendants. It has no buttons or keyboard stop; controls for exploring the example live outside it.
 * Size the transparent container to its composition, within the available width, with no border, corner rounding, or shadow. Keep 24px vertical and 20px horizontal padding. Align detail-row glyphs and values in shared columns and separate visible rows by 8px. Remove hidden rows and their space, including the entire detail group when all three visibility options are off.
@@ -13,7 +13,7 @@ Apply [Foundations](foundations.md) and the relevant [Controls and Forms](contro
 
 ## Relative Temperature
 
-Classify the current reading's difference from the seven-day mean in Celsius:
+Classify the current reading's difference from the three-day mean in Celsius:
 
 | Mode | Difference from the mean | Visible fill | Fill color |
 | --- | --- | --- | --- |
@@ -27,7 +27,7 @@ Classify the current reading's difference from the seven-day mean in Celsius:
 * Use the quantitative thermometer geometry in `components/weather.js`: a 48×184px cropped viewport, rounded tube, and circular bulb. The outer path uses `--surface-raised` and a 1.5px `--line-strong` stroke. Color the observed fill and bulb together using the muted palette below; preserve their rounded geometry at every level.
 * The inner tube is 6px wide; its top positions for the five levels are 160, 114, 80, 46, and 12px in the SVG's coordinate system, ending at 160px. Keep the bulb filled at every level. Far below has no tube fill; far above reaches the tube's top.
 * Do not add side notches, an average marker, an indicator dot, numeric ticks, or temperature labels to the thermometer. Keep fill height as the primary mode indicator. In either direction from around average, use blue, blue, then yellow: the middle three modes share the same muted blue, and only the two extremes turn muted yellow. Never use gray or red for temperature. Retain the named mode in the summary's accessible name and hover title.
-* Require seven finite previous-day readings and one finite current reading. If an application cannot supply them, present an unavailable state at the integration boundary instead of treating absent readings as zero or inventing a comparison.
+* Require exactly three finite previous-day readings in `previousDaysCelsius` and one finite current reading. If an application cannot supply them, present an unavailable state at the integration boundary instead of treating absent readings as zero or inventing a comparison.
 
 ## Weather Glyph and Layout
 
@@ -80,7 +80,7 @@ The UV groupings follow the [EPA UV Index scale](https://www.epa.gov/sunsafety/u
 
 ## Runnable Reference and Reuse
 
-Open [16 Weather](../assets/component-reference/index.html#weather) for one configurable preview. Its controls select clear/cloudy/rain/snow weather, time in 15-minute steps, temperature from 0–40°C, UV index from 0–12 in 0.5 steps, rain chance from 0–100% in 5% steps, independent visibility for sun times, UV index, and rain chance, glyph size from 50–200% in 5% steps, and the six layouts above. The fictional seven-day readings are 18, 20, 22, 21, 23, 24, and 19°C (mean 21°C); sunrise is 06:30 and sunset is 19:00. UV and rain controls default to 4 and 35%, remain adjustable when their rows are hidden, and state their yellow/red thresholds in helper text. The UV slider's maximum only limits the demo, not the renderer's accepted readings.
+Open [16 Weather](../assets/component-reference/index.html#weather) for one configurable preview. Its controls select clear/cloudy/rain/snow weather, time in 15-minute steps, temperature from 0–40°C, UV index from 0–12 in 0.5 steps, rain chance from 0–100% in 5% steps, independent visibility for sun times, UV index, and rain chance, glyph size from 50–200% in 5% steps, and the six layouts above. The fictional three-day readings are 23, 24, and 19°C (mean 22°C); sunrise is 06:30 and sunset is 19:00. UV and rain controls default to 4 and 35%, remain adjustable when their rows are hidden, and state their yellow/red thresholds in helper text. The UV slider's maximum only limits the demo, not the renderer's accepted readings.
 
 * Edit `components/weather.html`, `weather.css`, `weather.js`, and `weather-example.js`. The example owns all controls and sample data; the renderer has no catalog-ID, server, or prototype-directory dependency.
 * Put the six layout choices under the `Layout` legend. Keep condition and layout selections visible with neutral pressed-button states and `aria-pressed`. Give every slider a visible label, associated output, descriptive `aria-valuetext`, and standard keyboard operation. Reset restored controls to the same defaults as the preview on initialization.
@@ -92,7 +92,7 @@ Open [16 Weather](../assets/component-reference/index.html#weather) for one conf
 ```js
 const weather = ComponentReference.createWeather(container, {
   temperatureCelsius: 21,
-  previousWeekCelsius: [18, 20, 22, 21, 23, 24, 19],
+  previousDaysCelsius: [23, 24, 19],
   minute: 840,
   sunrise: 390,
   sunset: 1140,

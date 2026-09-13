@@ -18,9 +18,9 @@
   }
 
   function validate(options) {
-    if (!Number.isFinite(options.temperatureCelsius) || !Array.isArray(options.previousWeekCelsius)
-      || options.previousWeekCelsius.length !== 7 || !options.previousWeekCelsius.every(Number.isFinite)) {
-      throw new TypeError("Weather requires a current temperature and seven finite previous-day temperatures in Celsius.");
+    if (!Number.isFinite(options.temperatureCelsius) || !Array.isArray(options.previousDaysCelsius)
+      || options.previousDaysCelsius.length !== 3 || !options.previousDaysCelsius.every(Number.isFinite)) {
+      throw new TypeError("Weather requires a current temperature and three finite previous-day temperatures in Celsius.");
     }
     if (![options.minute, options.sunrise, options.sunset].every(value => Number.isInteger(value) && value >= 0 && value < dayLength)
       || options.sunrise >= options.sunset) {
@@ -42,7 +42,7 @@
       || options.rainChancePercent < 0 || options.rainChancePercent > 100)) {
       throw new RangeError("Weather rain chance must be a percentage between 0 and 100, or null.");
     }
-    return { ...options, previousWeekCelsius: [...options.previousWeekCelsius] };
+    return { ...options, previousDaysCelsius: [...options.previousDaysCelsius] };
   }
 
   function createWeather(container, options) {
@@ -103,7 +103,7 @@
 
     function update(patch = {}) {
       state = validate({ ...state, ...patch });
-      const average = state.previousWeekCelsius.reduce((sum, value) => sum + value, 0) / 7;
+      const average = state.previousDaysCelsius.reduce((sum, value) => sum + value, 0) / 3;
       const difference = state.temperatureCelsius - average;
       const level = difference <= -6 ? 0 : difference < -2 ? 1 : difference <= 2 ? 2 : difference < 6 ? 3 : 4;
       const mode = modes[level];
@@ -151,7 +151,7 @@
         ? ` Sunrise ${clockTime(state.sunrise, state.hour12)}; sunset ${clockTime(state.sunset, state.hour12)}. `
           + `${nextEvent} in ${Math.floor(until / 60)} hours and ${until % 60} minutes.`
         : "";
-      const description = `${mode} compared with the average temperature of the previous seven days. `
+      const description = `${mode} compared with the average temperature of the previous three days. `
         + `${conditions[state.condition]}. ${isDay ? "Daytime" : "Nighttime"}, ${clockTime(state.minute, state.hour12)}.`
         + sunDescription
         + (state.showUvIndex ? ` ${uvIndex.row.title}.` : "")

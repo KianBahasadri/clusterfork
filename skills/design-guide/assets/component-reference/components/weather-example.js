@@ -20,8 +20,8 @@
   let condition = "clear";
   let placement = "right-icon-above";
   const weather = reference.createWeather(document.getElementById("weatherExample"), {
-    // Fictional representative readings for seven complete days, excluding today.
-    previousWeekCelsius: [18, 20, 22, 21, 23, 24, 19],
+    // Fictional representative readings for three complete days, excluding today.
+    previousDaysCelsius: [23, 24, 19],
     temperatureCelsius: Number(temperature.value),
     minute: Number(time.value),
     sunrise,
