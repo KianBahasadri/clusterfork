@@ -41,14 +41,7 @@
           </svg>
         </div>
       </div>
-      <div class="weather-daylight" aria-hidden="true">
-        <svg class="weather-daylight-track" viewBox="0 0 72 24" aria-hidden="true" focusable="false">
-          <path class="weather-daylight-base" d="M4 12H68"></path>
-          <path class="weather-daylight-fill" d="M4 12H4"></path>
-          <circle class="weather-daylight-marker" cx="4" cy="12" r="2.5"></circle>
-          <use class="icon weather-night-icon" href="#lucide-moon" x="28" y="4" width="16" height="16"></use>
-        </svg>
-      </div>`;
+      <div class="weather-sun-times" aria-hidden="true"></div>`;
 
     function icon(name, className) {
       const element = reference.createLucideIcon(name, `icon ${className || ""}`);
@@ -59,12 +52,16 @@
 
     const glyph = icon("sun", "weather-glyph");
     root.querySelector(".weather-composition").appendChild(glyph);
-    const daylight = root.querySelector(".weather-daylight");
-    daylight.prepend(icon("sunrise"));
-    daylight.appendChild(icon("sunset"));
+    const sunTimes = root.querySelector(".weather-sun-times");
+    const sunEvents = ["sunrise", "sunset"].map(name => {
+      const row = document.createElement("div");
+      row.className = "weather-sun-event";
+      const time = document.createElement("time");
+      row.append(icon(name), time);
+      sunTimes.appendChild(row);
+      return { name, row, time };
+    });
     const fill = root.querySelector(".weather-thermometer-fill");
-    const daylightFill = root.querySelector(".weather-daylight-fill");
-    const daylightMarker = root.querySelector(".weather-daylight-marker");
 
     function update(patch = {}) {
       state = validate({ ...state, ...patch });
@@ -86,10 +83,12 @@
           : state.condition === "rain" ? "cloud-rain" : "snowflake";
       glyph.querySelector("use").setAttribute("href", `#lucide-${glyphName}`);
       root.dataset.daylight = String(isDay);
-      const progress = Math.max(0, Math.min(1, (state.minute - state.sunrise) / (state.sunset - state.sunrise)));
-      const position = 4 + progress * 64;
-      daylightFill.setAttribute("d", `M4 12H${position}`);
-      daylightMarker.setAttribute("cx", String(position));
+      sunEvents.forEach(({ name, row, time }) => {
+        const value = clockTime(state[name]);
+        time.dateTime = value;
+        time.textContent = value;
+        row.title = `${name === "sunrise" ? "Sunrise" : "Sunset"} at ${value}`;
+      });
 
       const nextEvent = isDay ? "Sunset" : "Sunrise";
       const until = ((isDay ? state.sunset : state.sunrise) - state.minute + dayLength) % dayLength;

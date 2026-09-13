@@ -17,7 +17,7 @@ Apply the exact specifications in the references relevant to the interface being
 - Read [Task Cards](references/task-cards.md) for compact task or issue records, project/deadline metadata, workflow contrast, and details dialogs.
 - Read [Budget Map](references/budget-map.md) when comparing several budgets, quotas, or capacity limits over a shared period, including current usage and end-of-period forecasts.
 - Read [Realtime Monitoring](references/realtime-monitoring.md) for continuously updating resource readings, recent trends, service-status histories, and feed freshness.
-- Read [Weather](references/weather.md) for a visual temperature comparison with the previous week, weather glyphs, compact sunrise/sunset progress, and glyph sizing and placement.
+- Read [Weather](references/weather.md) for a visual temperature comparison with the previous week, weather glyphs, compact sunrise/sunset times, and glyph sizing and placement.
 - Read [Overlays and Feedback](references/overlays-and-feedback.md) for dialogs, modals, tooltips, popovers, navigation, tabs, breadcrumbs, alerts, callouts, and toasts.
 - Read every component reference above when building or reviewing a complete component catalog; for other interfaces, read the references for the components they contain.
 - For a dashboard composed from the existing kit, also read [Dashboard Composition](references/dashboard-composition.md) for the sample's scope, reuse, and observed limits.

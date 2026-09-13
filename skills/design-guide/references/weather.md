@@ -4,12 +4,12 @@ Apply [Foundations](foundations.md) and the relevant [Controls and Forms](contro
 
 ## Purpose and Anatomy
 
-* Combine a thermometer, a weather glyph, and a compact sunrise/sunset strip into one visual weather summary. Keep personal training and weight progress in separate components.
+* Combine a thermometer, a weather glyph, and two compact sunrise/sunset time rows into one weather summary. Keep personal training and weight progress in separate components.
 * Show temperature relative to the arithmetic mean of the previous seven complete days, excluding today. Use representative temperatures from the same location and the same daily sampling method.
-* Keep persistent text and numbers out of the summary. Its accessible name and hover title report the temperature mode, weather, local time, day/night state, sunrise, sunset, and time until the next transition.
+* Keep the temperature comparison visual, with no persistent temperature text or numbers. Show sunrise and sunset as clock times to the right of their glyphs. The summary's accessible name and hover title report the temperature mode, weather, local time, day/night state, sunrise, sunset, and time until the next transition.
 * Render the summary as a labelled `role="img"` with decorative SVG descendants. It has no buttons or keyboard stop; controls for exploring the example live outside it.
-* Use a transparent 160px-wide container with no border, corner rounding, or shadow. Keep 24px vertical and 20px horizontal padding, and a 16px gap between the thermometer stage and the daylight strip.
-* Keep the thermometer 184px high and reserve `192px + glyph size` for its stage so changing placement does not move the strip. The glyph size may change the overall height.
+* Use a transparent 160px-wide container with no border, corner rounding, or shadow. Keep 24px vertical and 20px horizontal padding, and a 16px gap between the thermometer stage and the sunrise/sunset rows.
+* Keep the thermometer 184px high and reserve `192px + glyph size` for its stage so changing placement does not move the time rows. The glyph size may change the overall height.
 
 ## Relative Temperature
 
@@ -49,11 +49,12 @@ The gaps refer to glyph boxes and path geometry, before stroke expansion; Lucide
 
 ## Sunrise and Sunset
 
-* Put a 16px Lucide `Sunrise` glyph at the left and `Sunset` at the right of a 120×24px strip, with 8px gaps around a flexible central track. Keep these glyphs at 16px when the weather glyph is resized.
-* During daylight, advance a small marker along the track by `(now − sunrise) / (sunset − sunrise)`. Use `--line-strong` for the remaining track, `--muted` for the elapsed segment, and `--ink` for the marker.
-* At night, hide the elapsed segment and marker and show a 16px moon in a gap at the track's center. This moon denotes night, not lunar position.
+* Center two stacked rows beneath the thermometer stage: sunrise first, sunset second. Size the group to its contents and separate the rows by 8px.
+* Each row contains a 16px Lucide `Sunrise` or `Sunset` glyph, followed by its clock time on the right with an 8px gap. Align the glyph and time vertically at their centers. Use `--muted` for the glyph and retain its 16px size when the weather glyph is resized.
+* Format times as zero-padded 24-hour `HH:mm` values. Use a `<time>` element with a matching `datetime`, 14px `--mono`, 1.5 line-height, tabular numbers, and `--ink` text. Each row's hover title identifies the event and its time.
+* Keep both times visible during the day and at night. Update their visible text, `datetime`, row titles, and the summary's accessible description whenever the supplied event times change. The sunrise/sunset display contains no progress track, marker, or night indicator.
 * Accept local minutes since midnight for the current time, sunrise, and sunset. The compact reference supports a same-day sunrise before sunset. The caller must resolve location, date, timezone, and real event times; do not assume equal day/night lengths.
-* At sunrise, switch to daytime and start progress at zero. At sunset, switch to night. Calculate the next sunrise across midnight with a 24-hour wrap. Do not animate independently of supplied time or fetch weather/location data in the component.
+* At sunrise, switch the weather glyph to its daytime form; at sunset, switch to its night form. Calculate the next sunrise across midnight with a 24-hour wrap for the accessible description. Do not animate independently of supplied time or fetch weather/location data in the component.
 
 ## Runnable Reference and Reuse
 

@@ -1,4 +1,4 @@
-/* The component is visual; its accessible name carries the full reading. */
+/* Visual temperature comparison with local sunrise and sunset times. */
 .weather-summary {
   --weather-glyph-size: 32px;
   display: flex;
@@ -77,34 +77,25 @@
   --glyph-y: 0px;
 }
 .weather-summary[data-placement="below"] .weather-composition { --glyph-y: 192px; }
-.weather-daylight {
+.weather-sun-times {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  width: max-content;
+  max-width: 100%;
+}
+.weather-sun-event {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 120px;
-  max-width: 100%;
-  height: 24px;
   color: var(--muted);
 }
-.weather-daylight-track {
-  display: block;
-  flex: 1 1 0;
-  width: 72px;
-  min-width: 0;
-  height: 24px;
+.weather-sun-event time {
+  color: var(--ink);
+  font: 14px/1.5 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
-.weather-daylight-base, .weather-daylight-fill {
-  fill: none;
-  stroke-width: 2;
-  stroke-linecap: round;
-}
-.weather-daylight-base { stroke: var(--line-strong); }
-.weather-summary[data-daylight="false"] .weather-daylight-base { stroke-dasharray: 22 20 22; }
-.weather-daylight-fill { stroke: var(--muted); }
-.weather-daylight-marker { fill: var(--ink); }
-.weather-summary[data-daylight="false"] .weather-daylight-fill,
-.weather-summary[data-daylight="false"] .weather-daylight-marker,
-.weather-summary[data-daylight="true"] .weather-night-icon { display: none; }
 
 /* Catalog controls are separate from the reusable component. */
 .weather-catalog-layout {
