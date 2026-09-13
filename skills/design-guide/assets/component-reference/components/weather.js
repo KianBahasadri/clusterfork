@@ -3,7 +3,7 @@
 
   const modes = ["Far below average", "Below average", "Around average", "Above average", "Far above average"];
   const conditions = { clear: "Clear", cloudy: "Cloudy", rain: "Rain", snow: "Snow" };
-  const placements = ["close-right", "close-left", "beside-right", "beside-left", "above", "below"];
+  const placements = ["right-icon-above", "left-icon-above", "right-icon-below", "left-icon-below", "stack-above", "stack-below"];
   const dayLength = 1440;
 
   function clockTime(minute) {
@@ -40,7 +40,7 @@
 
   function createWeather(container, options) {
     let state = validate({
-      condition: "clear", placement: "close-right", glyphSize: 32,
+      condition: "clear", placement: "right-icon-above", glyphSize: 32,
       showSunTimes: true, showUvIndex: true, showRainChance: true,
       uvIndex: null, rainChancePercent: null, ...options
     });
@@ -55,10 +55,12 @@
             <rect class="weather-thermometer-fill" x="35" y="80" width="6" height="80" rx="3"></rect>
             <circle class="weather-thermometer-bulb" cx="38" cy="160" r="11"></circle>
           </svg>
+          <div class="weather-info">
+            <div class="weather-details">
+              <div class="weather-sun-times"></div>
+            </div>
+          </div>
         </div>
-      </div>
-      <div class="weather-details" aria-hidden="true">
-        <div class="weather-sun-times"></div>
       </div>`;
 
     function icon(name, className) {
@@ -69,8 +71,8 @@
     }
 
     const glyph = icon("sun", "weather-glyph");
-    root.querySelector(".weather-composition").appendChild(glyph);
     const details = root.querySelector(".weather-details");
+    root.querySelector(".weather-info").insertBefore(glyph, details);
     const sunTimes = root.querySelector(".weather-sun-times");
 
     function detailRow(iconName, className, tagName = "span") {

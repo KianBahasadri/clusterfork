@@ -8,8 +8,8 @@ Apply [Foundations](foundations.md) and the relevant [Controls and Forms](contro
 * Show temperature relative to the arithmetic mean of the previous seven complete days, excluding today. Use representative temperatures from the same location and the same daily sampling method.
 * Keep the temperature comparison visual, with no persistent temperature text or numbers. Show enabled details as values to the right of their glyphs. The summary's accessible name and hover title report the temperature mode, weather, local time, and day/night state, plus the enabled details and next sun transition when sun times are shown.
 * Render the summary as a labelled `role="img"` with decorative SVG descendants. It has no buttons or keyboard stop; controls for exploring the example live outside it.
-* Use a transparent 160px-wide container with no border, corner rounding, or shadow. Keep 24px vertical and 20px horizontal padding, and a 16px gap between the thermometer stage and the detail group. Center the group at its content width, align all row glyphs and values in shared columns, and separate visible rows by 8px. Remove the group and the 16px gap from layout when all details are hidden.
-* Keep the thermometer 184px high and reserve `192px + glyph size` for its stage so changing placement does not move the detail rows. The glyph size may change the overall height.
+* Size the transparent container to its composition, within the available width, with no border, corner rounding, or shadow. Keep 24px vertical and 20px horizontal padding. Align detail-row glyphs and values in shared columns and separate visible rows by 8px. Remove hidden rows and their space, including the entire detail group when all three visibility options are off.
+* Keep the thermometer 184px high. Group the main weather glyph and details into one stack that moves as a unit with the selected layout; size the composition to fit its visible content.
 
 ## Relative Temperature
 
@@ -29,23 +29,23 @@ Classify the current reading's difference from the seven-day mean in Celsius:
 * Do not add side notches, an average marker, an indicator dot, numeric ticks, or temperature labels to the thermometer. Encode the mode in fill height rather than changing semantic colors.
 * Require seven finite previous-day readings and one finite current reading. If an application cannot supply them, present an unavailable state at the integration boundary instead of treating absent readings as zero or inventing a comparison.
 
-## Weather Glyph and Placement
+## Weather Glyph and Layout
 
 * Use Lucide `Sun` / `Moon` for clear weather, `CloudSun` / `CloudMoon` for cloudy weather, `CloudRain` for rain, and `Snowflake` for snow. Choose the day icon from sunrise inclusive until sunset exclusive; choose the night icon otherwise.
 * Preserve the Lucide paths, 24×24 view box, 2px stroke, round joins and caps, and no fill. Use `--ink`; scale the whole glyph uniformly.
 * Default to a 32px glyph. Support 16–64px, equivalent to 50–200%, independently of the thermometer and the detail-row glyphs.
-* Offer exactly these six placements. Recalculate positions from the glyph size so enlarging it preserves its attachment point and prevents clipping.
+* Offer exactly these six layouts through the `placement` option. Account for both glyph size and the visible detail group's width and height so the thermometer, glyph, and details never overlap.
 
-| Option | Position |
-| --- | --- |
-| Close right | To the right of the tube, centered at SVG y=80, with a 4px gap from its outline geometry |
-| Close left | Mirror of close right |
-| Beside right | To the right of the bulb, centered at SVG y=160, with a 4px gap from its outline geometry |
-| Beside left | Mirror of beside right |
-| Above | Centered over the tube, with 12px between the glyph box and the top of the outline geometry |
-| Below | Centered under the bulb, with 12px between the bottom of the outline geometry and the glyph box |
+| Layout label | `placement` value | Arrangement |
+| --- | --- | --- |
+| Right · icon above | `right-icon-above` | Stack right of the thermometer; glyph above details |
+| Left · icon above | `left-icon-above` | Stack left of the thermometer; glyph above details |
+| Right · icon below | `right-icon-below` | Stack right of the thermometer; glyph below details |
+| Left · icon below | `left-icon-below` | Stack left of the thermometer; glyph below details |
+| Stack above | `stack-above` | Glyph, details, then thermometer in one centered column |
+| Stack below | `stack-below` | Thermometer, details, then glyph in one centered column |
 
-The gaps refer to glyph boxes and path geometry, before stroke expansion; Lucide's internal whitespace remains unchanged. Above and below deliberately have more space than the side placements.
+For side layouts, vertically center the thermometer against the entire glyph-and-details stack, with a 16px gap between their element boxes. Center the main weather glyph horizontally over or under the full detail group, including both its icons and values, and leave 12px between them. Recenter the stack whenever its content or glyph size changes. For the vertical layouts, center all blocks on one axis with 12px gaps between visible blocks. Hiding details removes their adjacent spacing. Preserve Lucide's internal whitespace and the thermometer's path geometry.
 
 ## Sunrise and Sunset
 
@@ -66,12 +66,12 @@ The gaps refer to glyph boxes and path geometry, before stroke expansion; Lucide
 
 ## Runnable Reference and Reuse
 
-Open [16 Weather](../assets/component-reference/index.html#weather) for one configurable preview. Its controls select clear/cloudy/rain/snow weather, time in 15-minute steps, temperature from 0–40°C, independent visibility for sun times, UV index, and rain chance, glyph size from 50–200% in 5% steps, and the six placements above. The fictional seven-day readings are 18, 20, 22, 21, 23, 24, and 19°C (mean 21°C); sunrise is 06:30, sunset is 19:00, UV index is 4, and rain chance is 35%.
+Open [16 Weather](../assets/component-reference/index.html#weather) for one configurable preview. Its controls select clear/cloudy/rain/snow weather, time in 15-minute steps, temperature from 0–40°C, independent visibility for sun times, UV index, and rain chance, glyph size from 50–200% in 5% steps, and the six layouts above. The fictional seven-day readings are 18, 20, 22, 21, 23, 24, and 19°C (mean 21°C); sunrise is 06:30, sunset is 19:00, UV index is 4, and rain chance is 35%.
 
 * Edit `components/weather.html`, `weather.css`, `weather.js`, and `weather-example.js`. The example owns all controls and sample data; the renderer has no catalog-ID, server, or prototype-directory dependency.
-* Keep condition and placement selections visible with neutral pressed-button states and `aria-pressed`. Give every slider a visible label, associated output, descriptive `aria-valuetext`, and standard keyboard operation. Reset restored controls to the same defaults as the preview on initialization.
+* Put the six layout choices under the `Layout` legend. Keep condition and layout selections visible with neutral pressed-button states and `aria-pressed`. Give every slider a visible label, associated output, descriptive `aria-valuetext`, and standard keyboard operation. Reset restored controls to the same defaults as the preview on initialization.
 * Group three checked native checkboxes with `role="switch"`, labelled `Show sunrise and sunset times`, `Show UV index`, and `Show rain chance`, with 4px between them. Apply the shared switch treatment, a 44px minimum label target, and a visible focus ring on each track. Clicking a label or pressing `Space` updates only that visibility option immediately.
-* Keep the summary beside the controls on wider screens. At 700px and below, stack the summary above the controls. Let weather choices wrap, keep placement choices in two columns, and stack the time/temperature sliders when their columns would be too narrow. Support a 320px viewport and 200% zoom without page overflow.
+* Reserve a 200px preview column beside the controls on wider screens so changing layout does not shift the controls horizontally. At 700px and below, stack the summary above the controls. Let weather choices wrap, keep layout choices in two columns, and stack the time/temperature sliders when their columns would be too narrow. Support a 320px viewport and 200% zoom without page overflow.
 * Load shared tokens, base styles, the Lucide sprite and `shared/icons.js`, followed by `weather.css` and `weather.js`. The catalog's exploration controls additionally use the shared button, range, and switch styles. Rebuild the generated catalog after HTML edits.
 
 ```js
@@ -85,16 +85,16 @@ const weather = ComponentReference.createWeather(container, {
   rainChancePercent: 35,
   condition: "clear",
   glyphSize: 32,
-  placement: "close-right",
+  placement: "right-icon-above",
   showSunTimes: true,
   showUvIndex: true,
   showRainChance: true
 });
-weather.update({ minute: 1200, glyphSize: 48, placement: "above" });
+weather.update({ minute: 1200, glyphSize: 48, placement: "stack-above" });
 weather.update({ showSunTimes: false });
 weather.update({ uvIndex: 2.5, rainChancePercent: 60, showUvIndex: false });
 // Remove this instance when its containing view is retired.
 weather.destroy();
 ```
 
-`update(patch)` changes only supplied options and returns `{ average, level, mode, isDay }`. Each instance owns its data and DOM; it can coexist with other instances. Invalid options, including non-boolean visibility flags, throw before changing the rendered state. Omitted condition, glyph size, and placement default to clear, 32px, and close right. Supply all temperature and time inputs explicitly, including event times when their display is hidden.
+`update(patch)` changes only supplied options and returns `{ average, level, mode, isDay }`. Each instance owns its data and DOM; it can coexist with other instances. Invalid options, including non-boolean visibility flags, throw before changing the rendered state. Omitted condition, glyph size, and placement default to clear, 32px, and `right-icon-above`. Supply all temperature and time inputs explicitly, including event times when their display is hidden.

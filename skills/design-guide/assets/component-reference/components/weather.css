@@ -4,8 +4,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
-  width: 160px;
+  width: max-content;
   max-width: 100%;
   padding: 24px 20px;
 }
@@ -14,22 +13,15 @@
   align-items: center;
   justify-content: center;
   width: 100%;
-  min-height: calc(192px + var(--weather-glyph-size));
 }
 .weather-composition {
-  --tube-x: 0px;
-  --tube-y: 0px;
-  --glyph-x: 36px;
-  --glyph-y: calc(80px - var(--weather-glyph-size) / 2);
-  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 16px;
   flex: 0 0 auto;
-  width: calc(36px + var(--weather-glyph-size));
-  height: 184px;
 }
 .weather-thermometer {
-  position: absolute;
-  left: var(--tube-x);
-  top: var(--tube-y);
+  flex: none;
   width: 48px;
   height: 184px;
   overflow: visible;
@@ -40,43 +32,29 @@
   stroke-width: 1.5;
 }
 .weather-thermometer-fill, .weather-thermometer-bulb { fill: var(--accent); }
+.weather-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
 .weather-glyph {
-  position: absolute;
-  left: var(--glyph-x);
-  top: var(--glyph-y);
+  flex: none;
   width: var(--weather-glyph-size);
   height: var(--weather-glyph-size);
   color: var(--ink);
 }
-.weather-summary[data-placement="close-left"] .weather-composition {
-  --tube-x: calc(var(--weather-glyph-size) - 12px);
-  --glyph-x: 0px;
+.weather-summary[data-placement="left-icon-above"] .weather-info,
+.weather-summary[data-placement="left-icon-below"] .weather-info,
+.weather-summary[data-placement="stack-above"] .weather-info { order: -1; }
+.weather-summary[data-placement="right-icon-below"] .weather-info,
+.weather-summary[data-placement="left-icon-below"] .weather-info,
+.weather-summary[data-placement="stack-below"] .weather-info { flex-direction: column-reverse; }
+.weather-summary[data-placement="stack-above"] .weather-composition,
+.weather-summary[data-placement="stack-below"] .weather-composition {
+  flex-direction: column;
+  gap: 12px;
 }
-.weather-summary[data-placement="beside-right"] .weather-composition,
-.weather-summary[data-placement="beside-left"] .weather-composition {
-  --glyph-y: calc(160px - var(--weather-glyph-size) / 2);
-  width: calc(48px + var(--weather-glyph-size));
-  height: max(184px, calc(160px + var(--weather-glyph-size) / 2));
-}
-.weather-summary[data-placement="beside-right"] .weather-composition { --glyph-x: 48px; }
-.weather-summary[data-placement="beside-left"] .weather-composition {
-  --tube-x: var(--weather-glyph-size);
-  --glyph-x: 0px;
-}
-.weather-summary[data-placement="above"] .weather-composition,
-.weather-summary[data-placement="below"] .weather-composition {
-  --composition-width: max(48px, var(--weather-glyph-size));
-  --tube-x: calc((var(--composition-width) - 48px) / 2);
-  --glyph-x: calc((var(--composition-width) - var(--weather-glyph-size)) / 2);
-  width: var(--composition-width);
-  height: calc(192px + var(--weather-glyph-size));
-}
-/* The outline starts at y=8 and ends at y=180: leave a 12px visual gap. */
-.weather-summary[data-placement="above"] .weather-composition {
-  --tube-y: calc(var(--weather-glyph-size) + 4px);
-  --glyph-y: 0px;
-}
-.weather-summary[data-placement="below"] .weather-composition { --glyph-y: 192px; }
 .weather-details, .weather-sun-times {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -102,7 +80,7 @@
 /* Catalog controls are separate from the reusable component. */
 .weather-catalog-layout {
   display: grid;
-  grid-template-columns: 160px minmax(0, 1fr);
+  grid-template-columns: 200px minmax(0, 1fr);
   align-items: center;
   gap: 40px;
 }

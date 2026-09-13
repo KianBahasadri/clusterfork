@@ -13,7 +13,7 @@
   // Reset restored Firefox controls to the same defaults as the preview.
   form.reset();
   let condition = "clear";
-  let placement = "close-right";
+  let placement = "right-icon-above";
   const weather = reference.createWeather(document.getElementById("weatherExample"), {
     // Fictional representative readings for seven complete days, excluding today.
     previousWeekCelsius: [18, 20, 22, 21, 23, 24, 19],
