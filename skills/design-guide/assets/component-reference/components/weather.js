@@ -23,11 +23,27 @@
       || !Number.isFinite(options.glyphSize) || options.glyphSize < 16 || options.glyphSize > 64) {
       throw new RangeError("Weather requires a supported condition, placement, and glyph size between 16 and 64px.");
     }
+    for (const option of ["showSunTimes", "showUvIndex", "showRainChance"]) {
+      if (typeof options[option] !== "boolean") {
+        throw new TypeError(`Weather ${option} must be a boolean.`);
+      }
+    }
+    if (options.uvIndex !== null && (!Number.isFinite(options.uvIndex) || options.uvIndex < 0)) {
+      throw new RangeError("Weather UV index must be a nonnegative finite number or null.");
+    }
+    if (options.rainChancePercent !== null && (!Number.isFinite(options.rainChancePercent)
+      || options.rainChancePercent < 0 || options.rainChancePercent > 100)) {
+      throw new RangeError("Weather rain chance must be a percentage between 0 and 100, or null.");
+    }
     return { ...options, previousWeekCelsius: [...options.previousWeekCelsius] };
   }
 
   function createWeather(container, options) {
-    let state = validate({ condition: "clear", placement: "close-right", glyphSize: 32, ...options });
+    let state = validate({
+      condition: "clear", placement: "close-right", glyphSize: 32,
+      showSunTimes: true, showUvIndex: true, showRainChance: true,
+      uvIndex: null, rainChancePercent: null, ...options
+    });
     const root = document.createElement("div");
     root.className = "weather-summary";
     root.setAttribute("role", "img");
@@ -41,7 +57,9 @@
           </svg>
         </div>
       </div>
-      <div class="weather-sun-times" aria-hidden="true"></div>`;
+      <div class="weather-details" aria-hidden="true">
+        <div class="weather-sun-times"></div>
+      </div>`;
 
     function icon(name, className) {
       const element = reference.createLucideIcon(name, `icon ${className || ""}`);
@@ -52,15 +70,26 @@
 
     const glyph = icon("sun", "weather-glyph");
     root.querySelector(".weather-composition").appendChild(glyph);
+    const details = root.querySelector(".weather-details");
     const sunTimes = root.querySelector(".weather-sun-times");
-    const sunEvents = ["sunrise", "sunset"].map(name => {
+
+    function detailRow(iconName, className, tagName = "span") {
       const row = document.createElement("div");
-      row.className = "weather-sun-event";
-      const time = document.createElement("time");
-      row.append(icon(name), time);
+      row.className = `weather-detail ${className}`;
+      const value = document.createElement(tagName);
+      value.className = "weather-detail-value";
+      row.append(icon(iconName), value);
+      return { row, value };
+    }
+
+    const sunEvents = ["sunrise", "sunset"].map(name => {
+      const { row, value: time } = detailRow(name, "weather-sun-event", "time");
       sunTimes.appendChild(row);
       return { name, row, time };
     });
+    const uvIndex = detailRow("radiation", "weather-uv-index");
+    const rainChance = detailRow("cloud-rain", "weather-rain-chance");
+    details.append(uvIndex.row, rainChance.row);
     const fill = root.querySelector(".weather-thermometer-fill");
 
     function update(patch = {}) {
@@ -83,19 +112,34 @@
           : state.condition === "rain" ? "cloud-rain" : "snowflake";
       glyph.querySelector("use").setAttribute("href", `#lucide-${glyphName}`);
       root.dataset.daylight = String(isDay);
+      details.hidden = !state.showSunTimes && !state.showUvIndex && !state.showRainChance;
+      sunTimes.hidden = !state.showSunTimes;
       sunEvents.forEach(({ name, row, time }) => {
         const value = clockTime(state[name]);
         time.dateTime = value;
         time.textContent = value;
         row.title = `${name === "sunrise" ? "Sunrise" : "Sunset"} at ${value}`;
       });
+      const uvText = state.uvIndex === null ? "—" : String(Number(state.uvIndex.toFixed(1)));
+      const rainText = state.rainChancePercent === null ? "—" : `${Math.round(state.rainChancePercent)}%`;
+      uvIndex.row.hidden = !state.showUvIndex;
+      uvIndex.value.textContent = `UV ${uvText}`;
+      uvIndex.row.title = state.uvIndex === null ? "UV index unavailable" : `UV index ${uvText}`;
+      rainChance.row.hidden = !state.showRainChance;
+      rainChance.value.textContent = rainText;
+      rainChance.row.title = state.rainChancePercent === null ? "Rain chance unavailable" : `Rain chance ${rainText}`;
 
       const nextEvent = isDay ? "Sunset" : "Sunrise";
       const until = ((isDay ? state.sunset : state.sunrise) - state.minute + dayLength) % dayLength;
+      const sunDescription = state.showSunTimes
+        ? ` Sunrise ${clockTime(state.sunrise)}; sunset ${clockTime(state.sunset)}. `
+          + `${nextEvent} in ${Math.floor(until / 60)} hours and ${until % 60} minutes.`
+        : "";
       const description = `${mode} compared with the average temperature of the previous seven days. `
-        + `${conditions[state.condition]}. ${isDay ? "Daytime" : "Nighttime"}, ${clockTime(state.minute)}. `
-        + `Sunrise ${clockTime(state.sunrise)}; sunset ${clockTime(state.sunset)}. `
-        + `${nextEvent} in ${Math.floor(until / 60)} hours and ${until % 60} minutes.`;
+        + `${conditions[state.condition]}. ${isDay ? "Daytime" : "Nighttime"}, ${clockTime(state.minute)}.`
+        + sunDescription
+        + (state.showUvIndex ? ` ${uvIndex.row.title}.` : "")
+        + (state.showRainChance ? ` ${rainChance.row.title}.` : "");
       root.setAttribute("aria-label", description);
       root.setAttribute("title", description);
       return { average, level, mode, isDay };

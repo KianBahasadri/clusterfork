@@ -7,6 +7,9 @@
   const time = document.getElementById("weatherTime");
   const temperature = document.getElementById("weatherTemperature");
   const size = document.getElementById("weatherGlyphSize");
+  const showSunTimes = document.getElementById("weatherShowSunTimes");
+  const showUvIndex = document.getElementById("weatherShowUvIndex");
+  const showRainChance = document.getElementById("weatherShowRainChance");
   // Reset restored Firefox controls to the same defaults as the preview.
   form.reset();
   let condition = "clear";
@@ -17,7 +20,12 @@
     temperatureCelsius: Number(temperature.value),
     minute: Number(time.value),
     sunrise: 390,
-    sunset: 1140
+    sunset: 1140,
+    uvIndex: 4,
+    rainChancePercent: 35,
+    showSunTimes: showSunTimes.checked,
+    showUvIndex: showUvIndex.checked,
+    showRainChance: showRainChance.checked
   });
 
   function slider(input, output, text, accessibleText) {
@@ -31,6 +39,9 @@
       temperatureCelsius: Number(temperature.value),
       minute: Number(time.value),
       glyphSize: Number(size.value) / 100 * 32,
+      showSunTimes: showSunTimes.checked,
+      showUvIndex: showUvIndex.checked,
+      showRainChance: showRainChance.checked,
       condition,
       placement
     });

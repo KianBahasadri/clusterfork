@@ -4,12 +4,12 @@ Apply [Foundations](foundations.md) and the relevant [Controls and Forms](contro
 
 ## Purpose and Anatomy
 
-* Combine a thermometer, a weather glyph, and two compact sunrise/sunset time rows into one weather summary. Keep personal training and weight progress in separate components.
+* Combine a thermometer, a weather glyph, and optional compact rows for sunrise/sunset times, UV index, and rain chance into one weather summary. Keep personal training and weight progress in separate components.
 * Show temperature relative to the arithmetic mean of the previous seven complete days, excluding today. Use representative temperatures from the same location and the same daily sampling method.
-* Keep the temperature comparison visual, with no persistent temperature text or numbers. Show sunrise and sunset as clock times to the right of their glyphs. The summary's accessible name and hover title report the temperature mode, weather, local time, day/night state, sunrise, sunset, and time until the next transition.
+* Keep the temperature comparison visual, with no persistent temperature text or numbers. Show enabled details as values to the right of their glyphs. The summary's accessible name and hover title report the temperature mode, weather, local time, and day/night state, plus the enabled details and next sun transition when sun times are shown.
 * Render the summary as a labelled `role="img"` with decorative SVG descendants. It has no buttons or keyboard stop; controls for exploring the example live outside it.
-* Use a transparent 160px-wide container with no border, corner rounding, or shadow. Keep 24px vertical and 20px horizontal padding, and a 16px gap between the thermometer stage and the sunrise/sunset rows.
-* Keep the thermometer 184px high and reserve `192px + glyph size` for its stage so changing placement does not move the time rows. The glyph size may change the overall height.
+* Use a transparent 160px-wide container with no border, corner rounding, or shadow. Keep 24px vertical and 20px horizontal padding, and a 16px gap between the thermometer stage and the detail group. Center the group at its content width, align all row glyphs and values in shared columns, and separate visible rows by 8px. Remove the group and the 16px gap from layout when all details are hidden.
+* Keep the thermometer 184px high and reserve `192px + glyph size` for its stage so changing placement does not move the detail rows. The glyph size may change the overall height.
 
 ## Relative Temperature
 
@@ -33,7 +33,7 @@ Classify the current reading's difference from the seven-day mean in Celsius:
 
 * Use Lucide `Sun` / `Moon` for clear weather, `CloudSun` / `CloudMoon` for cloudy weather, `CloudRain` for rain, and `Snowflake` for snow. Choose the day icon from sunrise inclusive until sunset exclusive; choose the night icon otherwise.
 * Preserve the Lucide paths, 24×24 view box, 2px stroke, round joins and caps, and no fill. Use `--ink`; scale the whole glyph uniformly.
-* Default to a 32px glyph. Support 16–64px, equivalent to 50–200%, independently of the thermometer and the sunrise/sunset glyphs.
+* Default to a 32px glyph. Support 16–64px, equivalent to 50–200%, independently of the thermometer and the detail-row glyphs.
 * Offer exactly these six placements. Recalculate positions from the glyph size so enlarging it preserves its attachment point and prevents clipping.
 
 | Option | Position |
@@ -49,21 +49,30 @@ The gaps refer to glyph boxes and path geometry, before stroke expansion; Lucide
 
 ## Sunrise and Sunset
 
-* Center two stacked rows beneath the thermometer stage: sunrise first, sunset second. Size the group to its contents and separate the rows by 8px.
+* Place sunrise first and sunset second at the top of the detail group.
 * Each row contains a 16px Lucide `Sunrise` or `Sunset` glyph, followed by its clock time on the right with an 8px gap. Align the glyph and time vertically at their centers. Use `--muted` for the glyph and retain its 16px size when the weather glyph is resized.
 * Format times as zero-padded 24-hour `HH:mm` values. Use a `<time>` element with a matching `datetime`, 14px `--mono`, 1.5 line-height, tabular numbers, and `--ink` text. Each row's hover title identifies the event and its time.
-* Keep both times visible during the day and at night. Update their visible text, `datetime`, row titles, and the summary's accessible description whenever the supplied event times change. The sunrise/sunset display contains no progress track, marker, or night indicator.
+* Default `showSunTimes` to `true`. When enabled, keep both times visible during the day and at night. Update their text, `datetime`, row titles, and the summary's accessible description whenever the supplied event times change. The sunrise/sunset display contains no progress track, marker, or night indicator.
+* With `showSunTimes: false`, hide both time rows, including their glyphs, and collapse their space. Leave the UV and rain rows independently visible. Omit event times and the next transition from the summary's accessible name and hover title. Continue using the supplied event times to determine the weather glyph's day/night form, and keep time values current so showing them again restores the latest readings.
 * Accept local minutes since midnight for the current time, sunrise, and sunset. The compact reference supports a same-day sunrise before sunset. The caller must resolve location, date, timezone, and real event times; do not assume equal day/night lengths.
 * At sunrise, switch the weather glyph to its daytime form; at sunset, switch to its night form. Calculate the next sunrise across midnight with a 24-hour wrap for the accessible description. Do not animate independently of supplied time or fetch weather/location data in the component.
 
+## UV Index and Rain Chance
+
+* Place the UV index row immediately below the sun times, followed by the rain chance row. Use a fixed 16px Lucide `Radiation` for UV and `CloudRain` for rain, with the same muted glyphs, 8px icon-to-value gap, and 14px tabular mono values as the sun times. Keep these glyphs unchanged at night and when the main weather glyph is resized.
+* Show UV as `UV 4` or `UV 4.2`, rounding to at most one decimal. Show rain chance as a whole percentage, such as `35%`. The percentage represents probability, not rainfall amount; use caller-supplied values without deriving either reading from the weather condition or time slider.
+* Default `showUvIndex` and `showRainChance` to `true`. Each boolean independently hides its entire row and collapses its space. Include only enabled readings in the summary's accessible name and hover title. Identify each reading in its row title and continue updating hidden values so showing a row restores the latest reading.
+* Accept `uvIndex` as a nonnegative finite number and `rainChancePercent` as a finite number from 0–100. Both default to `null`, meaning unavailable: render `UV —` or `—` and describe the reading as unavailable. Do not substitute zero for missing data. Preserve zero as a valid reading and reject invalid non-null inputs before changing the rendered state.
+
 ## Runnable Reference and Reuse
 
-Open [16 Weather](../assets/component-reference/index.html#weather) for one configurable preview. Its controls select clear/cloudy/rain/snow weather, time in 15-minute steps, temperature from 0–40°C, glyph size from 50–200% in 5% steps, and the six placements above. The fictional seven-day readings are 18, 20, 22, 21, 23, 24, and 19°C (mean 21°C); sunrise is 06:30 and sunset 19:00.
+Open [16 Weather](../assets/component-reference/index.html#weather) for one configurable preview. Its controls select clear/cloudy/rain/snow weather, time in 15-minute steps, temperature from 0–40°C, independent visibility for sun times, UV index, and rain chance, glyph size from 50–200% in 5% steps, and the six placements above. The fictional seven-day readings are 18, 20, 22, 21, 23, 24, and 19°C (mean 21°C); sunrise is 06:30, sunset is 19:00, UV index is 4, and rain chance is 35%.
 
 * Edit `components/weather.html`, `weather.css`, `weather.js`, and `weather-example.js`. The example owns all controls and sample data; the renderer has no catalog-ID, server, or prototype-directory dependency.
 * Keep condition and placement selections visible with neutral pressed-button states and `aria-pressed`. Give every slider a visible label, associated output, descriptive `aria-valuetext`, and standard keyboard operation. Reset restored controls to the same defaults as the preview on initialization.
+* Group three checked native checkboxes with `role="switch"`, labelled `Show sunrise and sunset times`, `Show UV index`, and `Show rain chance`, with 4px between them. Apply the shared switch treatment, a 44px minimum label target, and a visible focus ring on each track. Clicking a label or pressing `Space` updates only that visibility option immediately.
 * Keep the summary beside the controls on wider screens. At 700px and below, stack the summary above the controls. Let weather choices wrap, keep placement choices in two columns, and stack the time/temperature sliders when their columns would be too narrow. Support a 320px viewport and 200% zoom without page overflow.
-* Load shared tokens, base styles, the Lucide sprite and `shared/icons.js`, followed by `weather.css` and `weather.js`. The catalog's exploration controls additionally use the shared button and range styles. Rebuild the generated catalog after HTML edits.
+* Load shared tokens, base styles, the Lucide sprite and `shared/icons.js`, followed by `weather.css` and `weather.js`. The catalog's exploration controls additionally use the shared button, range, and switch styles. Rebuild the generated catalog after HTML edits.
 
 ```js
 const weather = ComponentReference.createWeather(container, {
@@ -72,13 +81,20 @@ const weather = ComponentReference.createWeather(container, {
   minute: 840,
   sunrise: 390,
   sunset: 1140,
+  uvIndex: 4,
+  rainChancePercent: 35,
   condition: "clear",
   glyphSize: 32,
-  placement: "close-right"
+  placement: "close-right",
+  showSunTimes: true,
+  showUvIndex: true,
+  showRainChance: true
 });
 weather.update({ minute: 1200, glyphSize: 48, placement: "above" });
+weather.update({ showSunTimes: false });
+weather.update({ uvIndex: 2.5, rainChancePercent: 60, showUvIndex: false });
 // Remove this instance when its containing view is retired.
 weather.destroy();
 ```
 
-`update(patch)` changes only supplied options and returns `{ average, level, mode, isDay }`. Each instance owns its data and DOM; it can coexist with other instances. Invalid readings, event times, condition, placement, or glyph size throw before changing the rendered state. Omitted condition, glyph size, and placement default to clear, 32px, and close right. Supply all temperature and time inputs explicitly.
+`update(patch)` changes only supplied options and returns `{ average, level, mode, isDay }`. Each instance owns its data and DOM; it can coexist with other instances. Invalid options, including non-boolean visibility flags, throw before changing the rendered state. Omitted condition, glyph size, and placement default to clear, 32px, and close right. Supply all temperature and time inputs explicitly, including event times when their display is hidden.

@@ -1,4 +1,4 @@
-/* Visual temperature comparison with local sunrise and sunset times. */
+/* Visual temperature comparison with optional sun times, UV index, and rain chance. */
 .weather-summary {
   --weather-glyph-size: 32px;
   display: flex;
@@ -77,20 +77,22 @@
   --glyph-y: 0px;
 }
 .weather-summary[data-placement="below"] .weather-composition { --glyph-y: 192px; }
-.weather-sun-times {
+.weather-details, .weather-sun-times {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 8px;
-  width: max-content;
   max-width: 100%;
 }
-.weather-sun-event {
+.weather-details { width: max-content; }
+.weather-details[hidden], .weather-sun-times[hidden], .weather-detail[hidden] { display: none; }
+.weather-detail {
   display: flex;
   align-items: center;
   gap: 8px;
   color: var(--muted);
 }
-.weather-sun-event time {
+.weather-detail .icon { flex-shrink: 0; }
+.weather-detail-value {
   color: var(--ink);
   font: 14px/1.5 var(--mono);
   font-variant-numeric: tabular-nums;
@@ -106,6 +108,12 @@
 }
 .weather-catalog-preview { display: flex; justify-content: center; min-width: 0; }
 .weather-catalog-controls { display: grid; gap: 20px; min-width: 0; }
+.weather-catalog-toggles { display: grid; gap: 4px; }
+.weather-catalog-toggle { min-height: 44px; }
+.weather-catalog-toggle .switch-input:focus-visible + .switch-track {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
 .weather-catalog-field { min-width: 0; border: 0; }
 .weather-catalog-field legend { margin-bottom: 8px; font-size: 14px; }
 .weather-catalog-choices { display: flex; flex-wrap: wrap; gap: 8px; }
