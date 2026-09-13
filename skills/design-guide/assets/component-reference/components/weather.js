@@ -10,6 +10,10 @@
     return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
   }
 
+  function severity(value, cautionThreshold, dangerThreshold) {
+    return value === null || value < cautionThreshold ? "neutral" : value < dangerThreshold ? "caution" : "danger";
+  }
+
   function validate(options) {
     if (!Number.isFinite(options.temperatureCelsius) || !Array.isArray(options.previousWeekCelsius)
       || options.previousWeekCelsius.length !== 7 || !options.previousWeekCelsius.every(Number.isFinite)) {
@@ -124,12 +128,19 @@
       });
       const uvText = state.uvIndex === null ? "—" : String(Number(state.uvIndex.toFixed(1)));
       const rainText = state.rainChancePercent === null ? "—" : `${Math.round(state.rainChancePercent)}%`;
+      // Classify source readings before display rounding; missing readings stay neutral.
+      const uvSeverity = severity(state.uvIndex, 3, 8);
+      const rainSeverity = severity(state.rainChancePercent, 50, 80);
+      const uvCategory = { neutral: "low", caution: "moderate to high", danger: "very high to extreme" }[uvSeverity];
+      const rainCategory = { neutral: "", caution: ", elevated likelihood", danger: ", high likelihood" }[rainSeverity];
       uvIndex.row.hidden = !state.showUvIndex;
+      uvIndex.row.dataset.severity = uvSeverity;
       uvIndex.value.textContent = `UV ${uvText}`;
-      uvIndex.row.title = state.uvIndex === null ? "UV index unavailable" : `UV index ${uvText}`;
+      uvIndex.row.title = state.uvIndex === null ? "UV index unavailable" : `UV index ${uvText}, ${uvCategory}`;
       rainChance.row.hidden = !state.showRainChance;
+      rainChance.row.dataset.severity = rainSeverity;
       rainChance.value.textContent = rainText;
-      rainChance.row.title = state.rainChancePercent === null ? "Rain chance unavailable" : `Rain chance ${rainText}`;
+      rainChance.row.title = state.rainChancePercent === null ? "Rain chance unavailable" : `Rain chance ${rainText}${rainCategory}`;
 
       const nextEvent = isDay ? "Sunset" : "Sunrise";
       const until = ((isDay ? state.sunset : state.sunrise) - state.minute + dayLength) % dayLength;

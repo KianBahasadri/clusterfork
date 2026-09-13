@@ -1,6 +1,9 @@
 /* Visual temperature comparison with optional sun times, UV index, and rain chance. */
 .weather-summary {
   --weather-glyph-size: 32px;
+  --weather-blue: color-mix(in srgb, var(--accent) 40%, var(--muted));
+  --weather-caution: color-mix(in srgb, var(--caution) 65%, var(--muted));
+  --weather-danger: color-mix(in srgb, var(--danger) 65%, var(--muted));
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -25,13 +28,16 @@
   width: 48px;
   height: 184px;
   overflow: visible;
+  color: var(--weather-blue);
 }
+.weather-summary[data-level="0"] .weather-thermometer,
+.weather-summary[data-level="4"] .weather-thermometer { color: var(--weather-caution); }
 .weather-thermometer-outline {
   fill: var(--surface-raised);
   stroke: var(--line-strong);
   stroke-width: 1.5;
 }
-.weather-thermometer-fill, .weather-thermometer-bulb { fill: var(--accent); }
+.weather-thermometer-fill, .weather-thermometer-bulb { fill: currentColor; }
 .weather-info {
   display: flex;
   flex-direction: column;
@@ -42,7 +48,7 @@
   flex: none;
   width: var(--weather-glyph-size);
   height: var(--weather-glyph-size);
-  color: var(--ink);
+  color: var(--muted);
 }
 .weather-summary[data-placement="left-icon-above"] .weather-info,
 .weather-summary[data-placement="left-icon-below"] .weather-info,
@@ -70,8 +76,10 @@
   color: var(--muted);
 }
 .weather-detail .icon { flex-shrink: 0; }
+.weather-detail[data-severity="caution"] { color: var(--weather-caution); }
+.weather-detail[data-severity="danger"] { color: var(--weather-danger); }
 .weather-detail-value {
-  color: var(--ink);
+  color: inherit;
   font: 14px/1.5 var(--mono);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;

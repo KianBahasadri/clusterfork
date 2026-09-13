@@ -6,6 +6,8 @@
   const form = section.querySelector("form");
   const time = document.getElementById("weatherTime");
   const temperature = document.getElementById("weatherTemperature");
+  const uvIndex = document.getElementById("weatherUvIndex");
+  const rainChance = document.getElementById("weatherRainChance");
   const size = document.getElementById("weatherGlyphSize");
   const showSunTimes = document.getElementById("weatherShowSunTimes");
   const showUvIndex = document.getElementById("weatherShowUvIndex");
@@ -21,8 +23,8 @@
     minute: Number(time.value),
     sunrise: 390,
     sunset: 1140,
-    uvIndex: 4,
-    rainChancePercent: 35,
+    uvIndex: Number(uvIndex.value),
+    rainChancePercent: Number(rainChance.value),
     showSunTimes: showSunTimes.checked,
     showUvIndex: showUvIndex.checked,
     showRainChance: showRainChance.checked
@@ -37,6 +39,8 @@
   function render() {
     const reading = weather.update({
       temperatureCelsius: Number(temperature.value),
+      uvIndex: Number(uvIndex.value),
+      rainChancePercent: Number(rainChance.value),
       minute: Number(time.value),
       glyphSize: Number(size.value) / 100 * 32,
       showSunTimes: showSunTimes.checked,
@@ -49,6 +53,8 @@
     const clock = `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
     slider(time, "weatherTimeOutput", clock, `${clock}, ${reading.isDay ? "daytime" : "nighttime"}`);
     slider(temperature, "weatherTemperatureOutput", `${temperature.value}°C`, `${temperature.value} degrees Celsius, ${reading.mode.toLowerCase()}`);
+    slider(uvIndex, "weatherUvIndexOutput", uvIndex.value, `UV index ${uvIndex.value}`);
+    slider(rainChance, "weatherRainChanceOutput", `${rainChance.value}%`, `${rainChance.value} percent chance of rain`);
     slider(size, "weatherGlyphSizeOutput", `${size.value}%`, `${size.value} percent`);
     section.querySelectorAll("[data-weather-condition]").forEach(button => {
       button.setAttribute("aria-pressed", String(button.dataset.weatherCondition === condition));

@@ -32,6 +32,22 @@
           <input class="range-slider" id="weatherTemperature" type="range" min="0" max="40" step="1" value="21" autocomplete="off" aria-describedby="weatherAverageReference">
           <span class="weather-catalog-hint" id="weatherAverageReference">Previous 7 days: 21°C average</span>
         </div>
+        <div class="range-control">
+          <div class="range-control-heading">
+            <label for="weatherUvIndex">UV index</label>
+            <output class="range-output" id="weatherUvIndexOutput" for="weatherUvIndex">4</output>
+          </div>
+          <input class="range-slider" id="weatherUvIndex" type="range" min="0" max="12" step="0.5" value="4" autocomplete="off" aria-describedby="weatherUvReference">
+          <span class="weather-catalog-hint" id="weatherUvReference">Yellow from 3 · Red from 8</span>
+        </div>
+        <div class="range-control">
+          <div class="range-control-heading">
+            <label for="weatherRainChance">Rain chance</label>
+            <output class="range-output" id="weatherRainChanceOutput" for="weatherRainChance">35%</output>
+          </div>
+          <input class="range-slider" id="weatherRainChance" type="range" min="0" max="100" step="5" value="35" autocomplete="off" aria-describedby="weatherRainReference">
+          <span class="weather-catalog-hint" id="weatherRainReference">Yellow from 50% · Red from 80%</span>
+        </div>
       </div>
       <div class="weather-catalog-toggles">
         <label class="control-row weather-catalog-toggle" for="weatherShowSunTimes">
