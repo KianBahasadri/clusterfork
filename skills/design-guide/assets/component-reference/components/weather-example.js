@@ -12,6 +12,9 @@
   const showSunTimes = document.getElementById("weatherShowSunTimes");
   const showUvIndex = document.getElementById("weatherShowUvIndex");
   const showRainChance = document.getElementById("weatherShowRainChance");
+  const hour12 = document.getElementById("weatherHour12");
+  const sunrise = 390;
+  const sunset = 1140;
   // Reset restored Firefox controls to the same defaults as the preview.
   form.reset();
   let condition = "clear";
@@ -21,8 +24,9 @@
     previousWeekCelsius: [18, 20, 22, 21, 23, 24, 19],
     temperatureCelsius: Number(temperature.value),
     minute: Number(time.value),
-    sunrise: 390,
-    sunset: 1140,
+    sunrise,
+    sunset,
+    hour12: hour12.checked,
     uvIndex: Number(uvIndex.value),
     rainChancePercent: Number(rainChance.value),
     showSunTimes: showSunTimes.checked,
@@ -42,6 +46,7 @@
       uvIndex: Number(uvIndex.value),
       rainChancePercent: Number(rainChance.value),
       minute: Number(time.value),
+      hour12: hour12.checked,
       glyphSize: Number(size.value) / 100 * 32,
       showSunTimes: showSunTimes.checked,
       showUvIndex: showUvIndex.checked,
@@ -50,7 +55,9 @@
       placement
     });
     const minute = Number(time.value);
-    const clock = `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+    const clock = reference.formatWeatherTime(minute, hour12.checked);
+    document.getElementById("weatherDaylightReference").textContent =
+      `Sunrise ${reference.formatWeatherTime(sunrise, hour12.checked)} · Sunset ${reference.formatWeatherTime(sunset, hour12.checked)}`;
     slider(time, "weatherTimeOutput", clock, `${clock}, ${reading.isDay ? "daytime" : "nighttime"}`);
     slider(temperature, "weatherTemperatureOutput", `${temperature.value}°C`, `${temperature.value} degrees Celsius, ${reading.mode.toLowerCase()}`);
     slider(uvIndex, "weatherUvIndexOutput", uvIndex.value, `UV index ${uvIndex.value}`);

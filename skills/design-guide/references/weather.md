@@ -51,7 +51,8 @@ For side layouts, vertically center the thermometer against the entire glyph-and
 
 * Place sunrise first and sunset second at the top of the detail group.
 * Each row contains a 16px Lucide `Sunrise` or `Sunset` glyph, followed by its clock time on the right with an 8px gap. Align the glyph and time vertically at their centers. Use `--muted` for the glyph and retain its 16px size when the weather glyph is resized.
-* Format times as zero-padded 24-hour `HH:mm` values. Use a `<time>` element with a matching `datetime`, 14px `--mono`, 1.5 line-height, tabular numbers, and `--muted` text. Each row's hover title identifies the event and its time.
+* Default `hour12` to `false` for zero-padded 24-hour `HH:mm` values, such as `06:30` and `19:00`. With `hour12: true`, use `h:mm AM/PM`, such as `6:30 AM` and `7:00 PM`, without a leading hour zero. Midnight is `12:00 AM`; noon is `12:00 PM`. Apply the selected format to both sun times, their row titles, and every clock time in the summary's accessible name and hover title.
+* Use a `<time>` element with a 24-hour `HH:mm` `datetime` in either display format, 14px `--mono`, 1.5 line-height, tabular numbers, and `--muted` text. Keep the existing centered layout and spacing as the time text changes width.
 * Default `showSunTimes` to `true`. When enabled, keep both times visible during the day and at night. Update their text, `datetime`, row titles, and the summary's accessible description whenever the supplied event times change. The sunrise/sunset display contains no progress track, marker, or night indicator.
 * With `showSunTimes: false`, hide both time rows, including their glyphs, and collapse their space. Leave the UV and rain rows independently visible. Omit event times and the next transition from the summary's accessible name and hover title. Continue using the supplied event times to determine the weather glyph's day/night form, and keep time values current so showing them again restores the latest readings.
 * Accept local minutes since midnight for the current time, sunrise, and sunset. The compact reference supports a same-day sunrise before sunset. The caller must resolve location, date, timezone, and real event times; do not assume equal day/night lengths.
@@ -60,9 +61,9 @@ For side layouts, vertically center the thermometer against the entire glyph-and
 ## UV Index and Rain Chance
 
 * Place the UV index row immediately below the sun times, followed by the rain chance row. Use a fixed 16px Lucide `Radiation` for UV and `CloudRain` for rain, with the same 8px icon-to-value gap and 14px tabular mono values as the sun times. Color each row's glyph and value together using its own reading and the muted palette below. Keep these glyphs unchanged at night and when the main weather glyph is resized.
-* Show UV as `UV 4` or `UV 4.2`, rounding to at most one decimal. Show rain chance as a whole percentage, such as `35%`. The percentage represents probability, not rainfall amount; use caller-supplied values without deriving either reading from the weather condition or time slider.
+* Show UV as just `4` or `4.2` beside the radiation glyph, rounding to at most one decimal with no visible `UV` prefix. Keep the UV identification in its row title and the summary's accessible name. Show rain chance as a whole percentage, such as `35%`. The percentage represents probability, not rainfall amount; use caller-supplied values without deriving either reading from the weather condition or time slider.
 * Default `showUvIndex` and `showRainChance` to `true`. Each boolean independently hides its entire row and collapses its space. Include only enabled readings in the summary's accessible name and hover title. Identify each reading in its row title and continue updating hidden values so showing a row restores the latest reading.
-* Accept `uvIndex` as a nonnegative finite number and `rainChancePercent` as a finite number from 0–100. Both default to `null`, meaning unavailable: render `UV —` or `—` and describe the reading as unavailable. Do not substitute zero for missing data. Preserve zero as a valid reading and reject invalid non-null inputs before changing the rendered state.
+* Accept `uvIndex` as a nonnegative finite number and `rainChancePercent` as a finite number from 0–100. Both default to `null`, meaning unavailable: render `—` beside the corresponding glyph and describe the reading as unavailable. Do not substitute zero for missing data. Preserve zero as a valid reading and reject invalid non-null inputs before changing the rendered state.
 
 ## Muted Colors and Reading States
 
@@ -83,7 +84,8 @@ Open [16 Weather](../assets/component-reference/index.html#weather) for one conf
 
 * Edit `components/weather.html`, `weather.css`, `weather.js`, and `weather-example.js`. The example owns all controls and sample data; the renderer has no catalog-ID, server, or prototype-directory dependency.
 * Put the six layout choices under the `Layout` legend. Keep condition and layout selections visible with neutral pressed-button states and `aria-pressed`. Give every slider a visible label, associated output, descriptive `aria-valuetext`, and standard keyboard operation. Reset restored controls to the same defaults as the preview on initialization.
-* Group three checked native checkboxes with `role="switch"`, labelled `Show sunrise and sunset times`, `Show UV index`, and `Show rain chance`, with 4px between them. Apply the shared switch treatment, a 44px minimum label target, and a visible focus ring on each track. Clicking a label or pressing `Space` updates only that visibility option immediately.
+* Group four native checkboxes with `role="switch"`: an unchecked `Use 12-hour time`, followed by checked `Sunrise and sunset times`, `UV index`, and `Rain chance`. Arrange them in two equal columns in reading order, with 20px column gaps and 4px row gaps. Collapse to one column at viewport widths of 600px or less. Apply the shared switch treatment, a 44px minimum label target, and a visible focus ring on each track. Clicking a label or pressing `Space` updates only that option immediately.
+* The time-format switch uses 24-hour time when off and 12-hour time when on. Update the time slider's output and `aria-valuetext`, the sunrise/sunset helper text, and the summary together. Keep this switch usable while sun times are hidden; showing them again restores the current format. Reuse `ComponentReference.formatWeatherTime(minute, hour12 = false)` for catalog clock text, with valid local minutes from 0–1439.
 * Reserve a 200px preview column beside the controls on wider screens so changing layout does not shift the controls horizontally. At 700px and below, stack the summary above the controls. Let weather choices wrap, keep layout choices in two columns, and stack the time/temperature and UV/rain sliders when their columns would be too narrow. Support a 320px viewport and 200% zoom without page overflow.
 * Load shared tokens, base styles, the Lucide sprite and `shared/icons.js`, followed by `weather.css` and `weather.js`. The catalog's exploration controls additionally use the shared button, range, and switch styles. Rebuild the generated catalog after HTML edits.
 
@@ -94,6 +96,7 @@ const weather = ComponentReference.createWeather(container, {
   minute: 840,
   sunrise: 390,
   sunset: 1140,
+  hour12: false,
   uvIndex: 4,
   rainChancePercent: 35,
   condition: "clear",
@@ -105,9 +108,10 @@ const weather = ComponentReference.createWeather(container, {
 });
 weather.update({ minute: 1200, glyphSize: 48, placement: "stack-above" });
 weather.update({ showSunTimes: false });
+weather.update({ hour12: true });
 weather.update({ uvIndex: 2.5, rainChancePercent: 60, showUvIndex: false });
 // Remove this instance when its containing view is retired.
 weather.destroy();
 ```
 
-`update(patch)` changes only supplied options and returns `{ average, level, mode, isDay }`. Each instance owns its data and DOM; it can coexist with other instances. Invalid options, including non-boolean visibility flags, throw before changing the rendered state. Omitted condition, glyph size, and placement default to clear, 32px, and `right-icon-above`. Supply all temperature and time inputs explicitly, including event times when their display is hidden.
+`update(patch)` changes only supplied options and returns `{ average, level, mode, isDay }`. Each instance owns its data and DOM; it can coexist with other instances. Invalid options, including non-boolean visibility flags or `hour12`, throw before changing the rendered state. Omitted condition, glyph size, and placement default to clear, 32px, and `right-icon-above`. Supply all temperature and time inputs explicitly, including event times when their display is hidden. Display format does not change the supplied minutes or the day/night calculation.

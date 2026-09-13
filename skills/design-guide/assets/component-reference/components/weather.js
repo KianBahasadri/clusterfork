@@ -6,8 +6,11 @@
   const placements = ["right-icon-above", "left-icon-above", "right-icon-below", "left-icon-below", "stack-above", "stack-below"];
   const dayLength = 1440;
 
-  function clockTime(minute) {
-    return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+  function clockTime(minute, hour12 = false) {
+    const hour = Math.floor(minute / 60);
+    const minutes = String(minute % 60).padStart(2, "0");
+    return hour12 ? `${hour % 12 || 12}:${minutes} ${hour < 12 ? "AM" : "PM"}`
+      : `${String(hour).padStart(2, "0")}:${minutes}`;
   }
 
   function severity(value, cautionThreshold, dangerThreshold) {
@@ -27,7 +30,7 @@
       || !Number.isFinite(options.glyphSize) || options.glyphSize < 16 || options.glyphSize > 64) {
       throw new RangeError("Weather requires a supported condition, placement, and glyph size between 16 and 64px.");
     }
-    for (const option of ["showSunTimes", "showUvIndex", "showRainChance"]) {
+    for (const option of ["showSunTimes", "showUvIndex", "showRainChance", "hour12"]) {
       if (typeof options[option] !== "boolean") {
         throw new TypeError(`Weather ${option} must be a boolean.`);
       }
@@ -46,7 +49,7 @@
     let state = validate({
       condition: "clear", placement: "right-icon-above", glyphSize: 32,
       showSunTimes: true, showUvIndex: true, showRainChance: true,
-      uvIndex: null, rainChancePercent: null, ...options
+      uvIndex: null, rainChancePercent: null, hour12: false, ...options
     });
     const root = document.createElement("div");
     root.className = "weather-summary";
@@ -121,8 +124,8 @@
       details.hidden = !state.showSunTimes && !state.showUvIndex && !state.showRainChance;
       sunTimes.hidden = !state.showSunTimes;
       sunEvents.forEach(({ name, row, time }) => {
-        const value = clockTime(state[name]);
-        time.dateTime = value;
+        const value = clockTime(state[name], state.hour12);
+        time.dateTime = clockTime(state[name]);
         time.textContent = value;
         row.title = `${name === "sunrise" ? "Sunrise" : "Sunset"} at ${value}`;
       });
@@ -135,7 +138,7 @@
       const rainCategory = { neutral: "", caution: ", elevated likelihood", danger: ", high likelihood" }[rainSeverity];
       uvIndex.row.hidden = !state.showUvIndex;
       uvIndex.row.dataset.severity = uvSeverity;
-      uvIndex.value.textContent = `UV ${uvText}`;
+      uvIndex.value.textContent = uvText;
       uvIndex.row.title = state.uvIndex === null ? "UV index unavailable" : `UV index ${uvText}, ${uvCategory}`;
       rainChance.row.hidden = !state.showRainChance;
       rainChance.row.dataset.severity = rainSeverity;
@@ -145,11 +148,11 @@
       const nextEvent = isDay ? "Sunset" : "Sunrise";
       const until = ((isDay ? state.sunset : state.sunrise) - state.minute + dayLength) % dayLength;
       const sunDescription = state.showSunTimes
-        ? ` Sunrise ${clockTime(state.sunrise)}; sunset ${clockTime(state.sunset)}. `
+        ? ` Sunrise ${clockTime(state.sunrise, state.hour12)}; sunset ${clockTime(state.sunset, state.hour12)}. `
           + `${nextEvent} in ${Math.floor(until / 60)} hours and ${until % 60} minutes.`
         : "";
       const description = `${mode} compared with the average temperature of the previous seven days. `
-        + `${conditions[state.condition]}. ${isDay ? "Daytime" : "Nighttime"}, ${clockTime(state.minute)}.`
+        + `${conditions[state.condition]}. ${isDay ? "Daytime" : "Nighttime"}, ${clockTime(state.minute, state.hour12)}.`
         + sunDescription
         + (state.showUvIndex ? ` ${uvIndex.row.title}.` : "")
         + (state.showRainChance ? ` ${rainChance.row.title}.` : "");
@@ -163,5 +166,6 @@
     return { update, destroy() { root.remove(); } };
   }
 
+  reference.formatWeatherTime = clockTime;
   reference.createWeather = createWeather;
 }(window.ComponentReference = window.ComponentReference || {}));
