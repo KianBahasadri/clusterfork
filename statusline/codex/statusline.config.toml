@@ -1,0 +1,4 @@
+# Shared by host and dev box through ~/.local/share/clusterfork-auth/codex/.
+[tui]
+status_line = ["model-with-reasoning", "context-used", "task-progress", "five-hour-limit", "weekly-limit"]
+status_line_use_colors = true

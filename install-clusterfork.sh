@@ -14,7 +14,7 @@
 #      from repo-local skills/. Also installs normalized skills for Command
 #      Code and Antigravity, plus OpenCode compatibility aliases.
 #   6. Overwrites Claude/Cursor statusline scripts + usage fetchers from
-#      repo-local statusline/
+#      repo-local statusline/ and links shared Codex statusline settings
 #   7. Overwrites ~/.cursor/mcp.json from agents/cursor-mcp.json (expands
 #      ${ENV} placeholders from the clusterfork .env)
 #   8. Overwrites ~/.commandcode/mcp.json from agents/command-code-mcp.json
@@ -113,6 +113,9 @@ CODEX_CONFIG_DEST="$HOME/.codex/config.toml"
 SHARED_AUTH_ROOT="$HOME/.local/share/clusterfork-auth"
 CODEX_AUTH_DIR="$HOME/.codex"
 CODEX_AUTH_STORE_DIR="$SHARED_AUTH_ROOT/codex"
+CODEX_STATUSLINE_SRC="$STATUSLINE_SRC_DIR/codex/statusline.config.toml"
+CODEX_STATUSLINE_SHARED="$CODEX_AUTH_STORE_DIR/statusline.config.toml"
+CODEX_STATUSLINE_LINK="$HOME/.codex/clusterfork-statusline.toml"
 CURSOR_AUTH_DIR="$HOME/.config/cursor"
 CURSOR_AUTH_STORE_DIR="$SHARED_AUTH_ROOT/cursor"
 GROK_AUTH_DIR="$HOME/.grok"
@@ -1056,6 +1059,20 @@ if result != current:
     dest_path.write_text(result, encoding="utf-8")
 PY
 step "codex config" "$CODEX_CONFIG_DEST" "Stop → clusterfork-notify; mcp_servers: $(python3 -c 'import sys, tomllib; print(", ".join(tomllib.load(open(sys.argv[1], "rb")).get("mcp_servers", {})))' "$CODEX_CONFIG_SRC")"
+
+# The dev box mounts the auth store read-only. Install the shared status-line
+# settings on its writable host; each environment only needs a relative link.
+[[ -f "$CODEX_STATUSLINE_SRC" ]] || fail "missing $(tildify "$CODEX_STATUSLINE_SRC")"
+mkdir -p "$CODEX_AUTH_STORE_DIR"
+if [[ -w "$CODEX_AUTH_STORE_DIR" ]]; then
+  CODEX_STATUSLINE_TMP="$(mktemp "$CODEX_AUTH_STORE_DIR/.statusline.config.XXXXXX")"
+  cp "$CODEX_STATUSLINE_SRC" "$CODEX_STATUSLINE_TMP"
+  mv -f "$CODEX_STATUSLINE_TMP" "$CODEX_STATUSLINE_SHARED"
+elif [[ ! -r "$CODEX_STATUSLINE_SHARED" ]]; then
+  fail "install Codex status line on the shared auth store's host first"
+fi
+ln -sfnT "$(realpath -ms --relative-to="$HOME/.codex" "$CODEX_STATUSLINE_SHARED")" "$CODEX_STATUSLINE_LINK"
+step "codex statusline" "$CODEX_STATUSLINE_LINK" "shared settings for codex and cc"
 
 # Ensure Claude Code user-scope MCP includes ElevenLabs. ~/.claude.json holds a lot
 # of unrelated state, so only upsert this one server entry.

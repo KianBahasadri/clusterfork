@@ -72,14 +72,49 @@ The installed `cursor-usage-fetch.py` keeps `~/.cursor/.usage-cache.json` fresh
 
 ## Codex line
 
-Codex CLI implements its status line natively in its Rust TUI via `[tui].status_line`
-in `~/.codex/config.toml`:
+Codex CLI renders its status line natively from `[tui].status_line`. Clusterfork
+keeps the shared layout in `statusline/codex/statusline.config.toml`:
 
 ```toml
 [tui]
 status_line = ["model-with-reasoning", "context-used", "task-progress", "five-hour-limit", "weekly-limit"]
 status_line_use_colors = true
 ```
+
+The installer copies this file into the writable shared auth store and creates
+a relative link in each environment:
+
+```text
+~/.codex/clusterfork-statusline.toml
+  → ../.local/share/clusterfork-auth/codex/statusline.config.toml
+```
+
+The dev box already mounts `~/.local/share/clusterfork-auth` read-only. Install
+on the host first, then in the dev box; the latter creates its local settings
+link without writing to the shared store. Both environments read the same
+file, so subsequent host-side edits are visible without reinstalling in the
+dev box. Existing Codex sessions must restart to load a changed layout.
+
+The shell commands `codex` and `cc` read this file on every launch when it is
+readable under `${CODEX_HOME:-~/.codex}`. They pass only `tui.status_line` and
+`tui.status_line_use_colors` as `--config` overrides before the caller's
+arguments. Other config values are ignored, and malformed status-line settings
+stop the launch with an error. Explicit profiles still work; a caller's
+`--config` for either status-line key takes precedence. Invoking the Codex
+binary directly (including `command codex`) bypasses the shell wrapper.
+
+To change the shared layout, edit the repo template and run the installer on
+the host, or edit the installed shared file for an immediate local change.
+Reinstalling on a writable host restores the repo template. `/statusline`
+changes the current session and Codex's local config; edit the shared file to
+publish a layout to both environments.
+
+This uses Codex's [CLI config overrides](https://learn.chatgpt.com/docs/config-file/config-advanced#one-off-overrides-from-the-cli).
+With Codex 0.162.1, a native `--profile` also receives unrelated preference
+writes (verified with screen-reader detection), so the launcher does not
+select a shared profile. Model choices and other preferences keep saving to
+the environment's normal config. See [Auth Rotation](auth-rotation.md#sharing-with-a-container)
+for the existing mount.
 
 Unlike Claude and Cursor — which spawn child-process scripts piped with JSON
 payloads on stdin — Codex renders its status line directly in the TUI without

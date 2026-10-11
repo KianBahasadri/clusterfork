@@ -171,6 +171,8 @@ class MockTmuxTests(unittest.TestCase):
         }
         self.base_env = {
             **env_no_tmux,
+            "HOME": str(self.tmp_path),
+            "CODEX_HOME": str(self.tmp_path / ".codex"),
             "PATH": f"{self.mock_bin}:{self.fake_bin}:{os.environ.get('PATH','')}",
             "MOCK_TMUX_LOG": str(self.log),
         }
@@ -250,6 +252,19 @@ class MockTmuxTests(unittest.TestCase):
         self.assertIn(
             "codex resume --yolo --model gpt-5.6-terra --config model_reasoning_effort=max",
             log,
+        )
+        self.assertNotIn("MOCK_TMUX_ERROR", log)
+
+    def test_cc_shared_statusline_reaches_tmux_as_a_real_binary(self):
+        codex_home = self.tmp_path / ".codex"
+        codex_home.mkdir()
+        (codex_home / "clusterfork-statusline.toml").write_text(
+            '[tui]\nstatus_line = ["weekly-limit"]\n'
+        )
+        self._script_run("'source bash_profile.sh; PWD=/tmp/proj cc --last'")
+        log = self._log()
+        self.assertIn(
+            'codex --config tui.status_line=["weekly-limit"] resume --yolo --last', log,
         )
         self.assertNotIn("MOCK_TMUX_ERROR", log)
 
