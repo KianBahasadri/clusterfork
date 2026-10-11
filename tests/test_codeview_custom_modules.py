@@ -51,6 +51,7 @@ class CustomModulesTests(unittest.TestCase):
         self.assertIn("rotate_auth.py", by_name["rotate-claude"])
         self.assertIn("OpenCode Go", by_name["occ"])
         self.assertIn("codex resume", by_name["cc"])
+        self.assertEqual("codex", by_name["codex"])
         flags = {r["name"]: r["flags"] for r in data["launchers"]}
         self.assertIn("--dangerously-skip-permissions", flags["cl"])
         self.assertIn("--effort max", flags["cl"])

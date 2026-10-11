@@ -121,6 +121,10 @@ def extract_flags(body: str, kind: str) -> str:
 
 
 def summarize_fn(body: str) -> str:
+    m = re.search(
+        r"_cf_launch_codex\s+(?:tmux|direct)(.*?)(?:\s+\"\$@\"|;|\n|$)", body)
+    if m:
+        return collapse("codex " + m.group(1))
     hits = re.findall(r"_cf_tmux\s+(.+?)(?:\s+\"\$@\"|;|\n|$)", body)
     if hits:
         picked = next((h for h in hits if "--resume" in h or "--yolo" in h),

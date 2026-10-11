@@ -132,6 +132,8 @@ Everything lands in `<repo>/.codeview/`:
   (inventories agent skills and slash commands), and `statusline.py`
   (inventories Claude Code and Cursor status lines, fetchers, and live previews)
   by scanning the tree on each load.
+  The scripts tab recognizes the shared Codex launcher helper and displays
+  `codex` or `codex resume --yolo` as the underlying command.
 
 ## Modules (drop-in tabs)
 
