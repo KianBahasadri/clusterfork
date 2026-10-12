@@ -97,7 +97,7 @@ notify_load_env() {
   local dir="$1"
   local env_file="${CLUSTERFORK_ENV_FILE:-$dir/.env}"
   local config_file
-  for config_file in "$dir/notify/settings.env" "$env_file"; do
+  for config_file in "$dir/notify/settings.env" "$dir/notify/relay-settings.sh" "$env_file"; do
     if [[ -f "$config_file" ]]; then
       set -a
       # shellcheck source=/dev/null
@@ -297,7 +297,11 @@ notify_print_row() {
     c_state="$c_red"
   fi
   if [[ "$key" == bell ]]; then
-    extra="  ${NOTIFY_VOLUME}%"
+    if [[ -n "${CLUSTERFORK_NOTIFY_RELAY_SOCKET:-}" ]]; then
+      extra="  host volume"
+    else
+      extra="  ${NOTIFY_VOLUME}%"
+    fi
   elif [[ "$key" == phone ]]; then
     if [[ -n "${CLUSTERFORK_NTFY_URL:-}" ]]; then
       extra="  $CLUSTERFORK_NTFY_URL"
@@ -328,6 +332,11 @@ notify_print_status() {
   printf '\n'
   notify_print_row bell
   notify_print_row phone
+  if [[ -n "${CLUSTERFORK_NOTIFY_RELAY_SOCKET:-}" ]]; then
+    printf '       host relay     %s' "$CLUSTERFORK_NOTIFY_RELAY_SOCKET"
+    [[ -S "$CLUSTERFORK_NOTIFY_RELAY_SOCKET" ]] || printf ' (socket missing)'
+    printf '\n'
+  fi
   printf '\n'
   for key in "${NOTIFY_AGENTS[@]}"; do
     notify_print_row "$key"
@@ -377,6 +386,12 @@ notify_play_bell() {
     return 1
   fi
   return 1
+}
+
+notify_relay() {
+  local helper
+  helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/clusterfork-notify-relay"
+  python3 -I "$helper" send "$CLUSTERFORK_NOTIFY_RELAY_SOCKET" "$1" "$2" "$3" </dev/null
 }
 
 notify_post_ntfy() {
@@ -447,6 +462,20 @@ notify_run_test() {
   local dir="$1" channel="${2:-}"
   local failed=0 timestamp notifications=""
   timestamp="$(notify_history_timestamp 2>/dev/null || true)"
+  if [[ -n "${CLUSTERFORK_NOTIFY_RELAY_SOCKET:-}" ]]; then
+    case "$channel" in
+      "") notifications="bell,phone" ;;
+      bell|phone) notifications="$channel" ;;
+      *) notify_err "notify test expects bell or phone, not $channel"; return 1 ;;
+    esac
+    if notify_relay test node-dev "$notifications"; then
+      notify_ok "host relay" "accepted $notifications (host switches apply)"
+      notify_record_trigger "$dir" test "$notifications" "$timestamp"
+      return 0
+    fi
+    notify_err "host relay  request failed"
+    return 1
+  fi
   case "$channel" in
     "")
       if notify_test_bell "$dir"; then

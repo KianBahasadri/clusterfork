@@ -1,5 +1,6 @@
 .env
 notify-prefs
+.notify-relay.sock
 auth.json*
 __pycache__/
 *.py[cod]

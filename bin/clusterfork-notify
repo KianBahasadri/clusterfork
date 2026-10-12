@@ -11,7 +11,26 @@ clusterfork_dir="${CLUSTERFORK_DIR:-$(cd "$script_dir/.." && pwd)}"
 notify_load_env "$clusterfork_dir"
 notify_load_prefs "$clusterfork_dir"
 
+relayed=0
+if [[ "${1:-}" == --from-devbox ]]; then
+  relayed=1
+  shift
+fi
 agent="${1:-agent}"
+if (( relayed )); then
+  # The host relay has already validated metadata and the guest has applied
+  # the Stop-event gates. Keep host switches as an additional veto.
+  case "$agent" in
+    claude|codex|command-code|grok|antigravity|agent|test) ;;
+    *) exit 0 ;;
+  esac
+  case "${3:-}" in
+    bell) NOTIFY_PREF[phone]=0 ;;
+    phone) NOTIFY_PREF[bell]=0 ;;
+    bell,phone) ;;
+    *) exit 0 ;;
+  esac
+fi
 if [[ -n "${NOTIFY_PREF[$agent]+x}" && "${NOTIFY_PREF[$agent]}" != 1 ]]; then
   exit 0
 fi
@@ -22,6 +41,7 @@ case "$agent" in
   command-code) label="Command Code" ;;
   grok) label="Grok" ;;
   antigravity) label="Antigravity" ;;
+  test) label="Clusterfork test" ;;
   *) label="Agent" ;;
 esac
 
@@ -69,7 +89,9 @@ if reason is not None and reason != "end_turn":
 '
 }
 
-if [[ "$agent" == antigravity ]]; then
+if (( relayed )); then
+  project="${2:-workspace}"
+elif [[ "$agent" == antigravity ]]; then
   project="$(antigravity_gate 2>/dev/null)" || exit 0
 elif [[ "$agent" == grok ]]; then
   grok_gate 2>/dev/null || exit 0
@@ -78,6 +100,19 @@ else
   project="$(basename "${PWD:-workspace}")"
 fi
 [[ -n "$project" && "$project" != "/" ]] || project="workspace"
+
+if (( ! relayed )) && [[ -n "${CLUSTERFORK_NOTIFY_RELAY_SOCKET:-}" ]]; then
+  channels=()
+  [[ "${NOTIFY_PREF[bell]}" == 1 ]] && channels+=(bell)
+  [[ "${NOTIFY_PREF[phone]}" == 1 ]] && channels+=(phone)
+  if (( ${#channels[@]} )); then
+    notifications="$(IFS=,; printf '%s' "${channels[*]}")"
+    if notify_relay "$agent" "$project" "$notifications" >/dev/null 2>&1; then
+      notify_record_trigger "$clusterfork_dir" "$agent" "$notifications"
+    fi
+  fi
+  exit 0
+fi
 
 # The network timeout stays below bell.mp3's duration, so phone delivery adds
 # no latency to the existing synchronous hooks. Neither path can fail a turn.
@@ -88,6 +123,13 @@ if [[ "${NOTIFY_PREF[bell]}" == 1 ]]; then
   notify_play_bell "$clusterfork_dir" &
   pids+=("$!")
   channels+=(bell)
+  if (( relayed )) && command -v notify-send >/dev/null 2>&1; then
+    # Fixed title/body only: no guest-selected actions, files, commands or URLs.
+    timeout 3 notify-send --app-name=Clusterfork --urgency=critical \
+      "Devbox: $label finished" "Turn complete in $project" \
+      </dev/null >/dev/null 2>&1 &
+    pids+=("$!")
+  fi
 fi
 if [[ "${NOTIFY_PREF[phone]}" == 1 ]]; then
   notify_post_ntfy "$label finished" "Turn complete in $project" &

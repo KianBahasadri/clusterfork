@@ -1,0 +1,185 @@
+#!/usr/bin/python3 -I
+"""A private Unix socket accepting only bounded completion-notification data."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import signal
+import socket
+import stat
+import subprocess
+import sys
+import time
+
+
+AGENTS = frozenset({"claude", "codex", "command-code", "grok", "antigravity", "agent", "test"})
+CHANNELS = frozenset({"bell", "phone", "bell,phone"})
+MAX_REQUEST = 512
+MIN_INTERVAL = 10.0
+
+
+def project_name(value: str) -> str:
+    # This is display text, never a path, command, URL, or environment setting.
+    return "".join(c for c in value if c.isalnum() or c in " ._-")[:80].strip() or "workspace"
+
+
+def parse_request(data: bytes) -> tuple[str, str, str]:
+    if len(data) > MAX_REQUEST:
+        raise ValueError("request too large")
+    request = json.loads(data)
+    if not isinstance(request, dict) or set(request) != {"agent", "project", "channels"}:
+        raise ValueError("invalid fields")
+    agent, project, channels = (request[key] for key in ("agent", "project", "channels"))
+    if not all(isinstance(value, str) for value in (agent, project, channels)):
+        raise ValueError("invalid types")
+    if agent not in AGENTS or channels not in CHANNELS:
+        raise ValueError("invalid action")
+    if project != project_name(project):
+        raise ValueError("invalid project")
+    return agent, project, channels
+
+
+def send(path: str, agent: str, project: str, channels: str) -> None:
+    request = json.dumps({"agent": agent, "project": project_name(project), "channels": channels},
+                         ensure_ascii=False).encode()
+    parse_request(request)
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(1)
+        client.connect(path)
+        client.sendall(request)
+        client.shutdown(socket.SHUT_WR)
+        response = client.recv(64)
+    if response != b"accepted\n":
+        raise ValueError(response.decode(errors="replace").strip() or "no acknowledgement")
+
+
+def bind_socket(path: Path) -> socket.socket:
+    # Never overwrite a regular file or follow a symlink. The parent directory
+    # is host-owned and must be read-only to the guest (the Clusterfork mount).
+    try:
+        existing = path.lstat()
+    except FileNotFoundError:
+        existing = None
+    if existing is not None:
+        if not stat.S_ISSOCK(existing.st_mode) or existing.st_uid != os.getuid():
+            raise ValueError("refusing to replace a non-owned socket or other file")
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            probe.settimeout(0.2)
+            try:
+                probe.connect(str(path))
+            except ConnectionRefusedError:
+                path.unlink()
+            else:
+                raise ValueError("relay already running")
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        server.bind(str(path))
+        path.chmod(0o600)
+        server.listen(8)
+        server.settimeout(1)
+    except BaseException:
+        server.close()
+        raise
+    return server
+
+
+def serve(path: Path) -> None:
+    # Executable and all configuration live on the host, outside guest-writable
+    # mounts. Guest data becomes only arguments to this one fixed executable.
+    helper = Path(__file__).resolve().with_name("clusterfork-notify")
+    child = None
+    next_allowed = 0.0
+    running = True
+
+    def stop(_signum, _frame):
+        nonlocal running
+        running = False
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    os.umask(0o077)
+    with bind_socket(path) as server:
+        socket_inode = path.lstat().st_ino
+        print("Notification relay ready", flush=True)
+        try:
+            while running:
+                try:
+                    connection, _ = server.accept()
+                except TimeoutError:
+                    continue
+                with connection:
+                    connection.settimeout(0.25)
+                    try:
+                        data = bytearray()
+                        deadline = time.monotonic() + 0.25
+                        while len(data) <= MAX_REQUEST:
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                raise TimeoutError("request deadline exceeded")
+                            connection.settimeout(remaining)
+                            part = connection.recv(MAX_REQUEST + 1 - len(data))
+                            if not part:
+                                break
+                            data.extend(part)
+                        agent, project, channels = parse_request(bytes(data))
+                        now = time.monotonic()
+                        if now < next_allowed or (child is not None and child.poll() is None):
+                            connection.sendall(b"rate limited; wait 10 seconds\n")
+                            continue
+                        child = subprocess.Popen(
+                            [str(helper), "--from-devbox", agent, project, channels],
+                            cwd=Path.home(), stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            env={**os.environ, "CLUSTERFORK_DIR": str(helper.parent.parent)},
+                        )
+                        next_allowed = now + MIN_INTERVAL
+                        connection.sendall(b"accepted\n")
+                        print(f"Accepted {agent} completion in {project} ({channels})", flush=True)
+                    except (ValueError, UnicodeError, RecursionError):
+                        try:
+                            connection.sendall(b"invalid request\n")
+                        except OSError:
+                            pass
+                    except OSError:
+                        # A stalled/disconnected client cannot stop the service.
+                        pass
+        finally:
+            try:
+                if path.lstat().st_ino == socket_inode:
+                    path.unlink()
+            except FileNotFoundError:
+                pass
+            if child is not None:
+                try:
+                    child.wait(timeout=6)
+                except subprocess.TimeoutExpired:
+                    child.terminate()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    server = commands.add_parser("serve")
+    server.add_argument("socket", type=Path)
+    client = commands.add_parser("send")
+    client.add_argument("socket")
+    client.add_argument("agent", choices=sorted(AGENTS))
+    client.add_argument("project")
+    client.add_argument("channels", choices=sorted(CHANNELS))
+    args = parser.parse_args()
+    try:
+        if args.command == "serve":
+            serve(args.socket)
+        else:
+            send(args.socket, args.agent, args.project, args.channels)
+    except (OSError, ValueError) as error:
+        print(f"notification relay: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -85,6 +85,70 @@ silent, and only the newest 200 rows are retained. `notify log` displays 50 by
 default, accepts a count from 1 through 200, and—like the five-row status
 summary—prints newest first.
 
+## Devbox completion alerts
+
+On `node-dev`, the installed `notify/relay-settings.sh` routes completion
+notifications to a host user service through
+`/home/dev/clusterfork/.notify-relay.sock`. The socket is created by the host
+at `~/clusterfork/.notify-relay.sock`, inside the existing read-only,
+UID-shifted Clusterfork mount. A live check confirmed that the container can
+connect through that mount without making it writable. There is no additional
+Incus device, firewall exception, TCP listener, or desktop/audio socket share.
+
+The host plays its existing bell and shows a critical desktop notification
+identifying the agent and project. Phone delivery also runs if enabled on the
+host. Guest preferences select which channels to request; host preferences can
+further silence them or the agent. Host `notify volume` controls playback
+volume. `notify bell off` also silences desktop popups for relayed events.
+
+Run the normal installer on both sides, then enable the relay **on the host**:
+
+```bash
+systemctl --user enable --now \
+  "$HOME/.config/clusterfork/notify/clusterfork-notify-relay.service"
+```
+
+The unit starts with the user's services on subsequent logins and restarts
+after failure. After updating an enabled relay, run
+`systemctl --user daemon-reload` and
+`systemctl --user restart clusterfork-notify-relay.service` on the host.
+The unit assumes the host checkout is `~/clusterfork`; its socket must stay
+inside a directory the guest cannot modify. Install the receiver outside
+guest-writable mounts. The optional `CLUSTERFORK_NOTIFY_RELAY_SOCKET` in the
+gitignored `.env` overrides the route; an empty value disables forwarding.
+
+Inside the devbox, `notify` shows the relay path and warns if the socket is
+missing. `notify test bell` sends a test through the same bridge. Its success
+message confirms host acceptance, not that a speaker was audible. Remote tests
+bypass guest channel switches, while host switches still apply. Accepted
+requests are recorded in guest history; host history records channels actually
+dispatched under host preferences. Hook delivery failures remain silent and
+bounded; a missing receiver does not stall the agent. Antigravity's `fullyIdle`
+and Grok's `end_turn` gates are applied before forwarding.
+
+The receiver uses a mode-0600 Unix socket, reads at most 512 bytes within a
+250 ms request deadline, and accepts only known agent/channel choices plus an
+80-character sanitized project label. Hook transcripts, URLs, executable paths,
+environment settings, and commands are never accepted. The host invokes one
+fixed, host-installed notifier without a shell evaluating guest input. Host
+code and preferences remain outside guest-writable mounts. Anyone who can
+write to the socket can request an alert and claim an agent/project name;
+this is not proof of task completion. Repeated requests are capped at one
+every ten seconds across all agents (extra requests during a burst are dropped).
+The service also has memory, process-count, and CPU limits.
+
+Host diagnosis and removal:
+
+```bash
+systemctl --user status clusterfork-notify-relay.service
+journalctl --user -u clusterfork-notify-relay.service -n 20
+systemctl --user disable --now clusterfork-notify-relay.service
+```
+
+Stopping removes the socket. Also disable the guest route to resume direct
+local delivery. Phone service availability is independent of the bell and
+desktop notification.
+
 ## Private ntfy service over Tailscale
 
 `notify/compose.yaml` runs ntfy server v2.28.0 on localhost port 2586 with a
