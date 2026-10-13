@@ -95,11 +95,11 @@ UID-shifted Clusterfork mount. A live check confirmed that the container can
 connect through that mount without making it writable. There is no additional
 Incus device, firewall exception, TCP listener, or desktop/audio socket share.
 
-The host plays its existing bell and shows a critical desktop notification
-identifying the agent and project. Phone delivery also runs if enabled on the
+Relayed events use the same bell and optional phone channels as host events.
+The host plays its existing bell; phone delivery also runs if enabled on the
 host. Guest preferences select which channels to request; host preferences can
 further silence them or the agent. Host `notify volume` controls playback
-volume. `notify bell off` also silences desktop popups for relayed events.
+volume.
 
 Run the normal installer on both sides, then enable the relay **on the host**:
 
@@ -146,8 +146,7 @@ systemctl --user disable --now clusterfork-notify-relay.service
 ```
 
 Stopping removes the socket. Also disable the guest route to resume direct
-local delivery. Phone service availability is independent of the bell and
-desktop notification.
+local delivery. Phone service availability is independent of the bell.
 
 ## Private ntfy service over Tailscale
 

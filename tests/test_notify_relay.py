@@ -180,10 +180,9 @@ class RelayHookTests(NotifyFixture):
                                 env=self.env(), capture_output=True, text=True, timeout=5)
         self.assertEqual(result.returncode, 0)
         self.assertIn("--volume=60", self.mpv_log.read_text())
-        self.assertIn("Devbox: Antigravity finished", desktop.read_text())
+        self.assertFalse(desktop.exists())
         self.assertFalse(self.curl_log.exists())
         self.mpv_log.unlink()
-        desktop.unlink()
         result = subprocess.run([str(NOTIFIER), "--from-devbox", "codex", "demo", "phone"],
                                 env=self.env(), capture_output=True, text=True, timeout=5)
         self.assertEqual(result.returncode, 0)

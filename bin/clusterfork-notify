@@ -123,13 +123,6 @@ if [[ "${NOTIFY_PREF[bell]}" == 1 ]]; then
   notify_play_bell "$clusterfork_dir" &
   pids+=("$!")
   channels+=(bell)
-  if (( relayed )) && command -v notify-send >/dev/null 2>&1; then
-    # Fixed title/body only: no guest-selected actions, files, commands or URLs.
-    timeout 3 notify-send --app-name=Clusterfork --urgency=critical \
-      "Devbox: $label finished" "Turn complete in $project" \
-      </dev/null >/dev/null 2>&1 &
-    pids+=("$!")
-  fi
 fi
 if [[ "${NOTIFY_PREF[phone]}" == 1 ]]; then
   notify_post_ntfy "$label finished" "Turn complete in $project" &
