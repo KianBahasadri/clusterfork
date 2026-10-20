@@ -1,0 +1,378 @@
+@font-face { font-family: 'Bebas Neue'; src: url('fonts/BebasNeue-Regular.ttf') format('truetype'); font-style: normal; font-weight: 400; font-display: swap; }
+.modder-theme, body:has(.modder-page) > .select-menu {
+  /* Canvas, surfaces, and control backgrounds inherit the shared site palette. */
+  --gold: #c5ad62; --gold-bright: #f0dfa1; --gold-line: #796b45;
+  --ink: #e1ded9; --ink-strong: #f4ebd1; --muted: #b1a99e; --faint: #8d867f;
+  --line: #39353a; --line-strong: #746649; --control-selected: #b39d58;
+  --accent: var(--gold); --accent-soft: color-mix(in srgb, var(--gold) 12%, transparent);
+  --good: #b4e675; --caution: #e4c681; --danger: #f19183;
+  --derived: #c9bddf; --radius: 2px; --radius-sm: 2px;
+  color: var(--ink); color-scheme: dark;
+}
+:root[data-theme=light] .modder-theme, :root[data-theme=light] body:has(.modder-page) > .select-menu {
+  --gold: #776027; --gold-bright: #4b3a13; --gold-line: #af9a6c;
+  --ink: #302e32; --ink-strong: #322811; --muted: #696157; --faint: #777067;
+  --line: #cfc5b7; --line-strong: #988351; --control-selected: #8a7135;
+  --good: #436a1e; --caution: #775b19; --danger: #aa392d; --derived: #6d568b;
+  color-scheme: light;
+}
+main:has(> .modder-page) { max-width: 1760px; }
+.modder-page { min-width: 0; }
+.modder-theme .button, .modder-theme input:not([type=range]), .modder-theme .select-trigger, .modder-theme textarea { border-radius: 0; }
+.modder-theme .button { color: var(--gold-bright); }
+.modder-theme .button.secondary { border-color: var(--gold-line); background: color-mix(in srgb, var(--surface) 60%, transparent); }
+.modder-toolbar, .modder-build-actions, .modder-name-row, .modder-section-title { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.modder-toolbar { justify-content: space-between; gap: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--gold-line); }
+.modder-title h1 { margin: 0; color: var(--gold-bright); font: 400 32px/1.1 'Bebas Neue', var(--ui); letter-spacing: .08em; text-transform: uppercase; }
+.modder-title h1 > span { color: var(--gold); }
+.modder-title > span { display: block; margin-top: 4px; font-size: 10px; }
+.modder-build-actions { gap: 8px; }
+.modder-build-actions .select-trigger { max-width: 220px; }
+.modder-build-actions .button { font-size: 12px; min-height: 34px; padding: 6px 12px; }
+.modder-equipment-bar { display: flex; align-items: stretch; gap: 12px; margin: 12px 0 20px; }
+.modder-arsenal { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); flex: 1; min-width: 0; gap: 4px; }
+.modder-arsenal > button { display: flex; align-items: center; justify-content: space-between; min-width: 0; padding: 5px 12px; border: 1px solid transparent; border-bottom-color: var(--line); background: color-mix(in srgb, var(--surface) 50%, transparent); text-align: left; }
+.modder-arsenal > button[aria-pressed=true] { border-bottom-color: var(--gold-bright); background: color-mix(in srgb, var(--gold) 8%, transparent); box-shadow: inset 0 -1px var(--gold-bright); }
+.modder-arsenal > button:hover { background: var(--surface-raised); }
+.modder-arsenal > button > span { display: grid; min-width: 0; gap: 2px; }
+.modder-arsenal strong { font-weight: 500; font-size: 14px; line-height: 1.15; color: var(--gold); text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modder-arsenal > button[aria-pressed=true] strong { color: var(--gold-bright); }
+.modder-arsenal small { color: var(--muted); font-size: 9px; }
+.modder-arsenal img { width: 44px; height: 34px; object-fit: contain; flex-shrink: 0; }
+.modder-swap { align-self: center; gap: 8px; font-size: 11px; text-transform: uppercase; padding: 6px 8px; }
+.modder-workspace { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 32px; align-items: start; }
+.modder-arsenal-panel, .modder-editor, .modder-results { min-width: 0; }
+.modder-stat-panel { background: color-mix(in srgb, var(--canvas) 65%, transparent); border: 1px solid var(--line); }
+.modder-capacity { padding: 5px 8px 8px; border-top: 1px solid var(--gold-line); }
+.modder-capacity > div { display: flex; justify-content: space-between; gap: 8px; align-items: center; text-transform: uppercase; font-size: 15px; }
+.modder-capacity strong { color: var(--ink-strong); font-size: 19px; font-variant-numeric: tabular-nums; }
+.modder-capacity progress { display: block; height: 5px; margin: 2px 0 4px; border-radius: 0; }
+.modder-capacity progress::-webkit-progress-bar { background: var(--line); border-radius: 0; }
+.modder-capacity progress::-webkit-progress-value { background: var(--gold); border-radius: 0; }
+.modder-capacity progress::-moz-progress-bar { background: var(--gold); border-radius: 0; }
+.modder-capacity > span { font-size: 10px; color: var(--muted); }
+.modder-stat-group dl { margin: 0; }
+.modder-stat-group dl > div { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 2px 8px; min-height: 23px; font-size: 13px; }
+.modder-stat-group dl > div:nth-child(odd) { background: color-mix(in srgb, var(--surface-raised) 60%, transparent); }
+.modder-stat-group dt { color: var(--gold); text-transform: capitalize; }
+.modder-stat-group dd { margin: 0; text-align: right; color: var(--gold-bright); font-weight: 600; font-variant-numeric: tabular-nums; }
+.modder-stat-group h2 { color: var(--gold-bright); font-size: 13px; text-transform: uppercase; margin: 12px 8px 4px; }
+.modder-stats-note { display: block; text-align: center; padding: 8px; margin-top: 8px; font-size: 10px; color: var(--muted); border-top: 1px solid var(--line); }
+.modder-config-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; background: color-mix(in srgb, var(--surface-raised) 60%, transparent); min-height: 36px; margin-bottom: 20px; border-bottom: 1px solid var(--line); }
+.modder-name { display: flex; align-items: center; min-width: 0; max-width: 360px; flex: 1; }
+.modder-name > span { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; }
+.modder-name > input { width: 100%; min-width: 0; padding: 6px 10px; background: transparent; border: 0; border-bottom: 2px solid var(--gold-bright); color: var(--gold-bright); text-transform: uppercase; font-size: 15px; }
+.modder-name-row > .button { margin-left: auto; font-size: 10px; padding: 4px 8px; }
+.modder-name-row > .select-trigger { font-size: 11px; min-height: 30px; max-width: 220px; }
+.modder-upgrade-stage { position: relative; isolation: isolate; }
+.modder-slot-layout { display: grid; grid-template-columns: minmax(0, 1fr) 120px; gap: 32px; align-items: stretch; }
+.modder-slot-grid { min-width: 0; width: 100%; max-width: 1000px; justify-self: center; }
+.modder-extra-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; width: calc(50% - 8px); margin: 0 auto 16px; }
+.modder-extra-grid > :only-child { grid-column: 2; }
+.modder-mod-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.modder-arcane-grid { display: grid; grid-auto-rows: 1fr; align-items: center; gap: 32px; }
+.modder-upgrade { min-width: 0; position: relative; container-type: inline-size; }
+.modder-slot-button { display: block; border: 0; padding: 0; width: 100%; background: transparent; }
+.modder-slot-button[draggable=true], .modder-library-result[draggable=true] { cursor: grab; }
+.modder-upgrade.is-drag-source .modder-slot-button { opacity: .4; }
+.modder-upgrade.is-drop-allowed { outline: 1px dashed var(--gold-line); outline-offset: 3px; }
+.modder-upgrade.is-drop-target { outline: 2px solid var(--gold-bright); background: color-mix(in srgb, var(--gold) 12%, transparent); }
+/* Compact frame layering adapted from Arsenyx, MIT: /licenses/arsenyx-MIT.txt.
+   Its 184 x 64 frame plus 32px lower rim becomes a responsive 184 x 96 face. */
+.modder-face { display: block; position: relative; width: 100%; aspect-ratio: 184 / 96; isolation: isolate; color: var(--rarity-color); user-select: none; }
+.modder-frame-top, .modder-frame-bottom { position: absolute; left: 50%; width: 100%; height: auto; max-width: none; transform: translateX(-50%); pointer-events: none; z-index: 2; }
+.modder-frame-top { top: 0; }
+.modder-frame-bottom { bottom: 0; }
+.modder-face.is-ornate .modder-frame-top, .modder-face.is-ornate .modder-frame-bottom { width: 110%; }
+.modder-face.is-ornate .modder-frame-top { top: -8%; }
+.modder-face-interior { position: absolute; inset: 4% 1.65% 16.67%; border-radius: 0 0 5px 5px; overflow: hidden; background: linear-gradient(125deg, #191a2166, #80828d20 46%, #14151c55 48%, #3d404b44); }
+.modder-face-interior > img { width: 100%; height: 100%; object-fit: cover; object-position: top; filter: grayscale(.7) brightness(.35); }
+.modder-face-tint { position: absolute; inset: 0; background: var(--rarity-color); opacity: .15; mix-blend-mode: hard-light; }
+.modder-face.is-empty .modder-face-tint { display: none; }
+.modder-face.is-empty .modder-frame-top, .modder-face.is-empty .modder-frame-bottom { opacity: .32; filter: grayscale(1); }
+.modder-face-label { position: absolute; top: 11%; left: 6%; font-size: 9px; color: var(--muted); text-transform: uppercase; opacity: .8; z-index: 3; }
+.modder-face.is-filled .modder-face-label { display: none; }
+.modder-aura-symbol { position: absolute; top: 6%; left: calc(50% - 9px); width: 18px; height: 18px; background: currentColor; mask: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAQAAAAAYLlVAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAACYktHRAD/h4/MvwAAAAd0SU1FB+oKFBIALbS9YUYAAAAldEVYdGRhdGU6Y3JlYXRlADIwMjYtMTAtMTRUMDA6MDU6NTMrMDA6MDDXvF9NAAAAJXRFWHRkYXRlOm1vZGlmeQAyMDI2LTEwLTE0VDAwOjA1OjUzKzAwOjAwpuHn8QAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyNi0xMC0yMFQxODowMDo0NSswMDowMPgAHdYAAAQvSURBVGje7ZlPaFxFHMc/b7Mxa1RSLFJbusnWbCPRg1oRD0pko5REtKK0KihowZuF4EE8qc1BvFoKnrzUg4i9CA1KUwRr6UnUFhLbrZt0u1QqaAymjdkku+/nYee9vLeZ9+a93ZcWIb9h2Znf/Hbm+/vOv9/MWsKtldQt7n8TwCaATQARAeznA57GwsKK3LLFEDmzfRQAgxxmnOHYzg3xegQrMaX9MiUiIl+IJZZYRnsn5aQok2Z7EwM7OMCDAAyzKzYHffSZTNK+UhZwDoc6cJBhCthYwDaOcpKTXFf1HQEtOvqP2E2FHhMAy3MYZfmELHe75TIFwFKfhlziqmIiCIBjuxOAQ3xqQOAbkay8LJ9JTWpSk7pKrYottthyRp4NnwPrVTullCAAW47L7WEAOg43U7JAiSILDKp1H33lNw9FI6WY4O+oQ7CWtsu48qBduSD5VpbhNT6n3KLvfsnTH1Z9M86CQ+TjAHDG7gG62pgBa5LmOd6JA8DZGB5lR2IcvBC8I6bjtANUyfAXAP8qjQ3kgFoLrYX+ZI9GN88fHKPIJQb4Sem6gPcZohPoIaN2SEsxaRxCHQABsgyySqdP/xtjlJhBEH716LsZo4tuYJwCK5TJASuUGKGxZa+ETPaA9ZmV332ruSbfyGjIgdyh6nZJn0p5ycvbsqp2kw+D9oFoo1ZnmjFKLj86iwbZ5ab6EveHNx1EzcN0e0rHeUV1n7isZ6DhyWP0eKbROS4aW9Ixs0y3aRrqGchx0ANnjmLbjj7C1ngAvFJMAMCeeADKnvwcb3GhbQDbeV5fsX4OCPhOyX/cPS+eWECGqpobae6Mw4BXjnGlZb/zYedgGID4AbheRswmegCXE+reARCyFPUAbObdeLDViEAYYYCUG1MEPEbpAVT4mPk2/R9l1FP6nh/iAIAz3KDWFoARdvsAnNabtRBCGGUrT/KEz38IHAI9gA6WSKm6uDzs400KbGnqOHC5mxkYAq7QhwAVet2mrpL1Nd2IhAZ5xtP5mpwObF8bJtwm98jPbjCyJEsqt+DqVjx570Vs/UXGFltmpT/exaQOfOeWMmRU7i5X1+nJw1owbzV5ZhT9ENT5k2tRw8oAsTzfN4Kh3IybUSgPwQAmmUkMwpfMxgcww4uJQZhqhYElpigncDcEK+yJL3wOnE2IgVc5oN0djACSkm0c5SxvaOtCn5D2ysWE3klERKblcdlifqTypjvkJVlWyTYkZ6/UPW7NiYjIqlTka3kqztVskfPM0A+c4kcDzasAVHiNvR7tMotMMMGA21PzriAmDo7IshyRTOQ34ozsk28VA1V5Tx5q760YZtUnukwyqbyf5ivOhxubjuNFTtDLCaqRu68C95LiOqd4N0J4G4HUrsj0O6kg5+QXuS+KrbVB/5z2ko42cBsFILL8T/602gSwgfIfGbMuD5k7P+oAAAAASUVORK5CYII=') center / contain no-repeat; z-index: 3; }
+.modder-face-drain { position: absolute; top: 7.3%; right: 1.1%; width: 21%; aspect-ratio: 2 / 1; color: var(--rarity-color); font-size: clamp(11px, 6.5cqw, 17px); line-height: 1; font-weight: 600; z-index: 3; }
+.modder-face-drain > img { position: absolute; width: 100%; height: 100%; inset: 0; }
+.modder-face-drain > span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding-left: 8%; gap: 1px; }
+.modder-face-drain.is-match { color: #4ade80; text-shadow: 0 0 8px #4ade8073; }
+.modder-face-drain.is-mismatch { color: #f87171; text-shadow: 0 0 8px #f8717173; }
+.modder-face-drain .modder-polarity { width: 14px; height: 14px; }
+.modder-face-name { position: absolute; top: 46.67%; left: 4%; width: 92%; transform: translateY(-50%); font-size: clamp(12px, 8cqw, 20px); line-height: 1.2; font-weight: 400; text-align: center; text-shadow: -1px -1px #000, 1px 1px #000, 0 0 6px #000, 0 0 12px #000; overflow-wrap: anywhere; z-index: 3; }
+.modder-face.is-empty .modder-face-name { opacity: 0; font-size: 12px; color: var(--muted); text-shadow: none; }
+.modder-slot-button:hover .is-empty .modder-face-name, .modder-slot-button:focus-visible .is-empty .modder-face-name { opacity: 1; }
+.modder-rank-pips { position: absolute; bottom: 5.2%; left: 8%; right: 8%; display: flex; align-items: center; justify-content: center; gap: 2px; z-index: 3; }
+.modder-rank-pips i { display: block; flex-shrink: 0; width: 5px; height: 5px; border-radius: 50%; background: #52525b99; }
+.modder-rank-pips .is-ranked { background: #7dd3fc; box-shadow: 0 0 2px .5px #78b4ff99; }
+.modder-rank-complete { position: absolute; bottom: 4.2%; left: 2.2%; width: 95.6%; pointer-events: none; z-index: 2; }
+.modder-face.is-arcane { aspect-ratio: auto; min-height: 100px; display: flex; flex-direction: column; align-items: center; color: #aaa99e; }
+.modder-arcane-socket { position: relative; display: block; width: 96px; height: 61px; }
+.modder-arcane-socket > svg { display: block; width: 100%; height: 100%; }
+.modder-arcane-art { position: absolute; inset: 4px 10px; width: calc(100% - 20px); height: calc(100% - 8px); object-fit: contain; }
+.modder-face.is-arcane .modder-face-name { position: static; transform: none; width: 100%; margin-top: 4px; color: var(--gold); font-size: 12px; text-transform: uppercase; text-shadow: none; }
+.modder-face.is-arcane .modder-rank-pips { position: static; margin-top: 8px; }
+.modder-face.is-arcane .modder-face-drain { top: 4px; right: 0; width: auto; font-size: 10px; background: #14151bd9; padding: 2px; }
+.modder-slot-adjust { position: absolute; bottom: 19%; right: 5%; display: flex; align-items: center; justify-content: center; gap: 4px; width: 24px; height: 24px; padding: 4px; color: #d5c998; background: #131117aa; border: 1px solid transparent; font-size: 9px; text-align: left; opacity: 0; z-index: 4; }
+.modder-slot-adjust > span:first-child, .modder-slot-adjust .modder-polarity, .modder-slot-adjust .modder-no-polarity { display: none; }
+.modder-slot-adjust::after { content: ''; position: absolute; inset: -8px; }
+.modder-upgrade:hover .modder-slot-adjust, .modder-upgrade:focus-within .modder-slot-adjust, .modder-slot-adjust[aria-pressed=true] { opacity: 1; }
+.modder-upgrade.is-muted .modder-slot-adjust { width: auto; opacity: 1; }
+.modder-slot-adjust[aria-pressed=true] { color: #f0dfa1; border-color: #c5ad62; }
+.modder-arcane-grid .modder-slot-adjust { top: 28px; right: 0; bottom: auto; }
+.modder-slot-button:hover .modder-face, .modder-slot-button:focus-visible .modder-face, .modder-library-result:hover:not(:disabled) .modder-face { filter: brightness(1.2); }
+.modder-slot-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.modder-upgrade.is-selected::after { content: ''; position: absolute; bottom: -4px; left: 18%; right: 18%; height: 1px; background: var(--gold-bright); pointer-events: none; }
+.modder-upgrade.is-muted .modder-face { opacity: .55; }
+.modder-polarity { display: inline-block; width: 22px; height: 22px; flex-shrink: 0; background: currentColor; mask-position: center; mask-size: contain; mask-repeat: no-repeat; vertical-align: middle; }
+.modder-no-polarity { display: inline-block; width: 16px; height: 16px; }
+.modder-polarity-option { display: flex; align-items: center; gap: 8px; }
+.modder-polarity-option .modder-polarity { width: 16px; height: 16px; }
+.modder-order-note { margin: 8px 0 0; font-size: 10px; color: var(--muted); }
+.modder-editor .callout { margin: 12px 0; font-size: 12px; padding: 8px 12px; }
+.modder-upgrade-controls { margin-top: 16px; display: grid; grid-template-columns: minmax(120px, .9fr) minmax(160px, 1.2fr) minmax(145px, 1fr) minmax(90px, .7fr); gap: 8px 20px; align-items: center; border-block: 1px solid var(--gold-line); padding: 8px 12px; background: color-mix(in srgb, var(--surface) 85%, transparent); }
+.modder-upgrade-top { display: flex; align-items: center; gap: 8px; color: var(--gold); font-size: 11px; grid-column: 1; }
+.modder-drain { margin-left: auto; font: 10px var(--mono); color: var(--muted); }
+.modder-upgrade-top .icon-button { width: 28px; height: 24px; }
+.modder-upgrade-pick { grid-column: 1; display: flex; align-items: center; gap: 8px; padding: 0; min-height: 28px; border: 0; background: transparent; color: var(--gold-bright); font-size: 13px; text-align: left; }
+.modder-upgrade-pick > svg:last-child { margin-left: auto; }
+.modder-effect-text { grid-column: 2; grid-row: 1 / 3; font-size: 11px; color: var(--muted); white-space: pre-line; overflow-wrap: anywhere; max-height: 100px; overflow: auto; }
+.modder-rank { grid-column: 3; grid-row: 1; display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 10px; color: var(--muted); }
+.modder-rank > input.quantity-range { min-width: 20px; flex: 1; height: 28px; }
+.modder-rank > input[type=number] { width: 42px; padding: 4px; font: 11px var(--mono); -moz-appearance: textfield; }
+.modder-rank > input[type=number]::-webkit-inner-spin-button { appearance: none; }
+.modder-upgrade-controls > .select-trigger { grid-column: 3; grid-row: 2; padding: 4px 8px; min-height: 30px; font-size: 11px; }
+.modder-upgrade-bottom { grid-column: 4; grid-row: 1 / 3; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11px; }
+.modder-upgrade-bottom > label { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 400; }
+.modder-upgrade-bottom input[type=checkbox] { width: 16px; height: 16px; }
+.modder-move { display: flex; margin-left: auto; }
+.modder-move .icon-button { width: 28px; height: 28px; }
+.modder-coverage { color: var(--caution); font-size: 10px; }
+.modder-upgrade-controls > .modder-number { grid-column: 3; grid-row: 2; display: flex; align-items: center; gap: 8px; font-size: 10px; }
+.modder-upgrade-controls > .modder-number input { width: 60px; margin-left: auto; }
+.modder-capacity-options { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px; border-top: 1px solid var(--line); }
+.modder-capacity-options > label:first-child { width: 100%; display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 400; }
+.modder-capacity-options .modder-number { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.modder-capacity-options input[type=number] { width: 56px; padding: 4px 8px; font-size: 11px; }
+.modder-library-dock { margin-top: 24px; border-top: 1px solid var(--gold-line); }
+.modder-library-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin: 8px 0; font-size: 11px; color: var(--muted); }
+.modder-library-heading h2 { font-size: 13px; text-transform: uppercase; color: var(--gold-bright); margin: 0; }
+.modder-library-heading strong { font-weight: 500; color: var(--gold-bright); }
+.modder-library-heading > label { display: flex; align-items: center; gap: 8px; margin-left: auto; font-size: 10px; font-weight: 400; }
+.modder-library-heading input { width: 14px; height: 14px; }
+.modder-library-heading > span:last-child { margin-left: auto; }
+.modder-library-filters { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; padding: 4px 0; background: color-mix(in srgb, var(--surface-raised) 60%, transparent); }
+.modder-library-filters .search-field { flex: 1; min-width: 160px; max-width: 290px; }
+.modder-library-filters .search-field input { border-radius: 0; border-color: var(--gold-line); padding-block: 6px; }
+.modder-library-filters .select-trigger { min-width: 150px; min-height: 34px; padding-block: 4px; text-transform: uppercase; color: var(--gold); font-size: 13px; }
+.modder-polarity-filters { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.modder-polarity-filters > button { display: flex; align-items: center; gap: 8px; padding: 4px 8px; height: 36px; min-width: 36px; border: 1px solid transparent; border-bottom: 2px solid transparent; background: transparent; color: var(--gold); text-transform: uppercase; font-size: 11px; }
+.modder-polarity-filters > button[aria-pressed=true] { color: var(--gold-bright); border-bottom-color: var(--gold-bright); background: color-mix(in srgb, var(--gold) 10%, transparent); }
+.modder-library-tools { display: flex; align-items: center; justify-content: flex-end; gap: 16px; min-height: 36px; }
+.modder-library-tools label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 10px; font-weight: 400; }
+.modder-library-tools input { width: 14px; height: 14px; }
+.modder-library-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(175px, 1fr)); gap: 16px; max-height: 320px; overflow: auto; overscroll-behavior: contain; padding: 10px 8px; margin: 4px -8px; scrollbar-width: thin; scrollbar-color: var(--gold-line) var(--surface); }
+.modder-library-result { position: relative; display: flex; flex-direction: column; align-items: stretch; min-width: 0; padding: 0; border: 0; background: transparent; text-align: left; container-type: inline-size; }
+.modder-library-result:disabled, .modder-library-result[aria-disabled=true] { opacity: .45; }
+.modder-library-description { font-size: 10px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 15px; margin: 4px 6px 0; }
+.modder-library-coverage { font-size: 9px; color: var(--muted); margin: 2px 6px 4px; }
+.modder-library-dock .modder-library-list { grid-template-columns: none; grid-template-rows: repeat(2, min-content); grid-auto-flow: column; grid-auto-columns: 210px; max-height: none; column-gap: 22px; overflow-y: hidden; padding-block: 12px; }
+.modder-library-dock .modder-library-description { display: none; }
+.modder-library-dock .modder-library-coverage { position: absolute; top: 18%; left: 6%; margin: 0; color: #eee; font-size: 9px; background: #111a; opacity: 0; }
+.modder-library-dock .modder-library-result:hover .modder-library-coverage, .modder-library-dock .modder-library-result:focus-visible .modder-library-coverage { opacity: 1; }
+.modder-library-result .modder-face.is-arcane { min-height: 110px; }
+.modder-library-dock > .button { font-size: 11px; min-height: 30px; padding: 4px 12px; }
+@media (hover: none) { .modder-drag-hint { display: none; } }
+.modder-library { width: min(1080px, calc(100vw - 32px)); max-width: calc(100vw - 32px); background: var(--canvas); border: 1px solid var(--gold-line); border-radius: 2px; }
+.modder-library .dialog-header h2 { color: var(--gold-bright); text-transform: uppercase; font-weight: 500; }
+.modder-library .modder-library-list { max-height: 52dvh; }
+.modder-library .modder-library-tools { justify-content: space-between; }
+.modder-library-list.is-equipment { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+.is-equipment .modder-library-result { flex-direction: row; align-items: center; gap: 12px; border: 1px solid var(--line); padding: 8px; min-height: 76px; }
+.is-equipment .modder-library-result:hover { border-color: var(--gold); background: var(--surface); }
+.is-equipment .modder-library-result img { width: 56px; height: 56px; object-fit: contain; }
+.is-equipment .modder-library-result > span { display: grid; gap: 4px; }
+.is-equipment strong { font-size: 13px; color: var(--gold-bright); font-weight: 500; }
+.is-equipment small { font-size: 10px; color: var(--muted); }
+.modder-settings-column { min-width: 0; margin-top: 24px; border-top: 1px solid var(--gold-line); padding-top: 24px; }
+.modder-number, .modder-field { display: grid; gap: 8px; min-width: 0; font-weight: 400; font-size: 12px; }
+.modder-number input { width: 100%; font-family: var(--mono); padding: 6px 8px; font-size: 12px; }
+.modder-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.modder-field .select-trigger { width: 100%; font-size: 12px; }
+.modder-settings { border-bottom: 1px solid var(--line); }
+.modder-settings > summary { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 12px 0; font-size: 13px; color: var(--gold); cursor: pointer; list-style: none; }
+.modder-settings > summary::-webkit-details-marker { display: none; }
+.modder-settings > summary > span { color: var(--muted); font-size: 11px; margin-left: auto; }
+.modder-settings > summary > svg:last-child { margin-left: auto; }
+.modder-settings[open] > summary > svg:last-child { transform: rotate(180deg); }
+.modder-setting-body { padding: 4px 0 16px; }
+.modder-setting-body > .select-trigger { width: 100%; margin-bottom: 16px; }
+.modder-setting-body > .button { margin-top: 16px; }
+.modder-settings textarea { width: 100%; }
+.modder-buff { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 20px 0; }
+.modder-buff > label { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 400; }
+.modder-buff .modder-number { max-width: 160px; }
+.modder-buff > .small { flex-basis: 100%; margin-top: -8px; }
+.modder-sources { margin-bottom: 16px; }
+.modder-sources p { font-size: 12px; color: var(--muted); }
+.modder-results { padding: 0 0 0 24px; border-left: 1px solid var(--line); scroll-margin-top: 16px; }
+.modder-section-title { justify-content: space-between; margin-bottom: 16px; }
+.modder-section-title h2 { margin: 0; color: var(--gold-bright); text-transform: uppercase; font-size: 16px; }
+.modder-modeled { background: var(--derived-soft); color: var(--derived); }
+.modder-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; margin: 24px 0; }
+.modder-metrics > div { display: grid; gap: 8px; min-width: 0; align-content: start; }
+.modder-metrics span { font-size: 10px; text-transform: uppercase; color: var(--muted); }
+.modder-metrics strong { font-size: 24px; line-height: 1.2; color: var(--gold-bright); font-weight: 500; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.modder-damage { margin-bottom: 24px; }
+.modder-damage h3 { font-size: 12px; }
+.modder-damage > div { display: grid; grid-template-columns: 80px minmax(0, 1fr) 68px; gap: 12px; align-items: center; margin-top: 8px; font-size: 11px; }
+.modder-damage strong { font: 11px var(--mono); text-align: right; }
+.modder-damage meter { width: 100%; height: 8px; }
+.modder-damage meter::-webkit-meter-bar { background: var(--line); border: 0; border-radius: 0; }
+.modder-damage meter::-webkit-meter-optimum-value { background: var(--gold); }
+.modder-damage meter::-moz-meter-bar { background: var(--gold); }
+.modder-breakdown-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.modder-breakdown-title { font-size: 13px; margin: 0; }
+.modder-breakdown-heading .button { font-size: 11px; }
+.modder-mobile-results { display: none; }
+.modder-calculations > details { border-bottom: 1px solid var(--line); }
+.modder-calculations summary { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 10px 0; list-style: none; cursor: pointer; font-size: 12px; }
+.modder-calculations summary::-webkit-details-marker { display: none; }
+.modder-calculations summary > strong { font: 12px var(--mono); margin-left: auto; text-align: right; }
+.modder-calculations summary > svg { flex-shrink: 0; color: var(--muted); }
+.modder-calculations details[open] summary > svg { transform: rotate(180deg); }
+.modder-delta { font: 10px var(--mono); color: var(--derived); white-space: nowrap; }
+.modder-equation { padding: 0 0 16px; }
+.modder-equation code { display: block; padding: 12px; background: var(--surface); font: 11px/1.7 var(--mono); overflow-wrap: anywhere; }
+.modder-equation p, .modder-equation li { font-size: 11px; line-height: 1.7; color: var(--muted); }
+.modder-equation p { margin: 12px 0 0; }
+.modder-equation ul { margin: 8px 0 0; padding-left: 16px; }
+.modder-limits { margin-top: 24px; background: var(--caution-soft); padding: 12px 16px; border-radius: 2px; }
+.modder-limits summary { cursor: pointer; font-size: 12px; }
+.modder-limits .count { margin-left: 8px; }
+.modder-limits ul { padding-left: 16px; margin-bottom: 0; font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.modder-limits li + li { margin-top: 8px; }
+.modder-results-note { font-size: 11px; color: var(--muted); margin: 16px 0 0; }
+@media (min-width: 1700px) {
+  .modder-workspace { grid-template-columns: 260px minmax(0, 1fr); gap: 44px; }
+  .modder-slot-layout { gap: 40px; }
+  .modder-library-dock .modder-library-list { grid-auto-columns: 220px; }
+}
+@media (max-width: 1200px) {
+  .modder-workspace { grid-template-columns: 210px minmax(0, 1fr); gap: 24px; }
+  .modder-slot-layout { grid-template-columns: minmax(0, 1fr) 96px; gap: 16px; }
+  .modder-mod-grid, .modder-extra-grid { gap: 12px; }
+  .modder-extra-grid { width: calc(50% - 6px); margin-bottom: 12px; }
+  .modder-upgrade-controls { grid-template-columns: minmax(110px, 1fr) minmax(140px, 1fr); gap: 8px 16px; }
+  .modder-effect-text { grid-column: 1; grid-row: auto; }
+  .modder-rank, .modder-upgrade-controls > .select-trigger, .modder-upgrade-controls > .modder-number { grid-column: 2; }
+  .modder-upgrade-bottom { grid-column: 2; grid-row: 3; }
+  .modder-library-filters { gap: 12px; }
+  .modder-library-dock .modder-library-list { grid-auto-columns: 184px; }
+}
+@media (max-width: 1000px) {
+  .modder-workspace { grid-template-columns: 180px minmax(0, 1fr); gap: 20px; }
+  .modder-slot-layout { grid-template-columns: minmax(0, 1fr); }
+  .modder-arcane-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: auto; max-width: 300px; width: 100%; margin: 0 auto; }
+  .modder-stat-group dl > div { min-height: 21px; font-size: 11px; }
+  .modder-stat-group h2 { margin-top: 8px; }
+  .modder-arsenal > button { padding: 6px; }
+  .modder-arsenal strong { font-size: 12px; }
+  .modder-arsenal img { display: none; }
+  .modder-library-filters .search-field { max-width: none; }
+  .modder-polarity-filters { order: 3; width: 100%; justify-content: center; }
+  .modder-name-row > .select-trigger { flex-basis: 100%; max-width: none; }
+}
+@media (max-width: 900px) {
+  .modder-results { border: 0; padding: 16px 0 0; }
+  .modder-page { padding-bottom: 72px; }
+  .modder-mobile-results { position: fixed; display: flex; align-items: center; justify-content: space-between; gap: 12px; bottom: 0; left: 0; right: 0; padding: 12px 16px; z-index: 20; background: var(--surface-raised); border-top: 1px solid var(--gold-line); }
+  .modder-mobile-results > span { display: grid; gap: 4px; min-width: 0; }
+  .modder-mobile-results small { font-size: 10px; color: var(--muted); }
+  .modder-mobile-results strong { font: 12px var(--mono); }
+  .modder-mobile-results .button { font-size: 12px; padding-inline: 8px; }
+}
+@media (max-width: 700px) {
+  .modder-workspace { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .modder-stat-panel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .modder-capacity, .modder-stats-note, .modder-capacity-options { grid-column: 1 / -1; }
+  .modder-capacity-options { gap: 12px; }
+  .modder-capacity-options > label:first-child { width: auto; }
+  .modder-stat-group { padding-top: 4px; }
+  .modder-stat-group h2 { display: none; }
+  .modder-stat-group dl > div { font-size: 11px; padding-inline: 8px; }
+  .modder-stats-note { margin-top: 8px; }
+  .modder-equipment-bar { flex-wrap: wrap; gap: 4px; margin-bottom: 12px; }
+  .modder-arsenal { flex-basis: 100%; }
+  .modder-swap { margin-left: auto; }
+  .modder-config-bar { margin-bottom: 16px; }
+  .modder-slot-layout { gap: 16px; }
+  .modder-extra-grid { margin-bottom: 16px; }
+  .modder-slot-adjust { opacity: 1; }
+  .modder-library-heading { gap: 8px; font-size: 10px; }
+  .modder-library-heading > label { order: 4; width: 100%; margin-left: 0; }
+}
+@media (max-width: 600px) {
+  .modder-title h1 { font-size: 28px; }
+  .modder-toolbar { align-items: flex-start; }
+  .modder-build-actions { width: 100%; }
+  .modder-build-actions .button { flex: 1; padding-inline: 10px; }
+  .modder-build-actions .select-trigger { flex-basis: 100%; max-width: none; }
+  .modder-arsenal { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .modder-arsenal > button { min-height: 48px; padding: 6px 8px; }
+  .modder-arsenal img { display: block; width: 32px; height: 32px; }
+  .modder-arsenal small { font-size: 8px; }
+  .modder-name-row { gap: 8px; }
+  .modder-name { max-width: none; flex-basis: 100%; }
+  .modder-name > input { font-size: 14px; }
+  .modder-mod-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .modder-extra-grid { width: 100%; gap: 16px; }
+  .modder-arcane-grid { gap: 24px; }
+  .modder-upgrade-controls { grid-template-columns: minmax(0, 1fr); padding: 12px; gap: 12px; }
+  .modder-upgrade-controls > * { grid-column: 1 !important; grid-row: auto !important; }
+  .modder-rank { gap: 8px; }
+  .modder-rank > input.quantity-range { height: 36px; }
+  .modder-upgrade-controls > .select-trigger { min-height: 36px; }
+  .modder-upgrade-bottom { min-height: 36px; }
+  .modder-library-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .modder-library-dock .modder-library-list { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: none; grid-auto-flow: row; grid-auto-columns: auto; gap: 16px; max-height: 330px; overflow-y: auto; }
+  .modder-library-filters .search-field { min-width: 100px; }
+  .modder-library-filters .select-trigger { min-width: 86px; width: 86px; padding-inline: 8px; }
+  .modder-polarity-filters { gap: 2px; justify-content: start; }
+  .modder-polarity-filters > button { padding: 4px 6px; min-width: 32px; height: 40px; }
+  .modder-polarity-filters > button > span:not(.modder-polarity) { display: none; }
+  .modder-library .dialog-inner { padding: 16px; }
+  .modder-library-list.is-equipment { grid-template-columns: minmax(0, 1fr); }
+  .modder-metrics { gap: 12px; }
+  .modder-metrics strong { font-size: 19px; }
+  .modder-metrics span { font-size: 9px; }
+  .modder-fields { grid-template-columns: minmax(0, 1fr); }
+  .modder-calculations summary { flex-wrap: wrap; }
+  .modder-delta { white-space: normal; }
+}
+@media (min-width: 1100px) and (max-height: 1000px) {
+  .modder-title > span { display: none; }
+  .modder-toolbar { padding-bottom: 8px; }
+  .modder-equipment-bar { margin: 8px 0 12px; }
+  .modder-config-bar { margin-bottom: 16px; }
+  .modder-slot-grid { max-width: 784px; }
+  .modder-mod-grid, .modder-extra-grid { row-gap: 12px; }
+  .modder-extra-grid { margin-bottom: 12px; }
+  .modder-capacity > span { display: none; }
+  .modder-stat-group dl > div { min-height: 21px; padding-block: 1px; }
+  .modder-stats-note { padding: 4px; margin-top: 4px; }
+  .modder-capacity-options { padding: 6px; gap: 6px; }
+  .modder-library-dock { margin-top: 16px; }
+  .modder-library-dock .modder-library-list { grid-auto-columns: 184px; row-gap: 12px; padding-block: 8px; }
+}
+:root[data-theme=light] .modder-face.is-empty { --rarity-color: #645c54; }
+:root[data-theme=light] .modder-face.is-arcane { color: var(--muted); }
+@media (hover: none) { .modder-slot-adjust { opacity: 1; } }
+@media (forced-colors: active) {
+  .modder-face { border: 1px solid ButtonText; }
+  .modder-frame-top, .modder-frame-bottom, .modder-rank-complete, .modder-face-interior, .modder-face-drain > img { display: none; }
+  .modder-face-name, .modder-face-label, .modder-face-drain { color: ButtonText; text-shadow: none; }
+  .modder-face.is-empty .modder-face-name { opacity: 1; }
+  .modder-upgrade.is-selected { outline: 2px solid Highlight; }
+  .modder-polarity { background: ButtonText; }
+}

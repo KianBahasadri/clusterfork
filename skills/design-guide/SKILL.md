@@ -21,6 +21,7 @@ Apply the exact specifications in the references relevant to the interface being
 - Read [Overlays and Feedback](references/overlays-and-feedback.md) for dialogs, modals, tooltips, popovers, navigation, tabs, breadcrumbs, alerts, callouts, and toasts.
 - Read every component reference above when building or reviewing a complete component catalog; for other interfaces, read the references for the components they contain.
 - For a dashboard composed from the existing kit, also read [Dashboard Composition](references/dashboard-composition.md) for the sample's scope, reuse, and observed limits.
+- For a multi-view React + TypeScript application spanning collection tables, market history charts, recursive crafting trees, faceted drop-table exploration with odds math, drag-and-drop loadout/modding calculation, and screenshot OCR import/review, also read [Warframe Toolkit Application Reference](references/warframe-toolkit.md).
 
 Treat each linked reference as the canonical instruction source for its area. Where a dedicated component reference explicitly specifies a different treatment, use that treatment; otherwise inherit the shared rules. Do not duplicate detailed rules in this router.
 
@@ -28,6 +29,7 @@ Treat each linked reference as the canonical instruction source for its area. Wh
 
 - For the complete interactive catalog, open [Component Reference](assets/component-reference/index.html).
 - For those components composed into a working page, open [Dashboard Reference](assets/dashboard-reference/index.html).
+- For a full multi-view React + TypeScript application with both prebuilt browser output and complete `src/` source, open [Warframe Toolkit Reference](assets/warframe-toolkit/index.html) (and inspect [`assets/warframe-toolkit/src/`](assets/warframe-toolkit/src/)).
 
 In that catalog, edit a component's markup, styles, and behavior in its matching `components/<name>.html`, `.css`, and `.js` files. Use matching filename prefixes for related examples and dialogs, such as `forms-selection.html` and `tables-details.html`, or when a larger component needs separate data, rendering, and interaction modules. Shared icons, page chrome, tokens, base styles, and page utilities live in `shared/`; shared table sorting lives in `components/table-sorting.js` and sample service metadata in `components/services-data.js`.
 
