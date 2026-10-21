@@ -357,6 +357,12 @@ class SharedStoreBackendTests(unittest.TestCase):
             backend.store_dir, Path.home() / ".local/share/clusterfork-auth/grok"
         )
 
+    def test_kickoff_codex_ping_uses_luna_model(self):
+        cmd = rotate_auth.KICKOFF_PINGS["rotate-codex"]
+        self.assertIn("-m", cmd)
+        self.assertEqual(cmd[cmd.index("-m") + 1], "gpt-6-luna")
+
+
 
 if __name__ == "__main__":
     unittest.main()

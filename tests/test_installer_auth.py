@@ -25,7 +25,12 @@ class InstallerSharedAuthTests(unittest.TestCase):
                 REPO_ROOT,
                 repo,
                 ignore=shutil.ignore_patterns(
-                    ".git", ".pytest_cache", ".codeview", ".env", "__pycache__"
+                    ".git",
+                    ".pytest_cache",
+                    ".codeview",
+                    ".env",
+                    "__pycache__",
+                    ".notify-relay.sock",
                 ),
             )
             (repo / ".env").write_text(
@@ -67,7 +72,12 @@ class InstallerSharedAuthTests(unittest.TestCase):
                 REPO_ROOT,
                 repo,
                 ignore=shutil.ignore_patterns(
-                    ".git", ".pytest_cache", ".codeview", ".env", "__pycache__"
+                    ".git",
+                    ".pytest_cache",
+                    ".codeview",
+                    ".env",
+                    "__pycache__",
+                    ".notify-relay.sock",
                 ),
             )
             (repo / ".env").write_text(
@@ -118,7 +128,12 @@ class InstallerSharedAuthTests(unittest.TestCase):
                 REPO_ROOT,
                 repo,
                 ignore=shutil.ignore_patterns(
-                    ".git", ".pytest_cache", ".codeview", ".env", "__pycache__"
+                    ".git",
+                    ".pytest_cache",
+                    ".codeview",
+                    ".env",
+                    "__pycache__",
+                    ".notify-relay.sock",
                 ),
             )
             (repo / ".env").write_text(

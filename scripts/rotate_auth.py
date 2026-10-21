@@ -29,7 +29,14 @@ KICKOFF_PINGS = {
     # One-shot mode per agent: send one tiny message so the provider starts
     # its usage ticker for that account. Keyed by backend `command`.
     "rotate-claude": ["claude", "-p", KICKOFF_MESSAGE],
-    "rotate-codex": ["codex", "exec", "--skip-git-repo-check", KICKOFF_MESSAGE],
+    "rotate-codex": [
+        "codex",
+        "exec",
+        "--skip-git-repo-check",
+        "-m",
+        "gpt-6-luna",
+        KICKOFF_MESSAGE,
+    ],
     "rotate-cursor-cli": ["cursor-agent", "-p", KICKOFF_MESSAGE],
     "rotate-grok": ["grok", "-p", KICKOFF_MESSAGE],
     "rotate-opencode": ["opencode", "run", KICKOFF_MESSAGE],

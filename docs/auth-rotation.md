@@ -40,7 +40,7 @@ sourced from the repo or from `~/.config/clusterfork/shell/` after install
 Pings every saved profile by default, or only the named ones (`--kickoff alice bob`),
 once per profile with a one-shot non-interactive message (`hi`)
 so the provider starts counting usage for each account. Per-agent ping
-commands: `claude -p`, `codex exec --skip-git-repo-check`, `cursor-agent -p`,
+commands: `claude -p`, `codex exec --skip-git-repo-check -m gpt-6-luna`, `cursor-agent -p`,
 `grok -p`, `opencode run`, `agy --print`. Each invocation gets a 120s timeout; stdin is
 detached so nothing blocks.
 
@@ -88,7 +88,8 @@ Serial costs wall time (sum of full pings instead of overlap) but every ping
 provably runs against its own account with no concurrent writers. Since the
 goal is a low-frequency ticker kick, that trade was taken deliberately.
 
-Known limitation: the ping always uses whatever model the agent CLI defaults
+Known limitation: except for Codex which explicitly pins `-m gpt-6-luna`
+(the Luna model), the ping uses whatever model the agent CLI defaults
 to — it does not pick the cheapest/smallest model for the provider. Picking
 per-provider smallest models would mean keeping a pinned model ID per provider
 (and OpenCode additionally needs a `provider/model` pair), which has not been
