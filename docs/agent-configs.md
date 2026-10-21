@@ -160,7 +160,7 @@ install time.
 - **Hooks:** root-only asynchronous `[[hooks.Stop]]` invokes the shared completion notifier; see [Notifications](notifications.md). The installer writes its matching `trusted_hash` so it does not wait on `/hooks`.
 - **context7:** remote `https://mcp.context7.com/mcp`
 - **ElevenLabs:** clusterfork `bin/elevenlabs-mcp` launcher
-- **linear:** remote `https://mcp.linear.app/mcp`, disabled
+- **linear:** remote `https://mcp.linear.app/mcp`, enabled
 - **chrome-devtools:** local `pnpm dlx chrome-devtools-mcp@latest`, disabled — uses Chromium on port 9222
 - **pixellab:** remote `https://api.pixellab.ai/mcp`, disabled
 
@@ -178,7 +178,7 @@ the server.
 
 ## Disabled-by-default MCP servers
 
-linear, chrome-devtools, and pixellab ship disabled in OpenCode (`"enabled": false`), Grok (`enabled = false`), Qwen (`mcp.excluded`), Codex (`enabled = false`), Command Code (`"enabled": false` on each `mcpServers` entry), Antigravity (`"disabled": true` in `mcp_config.json`), and Claude Code (`enabledPlugins` set to `false`, one plugin per server) — present but inactive; flip the flag (or remove the name from Qwen's exclude list, or run `agy mcp enable <name>` for Antigravity) in the live config to use one, and a reinstall resets it to disabled.
+linear, chrome-devtools, and pixellab ship disabled in OpenCode (`"enabled": false`), Grok (`enabled = false`), Qwen (`mcp.excluded`), Codex (`enabled = false`, except linear, which is enabled), Command Code (`"enabled": false` on each `mcpServers` entry), Antigravity (`"disabled": true` in `mcp_config.json`), and Claude Code (`enabledPlugins` set to `false`, one plugin per server) — present but inactive; flip the flag (or remove the name from Qwen's exclude list, or run `agy mcp enable <name>` for Antigravity) in the live config to use one, and a reinstall resets it to disabled.
 
 They are deliberately omitted from Cursor, which has no shippable off switch at all: `mcp.json` has no per-server disabled field, and on/off is IDE state toggled in Customize → MCPs, tracked per project (the CLI has `cursor-agent mcp enable/disable`, also local state).
 
@@ -232,8 +232,8 @@ Codex honors a per-server `enabled` flag at user scope in `~/.codex/config.toml`
 — a real global default-off:
 
 ```toml
-[mcp_servers.linear]
-url = "https://mcp.linear.app/mcp"
+[mcp_servers.pixellab]
+url = "https://api.pixellab.ai/mcp"
 enabled = false
 ```
 

@@ -23,7 +23,7 @@ enabled = true
 
 [mcp_servers.linear]
 url = "https://mcp.linear.app/mcp"
-enabled = false
+enabled = true
 
 [mcp_servers.chrome-devtools]
 command = "pnpm"
