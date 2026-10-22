@@ -68,6 +68,7 @@ class SourcingTests(unittest.TestCase):
         proc = run_bash("source bash_profile.sh; type chrome")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertNotIn("_cf_tmux", proc.stdout)
+        self.assertIn("prime-run google-chrome --ozone-platform=x11", proc.stdout)
 
     def test_rotate_helpers_exist(self):
         proc = run_bash(

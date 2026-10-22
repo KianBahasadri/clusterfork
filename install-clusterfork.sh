@@ -1199,7 +1199,7 @@ printf '    %-5s %-18s %s\n' oc "opencode" ""
 printf '    %-5s %-18s %s\n' occ "claude (Go)" "--dangerously-skip-permissions --effort \$OCC_EFFORT (max)"
 printf '    %-5s %-18s %s\n' ag "agy" "--dangerously-skip-permissions"
 printf '    %-5s %-18s %s\n' gk "grok" ""
-printf '    %-5s %-18s %s\n' chrome "chromium" "--remote-debugging-port=9222 (background)"
+printf '    %-5s %-18s %s\n' chrome "prime-run google-chrome" "--ozone-platform=x11 --remote-debugging-port=9222 (background)"
 printf '    %-5s %-18s %s\n' codeview "bin/codeview" "start|stop|restart|reload|status|open (no args = start)"
 printf '    %-5s %-18s %s\n' "rotate-*" "rotate_auth.py" "[name] --save name --unhook --list --kickoff [names]"
 

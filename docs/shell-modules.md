@@ -91,4 +91,4 @@ Headless and non-interactive invocations bypass the confirmation prompt so exter
 
 ## chrome.sh
 
-`chrome` launches Chromium with remote debugging on port 9222 for use with browser-automation MCP servers. Not wrapped in tmux (background `nohup ... &`).
+`chrome` launches `prime-run google-chrome --ozone-platform=x11` with remote debugging on port 9222 (`--user-data-dir="$HOME/.config/chromium"`) for discrete-GPU rendering and browser-automation MCP servers. Not wrapped in tmux (background `nohup ... &`).
