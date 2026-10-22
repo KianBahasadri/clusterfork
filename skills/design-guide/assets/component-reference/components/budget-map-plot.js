@@ -133,7 +133,6 @@
     if (baseUsage === 0) {
       line(ground, point(0, 0), point(1, 0), "budget-map-near-edge");
     }
-    if (baseUsage < 100) line(ground, point(0, baseUsage), point(1, 100), "budget-map-pace");
     line(ground, point(model.elapsed, baseUsage), point(model.elapsed, model.maximum), "budget-map-now");
 
     var hits = [], groups = [];

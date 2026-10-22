@@ -20,7 +20,6 @@ button.budget-map-surface { cursor: crosshair; touch-action: pan-y; }
 .budget-map-near-edge { stroke: var(--line-strong); stroke-width: 1.5; }
 .budget-map-overrun { fill: var(--danger-soft); opacity: 0.35; }
 .budget-map-limit { stroke: var(--danger); stroke-width: 1.5; opacity: 0.4; }
-.budget-map-pace { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 5; opacity: 0.5; }
 .budget-map-now { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 5 4; opacity: 0.25; }
 .budget-map-observed, .budget-map-forecast { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .budget-map-observed { stroke: var(--accent); }
