@@ -1,9 +1,0 @@
-.craft-plan-menu { position: fixed; z-index: 60; display: flex; flex-direction: column; gap: 2px; padding: 4px; overflow: auto; overscroll-behavior: contain; background: var(--surface-raised); border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: 0 16px 40px rgba(0, 0, 0, .42); }
-:root[data-theme=light] .craft-plan-menu { box-shadow: 0 16px 36px rgba(23, 32, 39, .12); }
-.craft-plan-menu [role=menuitem] { display: flex; align-items: center; flex-shrink: 0; gap: 12px; width: 100%; min-height: 44px; padding: 8px 12px; background: transparent; border: 0; border-radius: 4px; color: var(--ink); font-size: 13px; text-align: left; }
-.craft-plan-menu [role=menuitem] > span:last-child { min-width: 0; overflow-wrap: anywhere; }
-.craft-plan-menu [role=menuitem]:hover, .craft-plan-menu [role=menuitem][aria-current=page] { background: var(--surface); color: var(--ink-strong); }
-.craft-plan-menu [role=menuitem][aria-current=page] { font-weight: 600; }
-.craft-plan-menu .craft-art { display: grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0; background: transparent; color: var(--muted); }
-.craft-plan-menu .craft-art img { display: block; width: 100%; height: 100%; object-fit: contain; padding: 0; }
-.craft-plan-menu-message { margin: 0; padding: 12px; color: var(--muted); font-size: 12px; }
