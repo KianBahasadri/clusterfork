@@ -13,7 +13,7 @@ REPO = Path(__file__).resolve().parents[2]
 FUNC_RE = re.compile(
     r"^([A-Za-z_][A-Za-z0-9_-]*)\(\)\s*\{(.*)$", re.M)
 FLAG_RE = re.compile(r"--[A-Za-z0-9-]+(?:=[^\s\"']+)?")
-SKIP_FLAGS = {"--arg", "--slurpfile", "--argjson"}
+SKIP_FLAGS = {"--arg", "--slurpfile", "--argjson", "--agent"}
 ROTATE_FLAGS = "--list --save NAME --unhook --kickoff [names]"
 
 
@@ -125,6 +125,11 @@ def summarize_fn(body: str) -> str:
         r"_cf_launch_codex\s+(?:tmux|direct)(.*?)(?:\s+\"\$@\"|;|\n|$)", body)
     if m:
         return collapse("codex " + m.group(1))
+    m = re.search(r"_cl_cmd=\(([^)]+)\)", body)
+    if m:
+        return collapse(m.group(1))
+    if "OPENCODE_GO_BASE_URL" in body or "opencode.ai/zen/go" in body:
+        return "claude via OpenCode Go"
     hits = re.findall(r"_cf_tmux\s+(.+?)(?:\s+\"\$@\"|;|\n|$)", body)
     if hits:
         picked = next((h for h in hits if "--resume" in h or "--yolo" in h),
@@ -134,11 +139,6 @@ def summarize_fn(body: str) -> str:
     m = re.search(r"rotate_auth\.py\"?\s+(\S+)", body)
     if m:
         return f"rotate_auth.py {m.group(1).strip('\"')}"
-    m = re.search(r"_cl_cmd=\(([^)]+)\)", body)
-    if m:
-        return collapse(m.group(1))
-    if "OPENCODE_GO_BASE_URL" in body or "opencode.ai/zen/go" in body:
-        return "claude via OpenCode Go"
     m = re.search(r"nohup\s+(\S+)", body)
     if m:
         return collapse(m.group(0) + " …")

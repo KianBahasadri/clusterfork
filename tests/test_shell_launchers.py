@@ -5,6 +5,7 @@ session-name sanitization and arg/env forwarding. No real tmux
 server or flaky pty timing required.
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -202,6 +203,115 @@ class MockTmuxTests(unittest.TestCase):
         if self.log.exists():
             return self.log.read_text()
         return ""
+
+    def _save_account_fixtures(self):
+        for agent, directory in (
+            ("codex", ".codex"), ("cursor", ".config/cursor"),
+            ("grok", ".grok"), ("opencode", ".local/share/opencode"),
+        ):
+            store = self.tmp_path / ".local/share/clusterfork-auth" / agent
+            store.mkdir(parents=True)
+            for name in ("kian", "ida"):
+                (store / f"auth.json.{name}").write_text(
+                    json.dumps({"opencode-go": {"key": f"test-key-{name}"}})
+                )
+            (store / "current").symlink_to("auth.json.kian")
+            active = self.tmp_path / directory / "auth.json"
+            active.parent.mkdir(parents=True, exist_ok=True)
+            active.symlink_to(store / "current")
+        claude = self.tmp_path / ".claude"
+        claude.mkdir()
+        for suffix, token in (("", "active"), (".ida", "other"), (".kian", "active")):
+            (claude / f".credentials.json{suffix}").write_text(
+                json.dumps({"claudeAiOauth": {"accessToken": token}})
+            )
+        state = self.tmp_path / ".gemini/antigravity-cli/rotate-auth"
+        state.mkdir(parents=True)
+        (state / "current").write_text("kian\n")
+        commandcode = self.tmp_path / ".commandcode"
+        commandcode.mkdir()
+        (commandcode / "auth.json").write_text('{"userName": "kian"}')
+
+    def test_all_launchers_capture_account_in_window_name(self):
+        self._save_account_fixtures()
+        cases = (
+            ("cc", "codex"), ("cl", "claude"), ("ca", "cursor"),
+            ("oc", "opencode"), ("ag", "antigravity"), ("gk", "grok"),
+            ("cmd", "cmd"), ("occ", "occ"),
+        )
+        for launcher, label in cases:
+            with self.subTest(launcher=launcher):
+                self.log.unlink(missing_ok=True)
+                proc = self._script_run(
+                    f"'source bash_profile.sh; unset OPENCODE_API_KEY; PWD=/tmp/proj {launcher} --help'"
+                )
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                log = self._log()
+                self.assertIn(f"-n {label} - kian -c /tmp/proj", log)
+                self.assertIn("automatic-rename off", log)
+                self.assertIn("allow-rename off", log)
+                self.assertNotIn("#(", log)
+                self.assertNotIn("MOCK_TMUX_ERROR", log)
+
+    def test_account_rotation_is_captured_only_by_the_next_launch(self):
+        self._save_account_fixtures()
+        proc = self._script_run(
+            "'source bash_profile.sh; PWD=/tmp/proj cc --help; "
+            "rotate-codex ida; PWD=/tmp/proj cc --help'"
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        launches = [line for line in self._log().splitlines() if "new-session" in line]
+        self.assertEqual(len(launches), 2)
+        self.assertIn("-n codex - kian", launches[0])
+        self.assertIn("-n codex - ida", launches[1])
+
+    def test_detached_login_does_not_use_previous_store_label(self):
+        self._save_account_fixtures()
+        active = self.tmp_path / ".codex/auth.json"
+        active.unlink()
+        active.write_text('{"tokens": {}}')
+        proc = self._script_run("'source bash_profile.sh; cc --help'")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("-n codex - unknown", self._log())
+
+    def test_occ_label_matches_overriding_api_key(self):
+        self._save_account_fixtures()
+        proc = self._script_run(
+            "'source bash_profile.sh; OPENCODE_API_KEY=test-key-ida occ --help'"
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("-n occ - ida", self._log())
+
+    def test_single_account_logins_use_stored_identity(self):
+        self._save_account_fixtures()
+        (self.tmp_path / ".claude/.credentials.json").write_text("{}")
+        (self.tmp_path / ".claude.json").write_text(
+            '{"oauthAccount": {"emailAddress": "claude@example.com"}}'
+        )
+        active = self.tmp_path / ".grok/auth.json"
+        active.unlink()
+        active.write_text(json.dumps({
+            "issuer::client": {"email": "grok@example.com", "key": "secret-not-a-label"}
+        }))
+        for launcher, label in (("cl", "claude - claude@example.com"),
+                                ("gk", "grok - grok@example.com")):
+            with self.subTest(launcher=launcher):
+                self.log.unlink(missing_ok=True)
+                proc = self._script_run(f"'source bash_profile.sh; {launcher} --help'")
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                self.assertIn(f"-n {label}", self._log())
+                self.assertNotIn("secret-not-a-label", self._log())
+
+    def test_missing_or_malformed_credentials_do_not_prevent_launch(self):
+        self._save_account_fixtures()
+        (self.tmp_path / ".claude/.credentials.json").write_text("not json")
+        (self.tmp_path / ".commandcode/auth.json").unlink()
+        for launcher, label in (("cl", "claude"), ("cmd", "cmd")):
+            with self.subTest(launcher=launcher):
+                self.log.unlink(missing_ok=True)
+                proc = self._script_run(f"'source bash_profile.sh; {launcher} --help'")
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                self.assertIn(f"-n {label} - unknown", self._log())
 
     def test_session_name_sanitization(self):
         cases = {

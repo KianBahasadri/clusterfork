@@ -16,27 +16,10 @@ cl() {
     fi
     _cl_cmd+=("$@")
 
-    if [[ -n "${CF_NO_TMUX:-}" ]] || [[ -n "${TMUX:-}" ]] || ! [[ -t 0 ]] || ! command -v tmux >/dev/null 2>&1; then
-      for kv in "${_cl_env[@]}"; do export "$kv"; done
-      exec "${_cl_cmd[@]}"
-    fi
-
-    local base name orig i
-    base="$(basename "$PWD")"
-    [[ "$base" == "/" || -z "$base" ]] && base="root"
-    name="${base//./-}"
-    name="${name//:/-}"
-    [[ "$name" == -* ]] && name="_$name"
-    [[ -z "$name" ]] && name="default"
-    orig="$name"
-    i=1
-    while tmux has-session -t "$name" 2>/dev/null; do
-      name="${orig}-${i}"
-      ((i++))
-    done
+    local kv
     local -a _cl_tmux_env=()
     for kv in "${_cl_env[@]}"; do _cl_tmux_env+=(-e "$kv"); done
-    exec tmux new-session -s "$name" -c "$PWD" "${_cl_tmux_env[@]}" -- "${_cl_cmd[@]}"
+    _cf_tmux "${_cl_tmux_env[@]}" -- "${_cl_cmd[@]}"
   )
 }
 

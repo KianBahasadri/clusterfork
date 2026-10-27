@@ -6,6 +6,28 @@
 
 `_cf_tmux` is the shared tmux wrapper used by every launcher. It runs `tmux new-session -s <basename> -c "$PWD"` so each invocation creates a fresh session named after `basename "$PWD"` (sanitized: `.` and `:` → `-`, `-` prefix guarded, `default` fallback); if that name is already taken it suffixes `-1`, `-2`, … via `has-session` so a second agent in the same directory never attaches to the first. It bypasses tmux when `CF_NO_TMUX=1`, when already inside tmux (`$TMUX`), when stdin is not a tty, or when `tmux` is not installed — falling back to running the command directly.
 
+Each new agent window is named `<agent> - <account>`, such as `codex - kian`.
+The account is read once before launch by `bin/clusterfork-tmux-label`, which
+reuses auth rotation's account detection: Claude matches its saved credentials,
+Codex/Cursor/Grok/OpenCode follow their active auth symlinks, and Antigravity
+reads its saved current-account marker. Command Code uses its stored `userName`.
+Claude and Grok fall back to their stored account email for single-account
+logins without a saved profile name.
+`occ` is labelled `occ` and uses its OpenCode account (matching a supplied
+`OPENCODE_API_KEY` to saved profiles when set). An unidentified account appears
+as `unknown`, including a detached shared-store login. `CODEX_HOME`,
+`CLAUDE_CONFIG_DIR`, `OCC_OPENCODE_AUTH_FILE`, and the rotation directory
+overrides are respected.
+
+The tmux bar displays that fixed window name; automatic renaming and terminal
+rename requests are disabled for the window. Rotating accounts leaves existing
+labels unchanged; only new launches capture the newly selected account. Session
+names still identify the project directory. Labels apply to newly created tmux
+sessions, not launches that bypass tmux or existing windows.
+
+The wrapper accepts internal `-e NAME=value` options so `cl` and `occ` can pass
+their launch environment both through tmux and to direct fallback launches.
+
 ## claude.sh
 
 `cl` launches `claude --dangerously-skip-permissions --effort max` via `_cf_tmux`, resuming the last conversation (`--continue`) unless arguments are given, in which case it forwards them unchanged. It sets `ANTHROPIC_CUSTOM_MODEL_OPTION=claude-opus-4-8` (label `Opus 4.8`) so `/model` keeps a 4.8 row after the `opus` alias moved to Opus 5. The env vars are scoped to that launch. `rotate-claude` switches between multiple saved Claude account credentials.

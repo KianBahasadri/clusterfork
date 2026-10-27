@@ -50,6 +50,7 @@ class CustomModulesTests(unittest.TestCase):
         by_name = {r["name"]: r["runs"] for r in data["launchers"]}
         self.assertIn("rotate_auth.py", by_name["rotate-claude"])
         self.assertIn("OpenCode Go", by_name["occ"])
+        self.assertTrue(by_name["cl"].startswith("claude "))
         self.assertIn("codex resume", by_name["cc"])
         self.assertEqual("codex", by_name["codex"])
         flags = {r["name"]: r["flags"] for r in data["launchers"]}
@@ -58,6 +59,7 @@ class CustomModulesTests(unittest.TestCase):
         self.assertIn("--yolo", flags["cc"])
         self.assertIn("--list", flags["rotate-claude"])
         self.assertIn("--effort", flags["occ"])
+        self.assertNotIn("--agent", flags["occ"])
         bins = {r["name"] for r in data["bins"]}
         self.assertIn("codeview", bins)
         self.assertIn("notify", bins)
