@@ -1,17 +1,19 @@
-"""Characterization tests for scripts/rotate_auth.py.
+"""Tests for scripts/rotate_auth.py.
 
-Only the pure logic and env-overridable CLI paths are tested. The Antigravity
-backend needs `secret-tool` and a real keyring; that is deliberately not
-covered here.
+Filesystem paths use temporary directories. Antigravity deletion uses a fake
+secret-tool service so tests never touch the real keyring.
 """
 
 import importlib.util
+import io
+import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -46,6 +48,17 @@ class ParseActionTests(unittest.TestCase):
             rotate_auth.parse_action("cmd", ["--save"])
         with self.assertRaises(rotate_auth.RotateError):
             rotate_auth.parse_action("cmd", ["--save", "a", "b"])
+
+    def test_delete_requires_exactly_one_valid_name(self):
+        self.assertEqual(
+            rotate_auth.parse_action("cmd", ["--delete", "work"]), ("delete", "work")
+        )
+        for args in (
+            ["--delete"], ["--delete", "a", "b"], ["--delete", ""],
+            ["--delete", "../work"], ["--delete", "has space"],
+        ):
+            with self.subTest(args=args), self.assertRaises(rotate_auth.RotateError):
+                rotate_auth.parse_action("cmd", args)
 
     def test_flags_reject_extra_args(self):
         for flag in ("-h", "--help", "--list", "--unhook"):
@@ -157,6 +170,223 @@ class RealpathMsTests(unittest.TestCase):
                 rotate_auth.realpath_ms(link / "file.txt"),
                 Path(tmp) / "link" / "file.txt",
             )
+
+
+class DeleteProfileTests(unittest.TestCase):
+    AGENTS = ("claude", "codex", "cursor", "grok", "opencode", "antigravity")
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        env = {
+            "ROTATE_CLAUDE_DIR": str(self.root / "claude"),
+            "ROTATE_ANTIGRAVITY_STATE_DIR": str(self.root / "antigravity"),
+        }
+        for agent, agent_env, store_env in (
+            ("codex", "ROTATE_CODEX_CODEX_DIR", "ROTATE_CODEX_AUTH_STORE_DIR"),
+            ("cursor", "ROTATE_CURSOR_DIR", "ROTATE_CURSOR_AUTH_STORE_DIR"),
+            ("grok", "ROTATE_GROK_DIR", "ROTATE_GROK_AUTH_STORE_DIR"),
+            ("opencode", "ROTATE_OPENCODE_DIR", "ROTATE_OPENCODE_AUTH_STORE_DIR"),
+        ):
+            env[agent_env] = str(self.root / agent / "agent")
+            env[store_env] = str(self.root / agent / "store")
+        env_patch = patch.dict(os.environ, env)
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        output_patch = patch("sys.stdout", new=io.StringIO())
+        self.output = output_patch.start()
+        self.addCleanup(output_patch.stop)
+        self.keyring = {}
+        for fake in (
+            patch.object(rotate_auth.AntigravityBackend, "_require_secret_tool"),
+            patch.object(rotate_auth.subprocess, "run", side_effect=self._secret_tool),
+        ):
+            fake.start()
+            self.addCleanup(fake.stop)
+
+        self.backends = {}
+        for agent in self.AGENTS:
+            backend = rotate_auth.make_backend(agent)
+            self.backends[agent] = backend
+            if agent == "antigravity":
+                backend.state_dir.mkdir()
+                backend.profiles_file.write_text("alpha\nbeta\n", encoding="utf-8")
+                backend.current_file.write_text("alpha\n", encoding="utf-8")
+                for name in ("alpha", "beta"):
+                    self.keyring[(backend.profile_service, name)] = name.encode()
+                self.keyring[(backend.active_service, backend.active_user)] = b"alpha"
+            else:
+                for name in ("alpha", "beta"):
+                    profile = self._profile_path(backend, name)
+                    profile.parent.mkdir(parents=True, exist_ok=True)
+                    profile.write_text(
+                        json.dumps({"claudeAiOauth": {"accessToken": name}}),
+                        encoding="utf-8",
+                    )
+                backend.select("alpha")
+
+    def _profile_path(self, backend, name):
+        if isinstance(backend, rotate_auth.ClaudeBackend):
+            return backend.claude_dir / f".credentials.json.{name}"
+        return backend.store_dir / f"auth.json.{name}"
+
+    def _secret_tool(self, args, **kwargs):
+        self.assertEqual(args[0], "secret-tool")
+        key = (args[args.index("service") + 1], args[args.index("username") + 1])
+        if args[1] == "lookup":
+            secret = self.keyring.get(key)
+            return subprocess.CompletedProcess(
+                args, 0 if secret is not None else 1, stdout=secret or b"", stderr=b""
+            )
+        if args[1] == "clear":
+            secret = self.keyring.pop(key, None)
+            return subprocess.CompletedProcess(
+                args, 0 if secret is not None else 1, stdout=b"", stderr=b""
+            )
+        self.assertEqual(args[1], "store")
+        self.keyring[key] = kwargs["input"]
+        return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
+
+    def _snapshot(self):
+        files = {}
+        for path in self.root.rglob("*"):
+            if path.is_symlink():
+                files[str(path)] = ("link", os.readlink(path))
+            elif path.is_file():
+                files[str(path)] = ("file", path.read_bytes())
+        return files, dict(self.keyring)
+
+    def test_delete_inactive_profile_preserves_active_credentials(self):
+        for agent, backend in self.backends.items():
+            with self.subTest(agent=agent):
+                before_files, before_keys = self._snapshot()
+                self.assertEqual(rotate_auth.run([agent, "--delete", "beta"]), 0)
+                self.assertEqual(backend.suffixes(), ["alpha"])
+                self.assertEqual(backend.current_suffix(), "alpha")
+                if agent == "antigravity":
+                    before_keys.pop((backend.profile_service, "beta"))
+                    before_files[str(backend.profiles_file)] = ("file", b"alpha\n")
+                else:
+                    before_files.pop(str(self._profile_path(backend, "beta")))
+                self.assertEqual(self._snapshot(), (before_files, before_keys))
+                self.assertIn(f"{backend.command}: deleted profile beta", self.output.getvalue())
+
+    def test_delete_active_profile_refuses_without_changing_state(self):
+        before = self._snapshot()
+        for agent in self.AGENTS:
+            with self.subTest(agent=agent), self.assertRaises(rotate_auth.RotateError) as error:
+                rotate_auth.run([agent, "--delete", "alpha"])
+            self.assertIn("cannot delete active profile", str(error.exception))
+            self.assertIn("--unhook", str(error.exception))
+            self.assertEqual(self._snapshot(), before)
+
+    def test_unhook_then_delete_last_profile_clears_selection(self):
+        for agent, backend in self.backends.items():
+            with self.subTest(agent=agent):
+                rotate_auth.run([agent, "--delete", "beta"])
+                self.assertEqual(rotate_auth.run([agent, "--unhook"]), 0)
+                self.assertEqual(rotate_auth.run([agent, "--delete", "alpha"]), 0)
+                self.assertEqual(backend.suffixes(), [])
+                self.assertIsNone(backend.current_suffix())
+                if agent == "antigravity":
+                    self.assertFalse(backend.current_file.exists())
+                    self.assertEqual(self.keyring, {})
+                elif agent == "claude":
+                    self.assertFalse(backend.active.exists())
+                else:
+                    self.assertFalse(backend.auth.is_symlink())
+                    self.assertFalse(backend.current.is_symlink())
+
+    def test_unknown_or_invalid_name_never_changes_state(self):
+        before = self._snapshot()
+        for agent in self.AGENTS:
+            for name in ("missing", "", "../alpha", "has space"):
+                with self.subTest(agent=agent, name=name):
+                    with self.assertRaises(rotate_auth.RotateError):
+                        rotate_auth.run([agent, "--delete", name])
+                    self.assertEqual(self._snapshot(), before)
+
+    def test_shared_store_preserves_new_regular_file_login(self):
+        for agent in ("codex", "cursor", "grok", "opencode"):
+            with self.subTest(agent=agent):
+                backend = self.backends[agent]
+                backend.unhook()
+                backend.auth.write_bytes(b"new unsaved login")
+                self.assertEqual(rotate_auth.run([agent, "--delete", "alpha"]), 0)
+                self.assertEqual(backend.auth.read_bytes(), b"new unsaved login")
+                self.assertFalse(backend.auth.is_symlink())
+                self.assertFalse(backend.current.is_symlink())
+                self.assertEqual(backend.suffixes(), ["beta"])
+
+    def test_shared_store_protects_direct_auth_link(self):
+        backend = self.backends["codex"]
+        backend.auth.unlink()
+        backend.auth.symlink_to(self._profile_path(backend, "beta"))
+        before = self._snapshot()
+        with self.assertRaises(rotate_auth.RotateError):
+            backend.delete("beta")
+        self.assertEqual(self._snapshot(), before)
+
+    def test_claude_protects_duplicate_token_profiles(self):
+        backend = self.backends["claude"]
+        self._profile_path(backend, "beta").write_bytes(backend.active.read_bytes())
+        before = self._snapshot()
+        with self.assertRaises(rotate_auth.RotateError):
+            backend.delete("beta")
+        self.assertEqual(self._snapshot(), before)
+
+    def test_file_profile_symlink_is_removed_without_deleting_target(self):
+        for agent in ("claude", "codex", "cursor", "grok", "opencode"):
+            with self.subTest(agent=agent):
+                backend = self.backends[agent]
+                profile = self._profile_path(backend, "beta")
+                target = profile.with_name("external-credentials")
+                profile.rename(target)
+                profile.symlink_to(target)
+                original = target.read_bytes()
+                self.assertEqual(backend.delete("beta"), 0)
+                self.assertFalse(profile.is_symlink())
+                self.assertEqual(target.read_bytes(), original)
+
+    def test_antigravity_keyring_failure_preserves_profile_metadata(self):
+        backend = self.backends["antigravity"]
+        before = self._snapshot()
+        failed = subprocess.CompletedProcess([], 1, stdout=b"", stderr=b"keyring locked")
+        with patch.object(rotate_auth.subprocess, "run", return_value=failed):
+            with self.assertRaisesRegex(rotate_auth.RotateError, "keyring locked"):
+                backend.delete("beta")
+        self.assertEqual(self._snapshot(), before)
+
+    def test_antigravity_missing_keyring_entry_preserves_profile_metadata(self):
+        backend = self.backends["antigravity"]
+        del self.keyring[(backend.profile_service, "beta")]
+        before = self._snapshot()
+        with self.assertRaisesRegex(rotate_auth.RotateError, "secret-tool clear failed"):
+            backend.delete("beta")
+        self.assertEqual(self._snapshot(), before)
+
+    def test_file_profile_directory_is_never_deleted(self):
+        for agent in ("claude", "codex", "cursor", "grok", "opencode"):
+            with self.subTest(agent=agent):
+                backend = self.backends[agent]
+                profile = self._profile_path(backend, "beta")
+                profile.unlink()
+                profile.mkdir()
+                (profile / "keep").write_bytes(b"unrelated file")
+                before = self._snapshot()
+                with self.assertRaises(OSError):
+                    backend.delete("beta")
+                self.assertTrue(profile.is_dir())
+                self.assertEqual(self._snapshot(), before)
+
+    def test_help_advertises_delete_for_every_agent(self):
+        for agent in self.AGENTS:
+            with self.subTest(agent=agent):
+                self.output.seek(0)
+                self.output.truncate()
+                self.assertEqual(rotate_auth.run([agent, "--help"]), 0)
+                self.assertIn("--delete name", self.output.getvalue())
 
 
 class SharedStoreBackendTests(unittest.TestCase):

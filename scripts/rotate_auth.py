@@ -205,6 +205,13 @@ def validate_suffix(command: str, suffix: str) -> None:
         )
 
 
+def refuse_active_delete(command: str, name: str) -> None:
+    fail(
+        f"{command}: cannot delete active profile: {name}",
+        f"  Switch to another profile or detach first: {command} --unhook",
+    )
+
+
 def print_profile_list(command: str, suffixes: list[str], current: str | None) -> int:
     if not suffixes:
         print(f"{command}: no saved profiles")
@@ -221,6 +228,7 @@ def usage(command: str) -> list[str]:
         f"{command}: usage:",
         f"  {command} [name]",
         f"  {command} --save name",
+        f"  {command} --delete name",
         f"  {command} --unhook",
         f"  {command} --list",
         f"  {command} --kickoff [names]",
@@ -257,6 +265,11 @@ def parse_action(command: str, args: list[str]) -> tuple[str, str | list[str] | 
         if len(args) != 2:
             fail(*usage(command))
         return "save", args[1]
+    if first == "--delete":
+        if len(args) != 2:
+            fail(*usage(command))
+        validate_suffix(command, args[1])
+        return "delete", args[1]
     if first.startswith("--"):
         fail(*usage(command))
     if len(args) != 1:
@@ -305,6 +318,8 @@ class ClaudeBackend:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError):
             return None
+        if not isinstance(data, dict):
+            return None
         oauth = data.get("claudeAiOauth")
         if not isinstance(oauth, dict):
             return None
@@ -341,6 +356,20 @@ class ClaudeBackend:
         atomic_copy(self.active, dest)
         print(f"{self.command}: saved active credentials as {name}")
         print(f"  Claude: {dest} is now a copy of {self.active}")
+        return 0
+
+    def delete(self, name: str) -> int:
+        validate_suffix(self.command, name)
+        self._choose(self.suffixes(), name)
+        profile = self.claude_dir / f"{CLAUDE_PREFIX}{name}"
+        token = self._read_token(profile)
+        linked = self.active.is_symlink() and (
+            realpath_ms(resolve_link(self.active)) == realpath_ms(profile)
+        )
+        if linked or (token is not None and self._read_token(self.active) == token):
+            refuse_active_delete(self.command, name)
+        profile.unlink()
+        print(f"{self.command}: deleted profile {name}")
         return 0
 
     def unhook(self) -> int:
@@ -471,6 +500,24 @@ class SharedStoreBackend:
             f"  {self.label}: {self.auth} -> {readlink_text(self.auth)} -> "
             f"{readlink_text(self.current)}"
         )
+        return 0
+
+    def delete(self, name: str) -> int:
+        validate_suffix(self.command, name)
+        self._choose(self.suffixes(), name)
+        profile = self.store_dir / f"{PROFILE_PREFIX}{name}"
+        selected = self.current.is_symlink() and (
+            realpath_ms(resolve_link(self.current)) == realpath_ms(profile)
+        )
+        directly_linked = self.auth.is_symlink() and (
+            realpath_ms(resolve_link(self.auth)) == realpath_ms(profile)
+        )
+        if directly_linked or (selected and self._auth_links_to_current()):
+            refuse_active_delete(self.command, name)
+        profile.unlink()
+        if selected:
+            self.current.unlink()
+        print(f"{self.command}: deleted profile {name}")
         return 0
 
     def save(self, name: str) -> int:
@@ -750,6 +797,31 @@ class AntigravityBackend:
         print(f"  Profile: service={self.profile_service} username={name}")
         return 0
 
+    def delete(self, name: str) -> int:
+        validate_suffix(self.command, name)
+        self._require_secret_tool()
+        names = self.suffixes()
+        if name not in names:
+            lines = [f"{self.command}: no matching profile: {name}"]
+            extra = format_suffixes("profiles", names)
+            if extra:
+                lines.append(extra)
+            fail(*lines)
+        selected = self.current_suffix() == name
+        if selected and self._lookup(self.active_service, self.active_user) is not None:
+            refuse_active_delete(self.command, name)
+        # Lookup unlocks a saved item if needed. Always check clear's result:
+        # lookup also returns None when the keyring is unavailable.
+        self._lookup(self.profile_service, name)
+        self._clear(self.profile_service, name)
+        atomic_write_text(
+            self.profiles_file, "".join(f"{item}\n" for item in names if item != name)
+        )
+        if selected:
+            self.current_file.unlink()
+        print(f"{self.command}: deleted profile {name}")
+        return 0
+
     def unhook(self) -> int:
         self._require_secret_tool()
         secret = self._lookup(self.active_service, self.active_user)
@@ -918,7 +990,7 @@ def run(argv: list[str]) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         print(
             "usage: rotate_auth.py <claude|codex|cursor|grok|opencode|antigravity> "
-            "[name | --save name | --unhook | --list | --kickoff [names]]",
+            "[name | --save name | --delete name | --unhook | --list | --kickoff [names]]",
             file=sys.stderr,
         )
         return 0 if argv else 1
@@ -938,6 +1010,9 @@ def run(argv: list[str]) -> int:
     if action == "save":
         assert name is not None and isinstance(name, str)
         return backend.save(name)
+    if action == "delete":
+        assert name is not None and isinstance(name, str)
+        return backend.delete(name)
     assert name is None or isinstance(name, str)
     return backend.select(name)
 

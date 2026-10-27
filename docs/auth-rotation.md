@@ -7,6 +7,8 @@ three backends: copy (Claude), shared-store symlink (Codex / Cursor / Grok /
 OpenCode), and GNOME Keyring (Antigravity). All six share the same flags:
 
 - `rotate-* --save NAME` — save the active account as a named profile
+- `rotate-* --delete NAME` — delete a saved profile; detach or switch away from
+  the active profile first
 - `rotate-* --unhook` — detach the active credentials so a new login does not
   overwrite the current profile
 - `rotate-* --list` — list saved profiles (`*` marks the current one)
@@ -20,6 +22,15 @@ OpenCode), and GNOME Keyring (Antigravity). All six share the same flags:
 
 `--save` overwrites an existing profile of that name. Profile names may only
 contain letters, numbers, dots, underscores, and dashes.
+
+To remove an account, run (for example) `rotate-codex --delete NAME`. Deleting
+an active profile is refused without changing credentials; switch to another
+profile or run `rotate-codex --unhook` first. This also permits deleting the
+last saved profile. An unknown or invalid name fails without changing state.
+Deletion removes the saved credential file (or Antigravity keyring entry and
+profile-list entry). It also removes the shared `current` link or Antigravity
+current marker when it names the deleted, detached profile. Other saved
+profiles and an unrelated active login are preserved.
 
 To add an account: `rotate-* --unhook`, log in as the new account, then
 `rotate-* --save NAME`. `--unhook` refuses if the active credentials are not
