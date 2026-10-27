@@ -212,6 +212,18 @@ def refuse_active_delete(command: str, name: str) -> None:
     )
 
 
+def confirm_delete(command: str, name: str) -> bool:
+    try:
+        answer = input(f"{command}: delete saved profile {name!r}? [y/N] ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        answer = ""
+    if answer.strip().lower() in ("y", "yes"):
+        return True
+    print(f"{command}: deletion cancelled")
+    return False
+
+
 def print_profile_list(command: str, suffixes: list[str], current: str | None) -> int:
     if not suffixes:
         print(f"{command}: no saved profiles")
@@ -368,6 +380,8 @@ class ClaudeBackend:
         )
         if linked or (token is not None and self._read_token(self.active) == token):
             refuse_active_delete(self.command, name)
+        if not confirm_delete(self.command, name):
+            return 1
         profile.unlink()
         print(f"{self.command}: deleted profile {name}")
         return 0
@@ -514,6 +528,8 @@ class SharedStoreBackend:
         )
         if directly_linked or (selected and self._auth_links_to_current()):
             refuse_active_delete(self.command, name)
+        if not confirm_delete(self.command, name):
+            return 1
         profile.unlink()
         if selected:
             self.current.unlink()
@@ -810,6 +826,8 @@ class AntigravityBackend:
         selected = self.current_suffix() == name
         if selected and self._lookup(self.active_service, self.active_user) is not None:
             refuse_active_delete(self.command, name)
+        if not confirm_delete(self.command, name):
+            return 1
         # Lookup unlocks a saved item if needed. Always check clear's result:
         # lookup also returns None when the keyring is unavailable.
         self._lookup(self.profile_service, name)

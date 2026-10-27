@@ -23,9 +23,12 @@ OpenCode), and GNOME Keyring (Antigravity). All six share the same flags:
 `--save` overwrites an existing profile of that name. Profile names may only
 contain letters, numbers, dots, underscores, and dashes.
 
-To remove an account, run (for example) `rotate-codex --delete NAME`. Deleting
-an active profile is refused without changing credentials; switch to another
-profile or run `rotate-codex --unhook` first. This also permits deleting the
+To remove an account, run (for example) `rotate-codex --delete NAME`. It asks
+`delete saved profile 'NAME'? [y/N]` before making changes; only `y` or `yes`
+(case-insensitive) confirms. Enter, any other answer, EOF, or Ctrl+C cancels
+without changing state and exits with status 1. Deleting an active profile is
+refused before prompting; switch to another profile or run
+`rotate-codex --unhook` first. This also permits deleting the
 last saved profile. An unknown or invalid name fails without changing state.
 Deletion removes the saved credential file (or Antigravity keyring entry and
 profile-list entry). It also removes the shared `current` link or Antigravity
