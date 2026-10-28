@@ -480,6 +480,27 @@ class SharedStoreBackend:
     def suffixes(self) -> list[str]:
         return suffixes_from(self.store_dir, PROFILE_PREFIX)
 
+    def remote_profiles(self) -> set[str]:
+        if self.command != "rotate-codex":
+            return set()
+        path = self.store_dir / "remote-profiles.json"
+        if not path.exists():
+            return set()
+        try:
+            value = json.loads(path.read_text())
+            if not isinstance(value, dict):
+                raise ValueError()
+            return set(value)
+        except (OSError, ValueError):
+            fail(f"{self.command}: cannot read remote account ownership; refusing local rotation")
+
+    def local_profiles(self, requested: str | None = None) -> list[str]:
+        remote = self.remote_profiles()
+        if requested in remote:
+            fail(f"{self.command}: profile is reserved for remote work",
+                 "  Reclaim it with automation/accounts.py reclaim --profile NAME first.")
+        return [name for name in self.suffixes() if name not in remote]
+
     def current_suffix(self) -> str | None:
         if not self.current.is_symlink():
             return None
@@ -491,7 +512,11 @@ class SharedStoreBackend:
 
     def list_profiles(self) -> int:
         current = self.current_suffix() if self.current.is_symlink() else None
-        return print_profile_list(self.command, self.suffixes(), current)
+        result = print_profile_list(self.command, self.suffixes(), current)
+        remote = self.remote_profiles()
+        if remote:
+            print(f"  {len(remote)} profiles reserved for remote work; skipped by local rotation")
+        return result
 
     def select(self, requested: str | None) -> int:
         if self.auth.exists() and not self.auth.is_symlink():
@@ -504,7 +529,7 @@ class SharedStoreBackend:
                 f"{self.command}: missing shared auth directory: {self.store_dir}",
                 "  Run install-clusterfork.sh to migrate existing profiles.",
             )
-        names = self.suffixes()
+        names = self.local_profiles(requested)
         next_suffix = self._choose(names, requested)
         atomic_symlink(f"{PROFILE_PREFIX}{next_suffix}", self.current)
         if not self._auth_links_to_current():
@@ -518,6 +543,7 @@ class SharedStoreBackend:
 
     def delete(self, name: str) -> int:
         validate_suffix(self.command, name)
+        self.local_profiles(name)
         self._choose(self.suffixes(), name)
         profile = self.store_dir / f"{PROFILE_PREFIX}{name}"
         selected = self.current.is_symlink() and (
@@ -538,6 +564,7 @@ class SharedStoreBackend:
 
     def save(self, name: str) -> int:
         validate_suffix(self.command, name)
+        self.local_profiles(name)
         if not self.auth.is_file():
             fail(f"{self.command}: missing active credentials: {self.auth}")
 
@@ -574,13 +601,15 @@ class SharedStoreBackend:
                 f"{self.command}: missing shared auth directory: {self.store_dir}",
                 "  Run install-clusterfork.sh to migrate existing profiles.",
             )
-        names = self.suffixes()
+        names = self.local_profiles()
         if not names:
             fail(
                 f"{self.command}: no saved profiles",
                 f"  Save the active account first: {self.command} --save NAME",
             )
         if selected is not None:
+            for name in selected:
+                self.local_profiles(name)
             missing = [n for n in selected if n not in set(names)]
             if missing:
                 extra = format_suffixes("suffixes", names)

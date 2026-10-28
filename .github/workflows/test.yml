@@ -41,6 +41,6 @@ jobs:
           sys.path.insert(0, "automation/azure")
           import function_app
           names = {function.get_function_name() for function in function_app.app.get_functions()}
-          assert names == {"health", "linear_webhook", "route_event", "reconcile"}, names
-          print("All dispatcher functions index on Python 3.12")
+          assert names == {"health", "linear_webhook", "route_event", "reconcile", "worker"}, names
+          print("All dispatcher and worker functions index on Python 3.12")
           PY

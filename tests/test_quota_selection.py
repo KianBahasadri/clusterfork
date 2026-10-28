@@ -25,13 +25,13 @@ class QuotaSelectionTests(unittest.TestCase):
     def choose(self, accounts):
         return select_account(accounts, self.profiles, self.policy, now=NOW)
 
-    def test_selects_least_used_account_across_both_agents(self):
+    def test_selects_least_used_codex_account_with_sol_max(self):
         result = self.choose([self.account("codex-a", used=(50,)),
                               self.account("codex-b", used=(30,)),
-                              self.account("agy-a", "antigravity", used=(15,))])
-        self.assertEqual(result.account_id, "agy-a")
-        self.assertEqual(result.model, "gemini-3.8-flash-high")
-        self.assertEqual(result.effort, "high")
+                              self.account("codex-c", used=(15,))])
+        self.assertEqual(result.account_id, "codex-c")
+        self.assertEqual(result.model, "gpt-6.1-sol")
+        self.assertEqual(result.effort, "max")
 
     def test_weekly_limit_constrains_account_with_healthy_short_window(self):
         result = self.choose([self.account("weekly-low", used=(2, 95)),
@@ -48,7 +48,7 @@ class QuotaSelectionTests(unittest.TestCase):
 
     def test_waits_when_every_account_is_near_exhaustion(self):
         self.assertIsNone(self.choose([self.account("low", used=(81,)),
-                                      self.account("empty", "antigravity", used=(100,))]))
+                                      self.account("empty", used=(100,))]))
 
     def test_missing_stale_or_reset_data_is_not_assumed_to_mean_zero_usage(self):
         base = self.account("test")
@@ -61,7 +61,8 @@ class QuotaSelectionTests(unittest.TestCase):
 
     def test_wrong_model_and_unknown_provider_never_trigger_a_substitute(self):
         base = self.account("test")
-        for row in [replace(base, model="gpt-6.1-sol"), replace(base, agent="command-code")]:
+        for row in [replace(base, model="gpt-6.1-terra"), replace(base, agent="command-code"),
+                    replace(base, agent="antigravity")]:
             with self.subTest(row=row):
                 self.assertIsNone(self.choose([row]))
 

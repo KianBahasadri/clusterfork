@@ -10,7 +10,7 @@
 - [Scripts](scripts.md) — standalone Python utilities
 - [Skills](skills.md) — shared skills and per-CLI discovery behavior
 - [Conventions](conventions.md) — style, safety, idempotency, and repo-as-source-of-truth
-- [Remote development](remote-development.md) — Linear → Azure → GitHub Actions routing pilot and credential setup
+- [Remote development](remote-development.md) — Linear → Azure → GitHub Actions Codex workers, account ownership, and setup
 - [OpenCode Go endpoint](opencode-go.md) — what the subscription's three wire formats serve, per-model, the Codex experiment that was not shipped, and the 2026-08-07 deepseek-v4-flash high-cap effort ladders (raw log: [opencode-go-effort-highcap-2026-08-07.log](opencode-go-effort-highcap-2026-08-07.log))
 - [Codex rewind bug (0.147.0)](codex-rewind-bug-0147.md) — why Esc-Esc branching fails, why it is not clusterfork, and what fixes it
 - [Codex bell vs usage-limit deaths](codex-usage-limit-bell.md) — why the turn-completion bell is silent when the usage limit kills a turn (verified in upstream source), coverage options evaluated, and why usage-limit coverage was not shipped

@@ -1,0 +1,50 @@
+name: Clusterfork Codex worker
+run-name: "Clusterfork worker · ${{ inputs.linear_identifier }} · ${{ inputs.dispatch_key }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      linear_issue_id:
+        description: Linear issue UUID
+        required: true
+        type: string
+      linear_identifier:
+        description: Linear issue identifier
+        required: true
+        type: string
+      linear_project_id:
+        description: Linear project UUID
+        required: true
+        type: string
+      dispatch_key:
+        description: Durable dispatcher receipt key
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: clusterfork-worker-${{ inputs.linear_issue_id }}
+  cancel-in-progress: false
+
+jobs:
+  develop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install pinned Codex CLI
+        run: npm install --global @openai/codex@0.165.0
+      - name: Implement issue and open a pull request
+        env:
+          CLUSTERFORK_BROKER_URL: https://clusterfork-dispatch-7604cac329.azurewebsites.net/api/worker
+          DISPATCH_KEY: ${{ inputs.dispatch_key }}
+        run: python3 automation/worker.py

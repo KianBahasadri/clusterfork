@@ -1,9 +1,10 @@
-# Remote development routing pilot
+# Remote development
 
-The implemented pilot routes eligible Linear issues through one shared Azure
-Function App to a GitHub Actions workflow in the mapped repository. The workflow
-validates and reports issue IDs. **It does not run Symphony or a coding agent,
-edit code, open PRs, or change Linear issues.** Those are later execution work.
+Eligible Linear issues route through one shared Azure Function App to a Codex
+worker on a standard GitHub-hosted runner. The worker selects a leased account
+using live quota, implements the issue, validates the repository, and opens a PR.
+It stops for human review. It does not merge, deploy, or update Linear statuses.
+This is Clusterfork's own execution adapter, not an installation of upstream Symphony.
 
 ## What exists
 
@@ -14,14 +15,21 @@ edit code, open PRs, or change Linear issues.** Those are later execution work.
 - `automation/azure/dispatch_clients.py`: Linear GraphQL, GitHub App authentication,
   and Azure Table receipts.
 - `automation/azure/projects.json`: non-secret project-to-repository mappings.
+- `automation/azure/worker_core.py` and `worker_store.py`: trusted workflow
+  authorization, account leases, persisted credentials, and worker outcomes.
+- `automation/worker.py` and `codex_runtime.py`: Codex account inspection,
+  execution, repository validation, branch push, and PR publication.
+- `automation/accounts.py`: enroll saved Codex profiles for cloud use or reclaim
+  their refreshed credentials for local use.
+- `.github/workflows/clusterfork-worker.yml`: Codex CLI 0.165.0 on standard
+  `ubuntu-24.04`, 45-minute job timeout, repository read and OIDC permissions.
 - `.github/workflows/clusterfork-pilot.yml`: manual/API-triggered smoke workflow;
-  also callable as a reusable workflow. Standard `ubuntu-24.04`, five-minute
-  timeout, no repository checkout, no agent credentials, no token permissions.
+  retained for routing-only checks. It does not run a coding agent.
 - `automation/pilot.py`: local configuration check, allowlisted source packaging,
   Azure deployment, and runtime secret configuration. It does not use or change
   Clusterfork's dotfile installer.
 
-The shared Azure Function App is deployed and its four functions are registered.
+The shared Azure Function App is deployed.
 The full Linear webhook → Azure queue → GitHub App → hosted runner path has passed
 a live test. Credentials stay outside version control; the root `.env` is
 gitignored, and the App private key lives outside the repo.
@@ -57,25 +65,21 @@ label. The issue was eligible in Todo during testing and is now Done.
   for the Kian team's Issues and Projects. The Linear API key has read access and
   correctly refuses webhook administration; the webhook was created in the UI.
 
-This is a routing test. It does not demonstrate live agent authentication, quota
-fetching, reservations, Symphony execution, or code/PR generation.
+The results above validate the original routing-only milestone. The Codex worker
+adds execution; its first full live validation is pending deployment and testing.
 
 ## Agent profiles
 
-`automation/azure/projects.json` pins the two profiles for remote development:
+`automation/azure/projects.json` currently enables only Codex:
 
 | Agent | Model ID | Reasoning effort |
 | --- | --- | --- |
-| Antigravity | `gemini-3.8-flash-high` | `high` |
-| Codex | `gpt-6.1-terra` | `max` |
+| Codex | `gpt-6.1-sol` | `max` |
 
-The registry requires both profiles and explicit supported effort values. The
-configuration check reports the exact pins. Each issue is intended to use **one**
-agent/account, selected by available quota, with the same fixed profile for every
-task assigned to that agent. There is no implementation/review pair or complexity
-classifier. These apply to the remote development integration; the routing smoke
-workflow still only reports issue IDs. Worker execution and live quota fetching
-are not implemented yet. Model substitution is not configured.
+The registry requires an explicit Codex profile and supported effort value. Each
+issue uses one account selected by available quota. There is no complexity
+classifier or model fallback. Antigravity is deferred. The runner verifies that
+the pinned model and effort are in each account's live model catalog before use.
 
 `quota_selection.py` implements the decision over provider-normalized snapshots:
 choose the account with the lowest used percentage in its **most depleted**
@@ -85,19 +89,65 @@ at least 20% remaining, a snapshot at most 60 seconds old, and one active task p
 account. Those are initial configurable operating values, not a prediction of a
 task's consumption. If no account qualifies, return no selection and wait.
 
-The execution scheduler must supply live quota snapshots and atomically reserve
-the provider/account identity before launching; this pure selection function does
-not acquire a distributed lease or synchronize refreshed auth. Provider adapters,
-reservations, and checkpoint/retry on a mid-task limit remain worker-phase work.
-Codex documents machine-readable `account/rateLimits/read`. Antigravity documents
-`/usage`/`/quota`; a reliable headless quota adapter still needs verification.
-References: [Codex limits](https://learn.chatgpt.com/docs/app-server#6-rate-limits-chatgpt),
-[Antigravity usage](https://antigravity.google/docs/cli/reference/).
+The runner calls Codex app-server `account/read`, `model/list`, and
+`account/rateLimits/read` in isolated temporary Codex homes. It probes available
+accounts under leases, selects by the worst applicable quota window, then
+reserves and rechecks the chosen account before starting `codex exec`.
+Unknown or denied usage never counts as unused quota. A lack of capacity records
+`waiting_for_quota` and allows reconciliation to retry after 15 minutes.
+References: [Codex app-server](https://learn.chatgpt.com/docs/app-server),
+[Sol model and efforts](https://developers.openai.com/api/docs/models/gpt-6.1-sol).
 
-The Antigravity ID was verified with `agy models`; Codex CLI 0.164.0's cached
-catalog lists Terra 6.1 and Max. Official guidance requires Codex CLI 0.159.0 or
-later for Terra 6.1. References: [Antigravity model selection](https://antigravity.google/docs/cli/headless/#model-and-agent-selection),
-[Codex models](https://learn.chatgpt.com/docs/models).
+## Accounts and token refresh
+
+The root `.env` and GitHub App PEM are not agent credentials. Saved Codex profiles
+come from `~/.local/share/clusterfork-auth/codex/auth.json.*`. The enrollment helper
+skips the currently active local account and deduplicates aliases by provider
+account identity. Enrolled profiles are reserved for cloud use in the local
+`remote-profiles.json` manifest, which the Codex rotator honors. This avoids
+local and cloud processes rotating the same refresh token independently.
+
+Use an isolated Python environment with the Azure dependencies:
+
+```bash
+python3 -m venv ~/.config/clusterfork/automation/venv
+~/.config/clusterfork/automation/venv/bin/pip install -r automation/azure/requirements.txt
+~/.config/clusterfork/automation/venv/bin/python automation/accounts.py enroll
+```
+
+Use `--profile NAME` to enroll particular inactive profiles. `list` reports the
+number reserved. Reclaim a profile before using it locally again:
+
+```bash
+~/.config/clusterfork/automation/venv/bin/python automation/accounts.py reclaim --profile NAME
+```
+
+Reclaim refuses busy accounts or changed local credentials, persists the latest
+cloud credentials locally, then removes cloud ownership. Existing local sessions
+must be stopped before enrolling their accounts; only the current profile can be
+detected automatically. Keep the installed rotator updated when enabling this feature.
+
+Private Azure Table `ClusterforkAccounts` holds auth caches. Each provider account
+has one 120-second lease with a random fencing token and ETag updates. Jobs renew
+every 20 seconds and persist refreshed auth during execution and on exit. A lost
+lease stops the agent. A crash between OAuth refresh and persistence can require
+re-login; no system can recover a refresh token that was never saved.
+
+The App private key stays in Azure. The broker verifies GitHub's OIDC signature,
+issuer, audience, expiry, repository, main-branch workflow path, hosted-runner type,
+run ID/attempt, and a durable dispatch receipt. It also checks the run through
+GitHub's API and requires dispatch by `clusterfork[bot]`. PR workflows, forks,
+other workflows, and unmapped repositories cannot obtain account credentials.
+Publication tokens are scoped to one repository with Contents and Pull requests
+write permission. They are issued again before publication and never passed in
+workflow inputs. Account caches and agent transcripts are not uploaded as artifacts.
+
+The user selected subscription-account auth. OpenAI recommends API keys for
+automation and advises against using account-auth CI on public repositories;
+the broker restricts access to the trusted dispatcher workflow, but does not change
+that guidance. References: [Codex authentication](https://learn.chatgpt.com/docs/auth),
+[non-interactive account auth](https://learn.chatgpt.com/docs/non-interactive-mode),
+[GitHub OIDC](https://docs.github.com/en/actions/reference/security/oidc).
 
 The project scan fetches enrollment labels once per page, outside the issues
 connection. Repeating the label connection for each issue exceeds Linear's query
@@ -133,9 +183,10 @@ webhook below is a separate workspace-admin action in the UI.
    as an installation; it does not need a user OAuth flow.
 4. Uncheck **Active** under **Webhook**. This app does not receive GitHub webhooks;
    Linear sends events directly to Azure.
-5. Under **Repository permissions**, set **Actions: Read and write**. **Metadata:
-   Read-only** is automatic. Leave other permissions at No access. No account or
-   organization permissions or event subscriptions are needed for the pilot.
+5. Under **Repository permissions**, set **Actions**, **Contents**, and
+   **Pull requests** to **Read and write**. **Metadata: Read-only** is automatic.
+   Leave other permissions at No access. Approve expanded permissions for any
+   existing installation. These grants have been verified on Clusterfork.
 6. Select **Only on this account**, then create the app.
 7. Copy its numeric **App ID** into `GITHUB_APP_ID` in `.env`.
 8. Under **Private keys**, click **Generate a private key**. Move the downloaded
@@ -150,7 +201,8 @@ For another repository later, extend this installation's selected repositories
 and add its registry entry and caller workflow. One GitHub App and Azure deployment
 can serve all those repositories. The dispatcher looks up the installation ID;
 you do not need to copy that ID into `.env`. It requests a short-lived token
-limited to the selected repository and Actions write permission.
+limited to the selected repository. Dispatcher tokens have Actions write;
+worker publication tokens have Contents and Pull requests write.
 
 References: [registration](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app),
 [installation](https://docs.github.com/en/apps/using-github-apps/installing-your-own-github-app),
@@ -191,7 +243,7 @@ normal allowances/pricing; this is not a promise of zero cost.
 
 Runtime dependencies pin `azure-functions==1.25.0`, which supports Python 3.12;
 the 2.x SDK requires Python 3.13 or later. CI installs these dependencies and
-indexes all four functions on Python 3.12, in addition to the repository tests.
+indexes all five functions on Python 3.12, in addition to the repository tests.
 Azure CLI responses may expose the hostname directly or inside `properties`;
 the deploy helper accepts both shapes and rejects a missing hostname.
 
@@ -221,9 +273,9 @@ passed the live validation recorded above.
    issue into Todo. The mapping uses the existing Kian team's Todo UUID; it does
    not invent or create a Ready status.
 7. Open [Clusterfork Actions](https://github.com/KianBahasadri/clusterfork/actions)
-   and look for **Clusterfork routing pilot**. Its job summary should name the
-   repository, Linear issue UUID/identifier, project UUID, and dispatch receipt key.
-   Issue descriptions and agent transcripts are never passed to this smoke job.
+   and look for **Clusterfork Codex worker**. Its summary names the issue, pinned
+   model/effort, outcome, and PR link when changes were published. The worker
+   receives issue text from the authenticated broker, not dispatch inputs.
 8. Edit that same issue again. The dispatcher receipt should suppress another
    smoke run. The shared timer also reconciles missed events every 15 minutes.
 
@@ -236,12 +288,18 @@ label prevents subsequent dispatches; it does not cancel runs already submitted.
 
 ## Pilot limits and troubleshooting
 
-This milestone deliberately dispatches once per issue per registry `generation`.
-It does not implement production retries, agent sessions, code publication, or
-Symphony's execution lifecycle. Editing an issue, moving it out of Todo and back,
-or retrying a webhook does not reset its receipt. A fresh test issue is the easiest
-way to repeat the test. Changing the registry generation permits **all** eligible
-issues to dispatch again, so use that only deliberately.
+Completed issues dispatch once per registry `generation`. Editing an issue or
+moving it out of Todo and back does not reset completion. Capacity waits retry
+through reconciliation; execution failures require inspection and a GitHub job
+rerun. Existing open PRs are recovered by their deterministic branch name.
+Changing generation permits **all** eligible issues to dispatch again.
+
+The agent has a 30-minute execution timeout inside the 45-minute job. Configured
+validation commands run after it finishes. Publication rechecks current project
+enrollment and status, pushes a separate branch, and opens a PR without merging.
+Workflow-file edits are refused because the App has no Workflows permission.
+Durable agent-session resume and automatic retries after a mid-task usage limit
+are not implemented. Linear API access remains read-only.
 
 Azure Table `ClusterforkDispatches` records `dispatching`, `dispatched`, or
 `uncertain`. `dispatched` means GitHub accepted the request; verify actual runner
@@ -270,13 +328,17 @@ no cloud writes and use no actual credentials. The deployment package has an
 explicit file allowlist. Function decorators and SDK integration can be checked
 with dependencies from `automation/azure/requirements.txt` in an isolated venv.
 
-Validation for this change: 27 routing/setup tests and six quota-selection tests
-pass; all four functions index
+Validation for the routing milestone: 27 routing/setup tests and six quota-selection tests
+pass; all dispatcher functions index
 with the pinned Azure SDK, a signed request passes through the native HTTP handler
 and queue consumer to the dispatch adapter, and queue failure returns 503. A
 temporary RSA key verifies GitHub App JWT signing and repository-scoped token
 requests. The full 278-test repository suite passes with `NO_COLOR` removed from
 the subprocess environment (the notification color tests otherwise inherit it).
+The worker adds 20 checks for workflow authorization, credential fencing, local
+account ownership, live quota shapes, and real Git branch/PR publication against
+a temporary bare repository. All 298 repository tests pass. Real RSA verification
+also rejects forged signatures, wrong issuers/audiences, expired and future tokens.
 
 Protocol references: [Linear webhooks](https://linear.app/developers/webhooks),
 [GitHub dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event),

@@ -27,6 +27,7 @@ class Route:
     workflow: str
     ref: str
     ready_state_ids: tuple[str, ...]
+    validation_commands: tuple[tuple[str, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -62,8 +63,8 @@ class Registry:
             if row["effort"] not in efforts[agent]:
                 raise ValueError(f"unsupported effort for {agent}")
             profiles[agent] = AgentProfile(row["model"], row["effort"])
-        if set(profiles) != {"antigravity", "codex"}:
-            raise ValueError("configure both Antigravity and Codex profiles explicitly")
+        if "codex" not in profiles:
+            raise ValueError("configure the Codex profile explicitly")
         routes = {}
         for row in data["projects"]:
             project_id = uuid_string(row["project_id"])
@@ -78,8 +79,15 @@ class Registry:
             states = tuple(uuid_string(s) for s in row["ready_state_ids"])
             if not states:
                 raise ValueError("a project needs at least one ready state")
+            commands = row.get("validation_commands", [])
+            if not isinstance(commands, list) or any(
+                not isinstance(command, list) or not command
+                or any(not isinstance(arg, str) or not arg or "\x00" in arg for arg in command)
+                for command in commands
+            ):
+                raise ValueError("validation_commands must be arrays of command arguments")
             routes[project_id] = Route(project_id, row["repository"], row["workflow"],
-                                       row["ref"], states)
+                                       row["ref"], states, tuple(tuple(c) for c in commands))
         return cls(label, generation, profiles, SelectionPolicy.load(data["agent_selection"]), routes)
 
 

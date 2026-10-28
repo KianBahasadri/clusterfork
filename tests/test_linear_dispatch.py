@@ -254,7 +254,7 @@ class ClientTests(unittest.TestCase):
         route = Registry.load(SOURCE / "projects.json").routes[PROJECT]
         with patch.object(client, "installation_token", return_value="test-token"):
             client.dispatch(route, {"linear_issue_id": ISSUE})
-        self.assertEqual(calls[0][0], "https://api.github.com/repos/KianBahasadri/clusterfork/actions/workflows/clusterfork-pilot.yml/dispatches")
+        self.assertEqual(calls[0][0], "https://api.github.com/repos/KianBahasadri/clusterfork/actions/workflows/clusterfork-worker.yml/dispatches")
         self.assertEqual(calls[0][1]["data"]["ref"], "main")
 
     def test_only_ambiguous_dispatch_errors_keep_claims(self):

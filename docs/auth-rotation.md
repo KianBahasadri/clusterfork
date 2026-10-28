@@ -156,6 +156,9 @@ Claude Code rewrites `.credentials.json` on every token refresh, so rotation cop
 
 ## rotate-codex
 
+Cloud account ownership and reclaiming remote credentials are described in
+[Remote development](remote-development.md#accounts-and-token-refresh).
+
 Switches Codex accounts stored under
 `~/.local/share/clusterfork-auth/codex/`. `--save NAME` writes the active
 `auth.json` to `auth.json.NAME` and points `current` at it (and will rebuild

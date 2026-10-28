@@ -10,6 +10,8 @@ import azure.functions as func
 
 from dispatch_clients import AzureReceipts, GitHub, Linear
 from dispatch_core import Dispatcher, Registry, WebhookError, webhook_event
+from worker_core import Accounts, WorkerError, WorkerService
+from worker_store import AzureTable, verify_oidc
 
 app = func.FunctionApp()
 QUEUE = "clusterfork-events"
@@ -40,6 +42,38 @@ def dispatcher():
                       AzureReceipts(os.environ["AzureWebJobsStorage"]))
 
 
+@lru_cache(maxsize=1)
+def worker_service():
+    connection = os.environ["AzureWebJobsStorage"]
+    return WorkerService(
+        registry(), AzureTable(connection, "ClusterforkDispatches", "pilot"),
+        AzureTable(connection, "ClusterforkWorkers", "worker"),
+        Accounts(AzureTable(connection, "ClusterforkAccounts", "codex")),
+        Linear(os.environ["LINEAR_API_KEY"]),
+        GitHub(os.environ["GITHUB_APP_ID"], os.environ["GITHUB_APP_PRIVATE_KEY"]))
+
+
+@app.route(route="worker/{action}", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+def worker(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        claims = verify_oidc(req.headers.get("Authorization", ""))
+        if len(req.get_body()) > 128_000:
+            raise WorkerError("Worker request is too large", 413)
+        data = json.loads(req.get_body())
+        if not isinstance(data, dict):
+            raise WorkerError("Invalid worker request", 400)
+        result = worker_service().handle(req.route_params["action"], claims, data)
+        return func.HttpResponse(json.dumps(result), mimetype="application/json",
+                                 headers={"Cache-Control": "no-store"})
+    except WorkerError as exc:
+        return func.HttpResponse(str(exc), status_code=exc.status)
+    except (ValueError, TypeError, KeyError):
+        return func.HttpResponse("Invalid worker request", status_code=400)
+    except Exception:
+        logging.error("Worker broker operation failed")
+        return func.HttpResponse("Worker broker unavailable", status_code=503)
+
+
 def missing_config():
     return [name for name in ("LINEAR_API_KEY", "LINEAR_WEBHOOK_SECRET", "GITHUB_APP_ID",
                               "GITHUB_APP_PRIVATE_KEY") if not os.environ.get(name)]
@@ -48,7 +82,8 @@ def missing_config():
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def health(req: func.HttpRequest) -> func.HttpResponse:
     missing = missing_config()
-    return func.HttpResponse(json.dumps({"mode": "routing-pilot", "missing": missing,
+    mode = "codex-worker" if any(route.workflow == "clusterfork-worker.yml" for route in registry().routes.values()) else "routing-pilot"
+    return func.HttpResponse(json.dumps({"mode": mode, "missing": missing,
                                         "projects": len(registry().routes)}),
                              status_code=503 if missing else 200, mimetype="application/json")
 

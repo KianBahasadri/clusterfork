@@ -36,7 +36,7 @@ def request_json(url, *, token, method="GET", data=None):
 
 
 ISSUE_FIELDS = """
-id identifier archivedAt
+id identifier title description url archivedAt
 state { id }
 """
 PROJECT_FIELDS = "id archivedAt labels(first: 100) { nodes { name } pageInfo { hasNextPage } }"
@@ -96,7 +96,7 @@ class GitHub:
     def __init__(self, app_id, private_key, request=request_json):
         self.app_id, self.private_key, self.request = app_id, private_key, request
 
-    def installation_token(self, repository):
+    def installation_token(self, repository, *, permissions=None):
         import jwt
 
         now = int(time.time())
@@ -109,11 +109,25 @@ class GitHub:
                 f"https://api.github.com/app/installations/{installation['id']}/access_tokens",
                 token=f"Bearer {signed}", method="POST",
                 data={"repositories": [repository.split("/")[1]],
-                      "permissions": {"actions": "write"}})
+                      "permissions": permissions if permissions is not None else {"actions": "write"}})
             return result["token"]
         except Exception:
             # No workflow dispatch has been attempted yet, so retry is safe.
             raise DispatchError("GitHub App authentication failed; check its ID, key and installation") from None
+
+    def verify_worker_run(self, repository, claims, dispatch_key):
+        from worker_core import WorkerError
+        token = self.installation_token(repository, permissions={"actions": "read"})
+        run = self.request(f"https://api.github.com/repos/{repository}/actions/runs/{claims['run_id']}",
+                           token=f"Bearer {token}")
+        if (run.get("event") != "workflow_dispatch" or run.get("head_sha") != claims["sha"]
+                or str(run.get("run_attempt")) != str(claims["run_attempt"])
+                or str(run.get("repository", {}).get("id")) != str(claims["repository_id"])
+                or run.get("head_repository", {}).get("full_name") != repository
+                or run.get("path") != ".github/workflows/clusterfork-worker.yml"
+                or dispatch_key not in run.get("display_title", "")
+                or run.get("actor", {}).get("login") != "clusterfork[bot]"):
+            raise WorkerError("GitHub run does not match the dispatch", 403)
 
     def dispatch(self, route, inputs):
         token = self.installation_token(route.repository)
@@ -144,7 +158,19 @@ class AzureReceipts:
                                       "status": "dispatching", "created_at": int(time.time()), **fields})
             return True
         except ResourceExistsError:
-            return False
+            from azure.core import MatchConditions
+            from azure.core.exceptions import ResourceModifiedError
+            row = self.table.get_entity("pilot", key)
+            if not row.get("retry_after") or row["retry_after"] > time.time():
+                return False
+            try:
+                self.table.update_entity({"PartitionKey": "pilot", "RowKey": key,
+                                          "retry_after": 0, "status": "dispatching"},
+                                         etag=row.metadata["etag"],
+                                         match_condition=MatchConditions.IfNotModified)
+                return True
+            except ResourceModifiedError:
+                return False
 
     def finish(self, key, status):
         self.table.update_entity({"PartitionKey": "pilot", "RowKey": key, "status": status})

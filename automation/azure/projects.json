@@ -1,6 +1,6 @@
 {
   "enrollment_label": "symphony",
-  "generation": "routing-pilot-1",
+  "generation": "codex-worker-1",
   "agent_selection": {
     "strategy": "lowest_usage",
     "min_remaining_percent": 20,
@@ -8,12 +8,8 @@
     "max_concurrent_tasks_per_account": 1
   },
   "agent_profiles": {
-    "antigravity": {
-      "model": "gemini-3.8-flash-high",
-      "effort": "high"
-    },
     "codex": {
-      "model": "gpt-6.1-terra",
+      "model": "gpt-6.1-sol",
       "effort": "max"
     }
   },
@@ -21,9 +17,10 @@
     {
       "project_id": "374f597c-89f5-4e40-9798-07533f57bfba",
       "repository": "KianBahasadri/clusterfork",
-      "workflow": "clusterfork-pilot.yml",
+      "workflow": "clusterfork-worker.yml",
       "ref": "main",
-      "ready_state_ids": ["ace01594-2daf-44bb-9690-cb0dccc11795"]
+      "ready_state_ids": ["ace01594-2daf-44bb-9690-cb0dccc11795"],
+      "validation_commands": [["python3", "-m", "unittest", "discover", "-s", "tests", "-q"]]
     }
   ]
 }
