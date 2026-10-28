@@ -271,9 +271,14 @@ Check local configuration:
 python3 automation/pilot.py check
 ```
 
-This prints only set/blank status and routing metadata, never secret values. A
-blank webhook secret is allowed for initial deployment. Required missing values
-make the check and deployment fail before creating any Azure resources.
+This validates local configuration and reports the mode from the registry's
+workflow mappings, each workflow filename and ref, and the configured agent
+model/effort. Worker mappings report `Codex worker`; mappings that all use
+`clusterfork-pilot.yml` report `routing pilot (no coding agent)`. The check does
+not launch a worker or verify a live agent login. It prints only set/blank
+credential status and configuration metadata, never secret values. A blank
+webhook secret is allowed for initial deployment. Required missing values make
+the check and deployment fail before creating any Azure resources.
 
 With Azure CLI authenticated to the intended student subscription:
 
