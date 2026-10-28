@@ -1,77 +1,60 @@
 # Skills
 
-The `skills/` directory contains skills in the shared `SKILL.md` format. The installer copies them to `~/.qwen/skills/` (Qwen Code), `~/.grok/skills/` (Grok CLI), `~/.claude/skills/` (Claude Code), and `~/.codex/skills/` (Codex). It also installs normalized copies to `~/.commandcode/skills/` for Command Code and `~/.gemini/antigravity-cli/skills/` for Antigravity CLI, plus compatibility aliases to `~/.config/opencode/skills/` for OpenCode.
+Detailed instructions and examples are canonical in each repository
+`skills/<name>/SKILL.md`. This page covers discovery and purpose; model pins,
+CLI flags, component rules, and templates stay in the skill that uses them.
 
-Command Code requires lowercase hyphenated skill IDs, so `commit_and_push` and `generate_docs` are installed there as `commit-and-push` and `generate-docs`.
+## Installation and discovery
 
-For Codex, only non-dot skill directories under `~/.codex/skills/` are replaced. `~/.codex/skills/.system` is left alone (Codex-managed system skills).
+| Agent | Shared skills location | Source naming |
+| --- | --- | --- |
+| Claude Code | `~/.claude/skills/` | Unchanged |
+| Codex | `~/.codex/skills/` | Unchanged; installer preserves `.system` and other dot entries |
+| Qwen Code | `~/.qwen/skills/` | Unchanged |
+| Grok | `~/.grok/skills/` | Unchanged |
+| Command Code | `~/.commandcode/skills/` | Underscores normalized to hyphens |
+| Antigravity CLI | `~/.gemini/antigravity-cli/skills/` | Underscores normalized to hyphens |
+| OpenCode | Discovers `~/.claude/skills/`; compatibility aliases in `~/.config/opencode/skills/` | Aliases only for incompatible underscore names |
 
-OpenCode additionally discovers global Claude-compatible skills from `~/.claude/skills/`, so the native OpenCode directory only contains aliases for source names that OpenCode rejects. OpenCode requires lowercase hyphenated names matching the skill directory; for example, `commit_and_push` and `generate_docs` are installed there as `commit-and-push` and `generate-docs`. OpenCode loads skills through its native `skill` tool. See the [OpenCode skill documentation](https://opencode.ai/docs/skills).
+Thus `commit_and_push` and `generate_docs` retain their source names in the
+first four agents and become `commit-and-push` and `generate-docs` in the
+normalized copies. OpenCode requires a lowercase hyphenated skill name matching
+its directory and loads skills with its native `skill` tool. See the
+[OpenCode discovery reference](https://opencode.ai/docs/skills).
 
-Antigravity CLI discovers global skills from `~/.gemini/antigravity-cli/skills/`. Its normalized copy uses the same hyphenated names and is available to all workspaces. See the [Antigravity CLI skill documentation](https://antigravity.google/docs/cli/plugins).
+Work on this repository's `skills/`, then reinstall to distribute edits.
+`agents/claude-plugins/` also installs directories into Claude's skills tree;
+those are [MCP plugins](agent-configs.md#skills-directory-mcp-plugins), not
+shared `SKILL.md` skills.
 
-## commit_and_push
+## Catalog
 
-Commits and pushes staged changes to the current branch. Invoked via the `/commit_and_push` slash command in Qwen Code, Grok, Claude Code, or Codex. OpenCode and Antigravity receive the compatible `commit-and-push` skill name.
+Invoke an explicit skill with `/<name>` where the CLI supports slash-command
+skill invocation, using the installed name above. Natural-language requests
+can also select skills according to their descriptions and client support.
+The links below open the complete rules, including any approval requirements.
 
-## create-github-action-tests
+| Skill | Purpose and invocation |
+| --- | --- |
+| [commit_and_push](../skills/commit_and_push/SKILL.md) | Commits and pushes staged changes to the current branch; `/commit_and_push` |
+| [generate_docs](../skills/generate_docs/SKILL.md) | Regenerates repo documentation and slim agent instructions from source; `/generate_docs` |
+| [create-github-action-tests](../skills/create-github-action-tests/SKILL.md) | Backfills characterization tests and hosted-runner CI after checking its billing scope; `/create-github-action-tests` |
+| [add-codeview-module](../skills/add-codeview-module/SKILL.md) | Adds a project-specific dashboard tab under `.codeview/modules/`; `/add-codeview-module` |
+| [design-guide](../skills/design-guide/SKILL.md) | Exact interface specifications and runnable component/dashboard references for building or reviewing UI |
+| [conservative-academic-prose-sweep](../skills/conservative-academic-prose-sweep/SKILL.md) | Removes embellishment and unsupported claims from technical or academic prose while preserving meaning and limitations |
+| [ask-claude](../skills/ask-claude/SKILL.md) | Gets headless help from Claude on difficult work; `/ask-claude` |
+| [ask-codex](../skills/ask-codex/SKILL.md) | Gets headless help from Codex on difficult work; `/ask-codex` |
+| [ask-cursor](../skills/ask-cursor/SKILL.md) | Gets headless help from Cursor Agent on difficult work; `/ask-cursor` |
+| [ask-grok](../skills/ask-grok/SKILL.md) | Gets headless help from Grok, including image work; `/ask-grok` |
+| [ask-opencode](../skills/ask-opencode/SKILL.md) | Gets headless help from OpenCode with a self-delegation guard; `/ask-opencode` |
+| [ask-antigravity](../skills/ask-antigravity/SKILL.md) | Gets headless help from Antigravity, including image work; `/ask-antigravity` |
+| [improve-codebase-architecture](../skills/improve-codebase-architecture/SKILL.md) | Presents module-deepening candidates in an HTML report, then interviews through a choice; explicit `/improve-codebase-architecture` |
+| [codebase-design](../skills/codebase-design/SKILL.md) | Vocabulary and principles for deep modules, interfaces, seams, and testability; selected during design work |
+| [domain-modeling](../skills/domain-modeling/SKILL.md) | Sharpens terminology and maintains `CONTEXT.md` and ADRs during design |
+| [grilling](../skills/grilling/SKILL.md) | Reusable interview loop for stress-testing plans and decisions |
+| [decide](../skills/decide/SKILL.md) | Forms and explains an independent recommendation when asked to decide |
 
-Backfills characterization tests and a hardened GitHub Actions workflow on a public repo using standard hosted runners (Actions minutes are free there). Auto-rejects billed or unknown CI until the user explicitly approves. Invoked via `/create-github-action-tests`.
-
-## add-codeview-module
-
-Adds a drop-in codeview dashboard tab: a Python module in the current repo's `.codeview/modules/` that appears as an extra `/m/<name>/` tab. Follows whatever modules the target repo already ships and the codeview module contract; carries the page template, host CSS classes, and the sandboxed-frame constraints. Invoked via `/add-codeview-module`.
-
-## generate_docs
-
-Regenerates `AGENTS.md` and the `docs/` directory from the current state of the repo. Reads all source files, creates one doc per topic with no repeated information, and writes a slim `AGENTS.md` with process rules for reading and maintaining `docs/` (not topic detail). Invoked via the `/generate_docs` slash command in Qwen Code, Grok, Claude Code, or Codex. OpenCode and Antigravity receive the compatible `generate-docs` skill name.
-
-Creates a `CLAUDE.md → AGENTS.md` symlink so Claude Code picks up the same instructions. **Do not** add a matching `GEMINI.md` symlink for Google Antigravity: current Antigravity (and Antigravity CLI) reads root `AGENTS.md` natively, in addition to `GEMINI.md` and `.agents/rules/`. Official sources: [changelog](https://antigravity.google/changelog) (“reading rules from AGENTS.md in addition to GEMINI.md”) and [CLI best practices](https://antigravity.google/docs/cli/best-practices) (`GEMINI.md` or `AGENTS.md` at workspace root). Global Antigravity rules still live in `~/.gemini/GEMINI.md`; workspace rule files live under `.agents/rules/`.
-
-## design-guide
-
-Provides principles, design tokens, component guidance, and runnable references for building and reviewing accessible interfaces across web, desktop, and mobile. `skills/design-guide/SKILL.md` routes to the canonical detailed Markdown references; each runnable reference and its supporting files live together in a dedicated subdirectory under `skills/design-guide/assets/`.
-
-## ask-claude
-
-Invokes the Claude Code CLI so the agent can get help from Claude on difficult work. The agent chooses how to use the CLI from task context; the user only runs `/ask-claude`. Scope is general — not code-only.
-
-## ask-codex
-
-Invokes Codex (`codex exec`; currently model `gpt-5.6-sol`, effort `xhigh` — see the skill file for pins) so the agent can get help from Codex on difficult work. The agent chooses new vs resume, sandbox (`read-only` / `workspace-write` / `danger-full-access`), approval (`-c approval_policy=never` for unattended runs; do not put `-a never` after `exec` on current CLI), and prompt shape from task context; the user only runs `/ask-codex`. Scope is general — not code-only.
-
-## ask-grok
-
-Invokes Grok headlessly (`grok --prompt-file` / `-p`, with session, sandbox, and permission flags chosen from context) so the agent can get help from Grok on difficult work, including image generation via `image_gen` / `image_edit`. The agent decides how to use the CLI; the user only runs `/ask-grok`. Scope is general — not code-only.
-
-## ask-cursor
-
-Invokes the Cursor Agent CLI headlessly (`cursor-agent --print`; default model `cursor-grok-4.5-high` — Grok 4.5 High — see the skill file for the pin) so the agent can get help from Cursor on difficult work. The agent chooses new vs continue/resume, mode (`--mode ask` / `--mode plan` read-only vs default action mode), approval (`--yolo` for unattended write/shell work; `--trust` to skip the workspace-trust prompt), and model from task context; the user only runs `/ask-cursor`. Models are listed via `cursor-agent --list-models` (or `cursor-agent models`) and switched with `--model <id>` / bracket overrides. Scope is general — not code-only.
-
-## ask-opencode
-
-Invokes OpenCode headlessly (`opencode run`; default `-m opencode-go/deepseek-v4-pro --variant max` — DeepSeek V4 Pro at `max` effort — see the skill file for the pin) so the agent can get help from OpenCode on difficult work. The agent chooses new vs continue/resume (`-c` / `-s`), permissions (`--auto` auto-approves asks for tool-heavy handoffs but cannot override explicit denies), agent (`plan` for enforced no-shell/no-edit judgment, default `build` for implementation), and model/variant from task context; the user only runs `/ask-opencode`. Prompts describe the underlying task directly, and the skill has a runtime guard against delegating recursively from OpenCode itself. `opencode run` reads the prompt from stdin or positional args. Models and variants are listed via `opencode models [provider] [--verbose]` and switched with `-m <provider/model>` plus `--variant <effort>`. Scope is general — not code-only.
-
-## ask-antigravity
-
-Invokes Antigravity CLI headlessly (`agy --print`; default model `gemini-3.6-flash-high` with `--effort high` — see the skill file for the pin) so the agent can get help from Antigravity on difficult work, including image generation via the built-in `generate_image` tool (Nano Banana 2; args `Prompt`, `ImageName`, optional `ImagePaths` for edits). The agent chooses new vs continue/resume (`--continue` / `--conversation`), mode (`--mode plan` for judgment, `--mode accept-edits` for auto-applied file edits), permissions (`--dangerously-skip-permissions` for unattended tools/images; always detach stdin with `< /dev/null` in print mode), and model from task context; the user only runs `/ask-antigravity`. Workspace is the process cwd (no `--cwd` flag); use `--add-dir` for extras. Models are listed via `agy models`. Scope is general — not code-only.
-
-## improve-codebase-architecture
-
-Scans the codebase for deepening opportunities (shallow modules, leaky seams, poor locality/leverage), presents candidates as a self-contained HTML report (Tailwind + Mermaid) in the OS temp dir, then grills the user on the chosen candidate. Sourced from [mattpocock/skills](https://github.com/mattpocock/skills) (MIT). Invoked via `/improve-codebase-architecture`. Depends on `codebase-design` (vocabulary), `grilling` (interview loop), and `domain-modeling` (CONTEXT.md/ADR updates).
-
-## codebase-design
-
-Shared vocabulary and principles for designing deep modules (module, interface, depth, seam, adapter, leverage, locality) including the deletion test and seam discipline. Model-invoked; also used directly when designing interfaces or deepening modules. Sourced from [mattpocock/skills](https://github.com/mattpocock/skills). Companion docs: `DEEPENING.md` and `DESIGN-IT-TWICE.md`.
-
-## domain-modeling
-
-Actively builds and sharpens the project's domain model during design — challenging terms against `CONTEXT.md`, stress-testing with edge-case scenarios, and updating `CONTEXT.md`/`docs/adr/` inline. Model-invoked when terminology or decisions are being shaped, not just read. Sourced from [mattpocock/skills](https://github.com/mattpocock/skills). Companion docs: `CONTEXT-FORMAT.md` and `ADR-FORMAT.md`.
-
-## decide
-
-Behavioral skill for decision requests: form an independent conclusion before considering the user's implied preference, trust its own capabilities as a genius state-of-the-art model, and own the call with honest reasoning. Model-invoked via "decide", "what should I do", or expressions of trust in the model's judgment.
-
-## grilling
-
-Reusable interview primitive: maps decisions as a design tree, asks the whole frontier each round with a recommended answer, and recomputes after each answer until the frontier is empty. Model-invoked by `improve-codebase-architecture` and other skills. Sourced from [mattpocock/skills](https://github.com/mattpocock/skills) (`skills/productivity/grilling`).
+The architecture, codebase-design, domain-modeling, and grilling skills retain
+provenance links to [mattpocock/skills](https://github.com/mattpocock/skills) in
+their own files. `generate_docs` maintains the `CLAUDE.md → AGENTS.md` symlink;
+Antigravity reads root `AGENTS.md`, so no matching `GEMINI.md` link is installed.

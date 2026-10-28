@@ -1,23 +1,51 @@
-# Clusterfork Documentation
+# Clusterfork documentation
 
-- [Installation](installation.md) — running the installer and what it writes
-- [Shell Modules](shell-modules.md) — launch wrappers and aliases per agent
-- [Agent Configs](agent-configs.md) — per-agent settings files
-- [Notifications](notifications.md) — shared completion bell and private ntfy phone delivery over Tailscale
-- [Statusline](statusline.md) — Claude Code, Cursor Agent, and shared Codex status lines
-- [Dashboard](dashboard.md) — codeview repo introspection dashboard and drop-in modules
-- [Auth Rotation](auth-rotation.md) — switching between saved accounts
-- [Scripts](scripts.md) — standalone Python utilities
-- [Skills](skills.md) — shared skills and per-CLI discovery behavior
-- [Conventions](conventions.md) — style, safety, idempotency, and repo-as-source-of-truth
-- [Remote development](remote-development.md) — Linear → Azure → GitHub Actions Codex workers, account ownership, and setup
-- [OpenCode Go endpoint](opencode-go.md) — what the subscription's three wire formats serve, per-model, the Codex experiment that was not shipped, and the 2026-08-07 deepseek-v4-flash high-cap effort ladders (raw log: [opencode-go-effort-highcap-2026-08-07.log](opencode-go-effort-highcap-2026-08-07.log))
-- [Codex rewind bug (0.147.0)](codex-rewind-bug-0147.md) — why Esc-Esc branching fails, why it is not clusterfork, and what fixes it
-- [Codex bell vs usage-limit deaths](codex-usage-limit-bell.md) — why the turn-completion bell is silent when the usage limit kills a turn (verified in upstream source), coverage options evaluated, and why usage-limit coverage was not shipped
-- [Codex experimental context management (0.153.0)](codex-context-management-0153.md) — notes-plus-searchable-history instead of compaction: upstream status, the Plus/Pro eligibility gate, why the "saves tokens" claim is a misread, and the 2026-09-05 decision to defer with a dated re-check list
-- [cmd "No conversations found to resume." (investigated, fix reverted)](cmd-resume-bug.md) — why `cmd` kicks you out in session-free dirs, the Command Code CLI mechanics, and the validated-but-unshipped fix
-- [aerolink.sh (removed)](aerolink-removed.md) — historical record of the deleted Aerolink proxy launcher
-- [Pioneer (removed)](pioneer-removed.md) — historical record of the deleted Pioneer gateway integration
+Use the topic that owns the behavior you are changing. Installation describes
+where files go; skill-specific instructions stay in each `skills/<name>/SKILL.md`.
+
+## Setup and daily use
+
+- [Installation](installation.md) — requirements, file mapping, and preservation rules
+- [Shell modules](shell-modules.md) — agent launch commands, tmux, and browser helper
+- [Agent configs](agent-configs.md) — shipped settings, MCP roster, and enablement
+- [Auth rotation](auth-rotation.md) — saved profiles, kickoff, repair, and container sharing
+- [Statusline](statusline.md) — Claude/Cursor usage caches and shared native Codex layout
+- [Notifications](notifications.md) — Stop events, switches, tests, and trigger history
+- [Notification relay](notifications-relay.md) — devbox-to-host socket and user service
+- [Private ntfy](notifications-ntfy.md) — Tailnet phone service setup and troubleshooting
+- [OpenCode Go](opencode-go.md) — shipped `occ` profile, overrides, and model discovery
+
+## Development
+
+- [Conventions and validation](conventions.md) — repository ownership and local checks
+- [Scripts](scripts.md) — rotation, auth conversion, gateway probes, and hook trust
+- [Skills](skills.md) — installation, discovery, invocation, and skill catalog
+- [Dashboard](dashboard.md) — codeview commands, views, caches, and shipped tabs
+- [Codeview modules](codeview-modules.md) — drop-in API, frames, theme, and reload behavior
+
+## Remote development
+
+- [Runtime](remote-development.md) — routing, quota selection, publication, lifecycle, and retries
+- [Setup](remote-development-setup.md) — project mappings, GitHub App, Azure, Linear, and local validation
+- [Accounts](remote-development-accounts.md) — enrollment, reclaim, leases, and worker credential boundary
+
+## Historical investigations
+
+These records are dated evidence and decisions, not current service or client
+compatibility claims. Recheck upstream behavior before adopting an old workaround.
+
+- [OpenCode Go catalog](archive/opencode-go-catalog.md) — August 2026 route/tool-loop results
+- [OpenCode Go effort](archive/opencode-go-effort.md) — measured controls and findings; [raw high-cap log](archive/opencode-go-effort-highcap-2026-08-07.log)
+- [Codex on OpenCode Go](archive/opencode-go-codex.md) — unshipped Responses-provider experiment
+- [MCP disable probes](archive/mcp-disable-probes.md) — version-scoped reasons for the shipped controls
+- [Codex rewind, 0.147.0](archive/codex-rewind-bug-0147.md) — upstream prompt-ID regression
+- [Codex context management, 0.153.x](archive/codex-context-management-0153.md) — deferred experiment and measurement criteria
+- [Codex usage-limit bell](archive/codex-usage-limit-bell.md) — completion-hook gap and rejected watcher
+- [Command Code resume](archive/cmd-resume-bug.md) — empty-directory failure and reverted fallback
+- [Retired integrations](archive/retired-integrations.md) — removed Aerolink and Pioneer gateways
+- [Remote live validation](archive/remote-development-validation.md) — 2026-10-28 routing, coding, merge, and lifecycle receipts
+
+_Generated from commit `ebc53a9` on 2026-10-28._
 
 ## Notes
 

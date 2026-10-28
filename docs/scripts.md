@@ -1,61 +1,79 @@
 # Scripts
 
-Standalone Python utilities under `scripts/`. `scripts/codex_hook_trust.py` is not a user-facing command — the installer uses it to stamp the Codex Stop-notifier `trusted_hash`; see [Agent Configs](agent-configs.md).
+Utilities under `scripts/` use Python's standard library. The installed rotation
+script and codeview package are listed in [Installation](installation.md);
+the converter and probes below run from the checkout. Cloud automation lives
+under `automation/` and is documented in [Remote development](remote-development.md).
 
-## scripts/rotate_auth.py
+## Account rotation
 
-Implements the `rotate-*` commands. The shell functions in `shell/*.sh` call this
-script; do not add a second copy of the rotation logic. Behavior, flags, and
-storage layout: [Auth Rotation](auth-rotation.md).
+`scripts/rotate_auth.py` implements every `rotate-*` shell command. Do not
+create another copy of its account-selection logic. Flags, storage, and
+container sharing belong to [Auth Rotation](auth-rotation.md).
 
 ```bash
 python3 scripts/rotate_auth.py claude --list
-python3 scripts/rotate_auth.py codex --save NAME
-python3 scripts/rotate_auth.py cursor
-python3 scripts/rotate_auth.py grok
-python3 scripts/rotate_auth.py opencode NAME
-python3 scripts/rotate_auth.py antigravity --save NAME
+python3 scripts/rotate_auth.py codex --help
 ```
 
-The installer copies this file to `~/.config/clusterfork/scripts/rotate_auth.py`
-so the sourced wrappers can find it after install.
+## Auth conversion
 
-## scripts/auth_convert.py
-
-Converts `auth.json` files between OpenCode and Codex formats.
+`scripts/auth_convert.py` reads an OpenCode or Codex auth file and writes
+converted credential JSON to stdout. It does not update the input file or
+install the output.
 
 ```bash
-python scripts/auth_convert.py --from opencode path/to/auth.json   # → Codex format (stdout)
-python scripts/auth_convert.py --from codex path/to/auth.json      # → OpenCode format (stdout)
-python scripts/auth_convert.py --from auto path/to/auth.json       # auto-detect format
+python3 scripts/auth_convert.py --from opencode path/to/auth.json
+python3 scripts/auth_convert.py --from codex path/to/auth.json
+python3 scripts/auth_convert.py --from auto path/to/auth.json
 ```
 
-OpenCode stores tokens under `openai.{access,refresh,accountId}`. Codex stores them under `tokens.{access_token,refresh_token,account_id}` with `auth_mode: "chatgpt"`.
+OpenCode's `openai.{access,refresh,accountId}` maps to Codex's
+`tokens.{access_token,refresh_token,account_id}` with `auth_mode: "chatgpt"`.
+The OpenCode access JWT also fills Codex's `id_token`; the reverse conversion
+emits only the `openai` token object.
 
-## scripts/opencode_go_probe.py
+## Gateway tool-loop probe
 
-Checks which OpenCode Go models can drive a Claude Code agent loop, by running a streaming tool-result round trip against the Anthropic `/v1/messages` route. Catches the failure mode that a plain "does it emit a tool call" probe misses: a model that returns an **empty reply** to the tool output, stalling the loop with no error.
+`scripts/opencode_go_probe.py` tests a streaming tool call plus a tool-result
+follow-up on OpenCode Go's Anthropic route. A nonempty answer must echo the
+injected tool result; emitting a tool call alone is insufficient.
 
 ```bash
-python scripts/opencode_go_probe.py                          # sweep whole catalog
-python scripts/opencode_go_probe.py deepseek-v4-flash        # one model
-python scripts/opencode_go_probe.py deepseek-v4-flash -n 10  # repeat, for flaky models
+python3 scripts/opencode_go_probe.py deepseek-v4-flash
+python3 scripts/opencode_go_probe.py deepseek-v4-flash -n 3
 ```
 
-Reads the key from `OPENCODE_API_KEY` or `~/.local/share/opencode/auth.json`, and the catalog from `~/.cache/opencode/models.json`. Exits non-zero if any probed model fails, so it doubles as a regression check before changing `OCC_MODEL`. See [OpenCode Go endpoint](opencode-go.md) for how to read the results.
+With no model IDs it sweeps the cached catalog. `-j` controls parallelism
+(default 12); `-n` repeats each target. Any failure or missing echo exits
+nonzero. It reads `OPENCODE_API_KEY` or OpenCode's auth file and uses the
+OpenCode models cache. See [OpenCode Go](opencode-go.md) for interpretation.
 
-## scripts/opencode_go_effort_probe.py
+## Gateway effort probe
 
-Measures whether OpenCode Go honours the reasoning effort a client sends. Status codes cannot answer this — an accepted enum value says nothing about effect — so the script samples each level and compares how much reasoning comes back, with a rank test on the extremes. Three routes: `--route messages` (default) replays what Claude Code sends (`output_config.effort` on `/v1/messages`); `--route chat` replays what OpenCode itself sends (`reasoning_effort` on `/v1/chat/completions`); `--route responses` replays what Codex sends (`reasoning.effort` on `/v1/responses`).
+`scripts/opencode_go_effort_probe.py` samples effort levels on `messages`,
+`chat`, or `responses`. It measures reasoning volume rather than answer quality
+or price. Its controls, output-cap limitations, and existing measurements live
+in the [dated effort investigation](archive/opencode-go-effort.md), including
+why the large historical runs should not be repeated casually.
+
+For an intentional small recheck:
 
 ```bash
-python scripts/opencode_go_effort_probe.py                           # Claude Code route
-python scripts/opencode_go_effort_probe.py --route chat              # OpenCode route
-python scripts/opencode_go_effort_probe.py --route responses gpt-5.6-luna  # Codex route
-python scripts/opencode_go_effort_probe.py --route chat --prompt absproof glm-5.1
-python scripts/opencode_go_effort_probe.py qwen3.8-max -n 20         # more samples
-python scripts/opencode_go_effort_probe.py --route chat --prompt stack \
-  --max-tokens 384000 --timeout 3600 deepseek-v4-flash               # uncapped output
+python3 scripts/opencode_go_effort_probe.py --route messages \
+  --prompt absproof -n 3 deepseek-v4-flash
 ```
 
-The prompt is selectable (`--prompt hotel|absproof|stack`) because the measurement is prompt-sensitive: `hotel` (the missing-dollar riddle) is a memorised classic that models recite with fixed-length reasoning, and it flatlines even on models with a real effort ladder — `absproof` or `stack` is what separates levels there. `--max-tokens` (default 8192) sets `max_tokens` on messages/chat and `max_output_tokens` on responses — deepseek flash advertises 384000, and pinning a small cap censors the ladder the same way a floor-flatlining prompt does (the 2026-08-06 messages/responses "ignored" cells for flash were this ceiling false negative; corrected 2026-08-07). Raise `--timeout` with it; a filled high cap takes minutes per request. The signal is thinking-text volume on messages and chat, and the upstream's `reasoning_tokens` counter on responses (which never returns reasoning text). Every run includes an off-switch control (`thinking: {"type": "disabled"}` on messages, `effort: "none"` on the OpenAI routes — both must return zero reasoning), and samples are interleaved across levels so mid-run upstream drift cannot masquerade as an effort effect. The script exits non-zero if the control fails, or if every level reads zero — a route that exposes no reasoning signal makes effort unmeasurable, not "ignored". Full flash high-cap tables (do not re-run casually) and the rest of the matrix: [OpenCode Go endpoint](opencode-go.md#reasoning-effort-works-on-some-models-some-clients).
+Defaults are 12 samples per level, 12 jobs, the `hotel` prompt, an 8192-token
+output cap, and a 240-second request timeout. `--max-tokens` sets `max_tokens`
+on messages/chat and `max_output_tokens` on responses. Exit zero means a
+comparison was measurable, even when no significant effort effect was found;
+a failed control or entirely absent reasoning signal exits nonzero.
+
+## Installer hook trust
+
+`scripts/codex_hook_trust.py` is imported by the installer, not installed as a
+user command. It computes the Codex Stop-hook identity hash and formats
+`hooks.state` entries. The hash covers normalized command/type/async/timeout
+fields, with the upstream 600-second timeout default. See
+[Installation](installation.md#replacement-and-preservation) for what is written.
