@@ -19,6 +19,7 @@
       "repository": "KianBahasadri/clusterfork",
       "workflow": "clusterfork-worker.yml",
       "ref": "main",
+      "auto_merge": true,
       "ready_state_ids": ["ace01594-2daf-44bb-9690-cb0dccc11795"],
       "validation_commands": [["python3", "-m", "unittest", "discover", "-s", "tests", "-q"]]
     }

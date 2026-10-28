@@ -145,6 +145,7 @@ class WorkerService:
             if url and not re.fullmatch(re.escape(f"https://github.com/{route.repository}/pull/") + r"[1-9][0-9]*", url):
                 raise WorkerError("Invalid pull request URL", 400)
             row["pull_request"] = url
+            row["auto_merge_requested"] = route.auto_merge and status == "completed" and bool(url)
             self.runs.replace(row, etag)
             if status == "waiting_for_quota":
                 receipt, receipt_etag = self.receipts.get(key)
@@ -177,5 +178,6 @@ class WorkerService:
                 "selection": {"min_remaining_percent": self.registry.agent_selection.min_remaining_percent,
                               "max_snapshot_age_seconds": self.registry.agent_selection.max_snapshot_age_seconds},
                 "repository": route.repository, "ref": route.ref,
+                "auto_merge": route.auto_merge,
                 "validation_commands": route.validation_commands,
                 "issue": {key: issue.get(key) for key in ("id", "identifier", "title", "description", "url")}}

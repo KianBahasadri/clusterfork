@@ -1,7 +1,9 @@
 """Worker trust boundaries, credential fencing, and real Git publication behavior."""
 
 import copy
+from contextlib import redirect_stdout
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -11,11 +13,13 @@ import tempfile
 import threading
 import time
 import unittest
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
 import worker
+import accounts as account_cli
 from codex_runtime import CodexError, quota_snapshot
 from dispatch_core import Registry
 from quota_selection import select_account
@@ -117,6 +121,65 @@ class AccountLeaseTests(unittest.TestCase):
         with self.assertRaises(WorkerError):
             self.table.replace(row, version)
 
+    def test_revoked_login_releases_lease_without_masking_authentication_failure(self):
+        class Broker:
+            released = False
+            def call(self, action, **data):
+                if action == "claim":
+                    return {"auth": auth(), "lease": "test-lease"}
+                self.released = data["release"] and data["auth"] is None
+        broker = Broker()
+        with self.assertRaises(CodexError):
+            with worker.account_lease(broker, "account") as (home, heartbeat):
+                (home / "auth.json").unlink()
+                raise CodexError("login revoked")
+        self.assertTrue(broker.released)
+
+
+class AccountEnrollmentTests(unittest.TestCase):
+    def enroll(self, store, table, *args):
+        output = io.StringIO()
+        with patch.object(account_cli, "connect", return_value=table), \
+             patch.object(sys, "argv", ["accounts.py", "enroll", "--store", str(store), *args]), \
+             redirect_stdout(output):
+            account_cli.main()
+        return output.getvalue()
+
+    def test_default_enrollment_includes_active_profile_and_deduplicates_aliases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Path(directory)
+            active = store / "auth.json.active"
+            active.write_text(json.dumps(auth("active-account")))
+            (store / "auth.json.alias").write_bytes(active.read_bytes())
+            (store / "auth.json.other").write_text(json.dumps(auth("other-account")))
+            (store / "current").symlink_to(active.name)
+            original = active.read_bytes()
+            table = MemoryTable()
+            output = self.enroll(store, table)
+            manifest = json.loads((store / account_cli.MANIFEST).read_text())
+            self.assertEqual(set(manifest), {"active", "alias", "other"})
+            self.assertEqual(len(table.rows), 2)
+            self.assertEqual(manifest["active"]["account_id"], manifest["alias"]["account_id"])
+            self.assertEqual((store / "current").resolve(), active)
+            self.assertEqual(active.read_bytes(), original)
+            self.assertIn("includes the active local account", output)
+
+    def test_explicit_active_enrollment_is_idempotent_and_retains_refreshed_cloud_tokens(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Path(directory)
+            active = store / "auth.json.active"
+            active.write_text(json.dumps(auth("active-account")))
+            (store / "current").symlink_to(active.name)
+            table = MemoryTable()
+            self.enroll(store, table, "--profile", "active")
+            pool = Accounts(table)
+            identity = pool.list()[0]
+            leased = pool.claim(identity, "worker")
+            pool.save(identity, "worker", leased["lease"], auth("active-account", "cloud-refreshed"), release=True)
+            self.enroll(store, table, "--profile", "active")
+            self.assertEqual(len(pool.list()), 1)
+            self.assertEqual(pool.claim(identity, "check")["auth"]["tokens"]["access_token"], "cloud-refreshed")
+
 
 class WorkerAuthorizationTests(unittest.TestCase):
     def setUp(self):
@@ -164,6 +227,7 @@ class WorkerAuthorizationTests(unittest.TestCase):
         service, github, _ = self.service()
         config = service.handle("start", claims(), {"dispatch_key": KEY})
         self.assertEqual((config["model"], config["effort"]), ("gpt-6.1-sol", "max"))
+        self.assertTrue(config["auto_merge"])
         service.handle("github", claims(), {"dispatch_key": KEY})
         self.assertEqual(github.permissions, {"contents": "write", "pull_requests": "write"})
 
@@ -195,6 +259,20 @@ class WorkerAuthorizationTests(unittest.TestCase):
 
 
 class LiveQuotaShapeTests(unittest.TestCase):
+    def test_broker_authentication_or_storage_failure_is_not_reported_as_exhausted_quota(self):
+        class Broker:
+            def call(self, action):
+                return {"accounts": ["a" * 64]}
+        class Heartbeat:
+            failed = threading.Event()
+        config = {"model": "gpt-6.1-sol", "effort": "max",
+                  "selection": {"min_remaining_percent": 20, "max_snapshot_age_seconds": 60}}
+        for status in (401, 503):
+            with self.subTest(status=status), \
+                 patch.object(worker, "account_lease", side_effect=HTTPError("https://broker", status, "failure", {}, None)), \
+                 self.assertRaises(HTTPError):
+                worker.choose_account(Broker(), config, Heartbeat())
+
     def test_short_and_weekly_limits_both_constrain_headroom(self):
         config = Registry.load(ROOT / "automation/azure/projects.json")
         snapshot = quota_snapshot("account", "gpt-6.1-sol", {"rateLimitsByLimitId": {"codex": {
@@ -272,7 +350,7 @@ class GitPublicationTests(unittest.TestCase):
                     return {"token": "temporary-test-token"}
             class Heartbeat:
                 failed = threading.Event()
-            config = {"repository": "owner/repo", "ref": "main", "issue": {
+            config = {"repository": "owner/repo", "ref": "main", "auto_merge": False, "issue": {
                 "id": ISSUE, "identifier": "KIAN-891", "title": "Improve file", "url": "https://linear.app/test"},
                 "validation_commands": [[sys.executable, "-c", "from pathlib import Path; assert Path('file.txt').read_text() == 'updated\\n'"]]}
             def implement(*args):
@@ -292,6 +370,99 @@ class GitPublicationTests(unittest.TestCase):
                 self.assertIn("clusterfork-dispatch:" + KEY, request.call_args.args[2]["body"])
             finally:
                 os.chdir(old)
+
+
+class AutoMergeTests(unittest.TestCase):
+    def setUp(self):
+        self.config = {"repository": "owner/repo", "ref": "main"}
+        self.branch = "clusterfork/kian-891-aaaaaaaa"
+        self.url = "https://github.com/owner/repo/pull/1"
+        self.sha = "c" * 40
+        self.pull = {"html_url": self.url, "state": "open", "draft": False, "merged": False,
+                     "user": {"login": "clusterfork[bot]"},
+                     "head": {"repo": {"full_name": "owner/repo"}, "ref": self.branch, "sha": self.sha},
+                     "base": {"ref": "main"}, "body": f"<!-- clusterfork-dispatch:{KEY} -->"}
+        self.policy = {"data": {"repository": {"autoMergeAllowed": True, "ref": {
+            "branchProtectionRule": {"requiresStatusChecks": True,
+                                     "requiredStatusCheckContexts": ["test", "routing-runtime"]}}}}}
+
+    def request(self, **kwargs):
+        worker.request_auto_merge(self.config, "private-test-token", self.url, KEY, self.branch, **kwargs)
+
+    def test_default_auto_merge_uses_exact_commit_and_never_bypasses_checks(self):
+        with patch.object(worker, "json_request", side_effect=[self.pull, self.policy]), \
+             patch.object(worker, "command") as command:
+            self.request(expected_sha=self.sha)
+        args = command.call_args.args[0]
+        self.assertEqual(args, ["gh", "pr", "merge", self.url, "--auto", "--squash", "--match-head-commit", self.sha])
+        self.assertNotIn("--admin", args)
+        self.assertNotIn("private-test-token", args)
+        self.assertEqual(command.call_args.kwargs["env"]["GH_TOKEN"], "private-test-token")
+
+    def test_project_can_disable_auto_merge(self):
+        self.config["auto_merge"] = False
+        with patch.object(worker, "json_request") as request, patch.object(worker, "command") as command:
+            self.request()
+        request.assert_not_called()
+        command.assert_not_called()
+
+    def test_missing_ci_or_repository_auto_merge_prevents_merge(self):
+        cases = [
+            {"autoMergeAllowed": False, "ref": self.policy["data"]["repository"]["ref"]},
+            {"autoMergeAllowed": True, "ref": {"branchProtectionRule": None}},
+            {"autoMergeAllowed": True, "ref": {"branchProtectionRule": {
+                "requiresStatusChecks": False, "requiredStatusCheckContexts": ["test"]}}},
+            {"autoMergeAllowed": True, "ref": {"branchProtectionRule": {
+                "requiresStatusChecks": True, "requiredStatusCheckContexts": []}}},
+        ]
+        for repo in cases:
+            with self.subTest(policy=repo), \
+                 patch.object(worker, "json_request", side_effect=[self.pull, {"data": {"repository": repo}}]), \
+                 patch.object(worker, "command") as command, self.assertRaises(worker.WorkerFailure):
+                self.request()
+            command.assert_not_called()
+
+    def test_foreign_fork_changed_head_or_unrelated_pr_cannot_be_auto_merged(self):
+        cases = []
+        for field, value in [("user", {"login": "someone-else"}), ("body", "unrelated PR"),
+                             ("base", {"ref": "another-branch"}), ("draft", True)]:
+            cases.append({**self.pull, field: value})
+        cases.append({**self.pull, "head": {**self.pull["head"], "repo": {"full_name": "attacker/repo"}}})
+        cases.append({**self.pull, "head": {**self.pull["head"], "sha": "d" * 40}})
+        for pull in cases:
+            with self.subTest(pull=pull), patch.object(worker, "json_request", return_value=pull), \
+                 patch.object(worker, "command") as command, self.assertRaises(worker.WorkerFailure):
+                self.request(expected_sha=self.sha)
+            command.assert_not_called()
+
+    def test_retry_recovers_merged_pr_without_repeating_work_or_requesting_merge(self):
+        merged = {**self.pull, "state": "closed", "merged": True, "merged_at": "2026-10-28T20:00:00Z"}
+        with patch.object(worker, "json_request", return_value=[merged]) as request:
+            self.assertEqual(worker.find_pr(self.config, "token", self.branch), self.url)
+            self.assertIn("state=all", request.call_args.args[0])
+        with patch.object(worker, "json_request", return_value=merged), patch.object(worker, "command") as command:
+            self.request()
+        command.assert_not_called()
+
+    def test_closed_unmerged_pr_is_not_treated_as_completed_work(self):
+        closed = {**self.pull, "state": "closed", "merged_at": None}
+        with patch.object(worker, "json_request", return_value=[closed]):
+            self.assertIsNone(worker.find_pr(self.config, "token", self.branch))
+
+    def test_registry_defaults_to_auto_merge_and_rejects_non_boolean_override(self):
+        config = json.loads((ROOT / "automation/azure/projects.json").read_text())
+        config["projects"][0].pop("auto_merge", None)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "registry.json"
+            path.write_text(json.dumps(config))
+            self.assertTrue(Registry.load(path).routes[PROJECT].auto_merge)
+            config["projects"][0]["auto_merge"] = False
+            path.write_text(json.dumps(config))
+            self.assertFalse(Registry.load(path).routes[PROJECT].auto_merge)
+            config["projects"][0]["auto_merge"] = "true"
+            path.write_text(json.dumps(config))
+            with self.assertRaisesRegex(ValueError, "boolean"):
+                Registry.load(path)
 
 
 if __name__ == "__main__":
