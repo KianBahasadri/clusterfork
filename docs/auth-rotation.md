@@ -16,9 +16,8 @@ OpenCode), and GNOME Keyring (Antigravity). All six share the same flags:
 - `rotate-* NAME` — switch to a specific account
 - `rotate-* --kickoff [names]` — for every saved profile of
   that provider, or just the named ones, temporarily install it and send one
-  tiny one-shot message ("hi") via the agent CLI's non-interactive mode. Intent
-  is only to kick off each account's usage ticker; the active credentials are
-  restored afterwards.
+  tiny one-shot message ("hi") via the agent CLI's non-interactive mode to
+  start each account's usage ticker. See the restoration limits below.
 
 `--save` overwrites an existing profile of that name. Profile names may only
 contain letters, numbers, dots, underscores, and dashes.
@@ -36,18 +35,13 @@ current marker when it names the deleted, detached profile. Other saved
 profiles and an unrelated active login are preserved.
 
 To add an account: `rotate-* --unhook`, log in as the new account, then
-`rotate-* --save NAME`. `--unhook` refuses if the active credentials are not
-already saved as a profile (a regular-file `auth.json` on the shared-store
-backends, a Claude active file whose token matches no profile, or an
-Antigravity keyring item with no current profile marker). Saved profiles stay
-put. A later `rotate-* NAME` reattaches a saved profile if you abort before
-logging in. Do not re-run the installer in between: it repairs a missing
+`rotate-* --save NAME`. Shared-store detach refuses a regular-file `auth.json`;
+Claude refuses an unsaved regular-file login, identified by token matching;
+Antigravity requires a saved current profile marker. Save the login first if
+needed. Saved profiles stay put. A later `rotate-* NAME` reattaches a saved
+profile if you abort before logging in. Do not re-run the installer in between:
+it repairs a missing
 agent-side `auth.json` symlink and would hook the previous profile again.
-
-The shell modules are thin wrappers. They resolve
-`scripts/rotate_auth.py` from `BASH_SOURCE` so the same function works when
-sourced from the repo or from `~/.config/clusterfork/shell/` after install
-(the installer copies the script to `~/.config/clusterfork/scripts/`).
 
 ## --kickoff
 
@@ -61,81 +55,35 @@ detached so nothing blocks.
 The sweep is strictly sequential: install a profile, run its ping to
 completion, then move to the next profile.
 
-State handling per backend:
+After a normally completed sweep, Claude restores the previous active file's
+bytes if it existed. The shared-store backends restore the previous `current`
+link when one existed and remove a temporary agent link if the account started
+unhooked. Antigravity reinstalls its current saved profile, or clears the active
+item if it started fully unhooked.
 
-- Claude: the active `.credentials.json` bytes are backed up and restored
-  byte-identical after the sweep.
-- Codex / Cursor / Grok / OpenCode: only the shared `current` symlink is repointed
-  per profile; it is restored to its previous target afterwards. If the agent
-  side was unhooked, the temporary `auth.json` link is removed again.
-- Antigravity: each profile is installed into the active keyring slot in turn;
-  the original profile is reinstalled at the end, and a fully unhooked state is
-  restored by clearing the active item.
+Restoration has limits in the current implementation: Claude with no active
+file and a shared store with no previous `current` remain on the last profile;
+the latter prints a warning. Antigravity treats a current profile omitted from
+an explicitly selected subset as unknown, so it cannot restore that profile.
+An interrupted sweep has no general cleanup guarantee. Use a full sweep when
+the current Antigravity profile must be restored.
 
-An unknown name fails fast before any pings run, with the known profiles listed; duplicates and dashed args are rejected. Exit code is 1 if any account's ping failed; failures are reported per line
-and do not stop the sweep. The command refuses to run when the active
-credentials are not recoverable through rotation machinery (a regular-file
-`auth.json`, or an Antigravity active keyring item that matches no profile).
+Unknown names, duplicate names, and dashed arguments fail before pings run.
+A ping failure is reported and the sweep continues; the final exit code is 1
+if any ping failed. Shared-store kickoff refuses a regular-file `auth.json`;
+Antigravity refuses an active keyring item with no recoverable current profile.
 
-### Why not parallel
+Pings run sequentially because every backend shares one active credential
+slot. Concurrent launches can read the wrong account or overwrite refreshed
+tokens. Per-process config isolation is not supported consistently across all
+clients. Only Codex pins a small model (`gpt-6-luna`); the other pings use each
+CLI's configured default.
 
-Parallel kicks were tried and reverted to serial. All backends have exactly
-one active credential slot (the `current` symlink chain, `.credentials.json`,
-or the keyring item), so concurrent pings cannot each get their own account:
+## Implementation and directory overrides
 
-- **Credential misattribution.** An agent process reads credentials only after
-  CLI startup, not at spawn time. Spawning all pings against one slot means
-  whichever profile happens to be installed when each process reads wins —
-  some accounts never got kicked, others counted twice. A staggered variant
-  (install → spawn → wait N seconds → next) needs a guess at each CLI's
-  time-to-read and still misattributes on slow startups or cold caches.
-- **Token-refresh races.** A long-running ping can refresh an OAuth token and
-  write it back mid-sweep, clobbering or being clobbered by the next install.
-  With one blocking ping at a time there is no other writer.
-- **Env-var isolation is not portable.** The clean fix — give each process its
-  own config dir via `CLAUDE_CONFIG_DIR` / `CODEX_HOME`-style relocations so
-  all pings start truly simultaneously — works for Claude/Codex/OpenCode but
-  not Cursor, which honors no such variable, so the sweep would need two
-  different mechanisms with different failure modes for one best-effort job.
-
-Serial costs wall time (sum of full pings instead of overlap) but every ping
-provably runs against its own account with no concurrent writers. Since the
-goal is a low-frequency ticker kick, that trade was taken deliberately.
-
-Known limitation: except for Codex which explicitly pins `-m gpt-6-luna`
-(the Luna model), the ping uses whatever model the agent CLI defaults
-to — it does not pick the cheapest/smallest model for the provider. Picking
-per-provider smallest models would mean keeping a pinned model ID per provider
-(and OpenCode additionally needs a `provider/model` pair), which has not been
-built yet.
-
-## Why it is one Python script
-
-Until 2026-08-14 each `rotate-*` function was a self-contained bash copy in
-its `shell/*.sh` module. Codex, Cursor, and OpenCode were the same program
-after renaming (~256 lines × 3). Claude was the same control flow with
-copy-and-token-match instead of a symlink. Antigravity was the same flags
-against `secret-tool`. The next shared flag would have been a four-way paste.
-
-They were collapsed into `scripts/rotate_auth.py` with three backends (copy,
-shared-store symlink, keyring). Python was already how this repo does
-standalone tools, and JSON / atomic replace / tests are less painful there
-than in sourced bash.
-
-`--save` existed only on `rotate-antigravity`. Adding it to the other four
-started as bash, then was thrown away untested. The Python port was written
-from the last committed bash (no `--save` on the file backends), and `--save`
-was implemented only in Python. `configure_shared_auth` in the installer was
-left as migrate/repair — it is not a second rotator.
-
-`--save` on the shared-store backend is the user-facing fix for a login that
-replaced `auth.json` with a regular file. The installer still refuses to
-touch that case; the user names the new login and `--save` copies it into
-the store, points `current` at it, and puts the relative symlink back.
-
-The Antigravity bash wrapper used to `set +x` around the body so `set -x`
-would not echo secrets. That is gone: bash only sees `python3 … antigravity`,
-and the secret stays inside Python / `secret-tool`.
+All rotation logic lives in `scripts/rotate_auth.py`; shell modules resolve it
+from `BASH_SOURCE`, so the repo and installed wrappers share one
+implementation. Installer auth migration is separate from account selection.
 
 Override directories (empty or unset uses the default, same as bash
 `${VAR:-default}`): `ROTATE_CLAUDE_DIR`, `ROTATE_CODEX_CODEX_DIR`,
@@ -149,15 +97,15 @@ Override directories (empty or unset uses the default, same as bash
 
 Switches Claude Code accounts stored as `~/.claude/.credentials.json.*` files.
 `--save NAME` copies the active `.credentials.json` onto `.credentials.json.NAME`.
-`--unhook` deletes `.credentials.json` when its `accessToken` matches a saved
-profile.
+`--unhook` deletes a regular active file when its `accessToken` matches a saved
+profile; legacy active symlinks can also be detached.
 
 Claude Code rewrites `.credentials.json` on every token refresh, so rotation copies the selected file over `.credentials.json` rather than symlinking. The active account is identified by matching the `accessToken` field.
 
 ## rotate-codex
 
 Cloud account ownership and reclaiming remote credentials are described in
-[Remote development](remote-development.md#accounts-and-token-refresh).
+[Remote accounts](remote-development-accounts.md).
 
 Switches Codex accounts stored under
 `~/.local/share/clusterfork-auth/codex/`. `--save NAME` writes the active
@@ -255,17 +203,5 @@ the link chain with `rotate-codex --save NAME`, `rotate-cursor-cli --save NAME`,
 `rotate-grok --save NAME`, or `rotate-opencode --save NAME`. That copies the regular file into the store,
 points `current` at it, and replaces `auth.json` with the shared symlink.
 
-Manual equivalent:
-
-```bash
-STORE=~/.local/share/clusterfork-auth/<agent>
-mkdir -p "$STORE"
-chmod 700 ~/.local/share/clusterfork-auth "$STORE"
-cp <agent-dir>/auth.json "$STORE/auth.json.NAME"
-chmod 600 "$STORE/auth.json.NAME"
-ln -sfn auth.json.NAME "$STORE/current"
-ln -sfn "$(realpath -ms --relative-to=<agent-dir> "$STORE/current")" <agent-dir>/auth.json
-```
-
-From-scratch setup on a new machine is the same pattern if you are importing an
-auth file from elsewhere; `rotate-* --save NAME` does that copy and relink.
+For a new machine importing credentials, `rotate-* --save NAME` performs the
+copy and relink.

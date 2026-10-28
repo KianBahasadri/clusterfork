@@ -1,79 +1,65 @@
 # Statusline
 
-Clusterfork documents and installs the terminal status lines currently in use on
-this machine across Claude Code, Cursor Agent, and Codex CLI: colored footers
-showing model, effort/params, active account, context usage, and plan/rate-limit
-usage.
+Claude Code and Cursor use shell scripts that read JSON from stdin. Codex
+renders its footer natively. [Installation](installation.md#installed-files)
+owns the script destinations and config wiring. The shell scripts need `jq`
+and Python 3; usage helpers refresh caches in the background.
 
-## What gets installed
+## Claude
 
-| Repo file                          | Destination                       |
-|------------------------------------|-----------------------------------|
-| `statusline/claude/statusline.sh`  | `~/.claude/statusline-command.sh` |
-| `statusline/claude/usage-fetch.py` | `~/.claude/claude-usage-fetch.py` |
-| `statusline/cursor/statusline.sh`  | `~/.cursor/statusline.sh`         |
-| `statusline/cursor/usage-fetch.py` | `~/.cursor/cursor-usage-fetch.py` |
+Renders `model · effort · account · ctx% · 5h% · wk%`, omitting missing effort
+and account segments. Account labels come from matching the active
+`~/.claude/.credentials.json` access token against saved profile copies.
+After a token refresh the label can be absent until a copy matches again.
 
-Claude wires the script via `statusLine` in `agents/claude.json` →
-`~/.claude/settings.json` (full overwrite, like other agent configs).
+Usage comes from the statusline payload's `rate_limits` when present.
+`claude-usage-fetch.py` harvests those values into
+`~/.claude/.usage-cache.json`; when absent (including fast mode), it makes a
+small quota-check request and reads rate-limit headers. API fetches use a
+nonblocking lock and `CLAUDE_USAGE_TTL` (default 120 seconds). A failed fetch
+leaves the previous cache untouched.
 
-Cursor wires via `statusLine` in `~/.cursor/cli-config.json`. That file also
-holds session/auth caches, so the installer only sets/updates the `statusLine`
-key — it does not replace the whole file. See [Conventions](conventions.md).
+### OpenCode Go
 
-## Claude line
+When `ANTHROPIC_BASE_URL` contains `opencode.ai`, the script adds `go` and a
+monthly usage segment, while retaining any supplied effort. It ignores
+Anthropic rate limits and reads OpenCode dashboard usage instead.
 
-Renders: `model · effort · account · ctx% · 5h% · wk%`.
+The account label follows the suffix of the OpenCode store's `current` link
+(`ROTATE_OPENCODE_AUTH_STORE_DIR` overrides its directory). This statusline
+lookup does not match an overriding `OPENCODE_API_KEY` to a saved profile;
+its label can therefore differ from the account actually billed.
 
-Account comes from matching `~/.claude/.credentials.json` against
-`.credentials.json.<label>` copies (same idea as auth rotation). Usage % comes
-from the statusline payload's `rate_limits` when present; under fast mode those
-fields are omitted, so the installed `claude-usage-fetch.py` refreshes
-`~/.claude/.usage-cache.json` in the background (harvest from payload or a
-throttled quota API call).
+Usage reads the first account's 5h/weekly/monthly windows from the external
+conky-linear-HUP cache. Defaults:
 
-### OpenCode Go mode
+| Variable | Default |
+| --- | --- |
+| `OCC_USAGE_CACHE` | `~/conky-linear-HUP/cache/opencode-usage.json` |
+| `OCC_USAGE_FETCHER` | `~/conky-linear-HUP/scripts/fetch_opencode_usage.py` |
+| `OCC_USAGE_TTL` | 300 seconds |
 
-Under [`occ`](shell-modules.md) the same script renders
-`model · go · account · ctx% · 5h% · wk% · mo%` instead. Claude Code spawns the
-statusline as a child process, so it inherits the launcher's environment and
-detects the mode from `ANTHROPIC_BASE_URL` — no second script and no
-`--settings` override. (CLI `--settings` *does* outrank `~/.claude/settings.json`
-for `statusLine` if a fully separate line is ever wanted.)
+Clusterfork does not install that external scraper. If present, the fetcher is
+started when the cache file is too old. A cache marked `staleCache` prefixes
+values with `~`; missing/failed data displays `—`. The cache's first account
+is not selected by the launcher's billing key. Gateway observations and launcher
+configuration are in [OpenCode Go](opencode-go.md).
 
-Every Anthropic-side segment is replaced, because under `occ` each one would
-otherwise describe an account the session is not billing against:
+## Cursor
 
-- **Account** is the profile `rotate-opencode` selected, read as the suffix of
-  the `~/.local/share/clusterfork-auth/opencode/current` symlink. No token
-  matching needed — unlike Claude's credentials file, nothing rewrites this link.
-- **Usage** is OpenCode Go's three dashboard windows: 5h (`$12`), weekly (`$30`),
-  and monthly (`$60`). The payload's `rate_limits` are discarded.
+Renders `model · params/max · account · ctx% · auto% · api%`.
+The label is the resolved `auth.json` suffix under
+`${CURSOR_HOME:-~/.config/cursor}`, falling back to the selected label in
+`~/live-wallpaper/conky-linear-HUP/cache/cursor-usage.json`.
 
-The gateway serves no usage data at all (see
-[OpenCode Go endpoint](opencode-go.md)), so the authenticated web dashboard is
-the only source. conky-linear-HUP already scrapes it (Firefox `auth` cookie →
-the three usage cards) and is the system of record, so the statusline reads its
-`cache/opencode-usage.json` rather than duplicating that HTML parser. conky
-repolls on its own every 60–300s; only if that cache ages past `OCC_USAGE_TTL`
-(default 300s) does the statusline drive conky's fetcher itself, in the
-background. A figure served from a stale cache is prefixed `~`; if the cache is
-missing or its last fetch failed, the segments show `—` rather than a stale
-number. Overridable: `OCC_USAGE_CACHE`, `OCC_USAGE_FETCHER`, `OCC_USAGE_TTL`.
+`cursor-usage-fetch.py` keeps `~/.cursor/.usage-cache.json` fresh using that
+conky cache or Cursor's dashboard API. `CURSOR_USAGE_TTL` defaults to 120
+seconds; `CURSOR_AUTH_PATH` overrides the fetcher's credential path. Failed
+fetches retain the previous cache.
 
-## Cursor line
+## Codex
 
-Renders: `model · params/max · account · ctx% · auto% · api%`.
-
-Account is the suffix of the resolved `~/.config/cursor/auth.json` symlink
-(e.g. `ida`), with a fallback to the conky usage cache label.
-The installed `cursor-usage-fetch.py` keeps `~/.cursor/.usage-cache.json` fresh
-(conky cache harvest or Cursor dashboard API), throttled by TTL.
-
-## Codex line
-
-Codex CLI renders its status line natively from `[tui].status_line`. Clusterfork
-keeps the shared layout in `statusline/codex/statusline.config.toml`:
+`statusline/codex/statusline.config.toml` owns the shared layout:
 
 ```toml
 [tui]
@@ -81,50 +67,24 @@ status_line = ["model-with-reasoning", "context-used", "task-progress", "five-ho
 status_line_use_colors = true
 ```
 
-The installer copies this file into the writable shared auth store and creates
-a relative link in each environment:
+The installer writes it on the shared auth store's writable host and links it
+from `~/.codex/clusterfork-statusline.toml`. A container with that store mounted
+read-only needs the host installation first. See
+[container sharing](auth-rotation.md#sharing-with-a-container).
 
-```text
-~/.codex/clusterfork-statusline.toml
-  → ../.local/share/clusterfork-auth/codex/statusline.config.toml
-```
+The `codex` and `cc` shell functions read the link under
+`${CODEX_HOME:-~/.codex}` on every launch and pass only those two keys as
+`--config` overrides before caller arguments. Invalid statusline types or
+malformed TOML stop the launch. A caller override takes precedence; direct
+binary invocation bypasses this wrapper.
 
-The dev box already mounts `~/.local/share/clusterfork-auth` read-only. Install
-on the host first, then in the dev box; the latter creates its local settings
-link without writing to the shared store. Both environments read the same
-file, so subsequent host-side edits are visible without reinstalling in the
-dev box. Existing Codex sessions must restart to load a changed layout.
+Edit the repo template and reinstall on the host to distribute a layout.
+Direct shared-file edits take effect on new launches but are replaced on the
+next writable-host install. Existing sessions must restart. `/statusline`
+updates Codex's local config/current session, not the shared file.
 
-The shell commands `codex` and `cc` read this file on every launch when it is
-readable under `${CODEX_HOME:-~/.codex}`. They pass only `tui.status_line` and
-`tui.status_line_use_colors` as `--config` overrides before the caller's
-arguments. Other config values are ignored, and malformed status-line settings
-stop the launch with an error. Explicit profiles still work; a caller's
-`--config` for either status-line key takes precedence. Invoking the Codex
-binary directly (including `command codex`) bypasses the shell wrapper.
-
-To change the shared layout, edit the repo template and run the installer on
-the host, or edit the installed shared file for an immediate local change.
-Reinstalling on a writable host restores the repo template. `/statusline`
-changes the current session and Codex's local config; edit the shared file to
-publish a layout to both environments.
-
-This uses Codex's [CLI config overrides](https://learn.chatgpt.com/docs/config-file/config-advanced#one-off-overrides-from-the-cli).
-With Codex 0.162.1, a native `--profile` also receives unrelated preference
-writes (verified with screen-reader detection), so the launcher does not
-select a shared profile. Model choices and other preferences keep saving to
-the environment's normal config. See [Auth Rotation](auth-rotation.md#sharing-with-a-container)
-for the existing mount.
-
-Unlike Claude and Cursor — which spawn child-process scripts piped with JSON
-payloads on stdin — Codex renders its status line directly in the TUI without
-external script hooks.
-
-Renders: `model-with-reasoning · context-used · task-progress · five-hour-limit · weekly-limit`.
-
-- **model-with-reasoning**: active model and reasoning effort (e.g. `gpt-6-astra (max)`)
-- **context-used**: active context percentage or token budget consumption (e.g. `12% context`)
-- **task-progress**: multi-turn or task step counter
-- **five-hour-limit**: rolling 5-hour rate limit percentage
-- **weekly-limit**: rolling 7-day rate limit percentage
-
+The wrapper deliberately avoids selecting a native shared `--profile`: on
+Codex 0.162.1 that also redirected unrelated preference writes. Other settings
+continue to use each environment's normal config. Native footer fields
+include model/effort, context usage, task progress, and both quota windows;
+context percentage is distinct from rate-limit consumption.

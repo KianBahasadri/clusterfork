@@ -2,7 +2,7 @@
 name: add-codeview-module
 description: >
   Add a drop-in codeview dashboard tab: a Python file in
-  `.codeview/modules/` that becomes a namespaced `/m/<name>/` page.
+  `.codeview/modules/` that becomes a namespaced dashboard page.
   Follows the repo's existing tabs and the codeview module contract.
   Use when asked to "add a codeview module", "create a codeview tab",
   "custom codeview module", "drop-in dashboard tab", or
@@ -41,11 +41,11 @@ rather than starting from the template below.
 4. **Match the host page.** The tab is framed with
    `sandbox="allow-scripts allow-forms"`, so the response is a full document
    and the frame has an *opaque* origin: `localStorage`, cookies,
-   `window.parent`, and top-level navigation are all unavailable inside a
-   tab. Keep the theme bootstrap wrapped in `try`/`catch` and let it fall
-   back to `prefers-color-scheme` — the stored `codeview-theme` only applies
-   when `/m/<slug>/` is opened directly in a browser tab, and the
-   dashboard's own theme toggle does not reach the frame. Treat
+   the parent document, and top-level navigation are all unavailable inside a
+   tab. Use the template's theme handoff: read `?theme=` for first paint and
+   accept `codeview-theme` messages from `window.parent` for live toggles.
+   The guarded `localStorage` and `prefers-color-scheme` fallback applies
+   when `/m/<slug>/` is opened directly in a browser tab. Treat
    `navigator.clipboard` the same way: give it a `.catch()` so a blocked
    write cannot become an unhandled rejection. Link `/assets/app.css` and
    use the host classes below. Do not paste design-guide catalog markup —
