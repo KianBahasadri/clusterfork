@@ -104,12 +104,19 @@ An update to `main` alone does not force another CI run on an older PR branch.
 
 The runner refuses auto-merge if repository auto-merge or required PR checks are
 missing. It reads PR-specific required checks using its existing App permissions;
-no Administration grant is needed. GitHub handles pending/failed CI and merge conflicts; the
-worker never uses `--admin` or force-merges. A completed worker outcome means its
+no Administration grant is needed. GitHub handles pending/failed CI and merge
+conflicts; the worker never uses `--admin` or force-merges. A completed worker outcome means its
 coding/publication work finished; the PR can still be waiting for CI. The Azure
 outcome also records whether auto-merge was requested. Recovery recognizes merged
 PRs so a retry does not repeat work if merging preceded outcome persistence.
 Reference: [GitHub auto-merge](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/automatically-merging-a-pull-request).
+
+Live verification on 2026-10-28 refreshed PR #1 to trigger new CI, then used the
+worker's actual merge helper with a repository-scoped App token. The PR remained
+open with auto-merge enabled while checks ran, then `clusterfork[bot]` squash-merged
+it as `5b3474c` after the required checks passed. No approval was submitted.
+[Post-merge CI](https://github.com/KianBahasadri/clusterfork/actions/runs/40755845581)
+also passed. The test verifies native merging without an Administration grant.
 
 ## Agent profiles
 
@@ -385,18 +392,13 @@ no cloud writes and use no actual credentials. The deployment package has an
 explicit file allowlist. Function decorators and SDK integration can be checked
 with dependencies from `automation/azure/requirements.txt` in an isolated venv.
 
-Validation for the routing milestone: 27 routing/setup tests and six quota-selection tests
-pass; all dispatcher functions index
-with the pinned Azure SDK, a signed request passes through the native HTTP handler
-and queue consumer to the dispatch adapter, and queue failure returns 503. A
-temporary RSA key verifies GitHub App JWT signing and repository-scoped token
-requests. The full 278-test repository suite passes with `NO_COLOR` removed from
-the subprocess environment (the notification color tests otherwise inherit it).
-The worker adds 31 checks for workflow authorization, credential fencing, local
-account ownership, live quota shapes, and real Git branch/PR publication against
-a temporary bare repository, revoked-login cleanup, and broker error handling.
-The full suite has 309 tests, including auto-merge policy and merged-PR recovery. Real RSA verification
-also rejects forged signatures, wrong issuers/audiences, expired and future tokens.
+The full suite has 311 tests, including 31 worker checks for authorization,
+credential fencing, account ownership, quotas, Git publication, auth failure
+handling, auto-merge policy, and merged-PR recovery. Remove `NO_COLOR` from the
+subprocess environment for the notification color tests. All five functions index
+with the pinned Azure SDK. Native handler checks cover signed webhook routing and
+503 on queue failure. Real RSA checks cover App JWT signing and reject forged,
+expired, future, wrong-issuer, and wrong-audience OIDC tokens.
 
 Protocol references: [Linear webhooks](https://linear.app/developers/webhooks),
 [GitHub dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event),
