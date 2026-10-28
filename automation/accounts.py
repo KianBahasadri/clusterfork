@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enroll inactive saved Codex accounts for exclusive cloud use, or reclaim them."""
+"""Enroll saved Codex accounts, including the active one, or reclaim them."""
 
 from __future__ import annotations
 
@@ -51,15 +51,12 @@ def main():
     names = args.profile or sorted(profiles if args.action == "enroll" else manifest)
     if any(name not in profiles or Path(name).name != name for name in names):
         raise WorkerError("Unknown saved profile")
-    active = (args.store / "current").resolve()
-    active_auth = Path.home() / ".codex/auth.json"
-    active_id = account_identity(json.loads(active_auth.read_text())) if active_auth.is_file() else None
     identities = {name: account_identity(json.loads(path.read_text())) for name, path in profiles.items()}
     changed = 0
     for name in names:
         path = profiles[name]
         if args.action == "enroll":
-            if path.resolve() == active or identities[name] == active_id or name in manifest:
+            if name in manifest:
                 continue
             auth = json.loads(path.read_text())
             identity = accounts.enroll(auth)
@@ -93,7 +90,8 @@ def main():
             write_private(manifest_path, manifest)
         changed += 1
     print(f"{args.action}: {changed} profiles; {len(manifest)} reserved for remote work")
-    print("The currently active local account was preserved.")
+    if args.action == "enroll":
+        print("Enrollment includes the active local account.")
 
 
 if __name__ == "__main__":

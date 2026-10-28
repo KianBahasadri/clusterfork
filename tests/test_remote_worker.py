@@ -1,7 +1,9 @@
 """Worker trust boundaries, credential fencing, and real Git publication behavior."""
 
 import copy
+from contextlib import redirect_stdout
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -17,6 +19,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
 import worker
+import accounts as account_cli
 from codex_runtime import CodexError, quota_snapshot
 from dispatch_core import Registry
 from quota_selection import select_account
@@ -131,6 +134,51 @@ class AccountLeaseTests(unittest.TestCase):
                 (home / "auth.json").unlink()
                 raise CodexError("login revoked")
         self.assertTrue(broker.released)
+
+
+class AccountEnrollmentTests(unittest.TestCase):
+    def enroll(self, store, table, *args):
+        output = io.StringIO()
+        with patch.object(account_cli, "connect", return_value=table), \
+             patch.object(sys, "argv", ["accounts.py", "enroll", "--store", str(store), *args]), \
+             redirect_stdout(output):
+            account_cli.main()
+        return output.getvalue()
+
+    def test_default_enrollment_includes_active_profile_and_deduplicates_aliases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Path(directory)
+            active = store / "auth.json.active"
+            active.write_text(json.dumps(auth("active-account")))
+            (store / "auth.json.alias").write_bytes(active.read_bytes())
+            (store / "auth.json.other").write_text(json.dumps(auth("other-account")))
+            (store / "current").symlink_to(active.name)
+            original = active.read_bytes()
+            table = MemoryTable()
+            output = self.enroll(store, table)
+            manifest = json.loads((store / account_cli.MANIFEST).read_text())
+            self.assertEqual(set(manifest), {"active", "alias", "other"})
+            self.assertEqual(len(table.rows), 2)
+            self.assertEqual(manifest["active"]["account_id"], manifest["alias"]["account_id"])
+            self.assertEqual((store / "current").resolve(), active)
+            self.assertEqual(active.read_bytes(), original)
+            self.assertIn("includes the active local account", output)
+
+    def test_explicit_active_enrollment_is_idempotent_and_retains_refreshed_cloud_tokens(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Path(directory)
+            active = store / "auth.json.active"
+            active.write_text(json.dumps(auth("active-account")))
+            (store / "current").symlink_to(active.name)
+            table = MemoryTable()
+            self.enroll(store, table, "--profile", "active")
+            pool = Accounts(table)
+            identity = pool.list()[0]
+            leased = pool.claim(identity, "worker")
+            pool.save(identity, "worker", leased["lease"], auth("active-account", "cloud-refreshed"), release=True)
+            self.enroll(store, table, "--profile", "active")
+            self.assertEqual(len(pool.list()), 1)
+            self.assertEqual(pool.claim(identity, "check")["auth"]["tokens"]["access_token"], "cloud-refreshed")
 
 
 class WorkerAuthorizationTests(unittest.TestCase):

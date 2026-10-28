@@ -120,11 +120,18 @@ References: [Codex app-server](https://learn.chatgpt.com/docs/app-server),
 ## Accounts and token refresh
 
 The root `.env` and GitHub App PEM are not agent credentials. Saved Codex profiles
-come from `~/.local/share/clusterfork-auth/codex/auth.json.*`. The enrollment helper
-skips the currently active local account and deduplicates aliases by provider
-account identity. Enrolled profiles are reserved for cloud use in the local
-`remote-profiles.json` manifest, which the Codex rotator honors. This avoids
-local and cloud processes rotating the same refresh token independently.
+come from `~/.local/share/clusterfork-auth/codex/auth.json.*`. Enrollment includes
+**all saved profiles by default, including the currently active account**, and
+deduplicates aliases by provider account identity. The live pool now contains all
+six saved accounts. Existing cloud credentials are retained when enrollment runs
+again, so stale local copies cannot overwrite refreshed cloud tokens.
+
+The local `remote-profiles.json` manifest records cloud ownership. The Codex
+rotator skips those profiles for new local selections. Enrollment preserves the
+current symlink and local credential files; it does not stop or lease an already
+running local session. Remote leases coordinate cloud jobs only. Simultaneous
+local and cloud OAuth refreshes are not synchronized and can still conflict;
+reclaim a profile before starting further local use of its credentials.
 
 Use an isolated Python environment with the Azure dependencies:
 
@@ -134,17 +141,16 @@ python3 -m venv ~/.config/clusterfork/automation/venv
 ~/.config/clusterfork/automation/venv/bin/python automation/accounts.py enroll
 ```
 
-Use `--profile NAME` to enroll particular inactive profiles. `list` reports the
-number reserved. Reclaim a profile before using it locally again:
+Use `--profile NAME` to enroll particular profiles, including the active one.
+`list` reports the number reserved. Reclaim a profile before using it locally again:
 
 ```bash
 ~/.config/clusterfork/automation/venv/bin/python automation/accounts.py reclaim --profile NAME
 ```
 
 Reclaim refuses busy accounts or changed local credentials, persists the latest
-cloud credentials locally, then removes cloud ownership. Existing local sessions
-must be stopped before enrolling their accounts; only the current profile can be
-detected automatically. Keep the installed rotator updated when enabling this feature.
+cloud credentials locally, then removes cloud ownership. Keep the installed
+rotator updated when enabling this feature.
 
 Private Azure Table `ClusterforkAccounts` holds auth caches. Each provider account
 has one 120-second lease with a random fencing token and ETag updates. Jobs renew
@@ -354,10 +360,10 @@ and queue consumer to the dispatch adapter, and queue failure returns 503. A
 temporary RSA key verifies GitHub App JWT signing and repository-scoped token
 requests. The full 278-test repository suite passes with `NO_COLOR` removed from
 the subprocess environment (the notification color tests otherwise inherit it).
-The worker adds 22 checks for workflow authorization, credential fencing, local
+The worker adds 24 checks for workflow authorization, credential fencing, local
 account ownership, live quota shapes, and real Git branch/PR publication against
 a temporary bare repository, revoked-login cleanup, and broker error handling.
-The full suite has 300 tests. Real RSA verification
+The full suite has 302 tests. Real RSA verification
 also rejects forged signatures, wrong issuers/audiences, expired and future tokens.
 
 Protocol references: [Linear webhooks](https://linear.app/developers/webhooks),
