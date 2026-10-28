@@ -112,7 +112,7 @@ def account_lease(broker, identity):
                 save(release=True)
 
 
-def command(args, *, env=None, timeout=1200, failure_signals=(), stdin=None):
+def command(args, *, env=None, timeout=1200, failure_signals=(), stdin=None, allowed_returncodes=(0,)):
     with tempfile.TemporaryFile(mode="w+") as log:
         process = subprocess.Popen(args, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
                                    stdout=log, stderr=log, env=env, text=True, start_new_session=True)
@@ -129,7 +129,7 @@ def command(args, *, env=None, timeout=1200, failure_signals=(), stdin=None):
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 continue
-        if process.returncode:
+        if process.returncode not in allowed_returncodes:
             # Never copy raw Codex/auth/transport output into public Actions logs.
             raise WorkerFailure(f"Command failed: {Path(args[0]).name} (exit {process.returncode})")
         log.seek(0)
@@ -254,24 +254,40 @@ def request_auto_merge(config, token, pull_url, dispatch_key, branch, *, expecte
         raise WorkerFailure("Worker pull request is not ready for auto-merge")
     owner, name = repository.split("/")
     policy = json_request("https://api.github.com/graphql", token, {
-        "query": """query($owner: String!, $name: String!, $ref: String!) {
+        "query": """query($owner: String!, $name: String!) {
           repository(owner: $owner, name: $name) {
             autoMergeAllowed
-            ref(qualifiedName: $ref) {
-              branchProtectionRule { requiresStatusChecks requiredStatusCheckContexts }
-            }
           }
         }""",
-        "variables": {"owner": owner, "name": name, "ref": f"refs/heads/{config['ref']}"}})
+        "variables": {"owner": owner, "name": name}})
     repo = (policy.get("data") or {}).get("repository") or {}
-    protection = (repo.get("ref") or {}).get("branchProtectionRule") or {}
-    if (policy.get("errors") or not repo.get("autoMergeAllowed")
-            or not protection.get("requiresStatusChecks") or not protection.get("requiredStatusCheckContexts")):
-        raise WorkerFailure("Auto-merge requires repository auto-merge and protected-branch CI checks")
+    if policy.get("errors") or not repo.get("autoMergeAllowed"):
+        raise WorkerFailure("Auto-merge must be enabled in the repository")
+    env = {**clean_environment(), "GH_TOKEN": token}
+    # PR-specific check visibility needs no Administration grant. GitHub may take
+    # a few seconds to register new runs. Pending/failed required checks are valid
+    # gates: native auto-merge waits for them rather than bypassing them.
+    for attempt in range(30):
+        raw = command(["gh", "pr", "checks", pull_url, "--required", "--json", "name,bucket"],
+                      env=env, allowed_returncodes=(0, 1, 8))
+        try:
+            checks = json.loads(raw)
+        except ValueError:
+            checks = None
+        if isinstance(checks, list) and checks and all(
+            isinstance(check, dict) and isinstance(check.get("name"), str) and check["name"]
+            and check.get("bucket") in {"pass", "pending", "fail", "cancel", "skipping"}
+            for check in checks
+        ):
+            break
+        if attempt < 29:
+            time.sleep(2)
+    else:
+        raise WorkerFailure("Auto-merge requires observable required CI checks on the pull request")
     # No --admin: GitHub enforces required checks, reviews and merge conflicts.
     # Match the observed commit so a concurrent push cannot be merged blindly.
     command(["gh", "pr", "merge", pull_url, "--auto", "--squash", "--match-head-commit", head["sha"]],
-            env={**clean_environment(), "GH_TOKEN": token})
+            env=env)
     print(f"Automatic squash merge requested: {pull_url}", flush=True)
 
 

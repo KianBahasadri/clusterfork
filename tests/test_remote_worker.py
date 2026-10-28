@@ -382,22 +382,23 @@ class AutoMergeTests(unittest.TestCase):
                      "user": {"login": "clusterfork[bot]"},
                      "head": {"repo": {"full_name": "owner/repo"}, "ref": self.branch, "sha": self.sha},
                      "base": {"ref": "main"}, "body": f"<!-- clusterfork-dispatch:{KEY} -->"}
-        self.policy = {"data": {"repository": {"autoMergeAllowed": True, "ref": {
-            "branchProtectionRule": {"requiresStatusChecks": True,
-                                     "requiredStatusCheckContexts": ["test", "routing-runtime"]}}}}}
+        self.policy = {"data": {"repository": {"autoMergeAllowed": True}}}
 
     def request(self, **kwargs):
         worker.request_auto_merge(self.config, "private-test-token", self.url, KEY, self.branch, **kwargs)
 
     def test_default_auto_merge_uses_exact_commit_and_never_bypasses_checks(self):
         with patch.object(worker, "json_request", side_effect=[self.pull, self.policy]), \
-             patch.object(worker, "command") as command:
+             patch.object(worker, "command", side_effect=['[{"name":"test","bucket":"pending"}]', '']) as command:
             self.request(expected_sha=self.sha)
         args = command.call_args.args[0]
         self.assertEqual(args, ["gh", "pr", "merge", self.url, "--auto", "--squash", "--match-head-commit", self.sha])
         self.assertNotIn("--admin", args)
         self.assertNotIn("private-test-token", args)
         self.assertEqual(command.call_args.kwargs["env"]["GH_TOKEN"], "private-test-token")
+        self.assertEqual(command.call_args_list[0].args[0],
+                         ["gh", "pr", "checks", self.url, "--required", "--json", "name,bucket"])
+        self.assertIn(8, command.call_args_list[0].kwargs["allowed_returncodes"])
 
     def test_project_can_disable_auto_merge(self):
         self.config["auto_merge"] = False
@@ -407,20 +408,17 @@ class AutoMergeTests(unittest.TestCase):
         command.assert_not_called()
 
     def test_missing_ci_or_repository_auto_merge_prevents_merge(self):
-        cases = [
-            {"autoMergeAllowed": False, "ref": self.policy["data"]["repository"]["ref"]},
-            {"autoMergeAllowed": True, "ref": {"branchProtectionRule": None}},
-            {"autoMergeAllowed": True, "ref": {"branchProtectionRule": {
-                "requiresStatusChecks": False, "requiredStatusCheckContexts": ["test"]}}},
-            {"autoMergeAllowed": True, "ref": {"branchProtectionRule": {
-                "requiresStatusChecks": True, "requiredStatusCheckContexts": []}}},
-        ]
-        for repo in cases:
-            with self.subTest(policy=repo), \
-                 patch.object(worker, "json_request", side_effect=[self.pull, {"data": {"repository": repo}}]), \
-                 patch.object(worker, "command") as command, self.assertRaises(worker.WorkerFailure):
+        with patch.object(worker, "json_request", side_effect=[self.pull, {"data": {"repository": {"autoMergeAllowed": False}}}]), \
+             patch.object(worker, "command") as command, self.assertRaises(worker.WorkerFailure):
+            self.request()
+        command.assert_not_called()
+        for result in ['[]', '{"error":"unavailable"}', 'not json']:
+            with self.subTest(result=result), \
+                 patch.object(worker, "json_request", side_effect=[self.pull, self.policy]), \
+                 patch.object(worker, "command", return_value=result) as command, \
+                 patch.object(worker.time, "sleep"), self.assertRaises(worker.WorkerFailure):
                 self.request()
-            command.assert_not_called()
+            self.assertTrue(all(call.args[0][2] == "checks" for call in command.call_args_list))
 
     def test_foreign_fork_changed_head_or_unrelated_pr_cannot_be_auto_merged(self):
         cases = []

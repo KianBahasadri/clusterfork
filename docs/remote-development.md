@@ -102,8 +102,9 @@ available for repository maintenance; worker App tokens have no such bypass.
 Checks use non-strict mode so concurrent PRs do not wait for manual base updates.
 An update to `main` alone does not force another CI run on an older PR branch.
 
-The runner refuses auto-merge if repository auto-merge or protected-branch status
-checks are missing. GitHub handles pending/failed CI and merge conflicts; the
+The runner refuses auto-merge if repository auto-merge or required PR checks are
+missing. It reads PR-specific required checks using its existing App permissions;
+no Administration grant is needed. GitHub handles pending/failed CI and merge conflicts; the
 worker never uses `--admin` or force-merges. A completed worker outcome means its
 coding/publication work finished; the PR can still be waiting for CI. The Azure
 outcome also records whether auto-merge was requested. Recovery recognizes merged
@@ -251,7 +252,7 @@ can serve all those repositories. The dispatcher looks up the installation ID;
 you do not need to copy that ID into `.env`. It requests a short-lived token
 limited to the selected repository. Dispatcher tokens have Actions write;
 worker publication tokens have Contents and Pull requests write.
-Also enable repository auto-merge and classic branch protection with the relevant
+Also enable repository auto-merge and branch protection with the relevant
 required CI checks on its target branch, or explicitly set `auto_merge: false`.
 
 References: [registration](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app),
