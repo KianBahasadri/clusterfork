@@ -22,37 +22,40 @@ edit code, open PRs, or change Linear issues.** Those are later execution work.
   Clusterfork's dotfile installer.
 
 The shared Azure Function App is deployed and its four functions are registered.
-Live Linear reads, Azure queue/table operations, and a directly triggered hosted
-runner job have passed. The full Linear webhook-to-GitHub-App dispatch path still
-needs the webhook signing secret. Credentials stay outside
-version control; the root `.env` is gitignored, and the App private key lives
-outside the repo.
+The full Linear webhook → Azure queue → GitHub App → hosted runner path has passed
+a live test. Credentials stay outside version control; the root `.env` is
+gitignored, and the App private key lives outside the repo.
 
 ## Live pilot validation
 
-The first hosted smoke test uses
+The live smoke test used
 [KIAN-891](https://linear.app/kian-finishing-zombie-granola/issue/KIAN-891/verify-clusterforks-linear-azure-github-routing-pilot)
-in the Clusterfork project. The project has the `symphony` project label, and a
-live current-state query confirms that this Todo issue is eligible.
+in the Clusterfork project on 2026-10-28 UTC. The project has the `symphony` project
+label. The issue was eligible in Todo during testing and is now Done.
 
-- [Initial push CI](https://github.com/KianBahasadri/clusterfork/actions/runs/40606215763)
-  passed. The direct [routing smoke job](https://github.com/KianBahasadri/clusterfork/actions/runs/40606446755)
-  passed on a standard GitHub-hosted runner; this run was started through the
-  local GitHub CLI, not by the Azure dispatcher.
+- A real Linear issue update triggered a successful
+  [routing workflow](https://github.com/KianBahasadri/clusterfork/actions/runs/40607700052)
+  as `clusterfork[bot]`, with the correct issue and project IDs.
+- A second Linear update and a signed duplicate delivery produced no additional
+  workflow: one successful bot-triggered run, one `dispatched` Azure receipt,
+  and an empty event queue after processing.
+- [Repository CI and the Python 3.12 runtime check](https://github.com/KianBahasadri/clusterfork/actions/runs/40607363546)
+  passed. An earlier direct
+  [routing smoke job](https://github.com/KianBahasadri/clusterfork/actions/runs/40606446755)
+  also passed on a standard GitHub-hosted runner.
 - Azure resources are in `rg-clusterfork-automation`: Function App
   `clusterfork-dispatch-7604cac329` and storage account `cfdispatch7604cac329`.
   The app uses the Flex settings described below.
 - Webhook endpoint:
   `https://clusterfork-dispatch-7604cac329.azurewebsites.net/api/linear`.
-  Its `/api/health` endpoint currently returns 503 and names only the missing
-  `LINEAR_WEBHOOK_SECRET`; webhook requests fail closed until that is configured.
+  Its `/api/health` endpoint returns 200 with `"missing": []`. Live requests with
+  forged signatures or expired signed timestamps returned 401.
 - Real Azure Table claim/duplicate-claim/update operations passed, as did a
   queue send/receive/delete round trip. Temporary test records and the temporary
   storage-test queue were removed afterwards.
-- The GitHub App is installed on Clusterfork; its key and repository-scoped token
-  exchange validate. The Linear API key has read access and correctly refuses
-  webhook administration. Create the Linear webhook using the setup steps below;
-  save its signing secret in `.env` and run `configure`.
+- The GitHub App is installed on Clusterfork, and the Linear webhook is configured
+  for the Kian team's Issues and Projects. The Linear API key has read access and
+  correctly refuses webhook administration; the webhook was created in the UI.
 
 This is a routing test. It does not demonstrate live agent authentication, quota
 fetching, reservations, Symphony execution, or code/PR generation.
@@ -194,8 +197,8 @@ the deploy helper accepts both shapes and rejects a missing hostname.
 
 It prints the actual webhook and health URLs. Until the webhook secret is set,
 health returns 503, webhook requests are rejected, and reconciliation stays idle.
-The helper has now deployed this Function App successfully; external webhook and
-GitHub App access must still be configured before an event can traverse the full path.
+The current pilot has both the webhook and GitHub App access configured and has
+passed the live validation recorded above.
 
 ## Connect Linear and run the smoke test
 
