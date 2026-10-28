@@ -37,7 +37,7 @@ def request_json(url, *, token, method="GET", data=None):
 
 ISSUE_FIELDS = """
 id identifier title description url archivedAt
-state { id }
+state { id type }
 """
 PROJECT_FIELDS = "id archivedAt labels(first: 100) { nodes { name } pageInfo { hasNextPage } }"
 
@@ -91,6 +91,33 @@ class Linear:
                 raise ValueError("Linear pagination did not advance")
             cursor = next_cursor
 
+    def set_state(self, issue_id, state_id):
+        result = self.query("""mutation($id: String!, $state: String!) {
+          issueUpdate(id: $id, input: {stateId: $state}) { success }
+        }""", {"id": issue_id, "state": state_id})
+        if not result["issueUpdate"]["success"]:
+            raise RequestError()
+
+    def status_comment(self, issue_id, comment_id, body):
+        # A deterministic ID recovers creation after an ambiguous API response.
+        # Update one owned comment rather than adding a comment on every poll.
+        result = self.query("""query($issue: String!, $comment: ID!) {
+          issue(id: $issue) { comments(first: 1, filter: {id: {eq: $comment}}) { nodes { id body } } }
+        }""", {"issue": issue_id, "comment": comment_id})
+        comments = result["issue"]["comments"]["nodes"]
+        if comments:
+            if comments[0]["body"] == body:
+                return
+            result = self.query("""mutation($id: String!, $body: String!) {
+              commentUpdate(id: $id, input: {body: $body}) { success }
+            }""", {"id": comment_id, "body": body})["commentUpdate"]
+        else:
+            result = self.query("""mutation($id: String!, $issue: String!, $body: String!) {
+              commentCreate(input: {id: $id, issueId: $issue, body: $body, doNotSubscribeToIssue: true}) { success }
+            }""", {"id": comment_id, "issue": issue_id, "body": body})["commentCreate"]
+        if not result["success"]:
+            raise RequestError()
+
 
 class GitHub:
     def __init__(self, app_id, private_key, request=request_json):
@@ -128,6 +155,58 @@ class GitHub:
                 or dispatch_key not in run.get("display_title", "")
                 or run.get("actor", {}).get("login") != "clusterfork[bot]"):
             raise WorkerError("GitHub run does not match the dispatch", 403)
+
+    def worker_result(self, repository, owner):
+        run_id, attempt = owner.split(":")
+        if not run_id.isdigit() or not attempt.isdigit():
+            raise ValueError("Invalid stored worker identity")
+        token = self.installation_token(repository, permissions={"actions": "read"})
+        return self.request(
+            f"https://api.github.com/repos/{repository}/actions/runs/{run_id}/attempts/{attempt}",
+            token=f"Bearer {token}")
+
+    def worker_pull(self, route, receipt, key, url=""):
+        import re
+        from urllib.parse import urlencode
+
+        repository = route.repository
+        token = self.installation_token(repository, permissions={"contents": "read", "pull_requests": "read"})
+        branch = f"clusterfork/{receipt['identifier'].lower()}-{key[:8]}"
+        if url:
+            match = re.fullmatch(re.escape(f"https://github.com/{repository}/pull/") + r"([1-9][0-9]*)", url)
+            if not match:
+                raise ValueError("Invalid stored PR URL")
+            number = int(match[1])
+        else:
+            query = urlencode({"state": "all", "head": f"{repository.split('/')[0]}:{branch}", "base": route.ref})
+            pulls = self.request(f"https://api.github.com/repos/{repository}/pulls?{query}", token=f"Bearer {token}")
+            if not pulls:
+                return None
+            # Prefer the same open/merged PR that publication recovery would use.
+            number = next((p["number"] for p in pulls if p.get("state") == "open" or p.get("merged_at")), pulls[0]["number"])
+        result = self.request("https://api.github.com/graphql", token=f"Bearer {token}", method="POST", data={
+            "query": """query($owner: String!, $name: String!, $number: Int!) {
+              repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+                url state merged body baseRefName headRefName headRepository { nameWithOwner }
+                author { login __typename } mergeable mergeStateStatus isDraft autoMergeRequest { enabledAt }
+                commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) {
+                  nodes {
+                    __typename
+                    ... on CheckRun { name status conclusion isRequired(pullRequestNumber: $number) }
+                    ... on StatusContext { context state isRequired(pullRequestNumber: $number) }
+                  } pageInfo { hasNextPage }
+                } } } } }
+              } }
+            }""",
+            "variables": {"owner": repository.split('/')[0], "name": repository.split('/')[1], "number": number}})
+        pull = ((result.get("data") or {}).get("repository") or {}).get("pullRequest")
+        if (result.get("errors") or not pull or pull.get("baseRefName") != route.ref
+                or pull.get("headRefName") != branch
+                or (pull.get("headRepository") or {}).get("nameWithOwner") != repository
+                or pull.get("author") != {"login": "clusterfork", "__typename": "Bot"}
+                or f"<!-- clusterfork-dispatch:{key} -->" not in (pull.get("body") or "")):
+            raise RequestError()
+        return pull
 
     def dispatch(self, route, inputs):
         token = self.installation_token(route.repository)

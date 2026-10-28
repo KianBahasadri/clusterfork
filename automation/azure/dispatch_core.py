@@ -21,6 +21,13 @@ def uuid_string(value):
 
 
 @dataclass(frozen=True)
+class LinearStates:
+    in_progress: str
+    blocked: str
+    done: str
+
+
+@dataclass(frozen=True)
 class Route:
     project_id: str
     repository: str
@@ -29,6 +36,7 @@ class Route:
     ready_state_ids: tuple[str, ...]
     validation_commands: tuple[tuple[str, ...], ...] = ()
     auto_merge: bool = True
+    linear_states: LinearStates | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +91,15 @@ class Registry:
             auto_merge = row.get("auto_merge", True)
             if not isinstance(auto_merge, bool):
                 raise ValueError("auto_merge must be a boolean")
+            linear_states = None
+            if "linear_states" in row:
+                configured = row["linear_states"]
+                if not isinstance(configured, dict) or set(configured) != {"in_progress", "blocked", "done"}:
+                    raise ValueError("linear_states needs in_progress, blocked, and done")
+                linear_states = LinearStates(**{name: uuid_string(value) for name, value in configured.items()})
+                values = (linear_states.in_progress, linear_states.blocked, linear_states.done)
+                if len(set(values)) != 3 or set(values).intersection(states):
+                    raise ValueError("Linear lifecycle states must be distinct from each other and ready states")
             commands = row.get("validation_commands", [])
             if not isinstance(commands, list) or any(
                 not isinstance(command, list) or not command
@@ -91,7 +108,7 @@ class Registry:
             ):
                 raise ValueError("validation_commands must be arrays of command arguments")
             routes[project_id] = Route(project_id, row["repository"], row["workflow"],
-                                       row["ref"], states, tuple(tuple(c) for c in commands), auto_merge)
+                                       row["ref"], states, tuple(tuple(c) for c in commands), auto_merge, linear_states)
         return cls(label, generation, profiles, SelectionPolicy.load(data["agent_selection"]), routes)
 
 
@@ -132,7 +149,7 @@ def webhook_event(body, headers, secret, *, now=None):
         raise WebhookError(400, "invalid webhook payload") from None
 
 
-def eligibility(issue, registry):
+def eligibility(issue, registry, *, additional_state_ids=()):
     """Return (route, reason) using current Linear state, never webhook snapshots."""
     project = issue.get("project")
     if not project:
@@ -145,7 +162,7 @@ def eligibility(issue, registry):
     labels = project["labels"]["nodes"]
     if not any(label["name"] == registry.enrollment_label for label in labels):
         return None, "project_not_enrolled"
-    if issue["state"]["id"] not in route.ready_state_ids:
+    if issue["state"]["id"] not in (*route.ready_state_ids, *additional_state_ids):
         return None, "not_ready"
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*-\d+", issue["identifier"]):
         raise ValueError("invalid Linear issue identifier")

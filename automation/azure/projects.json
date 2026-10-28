@@ -21,6 +21,11 @@
       "ref": "main",
       "auto_merge": true,
       "ready_state_ids": ["ace01594-2daf-44bb-9690-cb0dccc11795"],
+      "linear_states": {
+        "in_progress": "764abaaa-b22c-42bb-8d6f-0c9c67b5f138",
+        "blocked": "26518242-2ca2-486c-884c-f9a829c3988f",
+        "done": "aa75d2cb-3bba-44e4-a1c8-d875533a600a"
+      },
       "validation_commands": [["python3", "-m", "unittest", "discover", "-s", "tests", "-q"]]
     }
   ]

@@ -12,6 +12,7 @@ from dispatch_clients import AzureReceipts, GitHub, Linear
 from dispatch_core import Dispatcher, Registry, WebhookError, webhook_event
 from worker_core import Accounts, WorkerError, WorkerService
 from worker_store import AzureTable, verify_oidc
+from linear_sync import LinearSync
 
 app = func.FunctionApp()
 QUEUE = "clusterfork-events"
@@ -45,12 +46,16 @@ def dispatcher():
 @lru_cache(maxsize=1)
 def worker_service():
     connection = os.environ["AzureWebJobsStorage"]
+    receipts = AzureTable(connection, "ClusterforkDispatches", "pilot")
+    runs = AzureTable(connection, "ClusterforkWorkers", "worker")
+    linear = Linear(os.environ["LINEAR_API_KEY"])
+    github = GitHub(os.environ["GITHUB_APP_ID"], os.environ["GITHUB_APP_PRIVATE_KEY"])
+    sync = LinearSync(registry(), receipts, runs,
+                      AzureTable(connection, "ClusterforkLinearSync", "linear"), linear, github)
     return WorkerService(
-        registry(), AzureTable(connection, "ClusterforkDispatches", "pilot"),
-        AzureTable(connection, "ClusterforkWorkers", "worker"),
+        registry(), receipts, runs,
         Accounts(AzureTable(connection, "ClusterforkAccounts", "codex")),
-        Linear(os.environ["LINEAR_API_KEY"]),
-        GitHub(os.environ["GITHUB_APP_ID"], os.environ["GITHUB_APP_PRIVATE_KEY"]))
+        linear, github, sync=sync)
 
 
 @app.route(route="worker/{action}", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
@@ -119,5 +124,6 @@ def reconcile(timer: func.TimerRequest):
     # projects. Durable receipts make repeat scans harmless for this pilot.
     if missing_config():
         return
+    worker_service().sync.reconcile()
     for project_id in registry().routes:
         enqueue({"type": "Project", "id": project_id})

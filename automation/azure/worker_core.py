@@ -95,9 +95,19 @@ class Accounts:
 
 
 class WorkerService:
-    def __init__(self, registry, receipts, runs, accounts, linear, github, clock=time.time):
+    def __init__(self, registry, receipts, runs, accounts, linear, github, clock=time.time, sync=None):
         self.registry, self.receipts, self.runs = registry, receipts, runs
         self.accounts, self.linear, self.github, self.clock = accounts, linear, github, clock
+        self.sync = sync
+
+    def sync_linear(self, key):
+        if self.sync:
+            import logging
+            try:
+                self.sync.sync(key)
+            except Exception:
+                # Tracker outages must not lose execution/publication outcomes.
+                logging.error("Linear lifecycle update deferred for %s", key)
 
     def handle(self, action, claims, data):
         key = data.get("dispatch_key", "")
@@ -130,7 +140,8 @@ class WorkerService:
             return {"saved": True}
         if action == "github":
             issue = self.linear.issue(receipt["issue_id"])
-            current_route, _ = eligibility(issue or {}, self.registry)
+            extra = (route.linear_states.in_progress,) if route.linear_states else ()
+            current_route, _ = eligibility(issue or {}, self.registry, additional_state_ids=extra)
             if current_route != route:
                 raise WorkerError("Issue is no longer eligible for publication", 403)
             return {"token": self.github.installation_token(
@@ -151,6 +162,7 @@ class WorkerService:
                 receipt, receipt_etag = self.receipts.get(key)
                 receipt["retry_after"] = int(self.clock()) + 900
                 self.receipts.replace(receipt, receipt_etag)
+            self.sync_linear(key)
             return {"status": status}
         raise WorkerError("Unknown worker action", 404)
 
@@ -158,7 +170,8 @@ class WorkerService:
         # Check the GitHub API as well as JWT claims, including who dispatched it.
         self.github.verify_worker_run(route.repository, claims, key)
         issue = self.linear.issue(receipt["issue_id"])
-        current, _ = eligibility(issue or {}, self.registry)
+        extra = (route.linear_states.in_progress, route.linear_states.blocked) if route.linear_states else ()
+        current, _ = eligibility(issue or {}, self.registry, additional_state_ids=extra)
         if current != route:
             raise WorkerError("Issue is no longer eligible", 403)
         if not route.validation_commands:
@@ -173,6 +186,7 @@ class WorkerService:
                     and existing.get("lease_until", 0) > self.clock()):
                 raise WorkerError("Another worker is active")
             self.runs.replace(row, etag)
+        self.sync_linear(key)
         profile = self.registry.agent_profiles["codex"]
         return {"model": profile.model, "effort": profile.effort,
                 "selection": {"min_remaining_percent": self.registry.agent_selection.min_remaining_percent,

@@ -4,7 +4,8 @@ Eligible Linear issues route through one shared Azure Function App to a Codex
 worker on a standard GitHub-hosted runner. The worker selects a leased account
 using live quota, implements the issue, validates the repository, and opens a PR.
 Worker PRs default to automatic squash merging after GitHub's required CI checks
-pass, with no human approval required. Deployment and Linear status updates are separate.
+pass, with no human approval required. Linear tracks execution, merge blockers,
+and completion; deployment remains separate.
 This is Clusterfork's own execution adapter, not an installation of upstream Symphony.
 
 ## What exists
@@ -18,6 +19,7 @@ This is Clusterfork's own execution adapter, not an installation of upstream Sym
 - `automation/azure/projects.json`: non-secret project-to-repository mappings.
 - `automation/azure/worker_core.py` and `worker_store.py`: trusted workflow
   authorization, account leases, persisted credentials, and worker outcomes.
+- `automation/azure/linear_sync.py`: Linear lifecycle and merge-blocker reconciliation.
 - `automation/worker.py` and `codex_runtime.py`: Codex account inspection,
   execution, validation, branch push, PR publication, and auto-merge requests.
 - `automation/accounts.py`: enroll saved Codex profiles for cloud use or reclaim
@@ -37,55 +39,37 @@ gitignored, and the App private key lives outside the repo.
 
 ## Live pilot validation
 
-The live smoke test used
-[KIAN-891](https://linear.app/kian-finishing-zombie-granola/issue/KIAN-891/verify-clusterforks-linear-azure-github-routing-pilot)
-in the Clusterfork project on 2026-10-28 UTC. The project has the `symphony` project
-label. The issue was eligible in Todo during testing and is now Done.
+The 2026-10-28 UTC routing test used
+[KIAN-891](https://linear.app/kian-finishing-zombie-granola/issue/KIAN-891/verify-clusterforks-linear-azure-github-routing-pilot),
+in Todo in the `symphony`-labeled Clusterfork project; it is now Done.
 
 - A real Linear issue update triggered a successful
   [routing workflow](https://github.com/KianBahasadri/clusterfork/actions/runs/40607700052)
   as `clusterfork[bot]`, with the correct issue and project IDs.
-- A second Linear update and a signed duplicate delivery produced no additional
-  workflow: one successful bot-triggered run, one `dispatched` Azure receipt,
-  and an empty event queue after processing.
-- [Repository CI and the Python 3.12 runtime check](https://github.com/KianBahasadri/clusterfork/actions/runs/40607363546)
-  passed. An earlier direct
-  [routing smoke job](https://github.com/KianBahasadri/clusterfork/actions/runs/40606446755)
-  also passed on a standard GitHub-hosted runner.
+- A second update and signed duplicate delivery produced no additional workflow.
+- [CI/Python 3.12 checks](https://github.com/KianBahasadri/clusterfork/actions/runs/40607363546)
+  and a [direct smoke job](https://github.com/KianBahasadri/clusterfork/actions/runs/40606446755) passed.
 - Azure resources are in `rg-clusterfork-automation`: Function App
   `clusterfork-dispatch-7604cac329` and storage account `cfdispatch7604cac329`.
-  The app uses the Flex settings described below.
-- Webhook endpoint:
-  `https://clusterfork-dispatch-7604cac329.azurewebsites.net/api/linear`.
-  Its `/api/health` endpoint returns 200 with `"missing": []`. Live requests with
-  forged signatures or expired signed timestamps returned 401.
-- Real Azure Table claim/duplicate-claim/update operations passed, as did a
-  queue send/receive/delete round trip. Temporary test records and the temporary
-  storage-test queue were removed afterwards.
+- Webhook: `https://clusterfork-dispatch-7604cac329.azurewebsites.net/api/linear`.
+  `/api/health` returned 200 with `"missing": []`; forged/expired requests returned 401.
+- Azure Table claims and a queue round trip passed; temporary records were removed.
 - The GitHub App is installed on Clusterfork, and the Linear webhook is configured
-  for the Kian team's Issues and Projects. The Linear API key has read access and
-  correctly refuses webhook administration; the webhook was created in the UI.
+  for the Kian team's Issues and Projects. The key lacks webhook administration;
+  the webhook was created in the UI. Issue/comment write access was verified later.
 
-The results above validate the original routing-only milestone.
+The first full Codex coding test passed the same day:
 
-The first full Codex coding test also passed on 2026-10-28 UTC:
-
-- Creating [KIAN-892](https://linear.app/kian-finishing-zombie-granola/issue/KIAN-892/report-the-configured-codex-worker-mode-in-the-setup-checker)
-  triggered the [worker run](https://github.com/KianBahasadri/clusterfork/actions/runs/40743398281)
-  automatically as `clusterfork[bot]`.
-- The runner inspected five accounts, selected one with 100% remaining in its
-  limiting quota window, and ran `gpt-6.1-sol` at `max` effort.
-- Codex implemented the checker fix, added tests, and updated its owning doc.
-  All 300 tests in that branch passed. The worker opened
-  [PR #1](https://github.com/KianBahasadri/clusterfork/pull/1), initially for human review.
+- [KIAN-892](https://linear.app/kian-finishing-zombie-granola/issue/KIAN-892/report-the-configured-codex-worker-mode-in-the-setup-checker)
+  triggered a [bot worker](https://github.com/KianBahasadri/clusterfork/actions/runs/40743398281).
+  It inspected five accounts, selected 100% quota headroom, and used Sol/max.
+- Codex fixed the checker, added tests/docs, passed all 300 tests, and opened
+  [PR #1](https://github.com/KianBahasadri/clusterfork/pull/1), initially for review.
 - Both [push CI](https://github.com/KianBahasadri/clusterfork/actions/runs/40744114226)
   and [PR CI](https://github.com/KianBahasadri/clusterfork/actions/runs/40744127352)
-  started automatically and passed.
-- Refreshed credentials for all five cloud accounts were persisted; all account
-  leases were released after execution. The active local profile was preserved.
-- The deployed health endpoint reports `codex-worker` with HTTP 200. Missing and
-  forged workflow credentials were rejected with HTTP 401.
-- A subsequent Linear update produced no second worker run or dispatch receipt.
+  passed. Refreshed credentials persisted and account leases were released.
+- Health reported `codex-worker`/200; missing/forged worker credentials returned
+  401. A subsequent Linear update produced no duplicate worker or receipt.
 
 ## Automatic merges
 
@@ -117,6 +101,38 @@ open with auto-merge enabled while checks ran, then `clusterfork[bot]` squash-me
 it as `5b3474c` after the required checks passed. No approval was submitted.
 [Post-merge CI](https://github.com/KianBahasadri/clusterfork/actions/runs/40755845581)
 also passed. The test verifies native merging without an Administration grant.
+
+## Linear lifecycle
+
+Each project can configure `linear_states` with the UUIDs for `in_progress`,
+`blocked`, and `done`. Clusterfork maps these to In Progress, the new Blocked
+status, and Done. Only ready states such as Todo dispatch new issues.
+
+| Event | Linear status |
+| --- | --- |
+| Worker starts, or required CI is pending | In Progress |
+| Merge conflicts, failed/canceled required checks, closed unmerged PR, draft PR, or unmet merge requirements | Blocked |
+| Worker fails, is canceled, or ends without a recorded outcome | Blocked |
+| PR merges, or validated work needs no repository changes | Done |
+| No account has enough quota | Todo; retries after 15 minutes |
+
+Start and finish attempt immediate updates. The existing shared 15-minute timer
+checks later PR/CI changes and retries failed Linear writes; no GitHub webhook or
+continuously running worker is needed. It updates one owned comment with the
+current reason, PR link, and worker-run link. Durable synchronization leases and
+a stable UUIDv4 comment ID prevent duplicate comments after retries.
+
+Pending CI is normal progress. A blocked PR returns to In Progress when its
+blocker clears, then Done after merging. Unknown/incomplete GitHub responses leave
+the previous state unchanged. Archived issues/projects, removed enrollment labels,
+project moves, and manually completed/canceled issues are respected. Publication
+accepts the worker's In Progress state while preserving other eligibility checks.
+A manual GitHub job rerun can resume Blocked work; status updates alone never
+reset the completed dispatch receipt or automatically rerun a failed agent.
+
+Live verification on 2026-10-28 used the actual stored worker outcome and GitHub
+App to confirm PR #1 was merged, moved KIAN-892 to Done, and created its status
+comment. Repeating reconciliation produced no duplicate update.
 
 ## Agent profiles
 
@@ -216,7 +232,7 @@ added for this pilot. Do not paste secret values into chat or commit them.
 
 | Variable | Value |
 | --- | --- |
-| `LINEAR_API_KEY` | Personal API key with read access to the Kian team |
+| `LINEAR_API_KEY` | Personal API key with Read, Write, and Create comments access to the Kian team |
 | `GITHUB_APP_ID` | Numeric **App ID**, not Client ID or installation ID |
 | `GITHUB_APP_PRIVATE_KEY_FILE` | Absolute path to the downloaded GitHub App PEM |
 | `LINEAR_WEBHOOK_SECRET` | Signing secret from the Linear webhook; filled after initial deployment |
@@ -226,9 +242,9 @@ Use quoted values if needed. The helper reads literal dotenv values; it never
 executes the file as shell code. Environment variables override the file.
 
 Create the Linear key in **Settings → Account → Security & access → Personal API
-keys**. Use read permission and limit team access to Kian if offered. The pilot
-only reads issues, states, project labels, and project issue lists. Creating the
-webhook below is a separate workspace-admin action in the UI.
+keys**. Allow reading issues/project labels, updating issues, and creating/updating
+comments; limit team access to Kian if offered. The configured key has passed live
+issue and comment writes. Creating the webhook is a separate admin action.
 
 ## Register and install the GitHub App
 
@@ -353,8 +369,8 @@ label prevents subsequent dispatches; it does not cancel runs already submitted.
 
 Completed issues dispatch once per registry `generation`. Editing an issue or
 moving it out of Todo and back does not reset completion. Capacity waits retry
-through reconciliation; execution failures require inspection and a GitHub job
-rerun. Existing open PRs are recovered by their deterministic branch name.
+through reconciliation; execution failures are marked Blocked and require a
+GitHub job rerun. Existing open PRs are recovered by their deterministic branch name.
 Changing generation permits **all** eligible issues to dispatch again.
 
 The agent has a 30-minute execution timeout inside the 45-minute job. Configured
@@ -363,7 +379,7 @@ enrollment and status, pushes a separate branch, opens a PR, and requests the
 configured merge policy. GitHub waits for required checks before automatic merging.
 Workflow-file edits are refused because the App has no Workflows permission.
 Durable agent-session resume and automatic retries after a mid-task usage limit
-are not implemented. Linear API access remains read-only.
+are not implemented. Linear credentials stay in Azure and are not sent to the agent.
 
 Azure Table `ClusterforkDispatches` records `dispatching`, `dispatched`, or
 `uncertain`. `dispatched` means GitHub accepted the request; verify actual runner
@@ -392,13 +408,12 @@ no cloud writes and use no actual credentials. The deployment package has an
 explicit file allowlist. Function decorators and SDK integration can be checked
 with dependencies from `automation/azure/requirements.txt` in an isolated venv.
 
-The full suite has 311 tests, including 31 worker checks for authorization,
-credential fencing, account ownership, quotas, Git publication, auth failure
-handling, auto-merge policy, and merged-PR recovery. Remove `NO_COLOR` from the
-subprocess environment for the notification color tests. All five functions index
-with the pinned Azure SDK. Native handler checks cover signed webhook routing and
-503 on queue failure. Real RSA checks cover App JWT signing and reject forged,
-expired, future, wrong-issuer, and wrong-audience OIDC tokens.
+The full suite has 331 tests: 31 cover worker authorization, credential fencing,
+account ownership, quotas, publication, auth failures, auto-merge, and PR recovery;
+20 cover lifecycle transitions, CI blockers, cancellation, retries, and publication.
+Remove `NO_COLOR` for notification color tests. All five functions index with the
+pinned Azure SDK. Native handlers cover signed routing and queue failure; real RSA
+checks cover App signing and forged/expired/future/wrong-issuer/wrong-audience OIDC.
 
 Protocol references: [Linear webhooks](https://linear.app/developers/webhooks),
 [GitHub dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event),
