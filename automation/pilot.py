@@ -158,9 +158,19 @@ def main():
     values = settings(args.env_file)
     missing = check(values)
     if args.action == "check":
-        print("Mode: routing pilot (no coding agent)")
+        workflows = {route.workflow for route in registry.routes.values()}
+        if workflows == {"clusterfork-pilot.yml"}:
+            mode = "routing pilot (no coding agent)"
+        elif "clusterfork-worker.yml" in workflows:
+            mode = "Codex worker"
+            if len(workflows) > 1:
+                mode += " (with other workflow mappings)"
+        else:
+            mode = "custom workflow mappings" if workflows else "no workflow mappings"
+        print(f"Mode: {mode}")
+        print("Check: local configuration only; does not launch a worker or verify a live agent login.")
         for route in registry.routes.values():
-            print(f"Mapping: {route.project_id} -> {route.repository} ({route.ref})")
+            print(f"Mapping: {route.project_id} -> {route.repository} ({route.workflow} @ {route.ref})")
         print(f"Project enrollment label: {registry.enrollment_label}")
         for agent, profile in registry.agent_profiles.items():
             print(f"Agent profile: {agent} -> {profile.model} (effort: {profile.effort})")

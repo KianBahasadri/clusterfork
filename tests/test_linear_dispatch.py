@@ -2,9 +2,11 @@
 
 import copy
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import redirect_stdout
 import hashlib
 import hmac
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -276,6 +278,59 @@ class ClientTests(unittest.TestCase):
 
 
 class SetupTests(unittest.TestCase):
+    def run_check(self, data):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            (source / "projects.json").write_text(json.dumps(data))
+            key = source / "app.pem"
+            key.write_text("local check only; not a live private key")
+            env_file = source / ".env"
+            env_file.write_text("LINEAR_API_KEY=check-only-api-key\nGITHUB_APP_ID=123\n"
+                                f"GITHUB_APP_PRIVATE_KEY_FILE='{key}'\n")
+            output = io.StringIO()
+            with patch.object(pilot, "SOURCE", source), \
+                 patch.object(sys, "argv", ["pilot.py", "check", "--env-file", str(env_file)]), \
+                 patch.dict(os.environ, {}, clear=True), \
+                 patch.object(pilot.subprocess, "run", side_effect=AssertionError("unexpected external command")), \
+                 redirect_stdout(output):
+                result = pilot.main()
+        return result, output.getvalue()
+
+    def test_check_reports_configured_codex_worker_without_launching_it(self):
+        data = json.loads((SOURCE / "projects.json").read_text())
+        result, output = self.run_check(data)
+        self.assertEqual(result, 0)
+        self.assertIn("Mode: Codex worker\n", output)
+        self.assertIn("Agent profile: codex -> gpt-6.1-sol (effort: max)", output)
+        self.assertIn("local configuration only", output)
+        self.assertIn("does not launch a worker or verify a live agent login", output)
+        self.assertNotIn("routing pilot (no coding agent)", output)
+        self.assertNotIn("check-only-api-key", output)
+        for route in data["projects"]:
+            self.assertIn(f"Mapping: {route['project_id']} -> {route['repository']} "
+                          f"({route['workflow']} @ {route['ref']})", output)
+
+    def test_check_mode_uses_all_workflow_mappings(self):
+        cases = [
+            (["clusterfork-pilot.yml"], "routing pilot (no coding agent)"),
+            (["clusterfork-pilot.yml", "clusterfork-pilot.yml"], "routing pilot (no coding agent)"),
+            (["clusterfork-pilot.yml", "clusterfork-worker.yml"], "Codex worker (with other workflow mappings)"),
+            (["clusterfork-worker.yml", "clusterfork-pilot.yml"], "Codex worker (with other workflow mappings)"),
+            (["custom.yml"], "custom workflow mappings"),
+            ([], "no workflow mappings"),
+        ]
+        for workflows, mode in cases:
+            with self.subTest(workflows=workflows):
+                data = json.loads((SOURCE / "projects.json").read_text())
+                route = data["projects"][0]
+                data["projects"] = [dict(route, project_id=project, workflow=workflow)
+                                    for project, workflow in zip((PROJECT, OTHER), workflows)]
+                result, output = self.run_check(data)
+                self.assertEqual(result, 0)
+                self.assertIn(f"Mode: {mode}\n", output)
+                for workflow in workflows:
+                    self.assertIn(f"({workflow} @ main)", output)
+
     def test_azure_hostname_supports_flat_and_arm_response_shapes(self):
         for response in [{"defaultHostName": "pilot.azurewebsites.net"},
                          {"properties": {"defaultHostName": "pilot.azurewebsites.net"}}]:
