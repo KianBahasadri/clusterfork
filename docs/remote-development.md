@@ -3,7 +3,8 @@
 Eligible Linear issues route through one shared Azure Function App to a Codex
 worker on a standard GitHub-hosted runner. The worker selects a leased account
 using live quota, implements the issue, validates the repository, and opens a PR.
-It stops for human review. It does not merge, deploy, or update Linear statuses.
+Worker PRs default to automatic squash merging after GitHub's required CI checks
+pass, with no human approval required. Deployment and Linear status updates are separate.
 This is Clusterfork's own execution adapter, not an installation of upstream Symphony.
 
 ## What exists
@@ -18,7 +19,7 @@ This is Clusterfork's own execution adapter, not an installation of upstream Sym
 - `automation/azure/worker_core.py` and `worker_store.py`: trusted workflow
   authorization, account leases, persisted credentials, and worker outcomes.
 - `automation/worker.py` and `codex_runtime.py`: Codex account inspection,
-  execution, repository validation, branch push, and PR publication.
+  execution, validation, branch push, PR publication, and auto-merge requests.
 - `automation/accounts.py`: enroll saved Codex profiles for cloud use or reclaim
   their refreshed credentials for local use.
 - `.github/workflows/clusterfork-worker.yml`: Codex CLI 0.165.0 on standard
@@ -76,16 +77,38 @@ The first full Codex coding test also passed on 2026-10-28 UTC:
   limiting quota window, and ran `gpt-6.1-sol` at `max` effort.
 - Codex implemented the checker fix, added tests, and updated its owning doc.
   All 300 tests in that branch passed. The worker opened
-  [PR #1](https://github.com/KianBahasadri/clusterfork/pull/1) for human review.
+  [PR #1](https://github.com/KianBahasadri/clusterfork/pull/1), initially for human review.
 - Both [push CI](https://github.com/KianBahasadri/clusterfork/actions/runs/40744114226)
   and [PR CI](https://github.com/KianBahasadri/clusterfork/actions/runs/40744127352)
-  started automatically and passed. The PR remains unmerged.
+  started automatically and passed.
 - Refreshed credentials for all five cloud accounts were persisted; all account
   leases were released after execution. The active local profile was preserved.
 - The deployed health endpoint reports `codex-worker` with HTTP 200. Missing and
   forged workflow credentials were rejected with HTTP 401.
 - A subsequent Linear update produced no second worker run or dispatch receipt.
-  KIAN-892 is In Progress while its PR awaits human review.
+
+## Automatic merges
+
+Project mappings default `auto_merge` to `true`; set it to `false` for a project
+that should stop at an open PR. The broker sends this policy to the runner.
+New PRs and recovered open PRs request native GitHub auto-merge using squash,
+bound to the observed head commit. The runner verifies the repository, base,
+worker branch, bot author, and dispatch marker before requesting a merge.
+
+Clusterfork enables repository auto-merge and deletion of merged PR branches.
+Its `main` protection requires `test` and `routing-runtime` from GitHub Actions
+(App ID 15368), with zero review approvals. Existing administrator bypass remains
+available for repository maintenance; worker App tokens have no such bypass.
+Checks use non-strict mode so concurrent PRs do not wait for manual base updates.
+An update to `main` alone does not force another CI run on an older PR branch.
+
+The runner refuses auto-merge if repository auto-merge or protected-branch status
+checks are missing. GitHub handles pending/failed CI and merge conflicts; the
+worker never uses `--admin` or force-merges. A completed worker outcome means its
+coding/publication work finished; the PR can still be waiting for CI. The Azure
+outcome also records whether auto-merge was requested. Recovery recognizes merged
+PRs so a retry does not repeat work if merging preceded outcome persistence.
+Reference: [GitHub auto-merge](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/automatically-merging-a-pull-request).
 
 ## Agent profiles
 
@@ -228,6 +251,8 @@ can serve all those repositories. The dispatcher looks up the installation ID;
 you do not need to copy that ID into `.env`. It requests a short-lived token
 limited to the selected repository. Dispatcher tokens have Actions write;
 worker publication tokens have Contents and Pull requests write.
+Also enable repository auto-merge and classic branch protection with the relevant
+required CI checks on its target branch, or explicitly set `auto_merge: false`.
 
 References: [registration](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app),
 [installation](https://docs.github.com/en/apps/using-github-apps/installing-your-own-github-app),
@@ -237,7 +262,7 @@ References: [registration](https://docs.github.com/en/apps/creating-github-apps/
 
 First commit/review and land the pilot workflow on Clusterfork's default branch
 (`main`). GitHub needs the workflow on that branch before it can accept dispatches.
-The routing setup does not push commits or merge branches automatically.
+The deploy helper does not publish workflow files to GitHub.
 
 Check local configuration:
 
@@ -321,7 +346,8 @@ Changing generation permits **all** eligible issues to dispatch again.
 
 The agent has a 30-minute execution timeout inside the 45-minute job. Configured
 validation commands run after it finishes. Publication rechecks current project
-enrollment and status, pushes a separate branch, and opens a PR without merging.
+enrollment and status, pushes a separate branch, opens a PR, and requests the
+configured merge policy. GitHub waits for required checks before automatic merging.
 Workflow-file edits are refused because the App has no Workflows permission.
 Durable agent-session resume and automatic retries after a mid-task usage limit
 are not implemented. Linear API access remains read-only.
@@ -360,10 +386,10 @@ and queue consumer to the dispatch adapter, and queue failure returns 503. A
 temporary RSA key verifies GitHub App JWT signing and repository-scoped token
 requests. The full 278-test repository suite passes with `NO_COLOR` removed from
 the subprocess environment (the notification color tests otherwise inherit it).
-The worker adds 24 checks for workflow authorization, credential fencing, local
+The worker adds 31 checks for workflow authorization, credential fencing, local
 account ownership, live quota shapes, and real Git branch/PR publication against
 a temporary bare repository, revoked-login cleanup, and broker error handling.
-The full suite has 302 tests. Real RSA verification
+The full suite has 309 tests, including auto-merge policy and merged-PR recovery. Real RSA verification
 also rejects forged signatures, wrong issuers/audiences, expired and future tokens.
 
 Protocol references: [Linear webhooks](https://linear.app/developers/webhooks),

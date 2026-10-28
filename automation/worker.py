@@ -7,6 +7,7 @@ from contextlib import contextmanager
 import base64
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import subprocess
@@ -224,9 +225,54 @@ def git_auth(token, directory):
 
 def find_pr(config, token, branch):
     repository = config["repository"]
-    query = urlencode({"state": "open", "head": f"{repository.split('/')[0]}:{branch}", "base": config["ref"]})
+    query = urlencode({"state": "all", "head": f"{repository.split('/')[0]}:{branch}", "base": config["ref"]})
     pulls = json_request(f"https://api.github.com/repos/{repository}/pulls?{query}", token)
-    return pulls[0]["html_url"] if pulls else None
+    # Recover already-merged PRs too: auto-merge may finish before the runner
+    # persists its outcome. A retry must not implement the same issue again.
+    return next((pull["html_url"] for pull in pulls
+                 if pull.get("state") == "open" or pull.get("merged_at")), None)
+
+
+def request_auto_merge(config, token, pull_url, dispatch_key, branch, *, expected_sha=None):
+    if not config.get("auto_merge", True):
+        return
+    repository = config["repository"]
+    match = re.fullmatch(re.escape(f"https://github.com/{repository}/pull/") + r"([1-9][0-9]*)", pull_url)
+    if not match:
+        raise WorkerFailure("Pull request URL does not match the worker repository")
+    pull = json_request(f"https://api.github.com/repos/{repository}/pulls/{match[1]}", token)
+    head, base = pull.get("head", {}), pull.get("base", {})
+    if ((head.get("repo") or {}).get("full_name") != repository or head.get("ref") != branch
+            or base.get("ref") != config["ref"] or pull.get("user", {}).get("login") != "clusterfork[bot]"
+            or f"<!-- clusterfork-dispatch:{dispatch_key} -->" not in (pull.get("body") or "")
+            or not re.fullmatch(r"[0-9a-f]{40}", head.get("sha", ""))
+            or (expected_sha is not None and head["sha"] != expected_sha)):
+        raise WorkerFailure("Pull request does not match the worker's published change")
+    if pull.get("merged"):
+        return
+    if pull.get("state") != "open" or pull.get("draft"):
+        raise WorkerFailure("Worker pull request is not ready for auto-merge")
+    owner, name = repository.split("/")
+    policy = json_request("https://api.github.com/graphql", token, {
+        "query": """query($owner: String!, $name: String!, $ref: String!) {
+          repository(owner: $owner, name: $name) {
+            autoMergeAllowed
+            ref(qualifiedName: $ref) {
+              branchProtectionRule { requiresStatusChecks requiredStatusCheckContexts }
+            }
+          }
+        }""",
+        "variables": {"owner": owner, "name": name, "ref": f"refs/heads/{config['ref']}"}})
+    repo = (policy.get("data") or {}).get("repository") or {}
+    protection = (repo.get("ref") or {}).get("branchProtectionRule") or {}
+    if (policy.get("errors") or not repo.get("autoMergeAllowed")
+            or not protection.get("requiresStatusChecks") or not protection.get("requiredStatusCheckContexts")):
+        raise WorkerFailure("Auto-merge requires repository auto-merge and protected-branch CI checks")
+    # No --admin: GitHub enforces required checks, reviews and merge conflicts.
+    # Match the observed commit so a concurrent push cannot be merged blindly.
+    command(["gh", "pr", "merge", pull_url, "--auto", "--squash", "--match-head-commit", head["sha"]],
+            env={**clean_environment(), "GH_TOKEN": token})
+    print(f"Automatic squash merge requested: {pull_url}", flush=True)
 
 
 def execute(broker, config, heartbeat, directory):
@@ -235,6 +281,7 @@ def execute(broker, config, heartbeat, directory):
     token = broker.call("github")["token"]
     existing = find_pr(config, token, branch)
     if existing:
+        request_auto_merge(config, token, existing, broker.key, branch)
         return "completed", existing
     with git_auth(token, directory) as env:
         # Recover a branch pushed by a previous attempt that stopped before PR creation.
@@ -276,6 +323,8 @@ def execute(broker, config, heartbeat, directory):
     pull = json_request(f"https://api.github.com/repos/{config['repository']}/pulls", token,
                         {"title": f"{issue['identifier']}: {issue['title']}"[:250],
                          "head": branch, "base": config["ref"], "body": body})
+    request_auto_merge(config, token, pull["html_url"], broker.key, branch,
+                       expected_sha=command(["git", "rev-parse", "HEAD"]).strip())
     return "completed", pull["html_url"]
 
 
@@ -296,6 +345,9 @@ def main():
                 stream.write(f"### Clusterfork Codex worker\n\nIssue: {config['issue']['identifier']}\n\n"
                              f"Model: `{config['model']}` / `{config['effort']}`\n\nOutcome: {status}\n\n"
                              + (f"Pull request: {pull}\n" if pull else ""))
+                if pull:
+                    stream.write("\nMerge policy: " + ("automatic squash merge after required checks\n"
+                                 if config.get("auto_merge", True) else "manual merge (project override)\n"))
         return 0
     except Exception as exc:
         if started:

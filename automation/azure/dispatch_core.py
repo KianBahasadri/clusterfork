@@ -28,6 +28,7 @@ class Route:
     ref: str
     ready_state_ids: tuple[str, ...]
     validation_commands: tuple[tuple[str, ...], ...] = ()
+    auto_merge: bool = True
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,9 @@ class Registry:
             states = tuple(uuid_string(s) for s in row["ready_state_ids"])
             if not states:
                 raise ValueError("a project needs at least one ready state")
+            auto_merge = row.get("auto_merge", True)
+            if not isinstance(auto_merge, bool):
+                raise ValueError("auto_merge must be a boolean")
             commands = row.get("validation_commands", [])
             if not isinstance(commands, list) or any(
                 not isinstance(command, list) or not command
@@ -87,7 +91,7 @@ class Registry:
             ):
                 raise ValueError("validation_commands must be arrays of command arguments")
             routes[project_id] = Route(project_id, row["repository"], row["workflow"],
-                                       row["ref"], states, tuple(tuple(c) for c in commands))
+                                       row["ref"], states, tuple(tuple(c) for c in commands), auto_merge)
         return cls(label, generation, profiles, SelectionPolicy.load(data["agent_selection"]), routes)
 
 
