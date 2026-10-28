@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 import unittest
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -117,6 +118,20 @@ class AccountLeaseTests(unittest.TestCase):
         with self.assertRaises(WorkerError):
             self.table.replace(row, version)
 
+    def test_revoked_login_releases_lease_without_masking_authentication_failure(self):
+        class Broker:
+            released = False
+            def call(self, action, **data):
+                if action == "claim":
+                    return {"auth": auth(), "lease": "test-lease"}
+                self.released = data["release"] and data["auth"] is None
+        broker = Broker()
+        with self.assertRaises(CodexError):
+            with worker.account_lease(broker, "account") as (home, heartbeat):
+                (home / "auth.json").unlink()
+                raise CodexError("login revoked")
+        self.assertTrue(broker.released)
+
 
 class WorkerAuthorizationTests(unittest.TestCase):
     def setUp(self):
@@ -195,6 +210,20 @@ class WorkerAuthorizationTests(unittest.TestCase):
 
 
 class LiveQuotaShapeTests(unittest.TestCase):
+    def test_broker_authentication_or_storage_failure_is_not_reported_as_exhausted_quota(self):
+        class Broker:
+            def call(self, action):
+                return {"accounts": ["a" * 64]}
+        class Heartbeat:
+            failed = threading.Event()
+        config = {"model": "gpt-6.1-sol", "effort": "max",
+                  "selection": {"min_remaining_percent": 20, "max_snapshot_age_seconds": 60}}
+        for status in (401, 503):
+            with self.subTest(status=status), \
+                 patch.object(worker, "account_lease", side_effect=HTTPError("https://broker", status, "failure", {}, None)), \
+                 self.assertRaises(HTTPError):
+                worker.choose_account(Broker(), config, Heartbeat())
+
     def test_short_and_weekly_limits_both_constrain_headroom(self):
         config = Registry.load(ROOT / "automation/azure/projects.json")
         snapshot = quota_snapshot("account", "gpt-6.1-sol", {"rateLimitsByLimitId": {"codex": {

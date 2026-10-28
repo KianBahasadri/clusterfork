@@ -65,8 +65,27 @@ label. The issue was eligible in Todo during testing and is now Done.
   for the Kian team's Issues and Projects. The Linear API key has read access and
   correctly refuses webhook administration; the webhook was created in the UI.
 
-The results above validate the original routing-only milestone. The Codex worker
-adds execution; its first full live validation is pending deployment and testing.
+The results above validate the original routing-only milestone.
+
+The first full Codex coding test also passed on 2026-10-28 UTC:
+
+- Creating [KIAN-892](https://linear.app/kian-finishing-zombie-granola/issue/KIAN-892/report-the-configured-codex-worker-mode-in-the-setup-checker)
+  triggered the [worker run](https://github.com/KianBahasadri/clusterfork/actions/runs/40743398281)
+  automatically as `clusterfork[bot]`.
+- The runner inspected five accounts, selected one with 100% remaining in its
+  limiting quota window, and ran `gpt-6.1-sol` at `max` effort.
+- Codex implemented the checker fix, added tests, and updated its owning doc.
+  All 300 tests in that branch passed. The worker opened
+  [PR #1](https://github.com/KianBahasadri/clusterfork/pull/1) for human review.
+- Both [push CI](https://github.com/KianBahasadri/clusterfork/actions/runs/40744114226)
+  and [PR CI](https://github.com/KianBahasadri/clusterfork/actions/runs/40744127352)
+  started automatically and passed. The PR remains unmerged.
+- Refreshed credentials for all five cloud accounts were persisted; all account
+  leases were released after execution. The active local profile was preserved.
+- The deployed health endpoint reports `codex-worker` with HTTP 200. Missing and
+  forged workflow credentials were rejected with HTTP 401.
+- A subsequent Linear update produced no second worker run or dispatch receipt.
+  KIAN-892 is In Progress while its PR awaits human review.
 
 ## Agent profiles
 
@@ -335,9 +354,10 @@ and queue consumer to the dispatch adapter, and queue failure returns 503. A
 temporary RSA key verifies GitHub App JWT signing and repository-scoped token
 requests. The full 278-test repository suite passes with `NO_COLOR` removed from
 the subprocess environment (the notification color tests otherwise inherit it).
-The worker adds 20 checks for workflow authorization, credential fencing, local
+The worker adds 22 checks for workflow authorization, credential fencing, local
 account ownership, live quota shapes, and real Git branch/PR publication against
-a temporary bare repository. All 298 repository tests pass. Real RSA verification
+a temporary bare repository, revoked-login cleanup, and broker error handling.
+The full suite has 300 tests. Real RSA verification
 also rejects forged signatures, wrong issuers/audiences, expired and future tokens.
 
 Protocol references: [Linear webhooks](https://linear.app/developers/webhooks),

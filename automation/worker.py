@@ -94,8 +94,14 @@ def account_lease(broker, identity):
         write_private(home / "auth.json", claimed["auth"])
 
         def save(release=False):
+            try:
+                auth = json.loads((home / "auth.json").read_text())
+            except (OSError, ValueError):
+                # A rejected login may remove the cache. Still release the lease,
+                # preserving the original auth error rather than masking it.
+                auth = None
             broker.call("save", account_id=identity, lease=claimed["lease"],
-                        auth=json.loads((home / "auth.json").read_text()), release=release)
+                        auth=auth, release=release)
 
         with Heartbeat(save) as heartbeat:
             try:
@@ -148,7 +154,12 @@ def choose_account(broker, config, worker_heartbeat):
                 snapshots.append(quota_snapshot(identity, config["model"], limits))
                 if heartbeat.failed.is_set() or worker_heartbeat.failed.is_set():
                     raise WorkerFailure("Worker lease was lost during quota inspection")
-        except (HTTPError, CodexError) as exc:
+        except HTTPError as exc:
+            if exc.code not in {404, 409} or getattr(exc, "clusterfork_action", "claim") != "claim":
+                raise
+            print(f"Account {identity[:8]} is no longer available", flush=True)
+            continue
+        except CodexError as exc:
             # Unknown/busy/unavailable accounts never count as unused quota.
             print(f"Account {identity[:8]} unavailable for quota inspection ({type(exc).__name__})", flush=True)
             continue
@@ -193,7 +204,7 @@ def run_codex(broker, config, worker_heartbeat, directory):
                         failure_signals=[heartbeat.failed, worker_heartbeat.failed])
                 return summary.read_text() if summary.exists() else "Codex completed the issue."
         except HTTPError as exc:
-            if exc.code == 409 and not ran_agent:
+            if exc.code in {404, 409} and not ran_agent:
                 continue
             raise
         except CodexError:
