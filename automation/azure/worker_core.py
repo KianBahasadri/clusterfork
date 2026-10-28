@@ -193,5 +193,6 @@ class WorkerService:
                               "max_snapshot_age_seconds": self.registry.agent_selection.max_snapshot_age_seconds},
                 "repository": route.repository, "ref": route.ref,
                 "auto_merge": route.auto_merge,
+                "agent_timeout_minutes": route.agent_timeout_minutes,
                 "validation_commands": route.validation_commands,
                 "issue": {key: issue.get(key) for key in ("id", "identifier", "title", "description", "url")}}

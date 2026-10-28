@@ -37,6 +37,7 @@ class Route:
     validation_commands: tuple[tuple[str, ...], ...] = ()
     auto_merge: bool = True
     linear_states: LinearStates | None = None
+    agent_timeout_minutes: int = 300
 
 
 @dataclass(frozen=True)
@@ -91,6 +92,9 @@ class Registry:
             auto_merge = row.get("auto_merge", True)
             if not isinstance(auto_merge, bool):
                 raise ValueError("auto_merge must be a boolean")
+            agent_timeout = row.get("agent_timeout_minutes", 300)
+            if isinstance(agent_timeout, bool) or not isinstance(agent_timeout, int) or not 1 <= agent_timeout <= 330:
+                raise ValueError("agent_timeout_minutes must be an integer from 1 to 330")
             linear_states = None
             if "linear_states" in row:
                 configured = row["linear_states"]
@@ -108,7 +112,8 @@ class Registry:
             ):
                 raise ValueError("validation_commands must be arrays of command arguments")
             routes[project_id] = Route(project_id, row["repository"], row["workflow"],
-                                       row["ref"], states, tuple(tuple(c) for c in commands), auto_merge, linear_states)
+                                       row["ref"], states, tuple(tuple(c) for c in commands), auto_merge,
+                                       linear_states, agent_timeout)
         return cls(label, generation, profiles, SelectionPolicy.load(data["agent_selection"]), routes)
 
 

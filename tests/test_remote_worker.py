@@ -7,14 +7,16 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from urllib.error import HTTPError
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
@@ -228,6 +230,7 @@ class WorkerAuthorizationTests(unittest.TestCase):
         config = service.handle("start", claims(), {"dispatch_key": KEY})
         self.assertEqual((config["model"], config["effort"]), ("gpt-6.1-sol", "max"))
         self.assertTrue(config["auto_merge"])
+        self.assertEqual(config["agent_timeout_minutes"], 300)
         service.handle("github", claims(), {"dispatch_key": KEY})
         self.assertEqual(github.permissions, {"contents": "write", "pull_requests": "write"})
 
@@ -259,6 +262,23 @@ class WorkerAuthorizationTests(unittest.TestCase):
 
 
 class LiveQuotaShapeTests(unittest.TestCase):
+    def test_codex_execution_uses_project_timeout_and_defaults_to_five_hours(self):
+        selection = SimpleNamespace(account_id="a" * 64, model="gpt-6.1-sol", effort="max", remaining_percent=100)
+        heartbeat = SimpleNamespace(failed=threading.Event())
+        for override, expected in [({}, 18_000), ({"agent_timeout_minutes": 17}, 1020)]:
+            with self.subTest(override=override), tempfile.TemporaryDirectory() as directory:
+                lease = MagicMock()
+                lease.__enter__.return_value = (Path(directory), heartbeat)
+                config = {"model": selection.model, "effort": selection.effort,
+                          "issue": {"identifier": "KIAN-891", "title": "Test", "url": "https://linear.app/test"}, **override}
+                with patch.object(worker, "choose_account", return_value=([], {}, None)), \
+                     patch.object(worker, "select_account", return_value=selection), \
+                     patch.object(worker, "account_lease", return_value=lease), \
+                     patch.object(worker, "inspect_account", return_value=({}, {})), \
+                     patch.object(worker, "quota_snapshot"), patch.object(worker, "command") as command:
+                    worker.run_codex(object(), config, heartbeat, Path(directory))
+                self.assertEqual(command.call_args.kwargs["timeout"], expected)
+
     def test_broker_authentication_or_storage_failure_is_not_reported_as_exhausted_quota(self):
         class Broker:
             def call(self, action):
@@ -461,6 +481,29 @@ class AutoMergeTests(unittest.TestCase):
             path.write_text(json.dumps(config))
             with self.assertRaisesRegex(ValueError, "boolean"):
                 Registry.load(path)
+
+    def test_project_timeout_defaults_and_bounds_leave_time_for_publication(self):
+        config = json.loads((ROOT / "automation/azure/projects.json").read_text())
+        config["projects"][0].pop("agent_timeout_minutes", None)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "registry.json"
+            path.write_text(json.dumps(config))
+            self.assertEqual(Registry.load(path).routes[PROJECT].agent_timeout_minutes, 300)
+            for value in (1, 330):
+                config["projects"][0]["agent_timeout_minutes"] = value
+                path.write_text(json.dumps(config))
+                self.assertEqual(Registry.load(path).routes[PROJECT].agent_timeout_minutes, value)
+            for value in (0, -1, 331, True, 1.5, "300"):
+                config["projects"][0]["agent_timeout_minutes"] = value
+                path.write_text(json.dumps(config))
+                with self.subTest(value=value), self.assertRaisesRegex(ValueError, "agent_timeout_minutes"):
+                    Registry.load(path)
+
+    def test_hosted_job_budget_covers_the_longest_allowed_agent_attempt(self):
+        workflow = (ROOT / ".github/workflows/clusterfork-worker.yml").read_text()
+        timeout = int(re.search(r"timeout-minutes:\s*(\d+)", workflow)[1])
+        self.assertLessEqual(timeout, 360)
+        self.assertGreaterEqual(timeout - 330, 30)
 
 
 if __name__ == "__main__":

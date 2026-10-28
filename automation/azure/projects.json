@@ -20,6 +20,7 @@
       "workflow": "clusterfork-worker.yml",
       "ref": "main",
       "auto_merge": true,
+      "agent_timeout_minutes": 300,
       "ready_state_ids": ["ace01594-2daf-44bb-9690-cb0dccc11795"],
       "linear_states": {
         "in_progress": "764abaaa-b22c-42bb-8d6f-0c9c67b5f138",

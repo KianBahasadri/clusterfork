@@ -22,7 +22,7 @@ live routing and merge evidence without treating it as current health.
 | `linear_sync.py` | Linear lifecycle and PR/CI reconciliation |
 | `automation/worker.py`, `automation/codex_runtime.py` | Account inspection, Codex execution, validation, publication, and merge requests |
 | `automation/azure/projects.json` | Project mappings, states, model/effort, validation commands, and merge policy |
-| `.github/workflows/clusterfork-worker.yml` | Pinned Codex CLI on `ubuntu-24.04`, 45-minute job, read/OIDC permissions |
+| `.github/workflows/clusterfork-worker.yml` | Pinned Codex CLI on `ubuntu-24.04`, six-hour job, read/OIDC permissions |
 | `.github/workflows/clusterfork-pilot.yml` | Routing-only receipt workflow; no coding agent |
 
 The webhook authenticates raw bytes with HMAC-SHA256 and requires a timestamp
@@ -88,7 +88,7 @@ Reference: [GitHub auto-merge](https://docs.github.com/en/pull-requests/how-tos/
 
 Each project can configure `linear_states` with the UUIDs for `in_progress`,
 `blocked`, and `done`. Clusterfork maps these to In Progress, Blocked,
-status, and Done. Only ready states such as Todo dispatch new issues.
+and Done. Only ready states such as Todo dispatch new issues.
 
 | Event | Linear status |
 | --- | --- |
@@ -120,9 +120,16 @@ through reconciliation; execution failures are marked Blocked and require a
 GitHub job rerun. Existing open PRs are recovered by their deterministic branch name.
 Changing generation permits **all** eligible issues to dispatch again.
 
-The agent has a 30-minute execution timeout inside the 45-minute job. Configured
-validation commands run after it finishes. Publication rechecks current project
-enrollment and status, pushes a separate branch, opens a PR, and requests the
+Each project can set `agent_timeout_minutes` in `automation/azure/projects.json`.
+The default is **300 minutes (five hours)**; allowed values are integers from 1
+through 330. The hosted job allows **360 minutes (six hours)**, leaving time for
+setup, validation, and publication. GitHub-hosted jobs have a
+[six-hour execution ceiling](https://docs.github.com/en/actions/reference/limits).
+Settings are read when a worker starts; changing them does not extend an already
+running attempt. Automatic checkpoint/continuation across jobs is not implemented.
+
+Configured validation commands run after the agent finishes. Publication rechecks
+current project enrollment and status, pushes a separate branch, opens a PR, and requests the
 configured merge policy. GitHub waits for required checks before automatic merging.
 Workflow-file edits are refused because the App has no Workflows permission.
 Durable agent-session resume and automatic retries after a mid-task usage limit

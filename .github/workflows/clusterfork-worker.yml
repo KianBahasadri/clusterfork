@@ -32,7 +32,7 @@ concurrency:
 jobs:
   develop:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
         with:

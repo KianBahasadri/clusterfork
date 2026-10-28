@@ -201,7 +201,7 @@ def run_codex(broker, config, worker_heartbeat, directory):
                          "-c", f'model_reasoning_effort="{selection.effort}"',
                          "-c", 'cli_auth_credentials_store="file"',
                          "--output-last-message", str(summary), "-"],
-                        stdin=prompt, env=env, timeout=1800,
+                        stdin=prompt, env=env, timeout=config.get("agent_timeout_minutes", 300) * 60,
                         failure_signals=[heartbeat.failed, worker_heartbeat.failed])
                 return summary.read_text() if summary.exists() else "Codex completed the issue."
         except HTTPError as exc:
