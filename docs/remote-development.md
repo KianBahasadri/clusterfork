@@ -21,9 +21,41 @@ edit code, open PRs, or change Linear issues.** Those are later execution work.
   Azure deployment, and runtime secret configuration. It does not use or change
   Clusterfork's dotfile installer.
 
-These files are prepared locally. Live deployment, webhook delivery, and a hosted
-runner execution have not yet been verified. Credentials are local, outside version
-control; the root `.env` is gitignored, and the App private key lives outside the repo.
+The shared Azure Function App is deployed and its four functions are registered.
+Live Linear reads, Azure queue/table operations, and a directly triggered hosted
+runner job have passed. The full Linear webhook-to-GitHub-App dispatch path still
+needs the webhook signing secret. Credentials stay outside
+version control; the root `.env` is gitignored, and the App private key lives
+outside the repo.
+
+## Live pilot validation
+
+The first hosted smoke test uses
+[KIAN-891](https://linear.app/kian-finishing-zombie-granola/issue/KIAN-891/verify-clusterforks-linear-azure-github-routing-pilot)
+in the Clusterfork project. The project has the `symphony` project label, and a
+live current-state query confirms that this Todo issue is eligible.
+
+- [Initial push CI](https://github.com/KianBahasadri/clusterfork/actions/runs/40606215763)
+  passed. The direct [routing smoke job](https://github.com/KianBahasadri/clusterfork/actions/runs/40606446755)
+  passed on a standard GitHub-hosted runner; this run was started through the
+  local GitHub CLI, not by the Azure dispatcher.
+- Azure resources are in `rg-clusterfork-automation`: Function App
+  `clusterfork-dispatch-7604cac329` and storage account `cfdispatch7604cac329`.
+  The app uses the Flex settings described below.
+- Webhook endpoint:
+  `https://clusterfork-dispatch-7604cac329.azurewebsites.net/api/linear`.
+  Its `/api/health` endpoint currently returns 503 and names only the missing
+  `LINEAR_WEBHOOK_SECRET`; webhook requests fail closed until that is configured.
+- Real Azure Table claim/duplicate-claim/update operations passed, as did a
+  queue send/receive/delete round trip. Temporary test records and the temporary
+  storage-test queue were removed afterwards.
+- The GitHub App is installed on Clusterfork; its key and repository-scoped token
+  exchange validate. The Linear API key has read access and correctly refuses
+  webhook administration. Create the Linear webhook using the setup steps below;
+  save its signing secret in `.env` and run `configure`.
+
+This is a routing test. It does not demonstrate live agent authentication, quota
+fetching, reservations, Symphony execution, or code/PR generation.
 
 ## Agent profiles
 
@@ -154,10 +186,16 @@ or `COMMAND_CODE_API_KEY` in that package. Runtime Linear/GitHub credentials are
 sent separately to Azure app settings. Compute and storage still use Azure's
 normal allowances/pricing; this is not a promise of zero cost.
 
+Runtime dependencies pin `azure-functions==1.25.0`, which supports Python 3.12;
+the 2.x SDK requires Python 3.13 or later. CI installs these dependencies and
+indexes all four functions on Python 3.12, in addition to the repository tests.
+Azure CLI responses may expose the hostname directly or inside `properties`;
+the deploy helper accepts both shapes and rejects a missing hostname.
+
 It prints the actual webhook and health URLs. Until the webhook secret is set,
 health returns 503, webhook requests are rejected, and reconciliation stays idle.
-The helper itself has local packaging/unit coverage; live Azure deployment remains
-to be verified once credentials are available.
+The helper has now deployed this Function App successfully; external webhook and
+GitHub App access must still be configured before an event can traverse the full path.
 
 ## Connect Linear and run the smoke test
 
@@ -229,12 +267,12 @@ no cloud writes and use no actual credentials. The deployment package has an
 explicit file allowlist. Function decorators and SDK integration can be checked
 with dependencies from `automation/azure/requirements.txt` in an isolated venv.
 
-Validation for this change: 26 routing/setup tests and six quota-selection tests
+Validation for this change: 27 routing/setup tests and six quota-selection tests
 pass; all four functions index
 with the pinned Azure SDK, a signed request passes through the native HTTP handler
 and queue consumer to the dispatch adapter, and queue failure returns 503. A
 temporary RSA key verifies GitHub App JWT signing and repository-scoped token
-requests. The full 277-test repository suite passes with `NO_COLOR` removed from
+requests. The full 278-test repository suite passes with `NO_COLOR` removed from
 the subprocess environment (the notification color tests otherwise inherit it).
 
 Protocol references: [Linear webhooks](https://linear.app/developers/webhooks),

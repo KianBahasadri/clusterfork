@@ -276,6 +276,14 @@ class ClientTests(unittest.TestCase):
 
 
 class SetupTests(unittest.TestCase):
+    def test_azure_hostname_supports_flat_and_arm_response_shapes(self):
+        for response in [{"defaultHostName": "pilot.azurewebsites.net"},
+                         {"properties": {"defaultHostName": "pilot.azurewebsites.net"}}]:
+            with self.subTest(response=response):
+                self.assertEqual(pilot.function_hostname(response), "pilot.azurewebsites.net")
+        with self.assertRaisesRegex(ValueError, "hostname"):
+            pilot.function_hostname({"properties": {}})
+
     def test_dotenv_parser_reads_literals_without_shell_execution(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / ".env"

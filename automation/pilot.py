@@ -87,6 +87,13 @@ def azure_names(args):
             "storage": f"cfdispatch{suffix}"}
 
 
+def function_hostname(response):
+    hostname = response.get("defaultHostName") or response.get("properties", {}).get("defaultHostName")
+    if not hostname:
+        raise ValueError("Azure did not return a Function App hostname")
+    return hostname
+
+
 def configure(values, names):
     key = private_key_path(values).read_text()
     if "PRIVATE KEY-----" not in key:
@@ -174,8 +181,9 @@ def main():
         deploy(args, values, names)
     else:
         configure(values, names)
-    hostname = command(["az", "functionapp", "show", "-g", names["group"], "-n", names["app"],
-                        "--query", "defaultHostName", "-o", "tsv", "--only-show-errors"])
+    hostname = function_hostname(json.loads(command([
+        "az", "functionapp", "show", "-g", names["group"], "-n", names["app"],
+        "-o", "json", "--only-show-errors"])))
     print(f"Function App: {names['app']} (resource group: {names['group']})")
     print(f"Webhook URL: https://{hostname}/api/linear")
     print(f"Health URL: https://{hostname}/api/health")
