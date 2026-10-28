@@ -1,0 +1,88 @@
+"""Shared Linear webhook receiver and queued GitHub routing pilot."""
+
+import json
+import logging
+import os
+from functools import lru_cache
+from pathlib import Path
+
+import azure.functions as func
+
+from dispatch_clients import AzureReceipts, GitHub, Linear
+from dispatch_core import Dispatcher, Registry, WebhookError, webhook_event
+
+app = func.FunctionApp()
+QUEUE = "clusterfork-events"
+
+
+@lru_cache(maxsize=1)
+def registry():
+    return Registry.load(Path(__file__).with_name("projects.json"))
+
+
+@lru_cache(maxsize=1)
+def queue_client():
+    from azure.storage.queue import QueueClient, TextBase64EncodePolicy
+
+    return QueueClient.from_connection_string(
+        os.environ["AzureWebJobsStorage"], QUEUE,
+        message_encode_policy=TextBase64EncodePolicy(), connection_timeout=2, read_timeout=2,
+        retry_total=0)
+
+
+def enqueue(event):
+    queue_client().send_message(json.dumps(event))
+
+
+def dispatcher():
+    return Dispatcher(registry(), Linear(os.environ["LINEAR_API_KEY"]),
+                      GitHub(os.environ["GITHUB_APP_ID"], os.environ["GITHUB_APP_PRIVATE_KEY"]),
+                      AzureReceipts(os.environ["AzureWebJobsStorage"]))
+
+
+def missing_config():
+    return [name for name in ("LINEAR_API_KEY", "LINEAR_WEBHOOK_SECRET", "GITHUB_APP_ID",
+                              "GITHUB_APP_PRIVATE_KEY") if not os.environ.get(name)]
+
+
+@app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def health(req: func.HttpRequest) -> func.HttpResponse:
+    missing = missing_config()
+    return func.HttpResponse(json.dumps({"mode": "routing-pilot", "missing": missing,
+                                        "projects": len(registry().routes)}),
+                             status_code=503 if missing else 200, mimetype="application/json")
+
+
+@app.route(route="linear", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+def linear_webhook(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        event = webhook_event(req.get_body(), req.headers, os.environ.get("LINEAR_WEBHOOK_SECRET"))
+    except WebhookError as exc:
+        return func.HttpResponse(str(exc), status_code=exc.status)
+    if event:
+        try:
+            enqueue(event)
+        except Exception:
+            # Return failure so Linear retries; no uncommitted success response.
+            logging.error("Unable to queue verified Linear event")
+            return func.HttpResponse("queue unavailable", status_code=503)
+    return func.HttpResponse("queued" if event else "ignored", status_code=200)
+
+
+@app.queue_trigger(arg_name="message", queue_name=QUEUE, connection="AzureWebJobsStorage")
+def route_event(message: func.QueueMessage):
+    results = dispatcher().process(json.loads(message.get_body()))
+    # No issue descriptions, webhook bodies, API responses, or credentials in logs.
+    for result in results:
+        logging.info("Clusterfork routing: %s", json.dumps(result))
+
+
+@app.timer_trigger(arg_name="timer", schedule="0 */15 * * * *", run_on_startup=False,
+                   use_monitor=True)
+def reconcile(timer: func.TimerRequest):
+    # One shared reconciliation timer catches missed webhooks and newly enrolled
+    # projects. Durable receipts make repeat scans harmless for this pilot.
+    if missing_config():
+        return
+    for project_id in registry().routes:
+        enqueue({"type": "Project", "id": project_id})

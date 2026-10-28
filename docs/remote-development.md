@@ -1,0 +1,243 @@
+# Remote development routing pilot
+
+The implemented pilot routes eligible Linear issues through one shared Azure
+Function App to a GitHub Actions workflow in the mapped repository. The workflow
+validates and reports issue IDs. **It does not run Symphony or a coding agent,
+edit code, open PRs, or change Linear issues.** Those are later execution work.
+
+## What exists
+
+- `automation/azure/function_app.py`: signed HTTP webhook, queue consumer, health
+  endpoint, and shared 15-minute reconciliation timer.
+- `automation/azure/dispatch_core.py`: project enrollment, current-state rules,
+  repository routing, and dispatch receipt handling.
+- `automation/azure/dispatch_clients.py`: Linear GraphQL, GitHub App authentication,
+  and Azure Table receipts.
+- `automation/azure/projects.json`: non-secret project-to-repository mappings.
+- `.github/workflows/clusterfork-pilot.yml`: manual/API-triggered smoke workflow;
+  also callable as a reusable workflow. Standard `ubuntu-24.04`, five-minute
+  timeout, no repository checkout, no agent credentials, no token permissions.
+- `automation/pilot.py`: local configuration check, allowlisted source packaging,
+  Azure deployment, and runtime secret configuration. It does not use or change
+  Clusterfork's dotfile installer.
+
+These files are prepared locally. Live deployment, webhook delivery, and a hosted
+runner execution have not yet been verified. Credentials are local, outside version
+control; the root `.env` is gitignored, and the App private key lives outside the repo.
+
+## Agent profiles
+
+`automation/azure/projects.json` pins the two profiles for remote development:
+
+| Agent | Model ID | Reasoning effort |
+| --- | --- | --- |
+| Antigravity | `gemini-3.8-flash-high` | `high` |
+| Codex | `gpt-6.1-terra` | `max` |
+
+The registry requires both profiles and explicit supported effort values. The
+configuration check reports the exact pins. Each issue is intended to use **one**
+agent/account, selected by available quota, with the same fixed profile for every
+task assigned to that agent. There is no implementation/review pair or complexity
+classifier. These apply to the remote development integration; the routing smoke
+workflow still only reports issue IDs. Worker execution and live quota fetching
+are not implemented yet. Model substitution is not configured.
+
+`quota_selection.py` implements the decision over provider-normalized snapshots:
+choose the account with the lowest used percentage in its **most depleted**
+applicable window. Both short and weekly/model limits matter. Skip busy, blocked,
+unknown, stale, and nearly exhausted accounts. Configuration currently requires
+at least 20% remaining, a snapshot at most 60 seconds old, and one active task per
+account. Those are initial configurable operating values, not a prediction of a
+task's consumption. If no account qualifies, return no selection and wait.
+
+The execution scheduler must supply live quota snapshots and atomically reserve
+the provider/account identity before launching; this pure selection function does
+not acquire a distributed lease or synchronize refreshed auth. Provider adapters,
+reservations, and checkpoint/retry on a mid-task limit remain worker-phase work.
+Codex documents machine-readable `account/rateLimits/read`. Antigravity documents
+`/usage`/`/quota`; a reliable headless quota adapter still needs verification.
+References: [Codex limits](https://learn.chatgpt.com/docs/app-server#6-rate-limits-chatgpt),
+[Antigravity usage](https://antigravity.google/docs/cli/reference/).
+
+The Antigravity ID was verified with `agy models`; Codex CLI 0.164.0's cached
+catalog lists Terra 6.1 and Max. Official guidance requires Codex CLI 0.159.0 or
+later for Terra 6.1. References: [Antigravity model selection](https://antigravity.google/docs/cli/headless/#model-and-agent-selection),
+[Codex models](https://learn.chatgpt.com/docs/models).
+
+The project scan fetches enrollment labels once per page, outside the issues
+connection. Repeating the label connection for each issue exceeds Linear's query
+complexity limit at a 50-issue page size.
+
+## Fill the local configuration
+
+Edit `/home/kian/clusterfork/.env`. Keep existing entries; fill the blank variables
+added for this pilot. Do not paste secret values into chat or commit them.
+
+| Variable | Value |
+| --- | --- |
+| `LINEAR_API_KEY` | Personal API key with read access to the Kian team |
+| `GITHUB_APP_ID` | Numeric **App ID**, not Client ID or installation ID |
+| `GITHUB_APP_PRIVATE_KEY_FILE` | Absolute path to the downloaded GitHub App PEM |
+| `LINEAR_WEBHOOK_SECRET` | Signing secret from the Linear webhook; filled after initial deployment |
+| `COMMAND_CODE_API_KEY` | Unused by the current Antigravity/Codex configuration |
+
+Use quoted values if needed. The helper reads literal dotenv values; it never
+executes the file as shell code. Environment variables override the file.
+
+Create the Linear key in **Settings → Account → Security & access → Personal API
+keys**. Use read permission and limit team access to Kian if offered. The pilot
+only reads issues, states, project labels, and project issue lists. Creating the
+webhook below is a separate workspace-admin action in the UI.
+
+## Register and install the GitHub App
+
+1. Open [New GitHub App](https://github.com/settings/apps/new) under your personal
+   account. Suggested name: `Clusterfork Kian Dispatcher` (must be globally unique).
+2. Set Homepage URL to `https://github.com/KianBahasadri/clusterfork`.
+3. Leave user authorization/callback and setup URLs empty. This app authenticates
+   as an installation; it does not need a user OAuth flow.
+4. Uncheck **Active** under **Webhook**. This app does not receive GitHub webhooks;
+   Linear sends events directly to Azure.
+5. Under **Repository permissions**, set **Actions: Read and write**. **Metadata:
+   Read-only** is automatic. Leave other permissions at No access. No account or
+   organization permissions or event subscriptions are needed for the pilot.
+6. Select **Only on this account**, then create the app.
+7. Copy its numeric **App ID** into `GITHUB_APP_ID` in `.env`.
+8. Under **Private keys**, click **Generate a private key**. Move the downloaded
+   PEM outside the repo, for example into `~/.config/clusterfork/automation/`, and
+   restrict its permissions with `chmod 600 /absolute/path/to/private-key.pem`.
+   Put that absolute path in `GITHUB_APP_PRIVATE_KEY_FILE`. Keep the PEM separate
+   from `.env`; the helper reads its contents only when configuring Azure.
+9. In the app's sidebar, choose **Install App**, install on `KianBahasadri`, choose
+   **Only select repositories**, select **clusterfork**, and click Install.
+
+For another repository later, extend this installation's selected repositories
+and add its registry entry and caller workflow. One GitHub App and Azure deployment
+can serve all those repositories. The dispatcher looks up the installation ID;
+you do not need to copy that ID into `.env`. It requests a short-lived token
+limited to the selected repository and Actions write permission.
+
+References: [registration](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app),
+[installation](https://docs.github.com/en/apps/using-github-apps/installing-your-own-github-app),
+[installation tokens](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation).
+
+## Deploy after credentials are filled
+
+First commit/review and land the pilot workflow on Clusterfork's default branch
+(`main`). GitHub needs the workflow on that branch before it can accept dispatches.
+The routing setup does not push commits or merge branches automatically.
+
+Check local configuration:
+
+```bash
+python3 automation/pilot.py check
+```
+
+This prints only set/blank status and routing metadata, never secret values. A
+blank webhook secret is allowed for initial deployment. Required missing values
+make the check and deployment fail before creating any Azure resources.
+
+With Azure CLI authenticated to the intended student subscription:
+
+```bash
+az account show --query '{name:name,state:state}'
+python3 automation/pilot.py deploy
+```
+
+The helper creates `rg-clusterfork-automation` in East US, a deterministic unique
+StorageV2 account, the event queue, and a Python 3.12 Function App on **Flex
+Consumption**, with 512 MB instances, no always-ready instances, and no Application
+Insights resource. It configures credentials through a temporary mode-0600 JSON
+file, not secret-bearing command arguments, and deploys the allowlisted source
+package with remote dependency build. It never uploads the root `.env`, PEM file,
+or `COMMAND_CODE_API_KEY` in that package. Runtime Linear/GitHub credentials are
+sent separately to Azure app settings. Compute and storage still use Azure's
+normal allowances/pricing; this is not a promise of zero cost.
+
+It prints the actual webhook and health URLs. Until the webhook secret is set,
+health returns 503, webhook requests are rejected, and reconciliation stays idle.
+The helper itself has local packaging/unit coverage; live Azure deployment remains
+to be verified once credentials are available.
+
+## Connect Linear and run the smoke test
+
+1. In Linear's workspace settings, open **API → Webhooks** and create a webhook
+   targeting the printed `https://…azurewebsites.net/api/linear` URL.
+2. Select the **Kian** team and the **Issues** and **Projects** resource types.
+   Workspace admin access is required. No webhook is needed per repository.
+3. Copy its signing secret into `LINEAR_WEBHOOK_SECRET` in `.env`, then run:
+
+   ```bash
+   python3 automation/pilot.py configure
+   ```
+
+4. Check the printed `/api/health` URL returns 200 with `"missing": []`. Re-enable
+   the Linear webhook if it was disabled during initial setup.
+5. Add a **project label** named `symphony` to the **Clusterfork project**. This is
+   different from an issue label. Enrollment can trigger smoke runs for existing
+   Todo issues, so inspect that list before applying it.
+6. Create a test issue in that project with status **Todo**, or move a selected
+   issue into Todo. The mapping uses the existing Kian team's Todo UUID; it does
+   not invent or create a Ready status.
+7. Open [Clusterfork Actions](https://github.com/KianBahasadri/clusterfork/actions)
+   and look for **Clusterfork routing pilot**. Its job summary should name the
+   repository, Linear issue UUID/identifier, project UUID, and dispatch receipt key.
+   Issue descriptions and agent transcripts are never passed to this smoke job.
+8. Edit that same issue again. The dispatcher receipt should suppress another
+   smoke run. The shared timer also reconciles missed events every 15 minutes.
+
+The HTTP function verifies the HMAC-SHA256 signature over the raw body, rejects
+timestamps more than five minutes away, and responds 200 only after a queue send
+succeeds. Only Issue/Project create/update events are used. The queue stores entity
+IDs, not whole webhook bodies. The consumer reads **current** Linear data before
+checking enrollment, mapping, archive flags, and ready status. Removing the project
+label prevents subsequent dispatches; it does not cancel runs already submitted.
+
+## Pilot limits and troubleshooting
+
+This milestone deliberately dispatches once per issue per registry `generation`.
+It does not implement production retries, agent sessions, code publication, or
+Symphony's execution lifecycle. Editing an issue, moving it out of Todo and back,
+or retrying a webhook does not reset its receipt. A fresh test issue is the easiest
+way to repeat the test. Changing the registry generation permits **all** eligible
+issues to dispatch again, so use that only deliberately.
+
+Azure Table `ClusterforkDispatches` records `dispatching`, `dispatched`, or
+`uncertain`. `dispatched` means GitHub accepted the request; verify actual runner
+success in Actions. Atomic receipt creation prevents concurrent delivery duplicates.
+Definite GitHub rejections release the receipt so queue retries can recover. A
+timeout/server error may have occurred after GitHub accepted a request: that receipt
+is held as `uncertain`, and a crash may leave `dispatching`. Check Actions before
+manually removing such a receipt in Azure Storage Explorer. This prioritizes avoiding
+duplicates over automatically retrying an ambiguous request. It does not claim
+exactly-once execution. Inspect `clusterfork-events-poison` after repeated failures.
+
+Common causes: missing App installation, incorrect numeric App ID/PEM, workflow
+not yet on `main`, wrong webhook signing secret, missing project label, or an issue
+outside the mapped project/Todo state. The registry and app installation must both
+allow the destination repository.
+
+## Local validation
+
+```bash
+python3 -m unittest discover -s tests -p 'test_linear_dispatch.py' -v
+python3 automation/pilot.py package --output /tmp/clusterfork-pilot.zip
+```
+
+Routing tests use recorded-shape Linear objects and in-memory receipts; they make
+no cloud writes and use no actual credentials. The deployment package has an
+explicit file allowlist. Function decorators and SDK integration can be checked
+with dependencies from `automation/azure/requirements.txt` in an isolated venv.
+
+Validation for this change: 26 routing/setup tests and six quota-selection tests
+pass; all four functions index
+with the pinned Azure SDK, a signed request passes through the native HTTP handler
+and queue consumer to the dispatch adapter, and queue failure returns 503. A
+temporary RSA key verifies GitHub App JWT signing and repository-scoped token
+requests. The full 277-test repository suite passes with `NO_COLOR` removed from
+the subprocess environment (the notification color tests otherwise inherit it).
+
+Protocol references: [Linear webhooks](https://linear.app/developers/webhooks),
+[GitHub dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event),
+[Azure queue triggers](https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-storage-queue-trigger),
+[Flex Consumption](https://learn.microsoft.com/en-us/azure/azure-functions/flex-consumption-plan).

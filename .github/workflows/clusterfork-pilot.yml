@@ -1,0 +1,77 @@
+name: Clusterfork routing pilot
+run-name: "Clusterfork pilot · ${{ inputs.linear_identifier }} · ${{ inputs.dispatch_key }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      linear_issue_id:
+        description: Linear issue UUID
+        required: true
+        type: string
+      linear_identifier:
+        description: Linear issue identifier
+        required: true
+        type: string
+      linear_project_id:
+        description: Linear project UUID
+        required: true
+        type: string
+      dispatch_key:
+        description: Durable dispatcher receipt key
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      linear_issue_id:
+        required: true
+        type: string
+      linear_identifier:
+        required: true
+        type: string
+      linear_project_id:
+        required: true
+        type: string
+      dispatch_key:
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: clusterfork-pilot-${{ inputs.linear_issue_id }}
+  cancel-in-progress: false
+
+jobs:
+  receipt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate and report routing
+        env:
+          LINEAR_ISSUE_ID: ${{ inputs.linear_issue_id }}
+          LINEAR_IDENTIFIER: ${{ inputs.linear_identifier }}
+          LINEAR_PROJECT_ID: ${{ inputs.linear_project_id }}
+          DISPATCH_KEY: ${{ inputs.dispatch_key }}
+          REPOSITORY: ${{ github.repository }}
+        shell: python
+        run: |
+          import os
+          import re
+          from uuid import UUID
+
+          for name in ("LINEAR_ISSUE_ID", "LINEAR_PROJECT_ID"):
+              assert str(UUID(os.environ[name])) == os.environ[name], f"Invalid {name}"
+          assert re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*-\d+", os.environ["LINEAR_IDENTIFIER"])
+          assert re.fullmatch(r"[0-9a-f]{64}", os.environ["DISPATCH_KEY"])
+          summary = (
+              "### Clusterfork routing pilot\n\n"
+              f"Repository: `{os.environ['REPOSITORY']}`\n\n"
+              f"Linear issue: `{os.environ['LINEAR_IDENTIFIER']}`\n\n"
+              f"Issue UUID: `{os.environ['LINEAR_ISSUE_ID']}`\n\n"
+              f"Project UUID: `{os.environ['LINEAR_PROJECT_ID']}`\n\n"
+              f"Dispatch key: `{os.environ['DISPATCH_KEY']}`\n\n"
+              "Routing verified. This pilot does not run a coding agent.\n"
+          )
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+              output.write(summary)
+          print(f"Received {os.environ['LINEAR_IDENTIFIER']} in {os.environ['REPOSITORY']}")
