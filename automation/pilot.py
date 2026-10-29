@@ -24,7 +24,7 @@ CONFIG_NAMES = ("LINEAR_API_KEY", "LINEAR_WEBHOOK_SECRET", "GITHUB_APP_ID",
                 "GITHUB_APP_PRIVATE_KEY_FILE", "COMMAND_CODE_API_KEY")
 PACKAGE_FILES = ("function_app.py", "dispatch_core.py", "dispatch_clients.py", "quota_selection.py",
                  "worker_core.py", "worker_store.py", "worker_reporting.py", "linear_sync.py", "repository_queue.py",
-                 "readiness.py", "readiness_policy.py",
+                 "readiness.py", "readiness_policy.py", "deployment_control.py",
                  "host.json", "requirements.txt", "projects.json")
 
 
@@ -64,12 +64,23 @@ def check(values):
     return missing
 
 
-def package(destination):
+def source_digest():
+    digest = hashlib.sha256()
+    for name in sorted(PACKAGE_FILES):
+        digest.update(name.encode() + b"\0" + (SOURCE / name).read_bytes() + b"\0")
+    return digest.hexdigest()
+
+
+def package(destination, revision=None):
     Registry.load(SOURCE / "projects.json")
+    if revision is not None and not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise ValueError("deployment revision must be a full commit SHA")
     with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
         # Explicit allowlist: never include .env, PEMs, caches, or local settings.
         for name in PACKAGE_FILES:
             archive.write(SOURCE / name, name)
+        if revision:
+            archive.writestr("deployment.json", json.dumps({"revision": revision, "digest": source_digest()}))
 
 
 def command(args, *, sensitive=False):

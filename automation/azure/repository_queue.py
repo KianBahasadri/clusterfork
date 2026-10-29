@@ -34,14 +34,17 @@ def optional(table, key):
 
 
 class RepositoryQueue:
-    def __init__(self, registry, receipts, runs, tables, linear, github, readiness, clock=time.time):
+    def __init__(self, registry, receipts, runs, tables, linear, github, readiness, clock=time.time, control=None):
         self.registry, self.receipts, self.runs = registry, receipts, runs
         self.tables = lru_cache(maxsize=None)(tables)
         self.linear, self.github, self.clock = linear, github, clock
         self.readiness = readiness
+        self.control = control
         self.readiness.admitted = self.is_admitted
 
     def is_admitted(self, issue, route):
+        if self.control and self.control.is_paused():
+            return False
         state, _ = self.table(route.repository).get("slot")
         return state["active_key"] == dispatch_key(self.registry, route, issue)
 
@@ -302,6 +305,13 @@ class RepositoryQueue:
     def _advance(self, repository):
         table = self.table(repository)
         results = {}
+        if self.control and self.control.is_paused():
+            reason = "Azure deployment in progress; new workers are paused."
+            for row in table.list():
+                if row["RowKey"] != "slot" and row["status"] not in TERMINAL:
+                    self.report(table, row, reason)
+                    results[row["RowKey"]] = {"status": "deployment_paused", "dispatch_key": row["RowKey"]}
+            return results
         for row in table.list():
             if row.get("status") in TERMINAL and row.get("reason"):
                 self.report(table, row, row["reason"])

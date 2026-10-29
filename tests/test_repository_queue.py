@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "automation/azure"))
 from dispatch_clients import GitHub, Linear, RequestError
 from dispatch_core import DispatchError, Dispatcher, Registry
 from repository_queue import RepositoryQueue
+from deployment_control import DeploymentControl
 from worker_core import Accounts, WorkerError, WorkerService
 from test_remote_worker import ApprovedReadiness, MemoryTable, NOW, PROJECT, claims
 from readiness_policy import PROTOCOL
@@ -95,6 +96,26 @@ class RepositoryQueueTests(unittest.TestCase):
 
     def slot(self, repository=None):
         return self.tables[(repository or self.repository).lower()].get("slot")[0]
+
+    def test_deployment_pause_holds_new_work_but_allows_current_worker_to_finish(self):
+        control = DeploymentControl(MemoryTable())
+        self.queue.control = control
+        first, _ = [self.enqueue(self.issue(n)) for n in (1, 2)]
+        control.pause("deployment", "a" * 40)
+        self.queue.advance(self.repository)
+        self.github.dispatch.assert_not_called()
+        control.resume("deployment", "a" * 40)
+        self.queue.advance(self.repository)
+        self.assertEqual(self.github.dispatch.call_count, 1)
+        self.start(first)
+        control.pause("deployment", "a" * 40)
+        self.finish(first)
+        self.stop(first)
+        self.queue.advance(self.repository)
+        self.assertEqual(self.github.dispatch.call_count, 1)
+        control.resume("deployment", "a" * 40)
+        self.queue.advance(self.repository)
+        self.assertEqual(self.github.dispatch.call_count, 2)
 
     def test_simultaneous_todo_events_and_timer_scans_admit_exactly_one(self):
         issues = [self.issue(n) for n in range(1, 9)]

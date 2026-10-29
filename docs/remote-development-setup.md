@@ -62,7 +62,9 @@ again; it is not a targeted retry switch.
 
 ## Azure deployment
 
-With Azure CLI authenticated to the intended subscription:
+Routine source updates use [automatic deployment](remote-development.md#automatic-deployments).
+Initial provisioning and local recovery use the helper, with Azure CLI
+authenticated to the intended subscription:
 
 ```bash
 az account show --query '{name:name,state:state}'
@@ -101,6 +103,33 @@ The helper prints `/api/linear` and `/api/health` URLs. With no webhook secret,
 health returns 503, webhook requests are rejected, and the timer stays idle.
 Azure hostname responses are accepted at either the root or `properties` level;
 a missing hostname is an error.
+
+## Automatic deployment identity
+
+The `azure-production` GitHub environment permits only main and has no required
+reviewers. Its `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID`
+variables identify the user-assigned managed identity `clusterfork-github-deploy`.
+Its federated credential trusts issuer
+`https://token.actions.githubusercontent.com`, subject
+`repo:KianBahasadri/clusterfork:environment:azure-production`, and audience
+`api://AzureADTokenExchange`.
+
+The identity has Website Contributor on the existing Function App and Storage
+Table Data Contributor on the `ClusterforkOperations` table only. It uses OIDC
+instead of a client secret or publish profile. Runtime Linear/App credentials
+continue to be configured separately through the provisioning helper; deployment
+does not copy the local `.env` or authentication caches to GitHub. The control
+table must exist before the deployment identity accesses it.
+
+The workflow uses Python 3.12, pinned Azure actions, and the explicit package
+allowlist. Run a recovery against the current tested main with:
+
+```bash
+gh workflow run deploy-azure.yml --repo KianBahasadri/clusterfork --ref main
+```
+
+References: [Azure Functions GitHub Actions deployment](https://learn.microsoft.com/en-us/azure/azure-functions/functions-how-to-github-actions),
+[Azure OIDC authentication](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect).
 
 ## Linear webhook and first run
 

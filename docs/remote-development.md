@@ -100,19 +100,17 @@ the old run stops. Completed coding tasks retain their once-per-generation rule.
 If a manual rerun of Blocked/In Progress work has a stale approval, move the
 issue to Todo to request its new review; the rerun cannot grant itself a pass.
 
-**Deployment compatibility:** deploy the Azure package (including both readiness
-modules) together with compatible `automation/worker.py` and shared policy code
-on every mapped repository's workflow branch. The broker and runner require the
+**Deployment compatibility:** the Azure readiness modules must match
+`automation/worker.py` and shared policy code on every mapped repository's
+workflow branch. The broker and runner require the
 `readiness-v1:<contract hash>` start protocol (including the prompt, schema, and
 budget hash) and an explicit broker-selected phase. An old runner is denied
 start; a new runner receiving an old broker response stops before
 execution. Readiness dispatches use the existing worker workflow and inputs;
-they are not imported into the coding FIFO. No generation reset, new credentials,
+their separate receipts share the admitted issue's repository slot. No generation reset, new credentials,
 or expanded App permissions are needed; the broker creates `ClusterforkReadiness`.
-Drain active workers before rollout, since credentials already issued by an old
-broker cannot be retroactively withdrawn. Keep routing paused during a mixed
-deployment, publish the compatible worker sources to the workflow branch, deploy
-the broker package, then resume routing. This change does not deploy either side.
+The automatic deployment workflow drains active workers before updating the
+broker. Other mapped repositories also need compatible worker sources.
 
 ## Repository queues
 
@@ -148,9 +146,8 @@ existing issue-scoped Actions concurrency only guards duplicate issue jobs.
 New workers require an explicit `serial_admission: true` confirmation from the
 broker before inspecting accounts or starting coding. Older deployments that
 omit it fail before agent execution. The health endpoint also reports this flag
-so operators can verify the deployed capability. Merging a PR does not deploy
-Azure: pause worker dispatches, let active workers finish, deploy the matching
-broker, verify this health flag, then resume dispatches.
+so operators can verify the deployed capability. The automatic deployment
+workflow coordinates broker updates after changes reach main.
 
 Failures, missing outcomes, closed unmerged PRs, and merge/CI blockers pause the
 repository. Resolve the PR or manually rerun the **same** admitted task to repair
@@ -179,6 +176,32 @@ before receipt creation can resume; a receipt left `dispatching` or `uncertain`
 is never blindly resent. Reconciliation discovers its run and deterministic PR
 branch. If no run can be confirmed, that repository stays paused for investigation
 or explicit cancellation. Incomplete GitHub responses also keep the slot held.
+
+## Automatic deployments
+
+`.github/workflows/deploy-azure.yml` runs on pushes to main and supports manual
+recovery with `workflow_dispatch`. It compares the allowlisted broker source
+digest with the deployed package and skips unchanged, unpaused deployments.
+Deployment runs are serialized, with later pushes retaining the newest pending
+run. [Setup](remote-development-setup.md#automatic-deployment-identity) owns the
+GitHub environment and Azure identity configuration.
+
+Before deployment, `automation/deploy.py` writes a durable pause to
+`ClusterforkOperations` (partition `control`). New readiness/development
+dispatches stop, while existing workers retain their broker access and can
+finish. The workflow waits for the exact main revision's `test` CI workflow to
+succeed and for all worker runs, including queued runs and older manual reruns,
+to stop. Draining allows 330 minutes within a six-hour deployment job.
+
+Only the allowlisted Function App ZIP is published, using Flex Consumption's
+remote build. `deployment.json` stamps its Git revision and broker source digest.
+The health endpoint returns this metadata, the serial-admission capability, and
+the deployment pause state. The workflow resumes dispatch only after the live
+revision/digest match the package, configuration is complete, and main still
+points to that revision. If main advances, the newer deployment inherits the
+pause. CI, drain, deployment, or health failures leave the pause in place; a
+corrected main push or manual deployment workflow run performs recovery. The
+pause has no time-based automatic expiry.
 
 ## Agent profiles
 

@@ -6,6 +6,12 @@ from worker_core import AUDIENCE, ISSUER, WorkerError
 
 
 class AzureTable:
+    @classmethod
+    def with_client(cls, client, partition):
+        instance = cls.__new__(cls)
+        instance.table, instance.partition = client, partition
+        return instance
+
     def __init__(self, connection, name, partition):
         from azure.data.tables import TableServiceClient
         self.table = TableServiceClient.from_connection_string(connection).create_table_if_not_exists(name)

@@ -16,6 +16,7 @@ from worker_store import AzureTable, verify_oidc
 from linear_sync import LinearSync
 from repository_queue import RepositoryQueue
 from readiness import ReadinessGate
+from deployment_control import DeploymentControl, build_metadata
 
 app = func.FunctionApp()
 QUEUE = "clusterfork-events"
@@ -60,7 +61,8 @@ def worker_service():
     queue = RepositoryQueue(registry(), receipts, runs,
                             lambda repository: AzureTable(connection, "ClusterforkRepositoryQueue",
                                                           hashlib.sha256(repository.encode()).hexdigest()),
-                            linear, github, readiness)
+                            linear, github, readiness,
+                            control=DeploymentControl(AzureTable(connection, "ClusterforkOperations", "control")))
     return WorkerService(
         registry(), receipts, runs,
         accounts,
@@ -98,6 +100,8 @@ def health(req: func.HttpRequest) -> func.HttpResponse:
     missing = missing_config()
     mode = "codex-worker" if any(route.workflow == "clusterfork-worker.yml" for route in registry().routes.values()) else "routing-pilot"
     return func.HttpResponse(json.dumps({"mode": mode, "missing": missing, "serial_admission": True,
+                                        "deployment": build_metadata(),
+                                        "deployment_paused": worker_service().queue.control.is_paused() if not missing else None,
                                         "projects": len(registry().routes)}),
                              status_code=503 if missing else 200, mimetype="application/json")
 
