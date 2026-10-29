@@ -15,6 +15,7 @@ from worker_core import Accounts, WorkerError, WorkerService
 from worker_store import AzureTable, verify_oidc
 from linear_sync import LinearSync
 from repository_queue import RepositoryQueue
+from readiness import ReadinessGate
 
 app = func.FunctionApp()
 QUEUE = "clusterfork-events"
@@ -51,15 +52,18 @@ def worker_service():
     runs = AzureTable(connection, "ClusterforkWorkers", "worker")
     linear = Linear(os.environ["LINEAR_API_KEY"])
     github = GitHub(os.environ["GITHUB_APP_ID"], os.environ["GITHUB_APP_PRIVATE_KEY"])
+    accounts = Accounts(AzureTable(connection, "ClusterforkAccounts", "codex"))
+    readiness = ReadinessGate(registry(), AzureTable(connection, "ClusterforkReadiness", "readiness"),
+                              accounts, linear, github)
     sync = LinearSync(registry(), receipts, runs,
                       AzureTable(connection, "ClusterforkLinearSync", "linear"), linear, github)
     queue = RepositoryQueue(registry(), receipts, runs,
                             lambda repository: AzureTable(connection, "ClusterforkRepositoryQueue",
                                                           hashlib.sha256(repository.encode()).hexdigest()),
-                            linear, github)
+                            linear, github, readiness)
     return WorkerService(
         registry(), receipts, runs,
-        Accounts(AzureTable(connection, "ClusterforkAccounts", "codex")),
+        accounts,
         linear, github, queue, sync=sync)
 
 
@@ -129,6 +133,7 @@ def reconcile(timer: func.TimerRequest):
     # projects. Durable receipts make repeat scans harmless for this pilot.
     if missing_config():
         return
+    worker_service().queue.readiness.reconcile()
     worker_service().sync.reconcile()
     worker_service().queue.reconcile()
     for project_id in registry().routes:

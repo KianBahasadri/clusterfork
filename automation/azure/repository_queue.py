@@ -34,10 +34,17 @@ def optional(table, key):
 
 
 class RepositoryQueue:
-    def __init__(self, registry, receipts, runs, tables, linear, github, clock=time.time):
+    def __init__(self, registry, receipts, runs, tables, linear, github, readiness, clock=time.time):
         self.registry, self.receipts, self.runs = registry, receipts, runs
         self.tables = lru_cache(maxsize=None)(tables)
         self.linear, self.github, self.clock = linear, github, clock
+        self.readiness = readiness
+
+    def prepare(self, issue, route):
+        receipt, _ = optional(self.receipts, dispatch_key(self.registry, route, issue))
+        # Coding receipts retain their once-per-generation semantics. Reviews
+        # have separate records and never consume or reset a coding receipt.
+        return {"status": "ready"} if receipt else self.readiness.ensure(issue, route)
 
     def table(self, repository):
         # GitHub names are case insensitive, including across project mappings.
@@ -82,6 +89,8 @@ class RepositoryQueue:
 
     def enqueue(self, issue, route):
         key = dispatch_key(self.registry, route, issue)
+        if not optional(self.receipts, key)[0]:
+            self.readiness.require(issue, route)
         for _ in range(32):
             try:
                 self.insert(self.table(route.repository), key,
@@ -192,6 +201,13 @@ class RepositoryQueue:
         # A newer manual rerun that never reached the broker cannot inherit an
         # earlier attempt's successful or quota-wait outcome.
         owners = {f"{r['id']}:{r['run_attempt']}" for r in runs}
+        if receipt.get("readiness_wait_owner") in owners:
+            current, reason = eligibility(issue or {}, self.registry)
+            if current != route:
+                return "skipped", f"Readiness-waiting issue is no longer eligible ({reason})."
+            if receipt["retry_after"] <= self.clock():
+                return "retry", "Rechecking readiness before retrying coding admission."
+            return "waiting", "Coding start held for a current passing readiness review; awaiting retry."
         if not run or run.get("owner") not in owners:
             return "blocked", "GitHub worker ended without recording a result. Rerun this task or cancel its Linear issue."
         latest = next(r for r in runs if f"{r['id']}:{r['run_attempt']}" == run["owner"])
@@ -221,6 +237,10 @@ class RepositoryQueue:
             self.finish_entry(table, state, etag, row, "skipped", message)
             self.report(table, row, message)
             return {"status": "skipped", "dispatch_key": key}
+        review = self.readiness.ensure(issue, route)
+        if review["status"] != "ready":
+            return {**review, "dispatch_key": key}
+        approval = self.readiness.require(issue, route)
         # Fence observations before crossing the external dispatch boundary.
         state["owner"] = ""
         table.replace(state, etag)
@@ -228,11 +248,13 @@ class RepositoryQueue:
         if receipt:
             if not retry or not receipt.get("retry_after") or receipt["retry_after"] > self.clock():
                 return {"status": "already_claimed", "dispatch_key": key}
-            receipt.update(status="dispatching", retry_after=0)
+            receipt.update(status="dispatching", retry_after=0, readiness_wait_owner="",
+                           readiness_review_key=approval.get("review_key", ""))
             self.receipts.replace(receipt, version)
         else:
             receipt = {"RowKey": key, "status": "dispatching", "created_at": int(self.clock()),
                        "workflow": route.workflow, "ref": route.ref, "auto_merge": route.auto_merge,
+                       "readiness_review_key": approval.get("review_key", ""),
                        **{k: row[k] for k in ("issue_id", "identifier", "repository", "project_id")}}
             if not self.receipts.create(receipt):
                 return {"status": "already_claimed", "dispatch_key": key}
@@ -303,7 +325,9 @@ class RepositoryQueue:
                 results[key] = result
                 if result["status"] == "skipped":
                     continue
-                reason = "Dispatched; this task owns the repository until its run and PR are resolved."
+                reason = ("Dispatched; this task owns the repository until its run and PR are resolved."
+                          if result["status"] in {"dispatched", "uncertain", "already_claimed"}
+                          else "Waiting for a current passing readiness review; coding and publication are held.")
             else:
                 action, reason = self.observe(row, receipt, route, state["owner"])
                 if action in TERMINAL:

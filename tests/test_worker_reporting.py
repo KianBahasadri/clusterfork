@@ -17,6 +17,7 @@ import worker
 from codex_runtime import CodexError, inspect_account, quota_snapshot, read_usage
 from dispatch_clients import Linear, RequestError
 from linear_sync import comment_id
+from readiness_policy import PROTOCOL
 from worker_core import Accounts, WorkerError, WorkerService
 from worker_reporting import STAGE_LABELS, attempt_comment, usage_report, validate_usage
 import test_linear_sync as lifecycle
@@ -44,10 +45,10 @@ class ProgressTests(unittest.TestCase):
         self.identity = self.accounts.enroll(auth())
         self.service = WorkerService(self.registry, self.receipts, self.runs, self.accounts,
                                      self.linear, self.github, self.queue, clock=lambda: self.now, sync=self.sync)
-        self.service.handle("start", claims(), {"dispatch_key": KEY})
+        self.service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
 
     def call(self, action, **data):
-        return self.service.handle(action, claims(), {"dispatch_key": KEY, **data})
+        return self.service.handle(action, claims(), {"dispatch_key": KEY, "protocol": PROTOCOL, **data})
 
     def select(self):
         self.call("claim", account_id=self.identity)
@@ -125,7 +126,7 @@ class ProgressTests(unittest.TestCase):
         self.assertIn("final reading unavailable; usage change unavailable", self.comments("finish")[0])
         self.assertIn("0h 0m 40s", self.comments("finish")[0])
         other = {**claims(), "run_attempt": "2"}
-        self.service.handle("start", other, {"dispatch_key": KEY})
+        self.service.handle("start", other, {"dispatch_key": KEY, "protocol": PROTOCOL})
         self.accounts.save(self.identity, "123:1", self.accounts.table.get(self.identity)[0]["fence"], release=True)
         self.service.handle("claim", other, {"dispatch_key": KEY, "account_id": self.identity})
         self.service.handle("progress", other, {"dispatch_key": KEY, "stage": "coding",

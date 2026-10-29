@@ -17,7 +17,8 @@ from dispatch_clients import GitHub, Linear, RequestError
 from dispatch_core import DispatchError, Dispatcher, Registry
 from repository_queue import RepositoryQueue
 from worker_core import Accounts, WorkerError, WorkerService
-from test_remote_worker import MemoryTable, NOW, PROJECT, claims
+from test_remote_worker import ApprovedReadiness, MemoryTable, NOW, PROJECT, claims
+from readiness_policy import PROTOCOL
 from test_linear_sync import pr, checks
 
 
@@ -46,7 +47,7 @@ class RepositoryQueueTests(unittest.TestCase):
 
     def restart(self):
         return RepositoryQueue(self.registry, self.receipts, self.runs, self.tables.__getitem__,
-                               self.linear, self.github, clock=lambda: self.now)
+                               self.linear, self.github, ApprovedReadiness(), clock=lambda: self.now)
 
     def issue(self, number, project=PROJECT):
         issue = {"id": str(UUID(int=number)), "identifier": f"KIAN-{number}", "title": "Test",
@@ -77,7 +78,7 @@ class RepositoryQueueTests(unittest.TestCase):
 
     def start(self, key):
         self.remote_runs[key][-1]["status"] = "in_progress"
-        return self.service.handle("start", self.identity(key), {"dispatch_key": key})
+        return self.service.handle("start", self.identity(key), {"dispatch_key": key, "protocol": PROTOCOL})
 
     def finish(self, key, status="completed", pull=""):
         self.service.handle("finish", self.identity(key),
@@ -466,7 +467,7 @@ class RepositoryQueueTests(unittest.TestCase):
         identity = self.identity(first)
         def start(run_id):
             try:
-                self.service.handle("start", {**identity, "run_id": run_id}, {"dispatch_key": first})
+                self.service.handle("start", {**identity, "run_id": run_id}, {"dispatch_key": first, "protocol": PROTOCOL})
                 return True
             except WorkerError:
                 return False

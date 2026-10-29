@@ -24,6 +24,7 @@ CONFIG_NAMES = ("LINEAR_API_KEY", "LINEAR_WEBHOOK_SECRET", "GITHUB_APP_ID",
                 "GITHUB_APP_PRIVATE_KEY_FILE", "COMMAND_CODE_API_KEY")
 PACKAGE_FILES = ("function_app.py", "dispatch_core.py", "dispatch_clients.py", "quota_selection.py",
                  "worker_core.py", "worker_store.py", "worker_reporting.py", "linear_sync.py", "repository_queue.py",
+                 "readiness.py", "readiness_policy.py",
                  "host.json", "requirements.txt", "projects.json")
 
 
@@ -175,7 +176,7 @@ def main():
         print(f"Project enrollment label: {registry.enrollment_label}")
         for agent, profile in registry.agent_profiles.items():
             print(f"Agent profile: {agent} -> {profile.model} (effort: {profile.effort})")
-        print("Agent selection: one agent per issue, lowest usage across applicable quota windows")
+        print("Agent selection: one agent per phase, lowest usage across applicable quota windows")
         print(f"Quota reserve: {registry.agent_selection.min_remaining_percent:g}% remaining; "
               f"maximum snapshot age: {registry.agent_selection.max_snapshot_age_seconds:g}s")
         for name in CONFIG_NAMES:

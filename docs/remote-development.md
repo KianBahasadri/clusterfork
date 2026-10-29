@@ -1,7 +1,8 @@
 # Remote development
 
 Eligible Linear issues route through one shared Azure Function App to a Codex
-worker on a standard GitHub-hosted runner. The worker leases an account using
+worker on a standard GitHub-hosted runner. A read-only readiness review precedes
+queue admission. After a pass, the development worker leases an account using
 live quota, implements the issue, runs configured validation, and publishes a
 PR. GitHub can squash-merge it after required checks; Linear tracks progress and
 blockers. Deployment is separate. This is Clusterfork's execution adapter, not
@@ -21,6 +22,7 @@ live routing and merge evidence without treating it as current health.
 | `worker_core.py`, `worker_store.py`, `quota_selection.py` | Workflow authorization, account leases, fenced credentials, and quota selection |
 | `linear_sync.py` | Linear lifecycle and PR/CI reconciliation |
 | `repository_queue.py` | Durable repository FIFO, admission, worker fencing, and queue advancement |
+| `readiness.py`, `readiness_policy.py` | Durable read-only reviews, structured-result validation, clarification, and revision-bound admission |
 | `automation/worker.py`, `automation/codex_runtime.py` | Account inspection, Codex execution, validation, publication, and merge requests |
 | `automation/azure/projects.json` | Project mappings, states, model/effort, validation commands, and merge policy |
 | `.github/workflows/clusterfork-worker.yml` | Pinned Codex CLI on `ubuntu-24.04`, six-hour job, read/OIDC permissions |
@@ -39,12 +41,85 @@ The shared timer reconciles worker/PR status and scans mapped projects every
 15 minutes. Project labels are fetched once per issue page to stay within
 Linear's query-complexity limit.
 
+## Todo readiness gate
+
+An enrolled issue in a configured Todo state first receives a bounded review of
+its title, description, relevant code, and repository rules. Reviewers read
+`AGENTS.md` and the relevant documentation. They judge missing decisions, not
+description length: a precise one-line fix can pass. They assess intended outcome,
+consequential scope decisions, observable completion, and specific unresolved
+security, privacy, data-loss, permission, external-action, or spending risks.
+Documented project-wide security defaults can settle a decision, including when
+an issue explicitly references them. New decisions or departures from those
+defaults must be addressed in the issue; discoverable implementation details do
+not require user clarification. This gate enables the existing development,
+validation, publication, and merge process; a pass is not a security certification.
+
+Reviews use the same pinned Sol 6.1/max profile, live quota selection, and fenced
+Codex account pool as development. They run in the pinned CLI's `read-only`
+sandbox with approvals disabled, isolated auth, no inherited job credentials,
+and a JSON output schema. They do not execute configured validation or receive
+publication tokens. Checkout credentials have only Contents read access. Each
+model review has a **600-second** timeout; the broker allows another 120 seconds
+for account selection and setup after start. Heartbeats cannot extend that
+deadline. Review callbacks never authorize repository writes themselves.
+
+Azure independently validates every criterion, blocker, and verdict, including
+consistency between them. A valid pass is recorded in `ClusterforkReadiness`
+before normal repository queue admission. Approval binds to the exact title and
+description content revision, project, versioned review policy/schema and project
+configuration, model profile, and target branch commit. Tracker comments, labels,
+and lifecycle updates do not invalidate their own review. Conservatively, any
+target branch change invalidates context, including a preceding queued task's
+merge. Admission, dispatch retries, worker start, account access, the transition
+to coding, and publication recheck approval; coding must use the reviewed base
+commit. Material edits during account selection prevent coding and publication.
+
+A valid `needs_clarification` result returns the issue to its team's Backlog,
+adds only `clusterfork: needs clarification`, and updates one stable review
+comment with one to four missing decisions, their consequences, and answerable
+questions. The team must have a unique backlog-type state named Backlog, or a
+single backlog-type state. Unrelated labels and human status changes are
+preserved. Update the description and manually move Backlog to Todo for another
+review. Successful resubmission clears the owned clarification label. Reviews
+and retries use separate receipts, so rejection/resubmission needs no registry
+generation change and never consumes or resets a completed coding receipt.
+
+Unavailable context, dispatch failures, timeouts, missing/malformed results, and
+reviewer-reported infrastructure uncertainty hold coding with a visible retry
+comment; they do not classify the issue as ambiguous. The shared timer retries
+temporary failures after 15 minutes and verifies the old GitHub attempt stopped
+before launching another. An uncertain/crashed dispatch without a confirmed run
+is held for discovery and investigation, never blindly resent. Duplicate issue
+events, project scans, and callbacks share the durable review record. Cancellation,
+archive, loss of enrollment, project moves, or human status changes prevent an
+in-flight result from admitting work. A coding dispatch invalidated while waiting
+for a runner records an admission hold and retries after a fresh pass and after
+the old run stops. Completed coding tasks retain their once-per-generation rule.
+If a manual rerun of Blocked/In Progress work has a stale approval, move the
+issue to Todo to request its new review; the rerun cannot grant itself a pass.
+
+**Deployment compatibility:** deploy the Azure package (including both readiness
+modules) together with compatible `automation/worker.py` and shared policy code
+on every mapped repository's workflow branch. The broker and runner require the
+`readiness-v1:<contract hash>` start protocol (including the prompt, schema, and
+budget hash) and an explicit broker-selected phase. An old runner is denied
+start; a new runner receiving an old broker response stops before
+execution. Readiness dispatches use the existing worker workflow and inputs;
+they are not imported into the coding FIFO. No generation reset, new credentials,
+or expanded App permissions are needed; the broker creates `ClusterforkReadiness`.
+Drain active workers before rollout, since credentials already issued by an old
+broker cannot be retroactively withdrawn. Keep routing paused during a mixed
+deployment, publish the compatible worker sources to the workflow branch, deploy
+the broker package, then resume routing. This change does not deploy either side.
+
 ## Repository queues
 
-Eligible Todo issues enter a durable FIFO per GitHub repository. Multiple Linear
-projects mapped to the same repository share its queue; repository names are
-case insensitive. Different repositories advance independently. Queue order is
-the sequence of first eligible observations committed to storage. A project scan
+Todo issues with a current passing review enter a durable FIFO per GitHub
+repository. Multiple Linear projects mapped to the same repository share its
+queue; repository names are case insensitive. Different repositories advance
+independently. Queue order is
+the sequence of first approved observations committed to storage. A project scan
 inserts its entire batch before dispatch, ordered by issue creation time and UUID.
 Later deliveries and scans retain existing positions. This does not reconstruct
 the historical order of Todo transitions missed before discovery.
@@ -52,9 +127,10 @@ the historical order of Todo transitions missed before discovery.
 Azure Table `ClusterforkRepositoryQueue` uses a partition derived from the
 lowercase repository name. Transactions assign the next sequence and insert its
 entry together, and atomically reserve the head and repository slot. Waiting
-issues remain Todo without a runner or account. Stable queue comments explain
-which issue they follow and whether it is running, waiting for CI/quota, blocked,
-or awaiting confirmation of an ambiguous dispatch.
+issues remain Todo without a development runner or account. If context changes,
+the head can receive another readiness review before coding. Stable queue comments
+explain which issue they follow and whether it is running, waiting for CI/quota,
+blocked, or awaiting confirmation of an ambiguous dispatch.
 
 The repository slot has **no expiry**. It spans dispatch, coding, validation,
 publication, pending CI, review, and merging. A finish callback or auto-merge
@@ -105,7 +181,7 @@ or explicit cancellation. Incomplete GitHub responses also keep the slot held.
 | Codex | `gpt-6.1-sol` | `max` |
 
 The registry requires an explicit Codex profile and supported effort value. Each
-issue uses one account selected by available quota. There is no complexity
+phase uses one account selected by available quota. There is no complexity
 classifier or model fallback. Antigravity is deferred. The runner verifies that
 the pinned model and effort are in each account's live model catalog before use.
 
