@@ -208,7 +208,7 @@ class WorkerAuthorizationTests(unittest.TestCase):
         receipts.create(receipt())
         issue = {"id": ISSUE, "identifier": "KIAN-891", "title": "Test", "description": "",
                  "url": "https://linear.app/test", "archivedAt": None,
-                 "project": {"id": PROJECT, "archivedAt": None, "labels": {"nodes": [{"name": "symphony"}]}},
+                 "project": {"id": PROJECT, "archivedAt": None, "labels": {"nodes": [{"name": "clusterfork-symphony"}]}},
                  "state": {"id": "ace01594-2daf-44bb-9690-cb0dccc11795"}}
         class Linear:
             def issue(self, identifier):

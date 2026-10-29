@@ -28,10 +28,11 @@ live routing and merge evidence without treating it as current health.
 The webhook authenticates raw bytes with HMAC-SHA256 and requires a timestamp
 within five minutes. It queues only entity IDs from Issue/Project create/update
 events and returns 200 only after a needed queue send succeeds. The consumer
-fetches current Linear data, then checks the mapped project, its `symphony`
-project label, archive flags, and configured ready-state IDs. An issue label does
-not enroll a project. Removing enrollment prevents new dispatches but does not
-cancel submitted jobs.
+fetches current Linear data, then checks the mapped project, its configured
+enrollment project label, archive flags, and configured ready-state IDs. An issue
+label does not enroll a project. Removing enrollment prevents new dispatches but
+does not cancel submitted jobs. See
+[setup](remote-development-setup.md#linear-webhook-and-first-run) for the enrollment label.
 
 The shared timer reconciles worker/PR status and scans mapped projects every
 15 minutes. Project labels are fetched once per issue page to stay within

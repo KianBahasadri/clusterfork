@@ -111,8 +111,8 @@ a missing hostname is an error.
 3. Check `/api/health` returns 200 and `"missing": []`. This verifies runtime
    configuration presence, not account quota or an end-to-end coding run.
 4. Inspect the mapped project's ready issues before adding the **project label**
-   `symphony`: enrollment can dispatch existing ready issues. The current
-   Clusterfork mapping uses the Kian team's Todo UUID.
+   `clusterfork-symphony`: enrollment can dispatch existing ready issues. The
+   current Clusterfork mapping uses the Kian team's Todo UUID.
 5. Enroll Codex accounts using [remote account setup](remote-development-accounts.md).
    Create or select a Todo issue and inspect **Clusterfork Codex worker** in
    [Actions](https://github.com/KianBahasadri/clusterfork/actions). Its summary

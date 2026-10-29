@@ -1,5 +1,5 @@
 {
-  "enrollment_label": "symphony",
+  "enrollment_label": "clusterfork-symphony",
   "generation": "codex-worker-1",
   "agent_selection": {
     "strategy": "lowest_usage",

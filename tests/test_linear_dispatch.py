@@ -42,7 +42,7 @@ def issue():
     return {"id": ISSUE, "identifier": "KIAN-123", "archivedAt": None,
             "state": {"id": TODO}, "labels": {"nodes": []},
             "project": {"id": PROJECT, "archivedAt": None,
-                        "labels": {"nodes": [{"name": "symphony"}],
+                        "labels": {"nodes": [{"name": "clusterfork-symphony"}],
                                    "pageInfo": {"hasNextPage": False}}}}
 
 
@@ -165,7 +165,7 @@ class RoutingTests(unittest.TestCase):
 
     def test_issue_label_cannot_enroll_project(self):
         self.tracker.current["project"]["labels"]["nodes"] = []
-        self.tracker.current["labels"]["nodes"] = [{"name": "symphony"}]
+        self.tracker.current["labels"]["nodes"] = [{"name": "clusterfork-symphony"}]
         self.assertEqual(self.dispatcher.process(self.event)[0]["status"], "project_not_enrolled")
         self.assertEqual(self.github.calls, [])
 

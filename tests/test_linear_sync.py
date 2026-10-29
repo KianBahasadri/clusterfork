@@ -42,7 +42,7 @@ class LifecycleTests(unittest.TestCase):
         self.route = self.registry.routes[PROJECT]
         self.states = self.route.linear_states
         self.issue = {"id": ISSUE, "identifier": "KIAN-891", "state": {"id": self.route.ready_state_ids[0]},
-                      "project": {"id": PROJECT, "archivedAt": None, "labels": {"nodes": [{"name": "symphony"}]}},
+                      "project": {"id": PROJECT, "archivedAt": None, "labels": {"nodes": [{"name": "clusterfork-symphony"}]}},
                       "title": "Test", "description": "", "url": "https://linear.app/test"}
         self.linear = Mock(spec=Linear)
         self.linear.issue.side_effect = lambda _: copy.deepcopy(self.issue)
