@@ -25,7 +25,7 @@ SOURCE = ROOT / "automation" / "azure"
 sys.path.insert(0, str(SOURCE))
 from dispatch_clients import GitHub, Linear, RequestError, request_json  # noqa: E402
 from dispatch_core import (Dispatcher, DispatchError, Registry, WebhookError,
-                           eligibility, webhook_event)  # noqa: E402
+                           dependency_status, eligibility, webhook_event)  # noqa: E402
 from test_remote_worker import MemoryTable, repository_queue
 
 spec = importlib.util.spec_from_file_location("clusterfork_pilot", ROOT / "automation" / "pilot.py")
@@ -66,6 +66,9 @@ class Tracker:
         self.fetched.append(issue_id)
         return self.current
 
+    def issue_dependencies(self, issue_id):
+        return []
+
     def project_issues(self, project_id):
         return [self.current]
 
@@ -97,6 +100,15 @@ class Workflows:
 
 
 class WebhookTests(unittest.TestCase):
+    def test_dependency_wakeup_events_keep_only_ids_and_always_require_fresh_reads(self):
+        event = webhook_event(*signed({"type": "IssueRelation", "action": "remove", "webhookTimestamp": NOW * 1000,
+                                       "data": {"id": OTHER, "issueId": ISSUE, "relatedIssueId": TODO,
+                                                "type": "blocks", "title": "private"}}), SECRET, now=NOW)
+        self.assertEqual(event, {"type": "IssueRelation", "id": OTHER, "issue_ids": [ISSUE, TODO], "webhook_at": NOW})
+        removed = webhook_event(*signed({"type": "Issue", "action": "remove", "data": {"id": ISSUE},
+                                         "webhookTimestamp": NOW * 1000}), SECRET, now=NOW)
+        self.assertEqual(removed["type"], "Issue")
+
     def test_raw_body_signature_returns_routing_ids_and_timestamp(self):
         body, headers = signed()
         self.assertEqual(webhook_event(body, headers, SECRET, now=NOW),
@@ -141,7 +153,7 @@ class WebhookTests(unittest.TestCase):
         self.assertEqual(error.exception.status, 503)
 
     def test_removed_issues_and_unrelated_events_are_ignored(self):
-        for kind, action in [("Issue", "remove"), ("Reaction", "create"), ("Comment", "remove")]:
+        for kind, action in [("Project", "remove"), ("Reaction", "create"), ("Comment", "remove")]:
             body, headers = signed({"type": kind, "action": action, "data": {"id": ISSUE},
                                     "webhookTimestamp": NOW * 1000})
             self.assertIsNone(webhook_event(body, headers, SECRET, now=NOW))
@@ -237,6 +249,68 @@ class RoutingTests(unittest.TestCase):
 
 
 class ClientTests(unittest.TestCase):
+    def test_incoming_dependency_pages_include_cross_project_and_archived_sources(self):
+        calls = []
+        completed = {"id": ISSUE, "identifier": "KIAN-905", "trashed": None,
+                     "state": {"type": "completed", "name": "Shipped"}}
+        unfinished = {"id": OTHER, "identifier": "OTHER-1", "trashed": False,
+                      "state": {"type": "started", "name": "Done"}}
+        pages = [
+            [{"id": TODO, "type": "related", "issue": unfinished}],
+            [{"id": TODO, "type": "blocks", "issue": completed}],
+            [{"id": TODO, "type": "blocks", "issue": unfinished}],
+        ]
+
+        def request(url, **kwargs):
+            query, variables = kwargs["data"]["query"], kwargs["data"]["variables"]
+            self.assertIn("inverseRelations(first: 50, after: $after, includeArchived: true)", query)
+            self.assertNotIn("project", query)
+            self.assertNotIn("filter", query)
+            self.assertIn("trashed", query)
+            calls.append(variables)
+            page = 0 if variables["after"] is None else int(variables["after"])
+            return {"data": {"issue": {"inverseRelations": {"nodes": pages[page], "pageInfo": {
+                "hasNextPage": page < 2, "endCursor": str(page + 1)}}}}}
+
+        rows = Linear("test", request).issue_dependencies(TODO)
+        ids, reason = dependency_status(rows)
+        self.assertEqual([call["after"] for call in calls], [None, "1", "2"])
+        self.assertEqual({call["id"] for call in calls}, {TODO})
+        self.assertEqual(set(json.loads(ids)), {ISSUE, OTHER})
+        self.assertIn("OTHER-1 (started)", reason)
+        self.assertNotIn("KIAN-905", reason)
+        self.assertEqual(dependency_status(rows[:-1])[1], "")
+
+    def test_incomplete_dependency_connections_and_missing_issue_fail_closed(self):
+        for data in ({"issue": None}, {"issue": {}},
+                     {"issue": {"inverseRelations": {"nodes": None, "pageInfo": {"hasNextPage": False}}}},
+                     {"issue": {"inverseRelations": {"nodes": [], "pageInfo": {}}}},
+                     {"issue": {"inverseRelations": {"nodes": [], "pageInfo": {"hasNextPage": "false"}}}}):
+            with self.subTest(data=data), self.assertRaises((ValueError, KeyError)):
+                Linear("test", lambda *a, **kw: {"data": data}).issue_dependencies(ISSUE)
+
+    def test_dependency_pagination_rejects_missing_repeated_and_cyclic_cursors(self):
+        for cursors in ([None], [""], ["one", "one"], ["one", "two", "one"]):
+            calls = []
+
+            def request(url, **kwargs):
+                calls.append(kwargs["data"]["variables"]["after"])
+                return {"data": {"issue": {"inverseRelations": {"nodes": [], "pageInfo": {
+                    "hasNextPage": True, "endCursor": cursors[len(calls) - 1]}}}}}
+
+            with self.subTest(cursors=cursors), self.assertRaises(ValueError):
+                Linear("test", request).issue_dependencies(ISSUE)
+            self.assertEqual(len(calls), len(cursors))
+
+    def test_error_on_later_dependency_page_does_not_return_a_partial_pass(self):
+        responses = iter([
+            {"data": {"issue": {"inverseRelations": {"nodes": [], "pageInfo": {
+                "hasNextPage": True, "endCursor": "next"}}}}},
+            {"data": {"issue": None}, "errors": [{"message": "inaccessible source"}]},
+        ])
+        with self.assertRaises(RequestError):
+            Linear("test", lambda *a, **kw: next(responses)).issue_dependencies(ISSUE)
+
     def test_issue_fetch_requests_and_preserves_priority(self):
         def request(url, **kwargs):
             self.assertRegex(kwargs["data"]["query"], r"\bpriority\b")

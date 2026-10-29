@@ -62,6 +62,7 @@ class ReadinessTests(unittest.TestCase):
         self.accounts = Accounts(MemoryTable(), clock=lambda: self.now)
         self.identity = self.accounts.enroll(auth())
         self.linear = Mock(spec=Linear)
+        self.linear.issue_dependencies.return_value = []
         self.linear.issue.side_effect = lambda key: copy.deepcopy(self.issues.get(key))
         self.linear.project_issues.side_effect = lambda project: [copy.deepcopy(i) for i in self.issues.values()]
         self.linear.status_comment.side_effect = self.write_comment
@@ -164,6 +165,78 @@ class ReadinessTests(unittest.TestCase):
         self.submit(key)
         self.stop(key)
         return key, config
+
+    def dependency(self, prerequisite):
+        return {"id": str(UUID(int=500)), "type": "blocks",
+                "issue": {**prerequisite, "trashed": False}}
+
+    def test_unresolved_dependencies_take_no_slot_review_worker_or_account(self):
+        prerequisite = self.make_issue(2)
+        self.linear.issue_dependencies.side_effect = lambda key: [self.dependency(prerequisite)] if key == self.issue["id"] else []
+        self.dispatcher.process({"type": "Issue", "id": self.issue["id"]})
+        self.assertFalse(self.github.dispatch.called)
+        self.assertFalse(self.tables[self.route.repository.lower()].get("slot")[0]["active_key"])
+        self.assertFalse(self.table.list())
+        self.assertFalse(self.runs.list())
+        self.assertFalse(self.accounts.table.get(self.identity)[0]["owner"])
+        self.assertIn(QUEUED_LABEL, self.issue["labels"])
+        self.assertNotIn(SELECTION_LABEL, self.issue["labels"])
+
+    def test_blocker_added_during_context_lookup_prevents_readiness_dispatch(self):
+        prerequisite = self.make_issue(2)
+
+        def context(route):
+            self.linear.issue_dependencies.return_value = [self.dependency(prerequisite)]
+            return self.sha
+
+        self.github.branch_sha.side_effect = context
+        self.dispatcher.process({"type": "Issue", "id": self.issue["id"]})
+        self.assertFalse(self.github.dispatch.called)
+        self.assertFalse(self.tables[self.route.repository.lower()].get("slot")[0]["active_key"])
+        self.assertIn(QUEUED_LABEL, self.issue["labels"])
+        self.assertNotIn(SELECTION_LABEL, self.issue["labels"])
+        self.assertFalse(self.accounts.table.get(self.identity)[0]["owner"])
+
+    def test_readiness_timer_retry_rechecks_new_blocker(self):
+        self.github.dispatch.side_effect = DispatchError("rejected")
+        self.dispatcher.process({"type": "Issue", "id": self.issue["id"]})
+        prerequisite = self.make_issue(2)
+        self.linear.issue_dependencies.return_value = [self.dependency(prerequisite)]
+        self.now += 901
+        self.github.dispatch.side_effect = self.dispatch
+        self.gate.reconcile()
+        self.assertEqual(self.github.dispatch.call_count, 1)
+        self.queue.reconcile()
+        self.assertFalse(self.tables[self.route.repository.lower()].get("slot")[0]["active_key"])
+
+    def test_queued_readiness_runner_cannot_start_after_blocker_is_added(self):
+        self.dispatcher.process({"type": "Issue", "id": self.issue["id"]})
+        key = self.key()
+        prerequisite = self.make_issue(2)
+        self.linear.issue_dependencies.return_value = [self.dependency(prerequisite)]
+        with self.assertRaisesRegex(WorkerError, "prerequisites"):
+            self.call(key, "start")
+        self.assertFalse(self.accounts.table.get(self.identity)[0]["owner"])
+        self.stop(key, "failure")
+        self.queue.reconcile()
+        self.assertFalse(self.tables[self.route.repository.lower()].get("slot")[0]["active_key"])
+
+    def test_passed_review_cannot_dispatch_coding_after_blocker_is_added(self):
+        key, _ = self.begin()
+        prerequisite = self.make_issue(2)
+        self.linear.issue_dependencies.return_value = [self.dependency(prerequisite)]
+        self.submit(key)
+        self.assertFalse(self.receipts.list())
+        self.assertEqual(self.github.dispatch.call_count, 1)
+        self.stop(key)
+        self.queue.reconcile()
+        self.assertIn(QUEUED_LABEL, self.issue["labels"])
+        self.assertNotIn(SELECTION_LABEL, self.issue["labels"])
+        prerequisite["state"]["type"] = "completed"
+        self.linear.issue_dependencies.return_value = [self.dependency(prerequisite)]
+        self.queue.reconcile()
+        self.assertEqual(self.github.dispatch.call_count, 2)
+        self.assertEqual(len(self.receipts.list()), 1)
 
     def test_failed_reviewer_diagnostic_is_saved_and_explained_without_admitting_coding(self):
         key, _ = self.begin()

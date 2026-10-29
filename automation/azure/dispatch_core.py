@@ -154,12 +154,18 @@ def webhook_event(body, headers, secret, *, now=None):
         clock = time.time() if now is None else now
         if not abs(clock * 1000 - timestamp) <= 300_000:
             raise WebhookError(401, "expired webhook")
-        if payload["type"] not in {"Issue", "Project", "Comment"}:
+        if payload["type"] not in {"Issue", "Project", "Comment", "IssueRelation"}:
             return None
-        if payload["action"] not in {"create", "update"}:
+        if payload["action"] not in {"create", "update"} and not (
+                payload["action"] == "remove" and payload["type"] in {"Issue", "IssueRelation"}):
             return None
         event = {"type": payload["type"], "id": uuid_string(payload["data"]["id"]),
                  "webhook_at": timestamp / 1000}
+        if payload["type"] == "IssueRelation":
+            # Wake-up hints only. Never decide eligibility from a webhook's
+            # relation type or prerequisite state, including removal events.
+            event["issue_ids"] = [uuid_string(payload["data"][name])
+                                  for name in ("issueId", "relatedIssueId") if payload["data"].get(name)]
         # Diagnostic only: eligibility always comes from a fresh Linear read.
         updated = payload["data"].get("updatedAt")
         if payload["type"] == "Issue" and isinstance(updated, str):
@@ -199,6 +205,44 @@ def eligibility(issue, registry, *, additional_state_ids=()):
     return route, "eligible"
 
 
+def dependency_status(relations):
+    """Return prerequisite IDs and a stable hold reason from incoming edges.
+
+    Only an actual completed-type source satisfies a blocks relationship.
+    Names, labels, project enrollment, and description text grant no exemption.
+    """
+    if not isinstance(relations, list):
+        raise ValueError("Incomplete dependency relationships")
+    ids, waiting = set(), set()
+    for relation in relations:
+        if not isinstance(relation, dict) or not isinstance(relation.get("type"), str):
+            raise ValueError("Unverifiable dependency relationship")
+        if relation["type"] != "blocks":
+            continue
+        source = relation.get("issue")
+        if not isinstance(source, dict) or not source.get("id"):
+            waiting.add("Unavailable prerequisite (relationship " + uuid_string(relation["id"]) + ")")
+            continue
+        ids.add(uuid_string(source["id"]))
+        identifier = source.get("identifier", "")
+        if not isinstance(identifier, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*-\d+", identifier):
+            identifier = source["id"]
+        state = source.get("state") or {}
+        if "trashed" not in source or source["trashed"] not in (True, False, None):
+            status = "unverifiable"
+        elif source["trashed"]:
+            status = "deleted"
+        elif state.get("type") == "completed":
+            continue
+        else:
+            status = state.get("type") or "unverifiable"
+        waiting.add(f"{identifier} ({status})")
+    reason = ("Waiting for blocked-by prerequisites: " + "; ".join(sorted(waiting))
+              + ". Each prerequisite must have a completed-type workflow status, "
+              "or its blocking relationship must be removed.") if waiting else ""
+    return json.dumps(sorted(ids)), reason
+
+
 class DispatchError(RuntimeError):
     """Uncertain means GitHub might have accepted a dispatch before the error."""
 
@@ -221,8 +265,17 @@ class Dispatcher:
                 self.steering.comment(uuid_string(event["id"]))
             return [{"status": "steering_observed"}]
         if event_type == "Issue":
-            issue = self.linear.issue(uuid_string(event["id"]))
-            return self.route_issues([issue], timing=event) if issue else [{"status": "missing_issue"}]
+            issue_id = uuid_string(event["id"])
+            repositories = self.queue.dependency_repositories([issue_id])
+            issue = self.linear.issue(issue_id)
+            results = self.route_issues([issue] if issue else [], timing=event, repositories=repositories)
+            return results if issue else [{"status": "missing_issue"}]
+        if event_type == "IssueRelation":
+            ids = [uuid_string(value) for value in event.get("issue_ids", [])]
+            repositories = self.queue.dependency_repositories(ids) if ids else self.queue.repositories()
+            for repository in repositories:
+                self.queue.advance(repository)
+            return [{"status": "dependencies_rechecked"}]
         if event_type == "Project":
             project_id = uuid_string(event["id"])
             if project_id not in self.registry.routes:

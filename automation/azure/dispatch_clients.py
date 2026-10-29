@@ -123,6 +123,38 @@ class Linear:
                  + " project { " + PROJECT_FIELDS + " } } }")
         return self.complete(self.query(query, {"id": issue_id})["issue"])
 
+    def issue_dependencies(self, issue_id):
+        """Read every incoming relation, including sources outside mapped projects.
+
+        For A blocks B, B.inverseRelations contains a `blocks` edge whose
+        `issue` is A. Never use B.relations (its outgoing edges) for this gate.
+        Return only a complete snapshot; partial/error responses cannot release
+        a dependency. Archived sources must not disappear from this check.
+        """
+        rows, seen, cursor = [], set(), None
+        while True:
+            issue = self.query("""query($id: String!, $after: String) {
+              issue(id: $id) {
+                inverseRelations(first: 50, after: $after, includeArchived: true) {
+                  nodes { id type issue { id identifier trashed state { type } } }
+                  pageInfo { hasNextPage endCursor }
+                }
+              }
+            }""", {"id": issue_id, "after": cursor})["issue"]
+            if not isinstance(issue, dict):
+                raise ValueError("Cannot verify incoming issue dependencies")
+            connection = issue["inverseRelations"]
+            nodes, page = connection["nodes"], connection["pageInfo"]
+            if not isinstance(nodes, list) or type(page["hasNextPage"]) is not bool:
+                raise ValueError("Incomplete incoming issue dependencies")
+            rows.extend(nodes)
+            if not page["hasNextPage"]:
+                return rows
+            cursor = page["endCursor"]
+            if not isinstance(cursor, str) or not cursor or cursor in seen:
+                raise ValueError("Linear dependency pagination did not advance")
+            seen.add(cursor)
+
     @lru_cache(maxsize=1)
     def viewer_id(self):
         return self.query("query { viewer { id } }", {})["viewer"]["id"]

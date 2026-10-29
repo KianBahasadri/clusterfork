@@ -8,11 +8,13 @@ Neither a worker heartbeat nor a wall-clock lease owns the repository slot.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import time
 from functools import lru_cache
+from uuid import uuid4
 
-from dispatch_core import DispatchError, Route, eligibility
+from dispatch_core import DispatchError, Route, dependency_status, eligibility
 from linear_sync import comment_id, pull_outcome
 from selection_reporting import SelectionReporter, selection_changed
 from routing_timing import record, timestamps
@@ -78,10 +80,128 @@ class RepositoryQueue:
         key = dispatch_key(self.registry, route, issue)
         if state["active_key"] != key:
             return False
+        if not self.dependencies_ready(issue, route):
+            return False
         # Readiness timer retries can dispatch without calling queue.advance.
         # Adopt legacy slots and retry their marker before that dispatch too.
         state, _ = self.reserve(table)
         return state["active_key"] == key
+
+    def started_coding(self, row):
+        if row.get("coding_started"):
+            return True
+        run, _ = optional(self.runs, row["RowKey"])
+        # Adopt work started before this gate existed. A completed outcome also
+        # crossed the coding boundary, including validated no-change work.
+        return bool(run and (run.get("status") == "completed"
+                             or run.get("stage") in {"coding", "testing", "publishing", "review"}))
+
+    @staticmethod
+    def unverified_dependencies(row):
+        reason = row.get("dependency_reason", "")
+        if not reason.startswith("Unable to verify"):
+            known = json.loads(row.get("dependency_ids", "[]"))
+            detail = " Last observed: " + reason if reason else ""
+            if not detail and known:
+                detail = " Previously observed prerequisite IDs: " + ", ".join(known) + "."
+            reason = "Unable to verify current blocked-by prerequisites; waiting for a successful Linear read." + detail
+        return {"dependency_ids": row.get("dependency_ids", "[]"), "dependency_reason": reason}
+
+    def dependency_fields(self, row):
+        try:
+            ids, reason = dependency_status(self.linear.issue_dependencies(row["issue_id"]))
+            return {"dependency_ids": ids, "dependency_reason": reason}
+        except Exception:
+            logging.error("Issue dependency lookup deferred for %s", row["issue_id"])
+            return self.unverified_dependencies(row)
+
+    def dependencies_ready(self, issue, route, *, owner=None, coding=False, key=None):
+        """Fresh broker boundary check, fenced against release and coding start."""
+        table = self.table(route.repository)
+        key = key or dispatch_key(self.registry, route, issue)
+        for _ in range(32):
+            state, etag = table.get("slot")
+            row, version = table.get(key)
+            if state["active_key"] != key or (owner is not None and state["owner"] != owner):
+                return False
+            if self.started_coding(row):
+                return True  # Added dependencies do not interrupt coding already started.
+            fields = self.dependency_fields(row)
+            updated = {**row, **fields}
+            if fields["dependency_reason"]:
+                # Fence a concurrent coding callback before persisting the
+                # hold. Only a fresh dispatch clears this; its epoch lets a
+                # crash before receipt creation resume without losing the retry.
+                if not row.get("dependency_hold"):
+                    updated["dependency_epoch"] = str(uuid4())
+                updated["dependency_hold"] = True
+            receipt, _ = optional(self.receipts, key) if owner is not None else (None, None)
+            held_attempt = owner is not None and (updated.get("dependency_hold") or (
+                receipt and updated.get("dependency_epoch", "") != receipt.get("dependency_epoch", "")))
+            if coding and not fields["dependency_reason"] and not held_attempt:
+                updated["coding_started"] = True
+            try:
+                if updated != row:
+                    table.transaction([(state, etag), (updated, version)])
+            except WorkerError as exc:
+                if exc.status != 409:
+                    raise
+                continue
+            if fields["dependency_reason"] or held_attempt:
+                self.record_dependency_wait(updated)
+                self.report(table, updated, fields["dependency_reason"] or
+                            "Prerequisites changed before coding; waiting for a fresh admitted dispatch.")
+                return False
+            return True
+        raise WorkerError("Issue dependencies changed concurrently; retry")
+
+    def record_dependency_wait(self, held):
+        """Keep a pre-coding failure retryable, scoped to its existing run."""
+        for _ in range(32):
+            row, _ = self.table(held["repository"]).get(held["RowKey"])
+            if not row.get("dependency_hold") or row.get("dependency_epoch") != held.get("dependency_epoch"):
+                return
+            run, etag = optional(self.runs, held["RowKey"])
+            if (not run or run.get("dependency_wait") or run.get("status") == "completed"
+                    or run.get("stage", "initializing") not in {"initializing", "selecting_account"}):
+                return
+            run["dependency_wait"] = True
+            try:
+                self.runs.replace(run, etag)
+                return
+            except WorkerError as exc:
+                if exc.status != 409:
+                    raise
+        raise WorkerError("Dependency-waiting worker changed concurrently; retry")
+
+    def prework_stopped(self, state, row, route, receipt):
+        """A dependency hold never treats a lease expiry as a stopped runner."""
+        if not self.readiness.prework_stopped(row["issue_id"], route):
+            return False
+        if receipt:
+            runs = self.github.dispatch_runs(route, row["RowKey"])
+            if any(run.get("status") != "completed" for run in runs):
+                return False
+            if not runs and receipt["status"] != "rejected":
+                return False  # An unconfirmed dispatch may still arrive.
+            run, _ = optional(self.runs, row["RowKey"])
+            owners = {state["owner"], (run or {}).get("owner", "")} - {""}
+            if any(self.github.worker_result(route.repository, owner).get("status") != "completed"
+                   for owner in owners):
+                return False
+            if self.github.worker_pull(route, receipt, row["RowKey"], (run or {}).get("pull_request", "")):
+                return False  # A legacy/unexpected publication still owns this slot.
+        return True
+
+    def defer_dependencies(self, table, state, etag, row, route, receipt):
+        reason = row["dependency_reason"]
+        released = (self.prework_stopped(state, row, route, receipt)
+                    and self.finish_entry(table, state, etag, row, "queued", reason))
+        if not released:
+            reason += " Waiting for the previously dispatched worker to stop before releasing the repository slot."
+        self.report(table, row, reason)
+        return {"status": "dependency_waiting", "dispatch_key": row["RowKey"],
+                "reason": reason, "released": released}
 
     def table(self, repository):
         # GitHub names are case insensitive, including across project mappings.
@@ -152,7 +272,8 @@ class RepositoryQueue:
         raise WorkerError("Repository queue is busy; retry admission")
 
     def head(self, table):
-        rows = [r for r in table.list() if r["RowKey"] != "slot" and r["status"] not in TERMINAL]
+        rows = [r for r in table.list() if r["RowKey"] != "slot" and r["status"] not in TERMINAL
+                and (r["status"] != "queued" or ("dependency_ids" in r and not r.get("dependency_reason")))]
         # Imported submissions have already crossed the dispatch boundary and
         # take precedence over new Todo work, regardless of their Linear state.
         # Linear uses 1..4 for Urgent..Low and 0 for No priority (sorted last).
@@ -312,25 +433,37 @@ class RepositoryQueue:
             if not self.finish_entry(table, state, etag, row, "skipped", message):
                 return {"status": "waiting", "dispatch_key": key, "reason": "Waiting for the readiness worker to stop."}
             return {"status": "skipped", "dispatch_key": key}
+        if not self.dependencies_ready(issue, route, key=key):
+            return {"status": "dependency_waiting", "dispatch_key": key}
         review = self.readiness.ensure(issue, route)
         if review["status"] != "ready":
+            if table.get(key)[0].get("dependency_reason"):
+                return {"status": "dependency_waiting", "dispatch_key": key}
             return {**review, "dispatch_key": key}
         approval = self.readiness.require(issue, route)
+        if not self.dependencies_ready(issue, route, key=key):
+            return {"status": "dependency_waiting", "dispatch_key": key}
         # Fence observations before crossing the external dispatch boundary.
         # Preserve the review/previous attempt's owner so development startup
         # verifies that it stopped before taking over this same repository slot.
-        table.replace(state, etag)
+        current_row, row_version = table.get(key)
+        current_row["dependency_hold"] = False
+        table.transaction([(state, etag), (current_row, row_version)])
         receipt, version = optional(self.receipts, key)
         if receipt:
-            if not retry or not receipt.get("retry_after") or receipt["retry_after"] > self.clock():
+            dependency_retry = current_row.get("dependency_epoch", "") != receipt.get("dependency_epoch", "")
+            if not retry or (not dependency_retry and (
+                    not receipt.get("retry_after") or receipt["retry_after"] > self.clock())):
                 return {"status": "already_claimed", "dispatch_key": key}
             receipt.update(status="dispatching", retry_after=0, readiness_wait_owner="",
+                           dependency_epoch=current_row.get("dependency_epoch", ""),
                            readiness_review_key=approval.get("review_key", ""))
             self.receipts.replace(receipt, version)
         else:
             receipt = {"RowKey": key, "status": "dispatching", "created_at": int(self.clock()),
                        "workflow": route.workflow, "ref": route.ref, "auto_merge": route.auto_merge,
                        "readiness_review_key": approval.get("review_key", ""),
+                       "dependency_epoch": current_row.get("dependency_epoch", ""),
                        **{k: row[k] for k in ("issue_id", "identifier", "repository", "project_id")}}
             if not self.receipts.create(receipt):
                 return {"status": "already_claimed", "dispatch_key": key}
@@ -370,22 +503,30 @@ class RepositoryQueue:
             row, version = table.get(key)
             if row["status"] != "queued" or state["active_key"] == key:
                 return
-            issue = self.linear.issue(row["issue_id"])
-            route, reason = eligibility(issue or {}, self.registry)
-            if (not route or route.project_id != row["project_id"]
+            original = dict(row)
+            try:
+                issue = self.linear.issue(row["issue_id"])
+                route, reason = eligibility(issue or {}, self.registry)
+            except Exception:
+                # A failed eligibility read cannot leave a stale dependency pass.
+                logging.error("Waiting issue refresh deferred for %s", row["RowKey"])
+                row.update(self.unverified_dependencies(row))
+                route, reason, issue = None, "unavailable", None
+            if reason == "unavailable":
+                pass
+            elif (not route or route.project_id != row["project_id"]
                     or route.repository.lower() != row["repository"].lower()):
                 if route:
                     reason = "project_or_repository_changed"
                 row.update(status="skipped", reason=f"No longer eligible for this queue ({reason}).")
                 selection_changed(row)
             else:
-                priority = issue.get("priority") or 0
-                if row.get("priority") == priority and row.get("selection_version"):
-                    return
-                row["priority"] = priority
+                row.update(priority=issue.get("priority") or 0, **self.dependency_fields(row))
                 if not row.get("selection_version"):
                     selection_changed(row)
-            # Fence priority edits, removal, and adoption against admission/reentry.
+            if row == original:
+                return
+            # Fence priority/dependency edits, removal, and adoption against admission/reentry.
             try:
                 table.transaction([(state, etag), (row, version)])
                 return
@@ -434,6 +575,8 @@ class RepositoryQueue:
                 for row in table.list():
                     if row.get("status") in TERMINAL and row.get("reason"):
                         self.report(table, row, row["reason"])
+                    elif row.get("status") == "queued" and row.get("dependency_reason"):
+                        self.report(table, row, row["dependency_reason"])
 
     def _advance(self, table):
         results = {}
@@ -448,10 +591,24 @@ class RepositoryQueue:
             state, etag = self.reserve(table)
             key = state["active_key"]
             if not key:
+                results.update(self.waiting_results(table))
                 return results
             row, _ = table.get(key)
             receipt, _ = optional(self.receipts, key)
             route = self.current_route(row, receipt)
+            if route is not None and not self.started_coding(row):
+                self.dependencies_ready({"id": row["issue_id"]}, route, key=key)
+                state, etag = table.get("slot")
+                if state["active_key"] != key:
+                    raise WorkerError("Repository admission changed during dependency lookup")
+                row, _ = table.get(key)
+                if row.get("dependency_reason") and not self.started_coding(row):
+                    result = self.defer_dependencies(table, state, etag, row, route, receipt)
+                    results[key] = result
+                    if result["released"]:
+                        continue
+                    results.update(self.waiting_results(table, row, result["reason"]))
+                    return results
             if route is None and not receipt:
                 reason = "Skipped because the project's repository mapping changed."
                 if not self.finish_entry(table, state, etag, row, "skipped", reason):
@@ -465,13 +622,19 @@ class RepositoryQueue:
             elif not receipt:
                 result = self.dispatch(table, state, etag, row, route)
                 results[key] = result
-                if result["status"] == "skipped":
+                if result["status"] in {"skipped", "dependency_waiting"}:
                     continue
                 reason = ("Dispatched; this task owns the repository until its run and PR are resolved."
                           if result["status"] in {"dispatched", "uncertain", "already_claimed"}
                           else "Waiting for a current passing readiness review; coding and publication are held.")
             else:
-                action, reason = self.observe(row, receipt, route, state["owner"])
+                if (row.get("dependency_epoch", "") != receipt.get("dependency_epoch", "")
+                        and not self.started_coding(row)):
+                    stopped = self.prework_stopped(state, row, route, receipt)
+                    action = "retry" if stopped else "waiting"
+                    reason = "Prerequisites completed; waiting for the previous worker to stop before retrying."
+                else:
+                    action, reason = self.observe(row, receipt, route, state["owner"])
                 if action in TERMINAL:
                     if not self.finish_entry(table, state, etag, row, action, reason):
                         return {key: {"status": "waiting", "dispatch_key": key,
@@ -481,17 +644,42 @@ class RepositoryQueue:
                 if action == "retry":
                     result = self.dispatch(table, state, etag, row, route, retry=True)
                     results[key] = result
-                    if result["status"] == "skipped":
+                    if result["status"] in {"skipped", "dependency_waiting"}:
                         continue
                 else:
                     results[key] = {"status": action, "dispatch_key": key, "reason": reason}
             self.report(table, row, reason)
-            for waiting in table.list():
-                if waiting["RowKey"] != "slot" and waiting["status"] in {"queued", "submitted"}:
-                    self.report(table, waiting, f"Queued behind {row['identifier']}. {reason}")
-                    results[waiting["RowKey"]] = {"status": "queued", "dispatch_key": waiting["RowKey"],
-                                                "reason": f"Waiting for {row['identifier']}: {reason}"}
+            results.update(self.waiting_results(table, row, reason))
             return results
+
+    def waiting_results(self, table, active=None, reason=""):
+        if active is not None:
+            # A blocker event can arrive while another task still owns the
+            # slot. Report the refreshed relationship/status, not the old hold.
+            self.refresh_waiting(table)
+        results = {}
+        for row in table.list():
+            if row.get("status") not in {"queued", "submitted"}:
+                continue
+            dependency = row.get("dependency_reason", "")
+            message = dependency or (f"Queued behind {active['identifier']}. {reason}" if active else "Queued for admission.")
+            self.report(table, row, message)
+            results[row["RowKey"]] = {"status": "dependency_waiting" if dependency else "queued",
+                                      "dispatch_key": row["RowKey"], "reason": message}
+        return results
+
+    def dependency_repositories(self, issue_ids):
+        """Wake dependents even when the changed prerequisite has no route/project."""
+        observed, repositories = set(issue_ids), set()
+        for table in self.selection_tables():
+            for row in table.list():
+                if row.get("status") in TERMINAL or row.get("RowKey") == "slot":
+                    continue
+                if (row["issue_id"] in observed or "dependency_ids" not in row
+                        or row.get("dependency_reason", "").startswith("Unable to verify")
+                        or observed.intersection(json.loads(row["dependency_ids"]))):
+                    repositories.add(row["repository"].lower())
+        return sorted(repositories)
 
     def repositories(self):
         repositories = {r.repository.lower() for r in self.registry.routes.values()}

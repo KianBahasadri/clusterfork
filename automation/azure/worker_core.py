@@ -181,6 +181,9 @@ class WorkerService:
             if (action == "progress" and data.get("stage") == "coding" and approval.get("context_sha")
                     and data.get("context_sha") != approval["context_sha"]):
                 raise WorkerError("Coding checkout does not match the reviewed repository context", 403)
+            if not self.queue.dependencies_ready(
+                    issue, route, key=key, owner=owner):
+                raise WorkerError("Coding start held for unresolved or unverifiable issue prerequisites", 403)
         if action == "heartbeat":
             return {"running": True}
         if action in {"steering_open", "instructions", "instruction_result", "steering_close"}:
@@ -246,6 +249,9 @@ class WorkerService:
             row.update(stage=stage, report_version=row.get("report_version", 0) + 1)
             if stage in {"testing", "publishing"}:
                 row["steering_closed"] = True
+            if data.get("stage") == "coding" and not self.queue.dependencies_ready(
+                    issue, route, key=key, owner=owner, coding=True):
+                raise WorkerError("Coding start held for unresolved or unverifiable issue prerequisites", 403)
             self.runs.replace(row, etag)
             self.sync_linear(key)
             self.sync_steering(receipt["issue_id"])
@@ -277,6 +283,10 @@ class WorkerService:
             if status not in {"completed", "failed", "waiting_for_quota"}:
                 raise WorkerError("Invalid worker outcome", 400)
             diagnostic = validate_failure(data["failure"]) if status == "failed" and "failure" in data else None
+            if row.get("dependency_wait"):
+                # The runner reports a denied pre-coding request as failure.
+                # Keep that outcome retryable without treating it as coding failure.
+                status, diagnostic = "waiting_for_dependencies", None
             row, etag = self.runs.get(key)
             row.update(status=status, lease_until=0, finished_at=int(self.clock()),
                        steering_closed=True,
@@ -332,6 +342,8 @@ class WorkerService:
         else:
             if previous.get("status") == "completed":
                 raise WorkerError("Issue already completed")
+        if not self.queue.dependencies_ready(issue, route, key=key, owner=owner):
+            raise WorkerError("Coding start held for unresolved or unverifiable issue prerequisites", 403)
         try:
             approval = self.queue.readiness.require(issue, route)
         except WorkerError:

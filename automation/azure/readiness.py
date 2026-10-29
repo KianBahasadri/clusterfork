@@ -186,6 +186,15 @@ class ReadinessGate:
             return False, runs
         return True, runs
 
+    def prework_stopped(self, issue_id, route):
+        pointer, _ = optional(self.table, self.pointer({"id": issue_id}))
+        row, _ = optional(self.table, pointer["review_key"]) if pointer else (None, None)
+        if not row or row["status"] == "pending":
+            return True
+        stopped, runs = self.stopped(row, route)
+        # A dispatching/uncertain attempt without a known run may still arrive.
+        return stopped and bool(runs or row.get("owner") or row["status"] == "retry")
+
     def ensure(self, issue, route):
         if route.workflow != "clusterfork-worker.yml":
             return {"status": "ready"}
@@ -236,6 +245,10 @@ class ReadinessGate:
             if stopped:
                 row = self.new(issue, route, binding, etag)
         if row["status"] == "pending":
+            # Branch/context lookup and prior-attempt reconciliation can take
+            # time. Recheck current dependencies immediately before dispatch.
+            if not self.admitted(issue, route):
+                return {"status": "queued"}
             current, version = self.table.get(row["RowKey"])
             if current["status"] != "pending":
                 raise WorkerError("Another caller already claimed this review dispatch")
@@ -282,6 +295,8 @@ class ReadinessGate:
             return {"saved": True}
         if not issue or eligibility(issue, self.registry)[0] != route or not self.current(row, issue, route):
             raise WorkerError("Readiness request was superseded or canceled", 403)
+        if action in {"start", "checkout", "accounts", "claim"} and not self.admitted(issue, route):
+            raise WorkerError("Readiness start held for unresolved or unverifiable issue prerequisites", 403)
         if action == "start":
             if data.get("protocol") != PROTOCOL:
                 raise WorkerError("Deploy a compatible readiness worker and broker", 403)
