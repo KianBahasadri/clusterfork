@@ -19,7 +19,7 @@ from dispatch_clients import Linear, RequestError
 from linear_sync import comment_id
 from readiness_policy import PROTOCOL
 from worker_core import Accounts, WorkerError, WorkerService
-from worker_reporting import SELECTION_LABEL, STAGE_LABELS, attempt_comment, usage_report, validate_usage
+from worker_reporting import QUEUED_LABEL, SELECTION_LABEL, STAGE_LABELS, attempt_comment, usage_report, validate_usage
 import test_linear_sync as lifecycle
 from test_remote_worker import KEY, NOW, ISSUE, MemoryTable, auth, claims
 
@@ -209,6 +209,26 @@ class LabelAdapterTests(unittest.TestCase):
         client.set_selected(ISSUE, True)
         client.set_selected(ISSUE, False)
         self.assertEqual(client.query.call_count, 2)
+
+    def test_queued_label_mutations_preserve_enrollment_stage_and_human_labels(self):
+        labels = [{"id": "user", "name": "bug"}, {"id": "coding", "name": STAGE_LABELS["coding"]},
+                  {"id": "enrollment", "name": "clusterfork-symphony"}]
+        queued = {"id": "queued", "name": QUEUED_LABEL}
+        client = self.client(self.label_issue(labels),
+                             {"issueLabels": {"nodes": [{"id": "queued"}], "pageInfo": {"hasNextPage": False}}},
+                             {"issueAddLabel": {"success": True}}, self.label_issue(labels + [queued]),
+                             self.label_issue(labels + [queued]), {"issueRemoveLabel": {"success": True}},
+                             self.label_issue(labels))
+        for enabled in (True, True, False, False):
+            client.set_queued(ISSUE, enabled)
+        calls = client.query.call_args_list
+        self.assertEqual(len(calls), 7)
+        self.assertEqual(calls[1].args[1], {"team": ISSUE, "name": "clusterfork: queued"})
+        self.assertIn("issueAddLabel", calls[2].args[0])
+        self.assertIn("issueRemoveLabel", calls[5].args[0])
+        self.assertEqual(calls[2].args[1], {"id": ISSUE, "label": "queued"})
+        self.assertEqual(calls[5].args[1], {"id": ISSUE, "label": "queued"})
+        self.assertTrue(all("issueUpdate" not in call.args[0] for call in calls))
 
     def test_selection_incomplete_labels_and_failed_mutations_are_recoverable(self):
         client = self.client(self.label_issue([], more=True))
