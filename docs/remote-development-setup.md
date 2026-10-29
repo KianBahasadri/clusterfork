@@ -12,16 +12,28 @@ precedence. `--env-file PATH` selects another file.
 
 | Variable | Purpose |
 | --- | --- |
-| `LINEAR_API_KEY` | Read mapped projects/issues and labels, update issue state, and create/update status comments |
+| `LINEAR_OAUTH_CLIENT_ID` | Linear OAuth2 Application client ID; preferred with its matching secret |
+| `LINEAR_OAUTH_CLIENT_SECRET` | OAuth2 Application client secret for the `client_credentials` grant |
+| `LINEAR_API_KEY` | Fallback Linear credential when the OAuth client ID/secret pair is incomplete |
 | `GITHUB_APP_ID` | Numeric App ID, not Client ID or installation ID |
 | `GITHUB_APP_PRIVATE_KEY_FILE` | Path to the App PEM outside the repo; relative paths resolve against the checkout |
 | `LINEAR_WEBHOOK_SECRET` | Linear signing secret, filled after initial deployment |
 
-Create the Linear personal key under account Security & access settings with
-Read, Write, and Create comments access for the mapped team. Webhook creation
-is a separate workspace-admin operation. Store the PEM outside the checkout
-with mode 0600. The helper reports only set/blank credential status and config
-metadata.
+Enable **Client credentials tokens** on the `Clusterfork` OAuth2 Application
+and configure its client ID and secret. The dispatcher exchanges them at
+`https://api.linear.app/oauth/token` as form data with `grant_type=client_credentials`
+and `scope=read,write,comments:create,issues:create`, then uses the returned Bearer
+token. Tokens stay in process memory, refresh five minutes before `expires_in`
+(half the lifetime for tokens lasting under ten minutes), and refresh/retry once
+on a GraphQL HTTP 401. Configured OAuth failures do not fall back to the personal
+key. See [Linear's client credentials protocol](https://linear.app/developers/oauth-2-0-authentication#client-credentials-tokens).
+
+Without both OAuth values, the dispatcher uses `LINEAR_API_KEY` unchanged. Create
+that fallback personal key under account Security & access with Read, Write, and
+Create comments access for the mapped team. Webhook creation is a separate
+workspace-admin operation. Store the PEM outside the checkout with mode 0600.
+The helper reports only set/blank credential status and config metadata; secrets,
+access tokens, and remote response bodies are excluded from errors and logs.
 
 ```bash
 python3 automation/pilot.py check
@@ -31,8 +43,10 @@ python3 automation/pilot.py check
 filenames/refs, model/effort, enrollment label, and quota policy. Worker mappings
 report `Codex worker`; mappings all using `clusterfork-pilot.yml` report
 `routing pilot (no coding agent)`. It neither launches a worker nor verifies a
-live agent login. A missing webhook secret is allowed for initial deployment;
-other required missing values fail before resource creation.
+live agent login. Linear configuration is complete with either both OAuth values
+or an API key; `/api/health` uses the same rule. A missing webhook secret is allowed
+for the initial local check but required by runtime health. Other missing required
+values fail the check.
 
 ## GitHub App and repository
 

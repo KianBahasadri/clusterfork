@@ -1,7 +1,9 @@
 """Deployment pauses, tested revisions, draining, and recovery boundaries."""
 
 import io
+import importlib
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -118,3 +120,62 @@ class DeploymentTests(unittest.TestCase):
             {"id": 2, "run_attempt": 1, "head_sha": REVISION, "head_branch": "other",
              "event": "pull_request", "status": "completed", "conclusion": "success"}]}):
             self.assertEqual(deploy.ci_state(REVISION), "failure")
+
+
+class FunctionAppConfigurationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.app = importlib.import_module("function_app")
+        except ModuleNotFoundError as exc:
+            if exc.name in {"azure", "azure.functions"}:
+                raise unittest.SkipTest("Run with automation/azure/requirements.txt for handler integration") from exc
+            raise
+
+    def test_health_accepts_either_linear_authentication_mode_and_rejects_partial_oauth(self):
+        base = {"LINEAR_WEBHOOK_SECRET": "test-webhook-secret", "GITHUB_APP_ID": "123",
+                "GITHUB_APP_PRIVATE_KEY": "test-private-key"}
+        for has_id in (False, True):
+            for has_secret in (False, True):
+                for has_key in (False, True):
+                    values = {**base, "LINEAR_OAUTH_CLIENT_ID": "test-client-id" if has_id else "",
+                              "LINEAR_OAUTH_CLIENT_SECRET": "test-client-secret" if has_secret else "",
+                              "LINEAR_API_KEY": "test-api-key" if has_key else ""}
+                    complete = has_key or (has_id and has_secret)
+                    with self.subTest(has_id=has_id, has_secret=has_secret, has_key=has_key), \
+                         patch.dict(os.environ, values, clear=True), \
+                         patch.object(self.app, "worker_service") as service, \
+                         patch.object(self.app, "build_metadata", return_value={"revision": REVISION}):
+                        service.return_value.queue.control.is_paused.return_value = False
+                        response = self.app.health(self.app.func.HttpRequest("GET", "https://example.test/api/health", body=b""))
+                        result = json.loads(response.get_body())
+                        self.assertEqual(response.status_code, 200 if complete else 503)
+                        self.assertEqual(result["missing"], self.app.missing_config())
+                        self.assertEqual(not result["missing"], complete)
+                        if complete:
+                            service.assert_called_once()
+                        else:
+                            service.assert_not_called()
+                        for value in values.values():
+                            if value:
+                                self.assertNotIn(value, response.get_body().decode())
+
+    def test_worker_service_uses_oauth_without_requiring_api_key_and_preserves_fallback(self):
+        base = {"AzureWebJobsStorage": "test-storage", "GITHUB_APP_ID": "123",
+                "GITHUB_APP_PRIVATE_KEY": "test-private-key"}
+        cases = [({"LINEAR_OAUTH_CLIENT_ID": "test-client-id", "LINEAR_OAUTH_CLIENT_SECRET": "test-client-secret"},
+                  "a76cf048-2395-425b-ae2b-15779a1de587", "Bearer test-access-token"),
+                 ({"LINEAR_API_KEY": "test-api-key"}, "62a4e98c-29f0-4b6c-8062-ede9c6176c1d", "test-api-key")]
+        self.addCleanup(self.app.worker_service.cache_clear)
+        for credentials, viewer, authorization in cases:
+            with self.subTest(oauth="LINEAR_OAUTH_CLIENT_ID" in credentials), \
+                 patch.dict(os.environ, {**base, **credentials}, clear=True), \
+                 patch.object(self.app, "AzureTable", side_effect=lambda *args: MemoryTable()):
+                self.app.worker_service.cache_clear()
+                service = self.app.worker_service()
+                results = [{"data": {"viewer": {"id": viewer}}}]
+                if "LINEAR_OAUTH_CLIENT_ID" in credentials:
+                    results.insert(0, {"access_token": "test-access-token", "expires_in": 3600})
+                service.linear.request = Mock(side_effect=results)
+                self.assertEqual(service.linear.viewer_id(), viewer)
+                self.assertEqual(service.linear.request.call_args.kwargs["token"], authorization)

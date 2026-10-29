@@ -19,7 +19,8 @@ SOURCE = Path(__file__).resolve().parent / "azure"
 sys.path.insert(0, str(SOURCE))
 from dispatch_core import Registry  # noqa: E402
 
-CONFIG_NAMES = ("LINEAR_API_KEY", "LINEAR_WEBHOOK_SECRET", "GITHUB_APP_ID",
+CONFIG_NAMES = ("LINEAR_API_KEY", "LINEAR_OAUTH_CLIENT_ID", "LINEAR_OAUTH_CLIENT_SECRET",
+                "LINEAR_WEBHOOK_SECRET", "GITHUB_APP_ID",
                 "GITHUB_APP_PRIVATE_KEY_FILE", "COMMAND_CODE_API_KEY")
 PACKAGE_FILES = ("function_app.py", "dispatch_core.py", "dispatch_clients.py", "quota_selection.py",
                  "worker_core.py", "worker_store.py", "worker_reporting.py", "linear_sync.py", "repository_queue.py",
@@ -54,8 +55,11 @@ def private_key_path(values):
 
 
 def check(values):
-    missing = [name for name in ("LINEAR_API_KEY", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY_FILE")
+    missing = [name for name in ("GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY_FILE")
                if not values.get(name)]
+    if not (values.get("LINEAR_API_KEY") or (values.get("LINEAR_OAUTH_CLIENT_ID")
+                                            and values.get("LINEAR_OAUTH_CLIENT_SECRET"))):
+        missing.insert(0, "LINEAR_API_KEY or (LINEAR_OAUTH_CLIENT_ID and LINEAR_OAUTH_CLIENT_SECRET)")
     key = private_key_path(values)
     if key and not key.is_file():
         missing.append("GITHUB_APP_PRIVATE_KEY_FILE (file not found)")

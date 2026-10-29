@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import time
 from functools import lru_cache
+from threading import Lock
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 from uuid import UUID
 
@@ -23,12 +25,14 @@ class RequestError(RuntimeError):
         super().__init__(f"remote request failed (HTTP {status or 'unavailable'})")
 
 
-def request_json(url, *, token, method="GET", data=None):
-    headers = {"Authorization": token, "Accept": "application/json",
-               "User-Agent": "clusterfork-routing-pilot", "Content-Type": "application/json"}
+def request_json(url, *, token=None, method="GET", data=None, form=False):
+    headers = {"Accept": "application/json", "User-Agent": "clusterfork-routing-pilot",
+               "Content-Type": "application/x-www-form-urlencoded" if form else "application/json"}
+    if token:
+        headers["Authorization"] = token
     if url.startswith("https://api.github.com/"):
         headers["X-GitHub-Api-Version"] = "2022-11-28"
-    body = None if data is None else json.dumps(data).encode()
+    body = None if data is None else (urlencode(data) if form else json.dumps(data)).encode()
     request = Request(url, data=body, headers=headers, method=method)
     with operation(http_operation(url, data), timeout_seconds=20):
         try:
@@ -49,13 +53,60 @@ PROJECT_FIELDS = "id archivedAt labels(first: 100) { nodes { name } pageInfo { h
 
 
 class Linear:
-    def __init__(self, token, request=request_json):
+    def __init__(self, token=None, request=request_json, *, client_id=None, client_secret=None,
+                 clock=time.monotonic):
         self.token = token
         self.request = request
+        self.client_id, self.client_secret = client_id, client_secret
+        self.clock = clock
+        self._access_token, self._refresh_at = None, 0
+        self._token_lock = Lock()
+
+    def _authorization(self):
+        if not (self.client_id and self.client_secret):
+            if not self.token:
+                raise RequestError()
+            return self.token
+        with self._token_lock:
+            if not self._access_token or self.clock() >= self._refresh_at:
+                self._access_token = None
+                issued_at = self.clock()
+                result = self.request("https://api.linear.app/oauth/token", method="POST", form=True,
+                                      data={"grant_type": "client_credentials", "client_id": self.client_id,
+                                            "client_secret": self.client_secret,
+                                            "scope": "read,write,comments:create,issues:create"})
+                if not isinstance(result, dict):
+                    raise RequestError()
+                token, expires_in = result.get("access_token"), result.get("expires_in")
+                if (not isinstance(token, str) or not token or any(char.isspace() for char in token)
+                        or type(expires_in) not in (int, float) or not math.isfinite(expires_in)
+                        or expires_in <= 0):
+                    raise RequestError()
+                self._access_token = token
+                # Short-lived tokens still get reused, with half their lifetime reserved.
+                self._refresh_at = issued_at + expires_in - min(300, expires_in / 2)
+            return f"Bearer {self._access_token}"
+
+    def _clear_token(self, authorization):
+        with self._token_lock:
+            # Another request may already have replaced the rejected token.
+            if authorization == f"Bearer {self._access_token}":
+                self._access_token = None
 
     def query(self, query, variables):
-        result = self.request("https://api.linear.app/graphql", token=self.token,
-                              method="POST", data={"query": query, "variables": variables})
+        for attempt in range(2):
+            authorization = self._authorization()
+            try:
+                result = self.request("https://api.linear.app/graphql", token=authorization,
+                                      method="POST", data={"query": query, "variables": variables})
+            except RequestError as exc:
+                if exc.status != 401 or not (self.client_id and self.client_secret):
+                    raise
+                self._clear_token(authorization)
+                if attempt:
+                    raise
+            else:
+                break
         if not isinstance(result, dict) or result.get("errors") or "data" not in result:
             raise RequestError()
         return result["data"]
