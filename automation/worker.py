@@ -20,9 +20,10 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).parent / "azure"))
-from codex_runtime import CodexError, inspect_account, quota_snapshot, write_private
+from codex_runtime import CodexError, inspect_account, quota_snapshot, read_usage, write_private
 from dispatch_core import AgentProfile
 from quota_selection import SelectionPolicy, select_account
+from worker_reporting import usage_report
 
 
 class WorkerFailure(RuntimeError):
@@ -167,21 +168,30 @@ def choose_account(broker, config, worker_heartbeat):
     return snapshots, profiles, policy
 
 
+@contextmanager
 def run_codex(broker, config, worker_heartbeat, directory):
+    # Keep the selected account leased through validation and publication so the
+    # final reading covers the full attempt without another worker consuming it.
+    broker.call("progress", stage="selecting_account")
     snapshots, profiles, policy = choose_account(broker, config, worker_heartbeat)
     while True:
         selected = select_account(snapshots, profiles, policy, now=time.time())
         if not selected:
-            return None
+            yield None
+            return
         snapshots = [row for row in snapshots if row.account_id != selected.account_id]
         ran_agent = False
         try:
             with account_lease(broker, selected.account_id) as (home, heartbeat):
-                _, limits = inspect_account(home, config["model"], config["effort"])
+                details, limits = inspect_account(home, config["model"], config["effort"])
                 fresh = quota_snapshot(selected.account_id, config["model"], limits)
                 selection = select_account([fresh], profiles, policy, now=time.time())
                 if not selection:
                     continue
+                account = details.get("account") or {}
+                broker.call("progress", stage="coding", account_id=selection.account_id,
+                            account_email=account.get("email"), account_plan=account.get("planType"),
+                            usage_before=usage_report(fresh))
                 print(f"Running {selection.model} ({selection.effort}); minimum quota headroom {selection.remaining_percent:g}%", flush=True)
                 issue = config["issue"]
                 prompt = (
@@ -196,16 +206,30 @@ def run_codex(broker, config, worker_heartbeat, directory):
                 env = {**clean_environment(), "CODEX_HOME": str(home)}
                 summary = directory / "summary.md"
                 ran_agent = True
-                command(["codex", "exec", "--ignore-user-config", "--ephemeral", "--color", "never",
-                         "--dangerously-bypass-approvals-and-sandbox", "--model", selection.model,
-                         "-c", f'model_reasoning_effort="{selection.effort}"',
-                         "-c", 'cli_auth_credentials_store="file"',
-                         "--output-last-message", str(summary), "-"],
-                        stdin=prompt, env=env, timeout=config.get("agent_timeout_minutes", 300) * 60,
-                        failure_signals=[heartbeat.failed, worker_heartbeat.failed])
-                return summary.read_text() if summary.exists() else "Codex completed the issue."
+                try:
+                    command(["codex", "exec", "--ignore-user-config", "--ephemeral", "--color", "never",
+                             "--dangerously-bypass-approvals-and-sandbox", "--model", selection.model,
+                             "-c", f'model_reasoning_effort="{selection.effort}"',
+                             "-c", 'cli_auth_credentials_store="file"',
+                             "--output-last-message", str(summary), "-"],
+                            stdin=prompt, env=env, timeout=config.get("agent_timeout_minutes", 300) * 60,
+                            failure_signals=[heartbeat.failed, worker_heartbeat.failed])
+                    yield summary.read_text() if summary.exists() else "Codex completed the issue."
+                    return
+                finally:
+                    try:
+                        if heartbeat.failed.is_set() or worker_heartbeat.failed.is_set():
+                            raise WorkerFailure("Credential lease was lost")
+                        final = quota_snapshot(selection.account_id, selection.model, read_usage(home),
+                                               allow_exhausted=True)
+                        broker.call("progress", usage_after=usage_report(final))
+                    except Exception:
+                        # Keep the execution outcome even if provider usage is
+                        # unavailable. The finish comment explicitly says so.
+                        print("Final quota reading unavailable; usage change will be reported as unknown", flush=True)
         except HTTPError as exc:
-            if exc.code in {404, 409} and not ran_agent:
+            if (exc.code in {404, 409} and not ran_agent
+                    and getattr(exc, "clusterfork_action", "claim") == "claim"):
                 continue
             raise
         except CodexError:
@@ -308,40 +332,42 @@ def execute(broker, config, heartbeat, directory):
         else:
             command(["git", "checkout", "-b", branch])
     original = command(["git", "rev-parse", "HEAD"]).strip()
-    summary = run_codex(broker, config, heartbeat, directory)
-    if summary is None:
-        return "waiting_for_quota", None
-    if (command(["git", "rev-parse", "HEAD"]).strip() != original
-            or command(["git", "branch", "--show-current"]).strip() != branch):
-        raise WorkerFailure("Codex changed the worker's Git history or branch")
-    changed = command(["git", "status", "--porcelain"]).strip()
-    paths = command(["git", "diff", "--name-only", "HEAD"]).splitlines()
-    paths += command(["git", "ls-files", "--others", "--exclude-standard"]).splitlines()
-    if any(path.startswith(".github/workflows/") for path in paths):
-        raise WorkerFailure("Workflow file changes require a separate Workflows permission")
-    print("Running repository validation", flush=True)
-    for args in config["validation_commands"]:
-        command(list(args), env=clean_environment(), failure_signals=[heartbeat.failed])
-    token = broker.call("github")["token"]
-    if changed:
-        command(["git", "add", "-A"])
-        command(["git", "-c", "user.name=clusterfork[bot]", "-c",
-                 "user.email=clusterfork[bot]@users.noreply.github.com", "commit", "-m",
-                 f"{issue['identifier']}: {issue['title'][:180]}"])
-    delta = command(["git", "diff", "--name-only", f"origin/{config['ref']}...HEAD"]).strip()
-    if not delta:
-        return "completed", None
-    with git_auth(token, directory) as env:
-        command(["git", "push", "origin", f"HEAD:refs/heads/{branch}"], env=env)
-    body = (f"Implements [{issue['identifier']}]({issue['url']}).\n\n{summary[:40_000]}\n\n"
-            f"Validation: all configured repository checks passed.\n\n"
-            f"<!-- clusterfork-dispatch:{broker.key} -->")
-    pull = json_request(f"https://api.github.com/repos/{config['repository']}/pulls", token,
-                        {"title": f"{issue['identifier']}: {issue['title']}"[:250],
-                         "head": branch, "base": config["ref"], "body": body})
-    request_auto_merge(config, token, pull["html_url"], broker.key, branch,
-                       expected_sha=command(["git", "rev-parse", "HEAD"]).strip())
-    return "completed", pull["html_url"]
+    with run_codex(broker, config, heartbeat, directory) as summary:
+        if summary is None:
+            return "waiting_for_quota", None
+        broker.call("progress", stage="testing")
+        if (command(["git", "rev-parse", "HEAD"]).strip() != original
+                or command(["git", "branch", "--show-current"]).strip() != branch):
+            raise WorkerFailure("Codex changed the worker's Git history or branch")
+        changed = command(["git", "status", "--porcelain"]).strip()
+        paths = command(["git", "diff", "--name-only", "HEAD"]).splitlines()
+        paths += command(["git", "ls-files", "--others", "--exclude-standard"]).splitlines()
+        if any(path.startswith(".github/workflows/") for path in paths):
+            raise WorkerFailure("Workflow file changes require a separate Workflows permission")
+        print("Running repository validation", flush=True)
+        for args in config["validation_commands"]:
+            command(list(args), env=clean_environment(), failure_signals=[heartbeat.failed])
+        broker.call("progress", stage="publishing")
+        token = broker.call("github")["token"]
+        if changed:
+            command(["git", "add", "-A"])
+            command(["git", "-c", "user.name=clusterfork[bot]", "-c",
+                     "user.email=clusterfork[bot]@users.noreply.github.com", "commit", "-m",
+                     f"{issue['identifier']}: {issue['title'][:180]}"])
+        delta = command(["git", "diff", "--name-only", f"origin/{config['ref']}...HEAD"]).strip()
+        if not delta:
+            return "completed", None
+        with git_auth(token, directory) as env:
+            command(["git", "push", "origin", f"HEAD:refs/heads/{branch}"], env=env)
+        body = (f"Implements [{issue['identifier']}]({issue['url']}).\n\n{summary[:40_000]}\n\n"
+                f"Validation: all configured repository checks passed.\n\n"
+                f"<!-- clusterfork-dispatch:{broker.key} -->")
+        pull = json_request(f"https://api.github.com/repos/{config['repository']}/pulls", token,
+                            {"title": f"{issue['identifier']}: {issue['title']}"[:250],
+                             "head": branch, "base": config["ref"], "body": body})
+        request_auto_merge(config, token, pull["html_url"], broker.key, branch,
+                           expected_sha=command(["git", "rev-parse", "HEAD"]).strip())
+        return "completed", pull["html_url"]
 
 
 def main():

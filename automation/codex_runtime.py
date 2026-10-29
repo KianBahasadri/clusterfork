@@ -90,7 +90,7 @@ def write_private(path, value):
 def inspect_account(home, model, effort):
     server = AppServer(home)
     try:
-        server.call("account/read", {"refreshToken": True})
+        account = server.call("account/read", {"refreshToken": True}).get("account") or {}
         models, cursor = [], None
         while True:
             params = {"limit": 100, "includeHidden": True}
@@ -108,26 +108,36 @@ def inspect_account(home, model, effort):
         if not match or effort not in {x["reasoningEffort"] for x in match["supportedReasoningEfforts"]}:
             raise CodexError("Pinned model/effort is unavailable for this account")
         limits = server.call("account/rateLimits/read")
-        return match, limits
+        return {**match, "account": {key: account.get(key) for key in ("email", "planType")}}, limits
     finally:
         server.close()
 
 
-def quota_snapshot(identity, model, limits):
+def read_usage(home):
+    server = AppServer(home)
+    try:
+        server.call("account/read", {"refreshToken": True})
+        return server.call("account/rateLimits/read")
+    finally:
+        server.close()
+
+
+def quota_snapshot(identity, model, limits, *, allow_exhausted=False):
     from quota_selection import AccountQuota, QuotaWindow
     if limits.get("ordinaryUsageAllowed") is False:
         raise CodexError("Codex account usage is unavailable")
     buckets = limits.get("rateLimitsByLimitId") or {"codex": limits.get("rateLimits")}
-    applicable = [row for key, row in buckets.items() if row and
+    applicable = [(key, row) for key, row in buckets.items() if row and
                   (key == "codex" or key == model or row.get("normalModelSlug") == model)]
     if not applicable:
         raise CodexError("No applicable Codex quota data")
     windows = []
-    for bucket in applicable:
-        if bucket.get("spendControlReached") or bucket.get("rateLimitReachedType"):
+    for bucket_id, bucket in applicable:
+        if not allow_exhausted and (bucket.get("spendControlReached") or bucket.get("rateLimitReachedType")):
             raise CodexError("Codex account limit was reached")
         for key in ("primary", "secondary"):
             window = bucket.get(key)
             if window:
-                windows.append(QuotaWindow(window.get("usedPercent"), window.get("resetsAt")))
+                windows.append(QuotaWindow(window.get("usedPercent"), window.get("resetsAt"),
+                                           f"{bucket_id}/{key}", window.get("windowDurationMins")))
     return AccountQuota(identity, "codex", model, time.time(), tuple(windows))

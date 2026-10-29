@@ -30,6 +30,8 @@ class SelectionPolicy:
 class QuotaWindow:
     used_percent: float
     resets_at: float | None = None
+    name: str = ""
+    duration_minutes: float | None = None
 
 
 @dataclass(frozen=True)

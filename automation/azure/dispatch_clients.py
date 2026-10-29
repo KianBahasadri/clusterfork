@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+from uuid import UUID
 
 from dispatch_core import DispatchError
+from worker_reporting import STAGE_LABELS
 
 
 class RequestError(RuntimeError):
@@ -97,6 +100,63 @@ class Linear:
         }""", {"id": issue_id, "state": state_id})
         if not result["issueUpdate"]["success"]:
             raise RequestError()
+
+    def stage_label(self, team_id, name):
+        def lookup():
+            result = self.query("""query($team: ID!, $name: String!) {
+              issueLabels(first: 2, filter: {team: {id: {eq: $team}}, name: {eq: $name}}) {
+                nodes { id } pageInfo { hasNextPage }
+              }
+            }""", {"team": team_id, "name": name})["issueLabels"]
+            if result["pageInfo"]["hasNextPage"] or len(result["nodes"]) > 1:
+                raise ValueError("Ambiguous worker stage label")
+            return result["nodes"][0]["id"] if result["nodes"] else None
+
+        existing = lookup()
+        if existing:
+            return existing
+        digest = hashlib.sha256(f"clusterfork:{team_id}:{name}".encode()).digest()
+        identifier = str(UUID(bytes=digest[:16], version=4))
+        try:
+            result = self.query("""mutation($id: String!, $team: String!, $name: String!) {
+              issueLabelCreate(input: {id: $id, teamId: $team, name: $name,
+                description: "Current Clusterfork development stage", color: "#5E6AD2"}) { success }
+            }""", {"id": identifier, "team": team_id, "name": name})["issueLabelCreate"]
+            if not result["success"]:
+                raise RequestError()
+        except RequestError:
+            # Another issue in this team can create the same label concurrently,
+            # or creation may have succeeded before its response was lost.
+            existing = lookup()
+            if not existing:
+                raise
+            return existing
+        return identifier
+
+    def set_stage(self, issue_id, stage):
+        name = STAGE_LABELS[stage] if stage is not None else None
+        issue = self.query("""query($id: String!) {
+          issue(id: $id) { team { id } labels(first: 100) {
+            nodes { id name } pageInfo { hasNextPage }
+          } }
+        }""", {"id": issue_id})["issue"]
+        if issue["labels"]["pageInfo"]["hasNextPage"]:
+            raise ValueError("Incomplete issue labels")
+        labels = issue["labels"]["nodes"]
+        if name and not any(label["name"] == name for label in labels):
+            identifier = self.stage_label(issue["team"]["id"], name)
+            result = self.query("""mutation($id: String!, $label: String!) {
+              issueAddLabel(id: $id, labelId: $label) { success }
+            }""", {"id": issue_id, "label": identifier})["issueAddLabel"]
+            if not result["success"]:
+                raise RequestError()
+        for label in labels:
+            if label["name"] in STAGE_LABELS.values() and label["name"] != name:
+                result = self.query("""mutation($id: String!, $label: String!) {
+                  issueRemoveLabel(id: $id, labelId: $label) { success }
+                }""", {"id": issue_id, "label": label["id"]})["issueRemoveLabel"]
+                if not result["success"]:
+                    raise RequestError()
 
     def status_comment(self, issue_id, comment_id, body):
         # A deterministic ID recovers creation after an ambiguous API response.

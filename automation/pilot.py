@@ -23,7 +23,8 @@ from dispatch_core import Registry  # noqa: E402
 CONFIG_NAMES = ("LINEAR_API_KEY", "LINEAR_WEBHOOK_SECRET", "GITHUB_APP_ID",
                 "GITHUB_APP_PRIVATE_KEY_FILE", "COMMAND_CODE_API_KEY")
 PACKAGE_FILES = ("function_app.py", "dispatch_core.py", "dispatch_clients.py", "quota_selection.py",
-                 "worker_core.py", "worker_store.py", "linear_sync.py", "host.json", "requirements.txt", "projects.json")
+                 "worker_core.py", "worker_store.py", "worker_reporting.py", "linear_sync.py",
+                 "host.json", "requirements.txt", "projects.json")
 
 
 def settings(path):

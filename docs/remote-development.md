@@ -105,6 +105,45 @@ continuously running worker is needed. It updates one owned comment with the
 current reason, PR link, and worker-run link. Durable synchronization leases and
 a stable UUIDv4 comment ID prevent duplicate comments after retries.
 
+The authenticated worker also reports its current stage through the broker.
+Linear creates team-scoped issue labels as needed and keeps one current stage
+label on the issue:
+
+| Label | When it applies |
+| --- | --- |
+| `clusterfork: runner initialization` | Worker starts and prepares its checkout |
+| `clusterfork: account selection` | Worker inspects and reserves account quota |
+| `clusterfork: coding` | Selected Codex account begins implementation |
+| `clusterfork: final testing and review` | Worker checks the resulting changes and runs configured validation |
+| `clusterfork: publication` | Worker prepares and publishes the result |
+| `clusterfork: PR review and CI` | Open PR awaits checks, review, or merging |
+| `clusterfork: waiting for quota` | No account qualifies; issue awaits an automatic retry |
+
+Stage changes replace only these owned labels; other issue labels are preserved.
+Completion and blockers clear the stage label. PR/CI reconciliation can restore
+the review label when a blocker clears. This does not create a separate review
+agent; checks inside the coding session are part of the coding stage.
+
+After selection and the final quota recheck, a separate start comment records
+the account email (when available), stable account identity, plan, agent, model,
+reasoning effort, and applicable quota windows before coding. Each reading shows
+used/remaining percentages and reset times, with weekly windows identified by
+their provider-reported duration. The selected account stays leased through
+validation and publication. On exit, including execution or validation failure,
+the worker attempts a fresh usage reading before releasing it.
+
+A separate finish comment repeats the account/model details, compares before and
+after usage in percentage points, and reports total time from worker start to its
+finish callback, including checkout preparation, account selection, coding,
+validation, and publication. It excludes subsequent PR/CI waiting. Window resets,
+missing readings, and unreported weekly windows are explicit rather than counted
+as zero usage. Readings may lag or include other account activity. An abandoned
+or canceled runner without a finish callback reports unavailable final usage and
+duration. Start/finish comments use distinct stable UUIDv4 IDs per run attempt;
+reconciliation retries them without overwriting the start snapshot or adding
+duplicate comments. Only quota measurements and account display fields cross the
+reporting boundary; Linear credentials stay in Azure.
+
 Pending CI is normal progress. A blocked PR returns to In Progress when its
 blocker clears, then Done after merging. Unknown/incomplete GitHub responses leave
 the previous state unchanged. Archived issues/projects, removed enrollment labels,

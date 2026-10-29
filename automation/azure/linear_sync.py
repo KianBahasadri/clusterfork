@@ -8,6 +8,13 @@ import time
 from uuid import UUID, uuid4
 
 from worker_core import WorkerError
+from worker_reporting import STAGES, attempt_comment
+
+
+def comment_id(key, kind):
+    # Linear accepts client-supplied UUIDv4 IDs. Stable IDs recover ambiguous writes.
+    digest = hashlib.sha256(f"clusterfork:{key}:{kind}".encode()).digest()
+    return str(UUID(bytes=digest[:16], version=4))
 
 
 def pull_outcome(pull, auto_merge):
@@ -136,14 +143,21 @@ class LinearSync:
                 state, reason = "done", "Worker completed successfully; no repository changes were needed."
             else:
                 raise ValueError("Unknown worker outcome")
+            stage = None
+            if state == "in_progress":
+                stage = "review" if pull else run.get("stage", "initializing")
+            elif status == "waiting_for_quota":
+                stage = "waiting_for_quota"
             target = route.ready_state_ids[0] if state == "ready" else getattr(states, state)
             run_id, attempt = owner.split(":")
             body = (f"Clusterfork: {reason}\n\n"
+                    + (f"Stage: {STAGES[stage]}.\n\n" if stage else "")
                     + (f"[Pull request]({pull['url']})\n\n" if pull else "")
                     + f"[Worker run](https://github.com/{route.repository}/actions/runs/{run_id}/attempts/{attempt})")
             signature = hashlib.sha256(json.dumps([target, body]).encode()).hexdigest()
             current, _ = self.runs.get(key)
-            if any(current.get(field) != run.get(field) for field in ("owner", "status", "pull_request")):
+            if any(current.get(field) != run.get(field) for field in
+                   ("owner", "status", "pull_request", "stage", "report_version")):
                 return  # A newer attempt/outcome supersedes this observation.
             updated, _ = self.notes.get(key)
             if updated.get("fence") != fence or updated["lease_until"] <= self.clock():
@@ -152,18 +166,29 @@ class LinearSync:
             if (not latest or latest["state"]["id"] != issue["state"]["id"]
                     or latest.get("project") != project or latest.get("archivedAt")):
                 return
+            if run.get("usage_before"):
+                for kind in ("start", "finish"):
+                    if kind == "finish" and status == "running":
+                        continue
+                    attempt_body = attempt_comment({**run, "status": status}, route.repository,
+                                                   finished=kind == "finish")
+                    attempt_signature = hashlib.sha256(attempt_body.encode()).hexdigest()
+                    field = f"{kind}_signature"
+                    if note.get("attempt_owner") != owner or note.get(field) != attempt_signature:
+                        self.linear.status_comment(issue["id"], comment_id(key, f"{owner}:{kind}"), attempt_body)
+                    updated[field] = attempt_signature
+                updated["attempt_owner"] = owner
             if note.get("signature") != signature:
-                # Linear validates supplied IDs as UUIDv4. Keep the value stable
-                # across retries while using the accepted version/variant bits.
-                digest = hashlib.sha256(f"clusterfork:{key}:status".encode()).digest()
-                comment_id = str(UUID(bytes=digest[:16], version=4))
-                self.linear.status_comment(issue["id"], comment_id, body)
+                self.linear.status_comment(issue["id"], comment_id(key, "status"), body)
+            # Dedicated add/remove mutations preserve unrelated labels, including
+            # labels a person adds while synchronization is in flight.
+            self.linear.set_stage(issue["id"], stage)
             # Save the explanation before the transition, including when the
             # state write fails and must be retried after a successful comment.
             if issue["state"]["id"] != target:
                 self.linear.set_state(issue["id"], target)
-            updated, etag = self.notes.get(key)
-            if updated.get("fence") != fence or updated["lease_until"] <= self.clock():
+            saved, etag = self.notes.get(key)
+            if saved.get("fence") != fence or saved["lease_until"] <= self.clock():
                 raise WorkerError("Linear synchronization lease was lost")
             updated.update(signature=signature, owner=owner, terminal=state == "done",
                            pull_request=pull["url"] if pull else "")
