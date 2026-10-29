@@ -39,12 +39,11 @@ class RepositoryQueue:
         self.tables = lru_cache(maxsize=None)(tables)
         self.linear, self.github, self.clock = linear, github, clock
         self.readiness = readiness
+        self.readiness.admitted = self.is_admitted
 
-    def prepare(self, issue, route):
-        receipt, _ = optional(self.receipts, dispatch_key(self.registry, route, issue))
-        # Coding receipts retain their once-per-generation semantics. Reviews
-        # have separate records and never consume or reset a coding receipt.
-        return {"status": "ready"} if receipt else self.readiness.ensure(issue, route)
+    def is_admitted(self, issue, route):
+        state, _ = self.table(route.repository).get("slot")
+        return state["active_key"] == dispatch_key(self.registry, route, issue)
 
     def table(self, repository):
         # GitHub names are case insensitive, including across project mappings.
@@ -89,8 +88,6 @@ class RepositoryQueue:
 
     def enqueue(self, issue, route):
         key = dispatch_key(self.registry, route, issue)
-        if not optional(self.receipts, key)[0]:
-            self.readiness.require(issue, route)
         for _ in range(32):
             try:
                 self.insert(self.table(route.repository), key,
@@ -223,10 +220,13 @@ class RepositoryQueue:
         return "blocked", "Worker failed, was canceled, or lost its result. Rerun this task or cancel its Linear issue."
 
     def finish_entry(self, table, state, etag, row, status, reason):
+        if state["owner"] and self.github.worker_result(row["repository"], state["owner"]).get("status") != "completed":
+            return False  # A read-only reviewer also owns the slot until its job stops.
         current, version = table.get(row["RowKey"])
         current.update(status=status, reason=reason)
         state.update(active_key="", owner="")
         table.transaction([(state, etag), (current, version)])
+        return True
 
     def dispatch(self, table, state, etag, row, route, *, retry=False):
         key = row["RowKey"]
@@ -234,7 +234,8 @@ class RepositoryQueue:
         current, reason = eligibility(issue or {}, self.registry)
         if current != route:
             message = f"No longer eligible ({reason})."
-            self.finish_entry(table, state, etag, row, "skipped", message)
+            if not self.finish_entry(table, state, etag, row, "skipped", message):
+                return {"status": "waiting", "dispatch_key": key, "reason": "Waiting for the readiness worker to stop."}
             self.report(table, row, message)
             return {"status": "skipped", "dispatch_key": key}
         review = self.readiness.ensure(issue, route)
@@ -242,7 +243,8 @@ class RepositoryQueue:
             return {**review, "dispatch_key": key}
         approval = self.readiness.require(issue, route)
         # Fence observations before crossing the external dispatch boundary.
-        state["owner"] = ""
+        # Preserve the review/previous attempt's owner so development startup
+        # verifies that it stopped before taking over this same repository slot.
         table.replace(state, etag)
         receipt, version = optional(self.receipts, key)
         if receipt:
@@ -313,7 +315,9 @@ class RepositoryQueue:
             route = self.current_route(row, receipt)
             if route is None and not receipt:
                 reason = "Skipped because the project's repository mapping changed."
-                self.finish_entry(table, state, etag, row, "skipped", reason)
+                if not self.finish_entry(table, state, etag, row, "skipped", reason):
+                    return {key: {"status": "waiting", "dispatch_key": key,
+                                  "reason": "Waiting for the readiness worker to stop."}}
                 self.report(table, row, reason)
                 results[key] = {"status": "skipped", "dispatch_key": key, "reason": reason}
                 continue
@@ -331,7 +335,9 @@ class RepositoryQueue:
             else:
                 action, reason = self.observe(row, receipt, route, state["owner"])
                 if action in TERMINAL:
-                    self.finish_entry(table, state, etag, row, action, reason)
+                    if not self.finish_entry(table, state, etag, row, action, reason):
+                        return {key: {"status": "waiting", "dispatch_key": key,
+                                      "reason": "Waiting for the admitted worker to stop."}}
                     self.report(table, row, reason)
                     results[key] = {"status": action, "dispatch_key": key, "reason": reason}
                     continue

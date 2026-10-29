@@ -437,6 +437,9 @@ def main():
     try:
         config = broker.call("start", protocol=PROTOCOL)
         started = True
+        if config.get("serial_admission") is not True:
+            raise WorkerFailure("Azure dispatcher does not confirm serial repository admission; "
+                                "deploy the matching broker before starting workers")
         if config.get("protocol") != PROTOCOL or config.get("phase") not in {"readiness", "development"}:
             raise WorkerFailure("Deploy a compatible readiness worker and broker")
         with Heartbeat(lambda: broker.call("heartbeat")) as heartbeat, \

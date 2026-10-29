@@ -108,6 +108,38 @@ def receipt():
             "issue_id": ISSUE, "identifier": "KIAN-891", "status": "dispatched"}
 
 
+class WorkerAdmissionTests(unittest.TestCase):
+    def run_worker(self, config):
+        broker = Mock()
+        broker.call.return_value = config
+        with patch.dict(os.environ, {"CLUSTERFORK_BROKER_URL": "https://broker.example/worker",
+                                     "DISPATCH_KEY": KEY}, clear=True), \
+             patch.object(worker, "Broker", return_value=broker), \
+             patch.object(worker, "execute", return_value=("completed", None)) as execute, \
+             patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()):
+            result = worker.main()
+        return result, broker, execute
+
+    def test_old_or_invalid_broker_cannot_start_agent_execution(self):
+        for value in (None, False, "true", 1):
+            with self.subTest(value=value):
+                config = {} if value is None else {"serial_admission": value}
+                result, broker, execute = self.run_worker(config)
+                self.assertEqual(result, 1)
+                execute.assert_not_called()
+                self.assertEqual(broker.call.call_args_list[0].args, ("start",))
+                self.assertEqual(broker.call.call_args_list[0].kwargs, {"protocol": worker.PROTOCOL})
+                broker.call.assert_called_with("finish", status="failed")
+                self.assertEqual(broker.call.call_count, 2)
+
+    def test_confirmed_serial_admission_allows_normal_execution(self):
+        result, broker, execute = self.run_worker({"serial_admission": True,
+                                                "protocol": worker.PROTOCOL, "phase": "development"})
+        self.assertEqual(result, 0)
+        execute.assert_called_once()
+        broker.call.assert_called_with("finish", status="completed", pull_request="")
+
+
 class AccountLeaseTests(unittest.TestCase):
     def setUp(self):
         self.now = NOW
@@ -266,6 +298,7 @@ class WorkerAuthorizationTests(unittest.TestCase):
         self.assertEqual((config["model"], config["effort"]), ("gpt-6.1-sol", "max"))
         self.assertTrue(config["auto_merge"])
         self.assertEqual(config["agent_timeout_minutes"], 300)
+        self.assertIs(config["serial_admission"], True)
         service.handle("github", claims(), {"dispatch_key": KEY})
         self.assertEqual(github.permissions, {"contents": "write", "pull_requests": "write"})
 

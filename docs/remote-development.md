@@ -1,8 +1,8 @@
 # Remote development
 
 Eligible Linear issues route through one shared Azure Function App to a Codex
-worker on a standard GitHub-hosted runner. A read-only readiness review precedes
-queue admission. After a pass, the development worker leases an account using
+worker on a standard GitHub-hosted runner. The repository queue admits one task
+for a read-only readiness review. After a pass, the development worker leases an account using
 live quota, implements the issue, runs configured validation, and publishes a
 PR. GitHub can squash-merge it after required checks; Linear tracks progress and
 blockers. Deployment is separate. This is Clusterfork's execution adapter, not
@@ -43,7 +43,8 @@ Linear's query-complexity limit.
 
 ## Todo readiness gate
 
-An enrolled issue in a configured Todo state first receives a bounded review of
+An enrolled issue in a configured Todo state enters its repository FIFO first.
+Only the issue holding that repository's slot receives a bounded review of
 its title, description, relevant code, and repository rules. Reviewers read
 `AGENTS.md` and the relevant documentation. They judge missing decisions, not
 description length: a precise one-line fix can pass. They assess intended outcome,
@@ -66,7 +67,7 @@ deadline. Review callbacks never authorize repository writes themselves.
 
 Azure independently validates every criterion, blocker, and verdict, including
 consistency between them. A valid pass is recorded in `ClusterforkReadiness`
-before normal repository queue admission. Approval binds to the exact title and
+before development dispatch. Approval binds to the exact title and
 description content revision, project, versioned review policy/schema and project
 configuration, model profile, and target branch commit. Tracker comments, labels,
 and lifecycle updates do not invalidate their own review. Conservatively, any
@@ -115,11 +116,11 @@ the broker package, then resume routing. This change does not deploy either side
 
 ## Repository queues
 
-Todo issues with a current passing review enter a durable FIFO per GitHub
+Eligible Todo issues enter a durable FIFO before readiness review, per GitHub
 repository. Multiple Linear projects mapped to the same repository share its
 queue; repository names are case insensitive. Different repositories advance
 independently. Queue order is
-the sequence of first approved observations committed to storage. A project scan
+the sequence of first eligible observations committed to storage. A project scan
 inserts its entire batch before dispatch, ordered by issue creation time and UUID.
 Later deliveries and scans retain existing positions. This does not reconstruct
 the historical order of Todo transitions missed before discovery.
@@ -127,12 +128,12 @@ the historical order of Todo transitions missed before discovery.
 Azure Table `ClusterforkRepositoryQueue` uses a partition derived from the
 lowercase repository name. Transactions assign the next sequence and insert its
 entry together, and atomically reserve the head and repository slot. Waiting
-issues remain Todo without a development runner or account. If context changes,
+issues remain Todo without a review/development runner or account. If context changes,
 the head can receive another readiness review before coding. Stable queue comments
 explain which issue they follow and whether it is running, waiting for CI/quota,
 blocked, or awaiting confirmation of an ambiguous dispatch.
 
-The repository slot has **no expiry**. It spans dispatch, coding, validation,
+The repository slot has **no expiry**. It spans readiness review, dispatch, coding, validation,
 publication, pending CI, review, and merging. A finish callback or auto-merge
 request does not release it. The shared 15-minute timer advances automatically
 after GitHub confirms all matching runs' latest attempts have stopped and the
@@ -143,6 +144,13 @@ and completion observations fence each other using the slot's ETag; stale,
 duplicate, or manual reruns cannot obtain account/publication access after their
 task loses admission. Repository admission is enforced by the broker; the
 existing issue-scoped Actions concurrency only guards duplicate issue jobs.
+
+New workers require an explicit `serial_admission: true` confirmation from the
+broker before inspecting accounts or starting coding. Older deployments that
+omit it fail before agent execution. The health endpoint also reports this flag
+so operators can verify the deployed capability. Merging a PR does not deploy
+Azure: pause worker dispatches, let active workers finish, deploy the matching
+broker, verify this health flag, then resume dispatches.
 
 Failures, missing outcomes, closed unmerged PRs, and merge/CI blockers pause the
 repository. Resolve the PR or manually rerun the **same** admitted task to repair

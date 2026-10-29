@@ -26,6 +26,7 @@ class ReadinessGate:
     def __init__(self, registry, table, accounts, linear, github, clock=time.time):
         self.registry, self.table, self.accounts = registry, table, accounts
         self.linear, self.github, self.clock = linear, github, clock
+        self.admitted = lambda issue, route: False
 
     def pointer(self, issue):
         return "issue-" + digest(issue["id"])
@@ -125,7 +126,7 @@ class ReadinessGate:
         body += (f"\n\nIssue content revision: `{binding['issue_revision']}`; "
                  f"policy: `{binding['policy_version']}`; repository: `{binding['context_sha']}`.")
         if row["status"] == "passed":
-            body += "\n\nReady for the normal development queue. This is not a security certification."
+            body += "\n\nReady for development in the admitted repository slot. This is not a security certification."
         else:
             body += "\n\nUpdate the description and move this issue from Backlog to Todo to request another review."
         return body
@@ -184,6 +185,8 @@ class ReadinessGate:
     def _ensure(self, issue, route):
         if eligibility(issue, self.registry)[0] != route:
             return {"status": "not_ready"}
+        if not self.admitted(issue, route):
+            return {"status": "queued"}
         binding = self.binding(issue, route)
         pointer, etag = optional(self.table, self.pointer(issue))
         row, _ = optional(self.table, pointer["review_key"]) if pointer else (None, None)

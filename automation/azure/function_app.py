@@ -97,7 +97,7 @@ def missing_config():
 def health(req: func.HttpRequest) -> func.HttpResponse:
     missing = missing_config()
     mode = "codex-worker" if any(route.workflow == "clusterfork-worker.yml" for route in registry().routes.values()) else "routing-pilot"
-    return func.HttpResponse(json.dumps({"mode": mode, "missing": missing,
+    return func.HttpResponse(json.dumps({"mode": mode, "missing": missing, "serial_admission": True,
                                         "projects": len(registry().routes)}),
                              status_code=503 if missing else 200, mimetype="application/json")
 

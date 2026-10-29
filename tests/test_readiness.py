@@ -140,8 +140,7 @@ class ReadinessTests(unittest.TestCase):
         return key, config
 
     def test_short_precise_issue_requires_review_before_coding_or_publication(self):
-        with self.assertRaises(WorkerError):
-            self.queue.enqueue(self.issue, self.route)
+        self.queue.enqueue(self.issue, self.route)
         review, config = self.begin()
         self.assertEqual(config["phase"], "readiness")
         self.assertEqual((config["model"], config["effort"]), ("gpt-6.1-sol", "max"))
@@ -160,10 +159,45 @@ class ReadinessTests(unittest.TestCase):
         self.assertNotEqual(review, coding)
         self.assertEqual(len(self.receipts.list()), 1)
         self.assertEqual(self.receipts.get(coding)[0]["readiness_review_key"], review)
+        self.stop(review)
         self.assertEqual(self.call(coding, "start")["phase"], "development")
         self.call(coding, "github")
         self.assertEqual(self.github.installation_token.call_args.kwargs["permissions"],
                          {"contents": "write", "pull_requests": "write"})
+
+    def test_multiple_todos_share_one_slot_before_any_review_starts(self):
+        others = [self.make_issue(number) for number in (2, 3)]
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(self.dispatcher.process, [{"type": "Project", "id": PROJECT}] * 16))
+        self.assertEqual(self.github.dispatch.call_count, 1)
+        self.assertFalse(self.receipts.list())
+        self.assertEqual(self.tables[self.route.repository.lower()].get("slot")[0]["active_key"],
+                         dispatch_key(self.registry, self.route, self.issue))
+        for issue in others:
+            self.assertEqual(self.gate.ensure(issue, self.route)["status"], "queued")
+            with self.assertRaises(WorkerError):
+                self.key(issue)
+        self.gate.reconcile()
+        self.queue.reconcile()
+        self.assertEqual(self.github.dispatch.call_count, 1)
+
+    def test_rejected_review_holds_slot_until_its_job_stops_and_late_callbacks_are_fenced(self):
+        review, config = self.begin()
+        self.assertIs(config["serial_admission"], True)
+        second = self.make_issue(2)
+        self.dispatcher.process({"type": "Issue", "id": second["id"]})
+        self.submit(review, clarification())
+        self.queue.advance(self.route.repository)
+        self.assertEqual(self.github.dispatch.call_count, 1)
+        self.assertEqual(self.tables[self.route.repository.lower()].get("slot")[0]["active_key"],
+                         dispatch_key(self.registry, self.route, self.issue))
+        self.stop(review)
+        self.queue.advance(self.route.repository)
+        self.assertEqual(self.github.dispatch.call_count, 2)
+        self.assertEqual(self.tables[self.route.repository.lower()].get("slot")[0]["active_key"],
+                         dispatch_key(self.registry, self.route, second))
+        with self.assertRaises(WorkerError):
+            self.call(review, "heartbeat")
 
     def test_actionable_clarification_resubmission_clears_only_owned_label(self):
         generation = self.registry.generation
@@ -230,6 +264,8 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(len(self.receipts.list()), 1)
 
     def test_two_callers_observing_pending_cannot_both_dispatch(self):
+        self.queue.enqueue(self.issue, self.route)
+        self.queue.reserve(self.queue.table(self.route.repository))
         row = self.gate.new(self.issue, self.route, self.gate.binding(self.issue, self.route), None)
         get = self.table.get
         barrier, local = threading.Barrier(2), threading.local()
@@ -270,7 +306,9 @@ class ReadinessTests(unittest.TestCase):
         self.pass_review()
         first = dispatch_key(self.registry, self.route, self.issue)
         second_issue = self.make_issue(2)
-        second_review, _ = self.pass_review(second_issue)
+        self.dispatcher.process({"type": "Issue", "id": second_issue["id"]})
+        with self.assertRaises(WorkerError):
+            self.key(second_issue)
         second = dispatch_key(self.registry, self.route, second_issue)
         self.assertEqual(len(self.receipts.list()), 1)
         self.call(first, "start")
@@ -280,7 +318,7 @@ class ReadinessTests(unittest.TestCase):
         self.queue.reconcile()
         self.assertEqual(len(self.receipts.list()), 1)
         newer = self.key(second_issue)
-        self.assertNotEqual(newer, second_review)
+        self.assertEqual(json.loads(self.table.get(newer)[0]["binding"])["context_sha"], self.sha)
         self.call(newer, "start")
         self.submit(newer)
         self.assertEqual(len(self.receipts.list()), 2)
@@ -297,6 +335,7 @@ class ReadinessTests(unittest.TestCase):
         self.assertFalse(self.github.installation_token.called)
         newer = self.key()
         self.assertNotEqual(newer, old)
+        self.stop(coding, "failure")
         self.call(newer, "start")
         self.submit(newer)
         self.stop(newer)
@@ -408,8 +447,9 @@ class ReadinessTests(unittest.TestCase):
             self.service.handle("start", self.identity_for(key), {"dispatch_key": key})
         binding = {**config["binding"], "context_sha": "d" * 40}
         self.assertEqual(self.submit(key, binding=binding)["status"], "readiness_retry")
-        with self.assertRaises(WorkerError):
-            self.queue.enqueue(self.issue, self.route)
+        self.queue.enqueue(self.issue, self.route)
+        self.queue.advance(self.route.repository)
+        self.assertFalse(self.receipts.list())
 
     def test_completed_coding_receipt_is_not_consumed_by_review_resubmission(self):
         old, _ = self.pass_review()
@@ -540,7 +580,8 @@ class ReadinessTests(unittest.TestCase):
         self.linear.set_state.side_effect = write
         self.gate.reconcile()
         self.assertTrue(self.table.get(key)[0]["applied"])
-        self.assertEqual(len(self.comments), 1)
+        self.assertEqual(len(self.comments), 2)  # Review and repository queue explanations.
+        self.stop(key, "failure")
         self.issue["state"] = {"id": self.route.ready_state_ids[0], "type": "unstarted"}
         newer, _ = self.begin()
         self.assertNotEqual(newer, key)

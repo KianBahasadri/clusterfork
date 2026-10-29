@@ -124,7 +124,19 @@ class WorkerService:
             if exc.status != 404:
                 raise
             review, _ = self.queue.readiness.table.get(key)
+            route = authorize_claims(claims, self.registry, review)
+            owner = f"{claims['run_id']}:{claims['run_attempt']}"
+            parent = hashlib.sha256(
+                f"{self.registry.generation}:{route.project_id}:{review['issue_id']}".encode()
+            ).hexdigest()
+            if action == "start":
+                self.github.verify_worker_run(route.repository, claims, key)
+                self.queue.start_worker(route.repository, parent, owner)
+            elif action != "save":
+                self.queue.assert_worker(route.repository, parent, owner)
             result = self.queue.readiness.handle(action, claims, data, review)
+            if action == "start":
+                result["serial_admission"] = True
             if action == "review" and result.get("status") == "passed":
                 issue = self.linear.issue(review["issue_id"])
                 current, _ = eligibility(issue or {}, self.registry)
@@ -301,6 +313,7 @@ class WorkerService:
         profile = self.registry.agent_profiles["codex"]
         return {"protocol": PROTOCOL, "phase": "development", "readiness": approval,
                 "model": profile.model, "effort": profile.effort,
+                "serial_admission": True,
                 "selection": {"min_remaining_percent": self.registry.agent_selection.min_remaining_percent,
                               "max_snapshot_age_seconds": self.registry.agent_selection.max_snapshot_age_seconds},
                 "repository": route.repository, "ref": route.ref,
