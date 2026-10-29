@@ -268,7 +268,8 @@ class Dispatcher:
             issue_id = uuid_string(event["id"])
             repositories = self.queue.dependency_repositories([issue_id])
             issue = self.linear.issue(issue_id)
-            results = self.route_issues([issue] if issue else [], timing=event, repositories=repositories)
+            results = self.route_issues([issue] if issue else [], timing=event, repositories=repositories,
+                                        observe_steering=True)
             return results if issue else [{"status": "missing_issue"}]
         if event_type == "IssueRelation":
             ids = [uuid_string(value) for value in event.get("issue_ids", [])]
@@ -291,7 +292,7 @@ class Dispatcher:
     def route(self, issue):
         return self.route_issues([issue])[0]
 
-    def route_issues(self, issues, *, timing=None, repositories=()):
+    def route_issues(self, issues, *, timing=None, repositories=(), observe_steering=False):
         results, repositories = [], {repository.lower() for repository in repositories}
         for issue in issues:
             route, reason = eligibility(issue, self.registry)
@@ -312,7 +313,10 @@ class Dispatcher:
             # Full comment scans and acknowledgement writes must not delay the
             # first visible evidence of durable repository admission.
             if self.steering:
+                observed = None if observe_steering else self.steering.observation_issues()
                 for issue in issues:
+                    if observed is not None and issue["id"] not in observed:
+                        continue
                     try:
                         self.steering.observe(issue["id"], issue=issue)
                     except Exception:

@@ -415,9 +415,12 @@ class ReadinessGate:
             if not pointer["RowKey"].startswith("issue-"):
                 continue
             try:
+                row, _ = self.table.get(pointer["review_key"])
+                if ((row["status"] == "passed" and row.get("reported"))
+                        or (row["status"] in REJECTIONS and row.get("applied"))):
+                    continue  # Issue events/project scans discover Todo reentry.
                 issue = self.linear.issue(pointer["issue_id"])
                 route, _ = eligibility(issue or {}, self.registry)
-                row, _ = self.table.get(pointer["review_key"])
                 if (issue and row.get("rejection_target") == issue["state"]["id"]
                         and row["status"] in REJECTIONS and not row.get("applied")):
                     self.update(row["RowKey"], applied=True, reported=True)

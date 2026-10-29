@@ -45,9 +45,9 @@ historical removals and comments. Label failures are reporting failures: they ca
 but do not discard ownership, outcomes, FIFO positions, or dispatch receipts, or trigger another worker. Pending queued
 and selected additions/removals survive restarts and retry on events and the shared timer, including removals after the
 queue empties. Reporters recheck current queue/slot state across repositories after writes and repair superseded updates
-without touching stage labels. The timer also refreshes waiting and historical entries to repair an ambiguous or delayed
-write whose reporting process stopped before recording its result. Dispatch receipts keep repositories discoverable for
-this cleanup after a mapping is removed.
+without touching stage labels. The [runtime reconciliation rules](remote-development.md#components-and-dispatch)
+define recovery after a reporting process stops. Dispatch receipts keep repositories discoverable for pending cleanup
+after a mapping is removed.
 
 The repository slot has **no expiry**. It spans readiness review, dispatch, coding, validation, publication, pending CI,
 review, and merging. A finish callback or auto-merge request does not release it. The shared 15-minute timer advances
