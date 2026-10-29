@@ -9,10 +9,12 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
 from quota_selection import SelectionPolicy
+from routing_timing import timestamps
 
 
 def uuid_string(value):
@@ -156,7 +158,18 @@ def webhook_event(body, headers, secret, *, now=None):
             return None
         if payload["action"] not in {"create", "update"}:
             return None
-        return {"type": payload["type"], "id": uuid_string(payload["data"]["id"])}
+        event = {"type": payload["type"], "id": uuid_string(payload["data"]["id"]),
+                 "webhook_at": timestamp / 1000}
+        # Diagnostic only: eligibility always comes from a fresh Linear read.
+        updated = payload["data"].get("updatedAt")
+        if payload["type"] == "Issue" and isinstance(updated, str):
+            try:
+                parsed = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+                if parsed.tzinfo is not None:
+                    event.update(timestamps({"source_updated_at": parsed.timestamp()}))
+            except (ValueError, OverflowError):
+                pass
+        return event
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         if isinstance(exc, WebhookError):
             raise
@@ -209,7 +222,7 @@ class Dispatcher:
             return [{"status": "steering_observed"}]
         if event_type == "Issue":
             issue = self.linear.issue(uuid_string(event["id"]))
-            return [self.route(issue)] if issue else [{"status": "missing_issue"}]
+            return self.route_issues([issue], timing=event) if issue else [{"status": "missing_issue"}]
         if event_type == "Project":
             project_id = uuid_string(event["id"])
             if project_id not in self.registry.routes:
@@ -218,23 +231,18 @@ class Dispatcher:
             # scans retain their original sequence; batch ties are deterministic.
             issues = sorted(self.linear.project_issues(project_id),
                             key=lambda i: (i.get("createdAt", ""), i["id"]))
-            return self.route_issues(issues)
+            return self.route_issues(issues, timing=event)
         raise ValueError("unsupported queued event")
 
     def route(self, issue):
         return self.route_issues([issue])[0]
 
-    def route_issues(self, issues):
+    def route_issues(self, issues, *, timing=None):
         results, repositories = [], set()
         for issue in issues:
-            if self.steering:
-                try:
-                    self.steering.observe(issue["id"], issue=issue)
-                except Exception:
-                    logging.error("Linear instruction observation deferred for %s", issue["id"])
             route, reason = eligibility(issue, self.registry)
             if route:
-                key = self.queue.enqueue(issue, route)
+                key = self.queue.enqueue(issue, route, timing=timing)
                 results.append({"status": "already_claimed", "dispatch_key": key})
             else:
                 results.append({"status": reason})
@@ -242,6 +250,16 @@ class Dispatcher:
             if mapped:
                 repositories.add(mapped.repository.lower())
         advanced = {}
-        for repository in sorted(repositories):
-            advanced.update(self.queue.advance(repository))
+        try:
+            for repository in sorted(repositories):
+                advanced.update(self.queue.advance(repository))
+        finally:
+            # Full comment scans and acknowledgement writes must not delay the
+            # first visible evidence of durable repository admission.
+            if self.steering:
+                for issue in issues:
+                    try:
+                        self.steering.observe(issue["id"], issue=issue)
+                    except Exception:
+                        logging.error("Linear instruction observation deferred for %s", issue["id"])
         return [advanced.get(result.get("dispatch_key"), result) for result in results]

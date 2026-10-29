@@ -31,8 +31,8 @@ live routing and merge evidence without treating it as current health.
 | `.github/workflows/clusterfork-pilot.yml` | Routing-only receipt workflow; no coding agent |
 
 The webhook authenticates raw bytes with HMAC-SHA256 and requires a timestamp
-within five minutes. It queues only entity IDs from Issue/Project/Comment create/update
-events and returns 200 only after a needed queue send succeeds. Comment events use
+within five minutes. It queues entity IDs and diagnostic timestamps from
+Issue/Project/Comment create/update events and returns 200 only after a needed queue send succeeds. Comment events use
 the separate [agent steering](remote-development-steering.md) path. The issue/project consumer
 fetches current Linear data, then checks the mapped project, its configured
 enrollment project label, archive flags, and configured ready-state IDs. An issue
@@ -122,102 +122,106 @@ broker. Other mapped repositories also need compatible worker sources.
 
 ## Repository queues
 
-Eligible Todo issues enter a durable FIFO before readiness review, per GitHub
-repository. Multiple Linear projects mapped to the same repository share its
-queue; repository names are case insensitive. Different repositories advance
-independently. Queue order is
-the sequence of first eligible observations committed to storage. A project scan
-inserts its entire batch before dispatch, ordered by issue creation time and UUID.
-Later deliveries and scans retain existing positions. This does not reconstruct
-the historical order of Todo transitions missed before discovery.
+Eligible Todo issues enter one durable FIFO per GitHub repository before readiness review. Projects targeting the same
+case-insensitive repository share its queue; different repositories advance independently. Order follows first eligible
+observations committed to storage. A project scan inserts its complete batch before dispatch, ordered by creation time and
+UUID. Later events/scans retain positions; missed historical Todo transitions cannot be reconstructed.
 
-Azure Table `ClusterforkRepositoryQueue` uses a partition derived from the
-lowercase repository name. Transactions assign the next sequence and insert its
-entry together, and atomically reserve the head and repository slot. Waiting
-issues remain Todo without a review/development runner or account. If context changes,
-the head can receive another readiness review before coding. Stable queue comments
-explain which issue they follow and whether it is running, waiting for CI/quota,
-blocked, or awaiting confirmation of an ambiguous dispatch.
+Azure Table `ClusterforkRepositoryQueue` partitions by lowercase repository name. Transactions insert each entry with
+its sequence and atomically reserve the head/slot. Waiting issues remain Todo without a runner or account; context
+changes can require another readiness review before coding. Stable queue comments identify the preceding issue and
+whether it is running, waiting for CI/quota, blocked, or awaiting confirmation of an ambiguous dispatch.
 
-Admission also records a versioned, pending Linear label update in that same
-transaction. Azure attempts to add the team-scoped `clusterfork: selected` label
-before dispatching either the readiness reviewer or development worker, including
-when the timer advances the queue. Webhook receipt and FIFO insertion alone do
-not select waiting issues. The marker means **Azure reserved this repository's
-slot**; it does not confirm that GitHub accepted a dispatch or a runner started.
-It leaves human assignments and unrelated labels intact and coexists with the
-current stage label. It stays through readiness, dispatch retries or uncertainty,
-quota waits, pending PRs, and development blockers until the slot is released.
-Readiness rejection clears it immediately; a durable reporting intent prevents
-reconciliation from restoring it while the rejected runner stops. The queue
-releases that slot and advances once GitHub confirms the old runner stopped.
+Admission also records a versioned, pending Linear label update in that same transaction. Azure attempts to add the
+team-scoped `clusterfork: selected` label immediately after reservation, before steering comment scans, historical
+label/comment repairs, or dispatching the readiness reviewer/development worker. This includes timer-driven admission.
+Webhook receipt and FIFO insertion alone do not select waiting issues. The marker means **Azure reserved this
+repository's slot**; it does not confirm that GitHub accepted a dispatch or a runner started. It leaves human
+assignments and unrelated labels intact and coexists with the current stage label. It stays through readiness, dispatch
+retries or uncertainty, quota waits, pending PRs, and development blockers until the slot is released. Readiness
+rejection clears it immediately; a durable reporting intent prevents reconciliation from restoring it while the rejected
+runner stops. The queue releases that slot and advances once GitHub confirms the old runner stopped.
 
-Release atomically records a new pending label version before Azure removes the
-marker and reports the next admitted issue. Label failures are reporting failures:
-they can temporarily delay the visible marker, but do not discard ownership,
-outcomes, or dispatch receipts, or trigger another worker. Pending additions and
-removals survive restarts and retry on events and the shared timer, including
-removals after the queue empties. Reporters recheck the current slot after writes
-and repair superseded updates without touching stage labels. The timer also
-refreshes previously admitted entries to repair an ambiguous or delayed write
-whose reporting process stopped before recording its result. Dispatch receipts
-keep repositories discoverable for this cleanup after a mapping is removed.
+Release atomically records a new pending label version. Azure reports the next admitted issue before repairing
+historical removals and comments. Label failures are reporting failures: they can temporarily delay the visible marker,
+but do not discard ownership, outcomes, or dispatch receipts, or trigger another worker. Pending additions and removals
+survive restarts and retry on events and the shared timer, including removals after the queue empties. Reporters recheck
+the current slot after writes and repair superseded updates without touching stage labels. The timer also refreshes
+previously admitted entries to repair an ambiguous or delayed write whose reporting process stopped before recording its
+result. Dispatch receipts keep repositories discoverable for this cleanup after a mapping is removed.
 
-The repository slot has **no expiry**. It spans readiness review, dispatch, coding, validation,
-publication, pending CI, review, and merging. A finish callback or auto-merge
-request does not release it. The shared 15-minute timer advances automatically
-after GitHub confirms all matching runs' latest attempts have stopped and the
-PR has merged, or a successful worker validated that no changes were needed.
-The recorded worker identity is checked directly as well, because run listings
-can lag. Open PRs hold the slot even with manual merging enabled. Worker starts
-and completion observations fence each other using the slot's ETag; stale,
-duplicate, or manual reruns cannot obtain account/publication access after their
-task loses admission. Repository admission is enforced by the broker; the
+The repository slot has **no expiry**. It spans readiness review, dispatch, coding, validation, publication, pending CI,
+review, and merging. A finish callback or auto-merge request does not release it. The shared 15-minute timer advances
+automatically after GitHub confirms all matching runs' latest attempts have stopped and the PR has merged, or a
+successful worker validated that no changes were needed. The recorded worker identity is checked directly as well,
+because run listings can lag. Open PRs hold the slot even with manual merging enabled. Worker starts and completion
+observations fence each other using the slot's ETag; stale, duplicate, or manual reruns cannot obtain
+account/publication access after their task loses admission. Repository admission is enforced by the broker; the
 existing issue-scoped Actions concurrency only guards duplicate issue jobs.
 
-New workers require an explicit `serial_admission: true` confirmation from the
-broker before inspecting accounts or starting coding. Older deployments that
-omit it fail before agent execution. The health endpoint also reports this flag
-so operators can verify the deployed capability. The automatic deployment
-workflow coordinates broker updates after changes reach main.
+New workers require an explicit `serial_admission: true` confirmation from the broker before inspecting accounts or
+starting coding. Older deployments that omit it fail before agent execution. The health endpoint also reports this flag
+so operators can verify the deployed capability. The automatic deployment workflow coordinates broker updates after
+changes reach main.
 
-The worker and required `routing-runtime` CI check share
-`.github/actions/setup-codex`. On Ubuntu 24.04 it installs the pinned CLI,
-Bubblewrap, and the supplied AppArmor user-namespace profile. Before any account
-is leased, `automation/check_codex_sandbox.py` runs the native read-only sandbox
-without credentials or a model call. It verifies repository reads, denied writes
-inside and outside the repository, and blocked network sockets. Missing sandbox
-support fails the runner setup instead of repeatedly spending quota on reviewers
-that cannot inspect files. The setup follows the
-[Ubuntu sandbox prerequisites](https://learn.chatgpt.com/docs/sandboxing).
+The worker and required `routing-runtime` CI check share `.github/actions/setup-codex`. On Ubuntu 24.04 it installs the
+pinned CLI, Bubblewrap, and the supplied AppArmor user-namespace profile. Before any account is leased,
+`automation/check_codex_sandbox.py` runs the native read-only sandbox without credentials or a model call. It verifies
+repository reads, denied writes inside and outside the repository, and blocked network sockets. Missing sandbox support
+fails the runner setup instead of repeatedly spending quota on reviewers that cannot inspect files. The setup follows
+the [Ubuntu sandbox prerequisites](https://learn.chatgpt.com/docs/sandboxing).
 
-Failures, missing outcomes, closed unmerged PRs, and merge/CI blockers pause the
-repository. Resolve the PR or manually rerun the **same** admitted task to repair
-it. To abandon it, cancel the Linear issue, stop/cancel its GitHub run, and close
-or merge any remaining PR. Reconciliation verifies those GitHub facts before
-releasing the slot. Changing Linear status to Done, archiving, or removing
-enrollment alone does not abandon active work. An expired worker/account lease
+Failures, missing outcomes, closed unmerged PRs, and merge/CI blockers pause the repository. Resolve the PR or manually
+rerun the **same** admitted task to repair it. To abandon it, cancel the Linear issue, stop/cancel its GitHub run, and
+close or merge any remaining PR. Reconciliation verifies those GitHub facts before releasing the slot. Changing Linear
+status to Done, archiving, or removing enrollment alone does not abandon active work. An expired worker/account lease
 never proves that the worker stopped.
 
-The head retains its position during quota waits and retries after its existing
-15-minute delay, once its prior GitHub run has stopped. Before every dispatch,
-the dispatcher fetches current enrollment, project, archive, cancellation, and
-ready-state data. Ineligible queued entries are skipped; an undispatched issue
-that later becomes eligible rejoins at the tail. Before coding a newly admitted
-task, the worker fetches the latest target branch and creates its branch from
+The head retains its position during quota waits and retries after its existing 15-minute delay, once its prior GitHub
+run has stopped. Before every dispatch, the dispatcher fetches current enrollment, project, archive, cancellation, and
+ready-state data. Ineligible queued entries are skipped; an undispatched issue that later becomes eligible rejoins at
+the tail. Before coding a newly admitted task, the worker fetches the latest target branch and creates its branch from
 that revision, including the preceding task's merged changes.
 
-Dispatch receipts retain their original workflow and target branch so active
-work can still be checked after its project mapping changes or is removed.
-Undispatched entries with removed/remapped destinations are skipped. Legacy
-receipts without those fields require restoring their mapping for verification.
+Dispatch receipts retain their original workflow and target branch so active work can still be checked after its project
+mapping changes or is removed. Undispatched entries with removed/remapped destinations are skipped. Legacy receipts
+without those fields require restoring their mapping for verification.
 
-Restart recovery reuses queue entries, slots, and dispatch receipts. Pre-queue
-receipts are imported before new Todo work is admitted. A reservation interrupted
-before receipt creation can resume; a receipt left `dispatching` or `uncertain`
-is never blindly resent. Reconciliation discovers its run and deterministic PR
-branch. If no run can be confirmed, that repository stays paused for investigation
-or explicit cancellation. Incomplete GitHub responses also keep the slot held.
+Restart recovery reuses queue entries, slots, and dispatch receipts. Pre-queue receipts are imported before new Todo
+work is admitted. A reservation interrupted before receipt creation can resume; a receipt left `dispatching` or
+`uncertain` is never blindly resent. Reconciliation discovers its run and deterministic PR branch. If no run can be
+confirmed, that repository stays paused for investigation or explicit cancellation. Incomplete GitHub responses also
+keep the slot held.
+
+### Selection feedback latency
+
+`host.json` caps idle queue polling at **one second**, replacing Azure's [one-minute
+default](https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-storage-queue#hostjson-settings). It
+allows eight events per host concurrently so an unrelated scan cannot monopolize the consumer; durable slot transactions
+still enforce repository serialization. Faster polling increases idle storage transactions. With a warm consumer, no
+backlog, and a free repository, expect feedback in seconds: polling plus current Linear eligibility, durable admission,
+and the label API calls. Label lookup/creation can add calls. Each HTTP request has a 20-second timeout. Linear webhook
+delivery, Azure cold starts/scaling, backlog, rate limits, and Linear client refresh can add delay; one second is a
+polling cap, not an end-to-end SLA. A busy repository stays queued until authoritative completion checks allow
+admission, normally on the 15-minute timer. Failed label writes retry on events and that timer; lowering polling does
+not shorten the timer or failed-message retry backoff.
+
+`Clusterfork timing` information logs record `webhook_received`, `event_enqueued`, `event_processing`,
+`repository_admitted`, and `selection_label_started`/`written`/`deferred`. Records contain IDs, versions, outcomes, and
+UTC epoch seconds only. Queue rows retain the first observation's `source_updated_at` (issue webhook `updatedAt`, when
+present), `webhook_at`, `received_at`, `enqueued_at`, `processing_at`, and `queued_at`. `selected_at` is stamped in the
+reservation transaction; `repository_admitted.at` confirms its commit. `selection_reported_at` records the last
+acknowledged label projection checked against the current slot/version. Compare processing minus enqueue for queue wait
+and label-written minus admission for reporting latency. A write acknowledgement measures Linear API acceptance; it
+cannot measure the user's UI refresh. Project scans lack an issue transition timestamp, and duplicate events retain the
+original queue timestamps. No issue content or credentials enter these diagnostics.
+
+KIAN-903 measurements (2026-10-29) compared the original and changed handlers with a virtual clock and mocked services.
+Source update / webhook emission / receipt / queue-send acknowledgement / consumer offsets were **0 / 0.10 / 0.20 /
+0.25 / 0.75s** in both. With a 12-second steering scan, admission improved **12.85 → 0.85s** and label acknowledgement
+**13.15 → 1.15s**. Separately, 8-second historical removal plus 4-second comment repair improved consumer-to-label time
+**12.3 → 0.3s**. These isolate ordering, not live service performance. KIAN-902's reported 18:23:05 → 18:23:42 UTC gap
+cannot be attributed without its traces; default polling was a plausible contributor, not a confirmed incident cause.
 
 ## Automatic deployments
 

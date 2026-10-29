@@ -541,11 +541,12 @@ class FakeAgent:
 
 
 class ProtocolTests(unittest.TestCase):
-    def test_signed_comment_webhook_queues_only_the_comment_id(self):
+    def test_signed_comment_webhook_queues_id_and_timestamp_without_content(self):
         identifier = str(uuid4())
         body, headers = signed({"type": "Comment", "action": "update", "webhookTimestamp": NOW * 1000,
                                 "data": {"id": identifier, "body": "@clusterfork private", "userId": STRANGER}})
-        self.assertEqual(webhook_event(body, headers, SECRET, now=NOW), {"type": "Comment", "id": identifier})
+        self.assertEqual(webhook_event(body, headers, SECRET, now=NOW),
+                         {"type": "Comment", "id": identifier, "webhook_at": NOW})
 
     def test_registry_validates_explicit_trusted_linear_ids(self):
         data = json.loads((ROOT / "automation/azure/projects.json").read_text())

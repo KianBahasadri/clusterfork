@@ -24,7 +24,7 @@ CONFIG_NAMES = ("LINEAR_API_KEY", "LINEAR_WEBHOOK_SECRET", "GITHUB_APP_ID",
                 "GITHUB_APP_PRIVATE_KEY_FILE", "COMMAND_CODE_API_KEY")
 PACKAGE_FILES = ("function_app.py", "dispatch_core.py", "dispatch_clients.py", "quota_selection.py",
                  "worker_core.py", "worker_store.py", "worker_reporting.py", "linear_sync.py", "repository_queue.py",
-                 "selection_reporting.py", "steering.py",
+                 "selection_reporting.py", "routing_timing.py", "steering.py",
                  "readiness.py", "readiness_policy.py", "deployment_control.py",
                  "host.json", "requirements.txt", "projects.json")
 
