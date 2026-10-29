@@ -235,18 +235,28 @@ class RoutingTests(unittest.TestCase):
 
 
 class ClientTests(unittest.TestCase):
+    def test_issue_fetch_requests_and_preserves_priority(self):
+        def request(url, **kwargs):
+            self.assertRegex(kwargs["data"]["query"], r"\bpriority\b")
+            return {"data": {"issue": {**issue(), "priority": 2}}}
+
+        self.assertEqual(Linear("test", request).issue(ISSUE)["priority"], 2)
+
     def test_all_project_pages_are_scanned(self):
         calls = []
 
         def request(url, **kwargs):
+            self.assertRegex(kwargs["data"]["query"], r"\bpriority\b")
             after = kwargs["data"]["variables"]["after"]
             calls.append(after)
-            return {"data": {"project": {**issue()["project"], "issues": {"nodes": [issue()],
+            row = {**issue(), "priority": 1 if after is None else 4}
+            return {"data": {"project": {**issue()["project"], "issues": {"nodes": [row],
                      "pageInfo": {"hasNextPage": after is None, "endCursor": "next"}}}}}
 
         rows = list(Linear("test", request).project_issues(PROJECT))
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["project"], issue()["project"])
+        self.assertEqual([row["priority"] for row in rows], [1, 4])
         self.assertEqual(calls, [None, "next"])
 
     def test_graphql_errors_never_become_a_successful_empty_scan(self):

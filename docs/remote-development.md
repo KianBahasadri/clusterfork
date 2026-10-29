@@ -24,7 +24,7 @@ live routing and merge evidence without treating it as current health.
 | `worker_core.py`, `worker_store.py`, `quota_selection.py` | Workflow authorization, account leases, fenced credentials, and quota selection |
 | `linear_sync.py` | Linear lifecycle and PR/CI reconciliation |
 | `steering.py`, `automation/agent_session.py` | Durable Linear instructions and delivery into the live Codex turn |
-| `repository_queue.py` | Durable repository FIFO, admission, worker fencing, and queue advancement |
+| `repository_queue.py` | Durable repository priority queue, admission, worker fencing, and queue advancement |
 | `selection_reporting.py` | Durable Linear queued/selected-label intent and repair against current queue state |
 | `readiness.py`, `readiness_policy.py` | Durable read-only reviews, structured-result validation, clarification, and revision-bound admission |
 | `automation/worker.py`, `automation/codex_runtime.py` | Account inspection, Codex execution, validation, publication, and merge requests |
@@ -48,7 +48,7 @@ Linear's query-complexity limit.
 
 ## Todo readiness gate
 
-An enrolled issue in a configured Todo state enters its repository FIFO first.
+An enrolled issue in a configured Todo state enters its repository queue first.
 Only the issue holding that repository's slot receives a bounded review of
 its title, description, full paginated comment thread (including reply parents),
 relevant code, and repository rules. Explicit user decisions can settle earlier
@@ -124,17 +124,27 @@ broker. Other mapped repositories also need compatible worker sources.
 
 ## Repository queues
 
-Eligible Todo issues enter one durable FIFO per GitHub repository before readiness review. Projects targeting the same
-case-insensitive repository share its queue; different repositories advance independently. Order follows first eligible
-observations committed to storage. A project scan inserts its complete batch before dispatch, ordered by creation time and
-UUID. Later events/scans retain positions; missed historical Todo transitions cannot be reconstructed.
+Eligible Todo issues enter one durable priority queue per GitHub repository before readiness review. Projects targeting
+the same case-insensitive repository share its queue; different repositories advance independently. Waiting issues are
+admitted in Linear priority order: **Urgent → High → Normal → Low → No priority** (values **1 → 2 → 3 → 4 → 0**).
+Within each priority, FIFO follows first eligible observations committed to storage. A project scan inserts its complete
+batch before dispatch, assigning sequence numbers by creation time and UUID. Later events/scans, priority edits, retries,
+and restarts retain those sequences; missed historical Todo transitions cannot be reconstructed.
+
+Issue webhooks, project scans, and timer reconciliation persist updated priorities for waiting entries without changing
+their sequence or queued-label intent. Before reserving a free slot, Azure refreshes waiting eligibility and priority,
+including during a handoff and for legacy rows without priority. Priority updates fence concurrent admission choices.
+Temporary Linear read failures retain the last known priority and durable position for retry. Once selected, an issue
+keeps its slot through review, dispatch retries, quota waits, coding, and unresolved PRs until normal release conditions
+are met; an urgent arrival or priority edit only affects the next admission. Imported pre-queue dispatches still precede
+new Todo work because they have already crossed the dispatch boundary.
 
 Azure Table `ClusterforkRepositoryQueue` partitions by lowercase repository name. Transactions insert each entry with
 its sequence and atomically reserve the head/slot. Waiting issues remain Todo without a runner or account; context
 changes can require another readiness review before coding. Stable queue comments identify the preceding issue and
 whether it is running, waiting for CI/quota, blocked, or awaiting confirmation of an ambiguous dispatch.
 
-FIFO insertion also records pending intent for the team-scoped `clusterfork: queued` label. Azure adds it only after
+Queue insertion also records pending intent for the team-scoped `clusterfork: queued` label. Azure adds it only after
 current eligibility passes and the waiting entry commits, through either webhook ingestion or timer/project-scan
 recovery. Raw webhook receipt does not add it. The marker means **received and waiting**; it does not assert that
 readiness passed or guarantee coding. Waiting issues retain Todo, human labels, stage labels, and project enrollment
@@ -143,7 +153,7 @@ through `clusterfork-symphony`. They start no readiness review, development runn
 Admission also records a versioned, pending Linear label update in that same transaction. Azure attempts to add the
 team-scoped `clusterfork: selected` label and remove `clusterfork: queued` immediately after reservation, before steering
 comment scans, historical label/comment repairs, or dispatching the readiness reviewer/development worker, including on
-the timer. An immediately admitted issue ends up selected without a queued marker. Webhook receipt and FIFO insertion
+the timer. An immediately admitted issue ends up selected without a queued marker. Webhook receipt and queue insertion
 alone do not select waiting issues. The selected marker means **Azure reserved this repository's slot**; it does not
 confirm that GitHub accepted a dispatch or a runner started. It leaves human assignments and unrelated labels intact
 and coexists with the current stage label. It stays through readiness, dispatch
@@ -192,9 +202,10 @@ run has stopped. Before every dispatch, the dispatcher fetches current enrollmen
 ready-state data. Events and reconciliation also recheck waiting entries while the head is active, including empty
 project scans and issues moved out of mapped projects. Leaving Todo, cancellation, issue/project archive, project moves,
 or loss of enrollment durably skips a waiting entry and removes its queued marker without waiting for the active task
-to finish. An undispatched issue that later becomes eligible rejoins at the tail. A temporary eligibility-read failure
-retains its durable position for retry. Before coding a newly admitted task, the worker fetches the latest target branch
-and creates its branch from that revision, including the preceding task's merged changes.
+to finish. An undispatched issue that later becomes eligible rejoins with a new sequence, at the tail of its priority.
+A temporary eligibility-read failure retains its durable position for retry. Before coding a newly admitted task, the
+worker fetches the latest target branch and creates its branch from that revision, including the preceding task's merged
+changes.
 
 Dispatch receipts retain their original workflow and target branch so active work can still be checked after its project
 mapping changes or is removed. Undispatched entries with removed/remapped destinations are skipped. Legacy receipts
@@ -233,8 +244,10 @@ KIAN-903 measurements (2026-10-29) compared the original and changed handlers wi
 Source update / webhook emission / receipt / queue-send acknowledgement / consumer offsets were **0 / 0.10 / 0.20 /
 0.25 / 0.75s** in both. With a 12-second steering scan, admission improved **12.85 → 0.85s** and label acknowledgement
 **13.15 → 1.15s**. Separately, 8-second historical removal plus 4-second comment repair improved consumer-to-label time
-**12.3 → 0.3s**. These isolate ordering, not live service performance. KIAN-902's reported 18:23:05 → 18:23:42 UTC gap
-cannot be attributed without its traces; default polling was a plausible contributor, not a confirmed incident cause.
+**12.3 → 0.3s**. With priority refresh enabled (KIAN-906), the same single-issue simulation records admission at **0.95s**
+and label acknowledgement at **1.25s**. These isolate ordering, not live service performance. KIAN-902's reported
+18:23:05 → 18:23:42 UTC gap cannot be attributed without its traces; default polling was a plausible contributor, not a
+confirmed incident cause.
 
 ## Automatic deployments
 

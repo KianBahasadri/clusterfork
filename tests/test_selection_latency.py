@@ -88,13 +88,14 @@ class HandlerTimingTests(unittest.TestCase):
         self.assertAlmostEqual(phases["webhook_received"]["at"] - NOW, 0.2, places=5)
         self.assertAlmostEqual(phases["event_enqueued"]["at"] - NOW, 0.25, places=5)
         self.assertAlmostEqual(phases["event_processing"]["at"] - NOW, 0.75, places=5)
-        self.assertAlmostEqual(phases["repository_admitted"]["at"] - NOW, 0.85, places=5)
-        self.assertAlmostEqual(phases["selection_label_written"]["at"] - NOW, 1.15, places=5)
+        # Ingestion and the admission-time waiting-priority refresh each read Linear.
+        self.assertAlmostEqual(phases["repository_admitted"]["at"] - NOW, 0.95, places=5)
+        self.assertAlmostEqual(phases["selection_label_written"]["at"] - NOW, 1.25, places=5)
         key = self.case.slot()["active_key"]
         row, _ = self.case.tables[self.case.repository.lower()].get(key)
         self.assertEqual(row["source_updated_at"], NOW)
         self.assertEqual(row["webhook_at"], NOW + 0.1)
-        self.assertAlmostEqual(row["selection_reported_at"] - NOW, 1.15, places=5)
+        self.assertAlmostEqual(row["selection_reported_at"] - NOW, 1.25, places=5)
         self.assertTrue(phases["selection_label_written"]["selected"])
         self.assertFalse(row["selection_pending"])
         self.assertNotIn("private issue text", "\n".join(logs.output))
