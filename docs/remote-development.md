@@ -21,6 +21,7 @@ live routing and merge evidence without treating it as current health.
 | `dispatch_core.py`, `dispatch_clients.py` in that directory | Current Linear eligibility, GitHub App dispatch, and durable receipts |
 | `worker_core.py`, `worker_store.py`, `quota_selection.py` | Workflow authorization, account leases, fenced credentials, and quota selection |
 | `linear_sync.py` | Linear lifecycle and PR/CI reconciliation |
+| `steering.py`, `automation/agent_session.py` | Durable Linear instructions and delivery into the live Codex turn |
 | `repository_queue.py` | Durable repository FIFO, admission, worker fencing, and queue advancement |
 | `selection_reporting.py` | Durable Linear selection-label intent and repair against current slots |
 | `readiness.py`, `readiness_policy.py` | Durable read-only reviews, structured-result validation, clarification, and revision-bound admission |
@@ -30,8 +31,9 @@ live routing and merge evidence without treating it as current health.
 | `.github/workflows/clusterfork-pilot.yml` | Routing-only receipt workflow; no coding agent |
 
 The webhook authenticates raw bytes with HMAC-SHA256 and requires a timestamp
-within five minutes. It queues only entity IDs from Issue/Project create/update
-events and returns 200 only after a needed queue send succeeds. The consumer
+within five minutes. It queues only entity IDs from Issue/Project/Comment create/update
+events and returns 200 only after a needed queue send succeeds. Comment events use
+the separate [agent steering](remote-development-steering.md) path. The issue/project consumer
 fetches current Linear data, then checks the mapped project, its configured
 enrollment project label, archive flags, and configured ready-state IDs. An issue
 label does not enroll a project. Removing enrollment prevents new dispatches but
@@ -105,7 +107,7 @@ issue to Todo to request its new review; the rerun cannot grant itself a pass.
 `automation/worker.py` and shared policy code on every mapped repository's
 workflow branch. The broker and runner require the
 `readiness-v1:<contract hash>` start protocol (including the prompt, schema,
-budget, and `repository-selection-v1` reporting contract) and an explicit
+budget, `repository-selection-v1` reporting, and `linear-steering-v1` contracts) and an explicit
 broker-selected phase. An old runner is denied start; a new runner receiving an
 old broker response stops before execution. Selection reporting versions this
 hash too: Azure and every workflow branch need matching shared policy/reporting
@@ -263,7 +265,8 @@ task's consumption. If no account qualifies, return no selection and wait.
 The runner calls Codex app-server `account/read`, `model/list`, and
 `account/rateLimits/read` in isolated temporary Codex homes. It probes available
 accounts under leases, selects by the worst applicable quota window, then
-reserves and rechecks the chosen account before starting `codex exec`.
+reserves and rechecks the chosen account before starting the development app-server
+thread (readiness still uses `codex exec`).
 Unknown or denied usage never counts as unused quota. A lack of capacity records
 `waiting_for_quota` and allows reconciliation to retry after 15 minutes.
 The registry owns these pins and selection thresholds.

@@ -85,9 +85,11 @@ def digest(value):
                                      ensure_ascii=True).encode()).hexdigest()
 
 
-# Both phases must agree on readiness and repository selection reporting. An
-# older broker must not silently start a runner without the selection behavior.
-PROTOCOL = "readiness-v1:" + digest([POLICY, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS, SELECTION_PROTOCOL])
+# Both phases must agree on readiness, repository selection, and steering. An
+# older broker must not silently start a runner without these capabilities.
+STEERING_PROTOCOL = "linear-steering-v1"
+PROTOCOL = "readiness-v1:" + digest([POLICY, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS,
+                                    SELECTION_PROTOCOL, STEERING_PROTOCOL])
 
 
 def issue_revision(issue):

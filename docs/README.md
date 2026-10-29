@@ -26,6 +26,7 @@ where files go; skill-specific instructions stay in each `skills/<name>/SKILL.md
 ## Remote development
 
 - [Runtime](remote-development.md) — routing, quota selection, publication, lifecycle, and retries
+- [Agent steering](remote-development-steering.md) — addressed Linear comments, authorization, delivery, and acknowledgements
 - [Setup](remote-development-setup.md) — project mappings, GitHub App, Azure, Linear, and local validation
 - [Accounts](remote-development-accounts.md) — enrollment, reclaim, leases, and worker credential boundary
 

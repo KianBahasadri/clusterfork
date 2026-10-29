@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import time
+from functools import lru_cache
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -68,6 +69,35 @@ class Linear:
         query = ("query($id: String!) { issue(id: $id) { " + ISSUE_FIELDS
                  + " project { " + PROJECT_FIELDS + " } } }")
         return self.complete(self.query(query, {"id": issue_id})["issue"])
+
+    @lru_cache(maxsize=1)
+    def viewer_id(self):
+        return self.query("query { viewer { id } }", {})["viewer"]["id"]
+
+    def comment(self, comment_id):
+        return self.query("""query($id: String!) {
+          comment(id: $id) { issue { id } }
+        }""", {"id": comment_id})["comment"]
+
+    def issue_comments(self, issue_id):
+        cursor = None
+        while True:
+            result = self.query("""query($id: String!, $after: String) {
+              issue(id: $id) { comments(first: 50, after: $after) {
+                nodes { id body createdAt user { id } botActor { id } }
+                pageInfo { hasNextPage endCursor }
+              } }
+            }""", {"id": issue_id, "after": cursor})["issue"]
+            if not result:
+                return
+            comments = result["comments"]
+            yield from comments["nodes"]
+            if not comments["pageInfo"]["hasNextPage"]:
+                return
+            next_cursor = comments["pageInfo"]["endCursor"]
+            if not next_cursor or next_cursor == cursor:
+                raise ValueError("Linear comment pagination did not advance")
+            cursor = next_cursor
 
     def project_issues(self, project_id):
         # Fetch project labels once per page. Nesting them under every issue

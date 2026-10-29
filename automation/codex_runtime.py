@@ -1,11 +1,13 @@
-"""Headless Codex account inspection; never print provider responses or auth."""
+"""Headless Codex app-server transport and account inspection; never log auth."""
 
 from __future__ import annotations
 
 import json
 import os
+from collections import deque
 from pathlib import Path
 import queue
+import signal
 import subprocess
 import tempfile
 import threading
@@ -16,16 +18,24 @@ class CodexError(RuntimeError):
     pass
 
 
+class CodexRejected(CodexError):
+    """An explicit RPC rejection, as distinct from an uncertain transport failure."""
+
+
 class AppServer:
-    def __init__(self, home, *, binary="codex", timeout=30):
+    def __init__(self, home, *, binary="codex", timeout=30, env=None, cwd=None, config=()):
         self.timeout, self.sequence = timeout, 0
-        env = {**os.environ, "CODEX_HOME": str(home)}
+        env = {**(os.environ if env is None else env), "CODEX_HOME": str(home)}
         for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"):
             env.pop(key, None)
+        args = [binary, "app-server"]
+        for value in config:
+            args.extend(["-c", value])
         self.process = subprocess.Popen(
-            [binary, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True, env=env, cwd=home)
+            args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True, env=env, cwd=cwd or home, start_new_session=True)
         self.messages = queue.Queue()
+        self.notifications = deque()
         threading.Thread(target=self._read, daemon=True).start()
         try:
             self.call("initialize", {"clientInfo": {"name": "clusterfork", "version": "1.0"}})
@@ -54,22 +64,38 @@ class AppServer:
             try:
                 message = self.messages.get(timeout=max(0, deadline - time.monotonic()))
             except queue.Empty:
-                raise CodexError("Codex account inspection timed out") from None
+                raise CodexError("Codex app-server request timed out") from None
             if message is None:
-                raise CodexError("Codex account inspection stopped")
+                raise CodexError("Codex app-server stopped")
+            if "method" in message:
+                self.notifications.append(message)
+                continue
             if message.get("id") != self.sequence:
                 continue
             if "error" in message:
-                raise CodexError(f"Codex rejected {method} during account inspection")
+                raise CodexRejected(f"Codex rejected {method}")
             return message["result"]
 
+    def next_event(self, timeout=0):
+        if self.notifications:
+            return self.notifications.popleft()
+        while True:
+            try:
+                message = self.messages.get(timeout=timeout)
+            except queue.Empty:
+                return None
+            if message is None:
+                raise CodexError("Codex app-server stopped")
+            if "method" in message:
+                return message
+
     def close(self):
-        self.process.terminate()
+        # Tools are in the same process group; lease loss must stop them too.
         try:
-            self.process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            self.process.kill()
-            self.process.wait()
+            os.killpg(self.process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        self.process.wait()
         self.process.stdin.close()
         self.process.stdout.close()
 

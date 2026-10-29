@@ -299,7 +299,8 @@ class RunnerReportingTests(unittest.TestCase):
                      patch.object(worker, "select_account", return_value=selection), \
                      patch.object(worker, "account_lease", return_value=lease), \
                      patch.object(worker, "inspect_account", return_value=({"account": {"email": "worker@example.com"}}, limits())), \
-                     patch.object(worker, "command"), patch.object(worker, "read_usage", return_value=limits(14, 23)) as read:
+                     patch.object(worker, "run_agent", return_value="Completed"), \
+                     patch.object(worker, "read_usage", return_value=limits(14, 23)) as read:
                     try:
                         with worker.run_codex(broker, config, heartbeat, Path(directory)):
                             read.assert_not_called()

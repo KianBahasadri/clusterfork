@@ -17,6 +17,7 @@ from linear_sync import LinearSync
 from repository_queue import RepositoryQueue
 from readiness import ReadinessGate
 from deployment_control import DeploymentControl, build_metadata
+from steering import Steering
 
 app = func.FunctionApp()
 QUEUE = "clusterfork-events"
@@ -43,7 +44,7 @@ def enqueue(event):
 
 def dispatcher():
     service = worker_service()
-    return Dispatcher(registry(), service.linear, service.queue)
+    return Dispatcher(registry(), service.linear, service.queue, steering=service.steering)
 
 
 @lru_cache(maxsize=1)
@@ -63,10 +64,13 @@ def worker_service():
                                                           hashlib.sha256(repository.encode()).hexdigest()),
                             linear, github, readiness,
                             control=DeploymentControl(AzureTable(connection, "ClusterforkOperations", "control")))
+    steering = Steering(registry(), receipts, runs,
+                        AzureTable(connection, "ClusterforkInstructions", "instructions"),
+                        linear, queue)
     return WorkerService(
         registry(), receipts, runs,
         accounts,
-        linear, github, queue, sync=sync)
+        linear, github, queue, sync=sync, steering=steering)
 
 
 @app.route(route="worker/{action}", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
@@ -146,5 +150,6 @@ def reconcile(timer: func.TimerRequest):
     worker_service().queue.readiness.reconcile()
     worker_service().sync.reconcile()
     worker_service().queue.reconcile()
+    worker_service().steering.reconcile()
     for project_id in registry().routes:
         enqueue({"type": "Project", "id": project_id})
