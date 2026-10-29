@@ -277,13 +277,26 @@ def review_readiness(broker, config, worker_heartbeat, directory):
                 if (command(["git", "rev-parse", "HEAD"]).strip() != config["binding"]["context_sha"]
                         or command(["git", "status", "--porcelain"]).strip()):
                     raise WorkerFailure("Readiness review changed repository contents")
+                result, result_error, result_location = None, None, None
                 try:
-                    # Invalid JSON is still submitted as an invalid result so Azure
-                    # records a retry, never a fabricated clarification decision.
-                    result = json.loads(output.read_text()) if output.stat().st_size <= 28_000 else None
-                except (OSError, ValueError):
-                    result = None
-            return broker.call("review", binding=config["binding"], result=result)["status"]
+                    # Preserve malformed output for the broker's actionable rejection,
+                    # without sending file paths, exception messages, or credentials.
+                    with output.open(encoding="utf-8") as stream:
+                        result = stream.read(28_001)
+                    if len(result.encode()) > 28_000:
+                        result, result_error = result[:28_000], "output_too_large"
+                    else:
+                        try:
+                            result = json.loads(result)
+                        except json.JSONDecodeError as exc:
+                            result_error = "invalid_json"
+                            result_location = {"line": exc.lineno, "column": exc.colno}
+                except UnicodeError:
+                    result, result_error = None, "invalid_encoding"
+                except OSError:
+                    result_error = "missing_output"
+            return broker.call("review", binding=config["binding"], result=result,
+                               result_error=result_error, result_location=result_location)["status"]
         except HTTPError as exc:
             if exc.code in {404, 409} and getattr(exc, "clusterfork_action", "claim") == "claim":
                 continue

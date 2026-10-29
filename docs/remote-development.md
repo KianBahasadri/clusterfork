@@ -48,9 +48,11 @@ Linear's query-complexity limit.
 
 An enrolled issue in a configured Todo state enters its repository FIFO first.
 Only the issue holding that repository's slot receives a bounded review of
-its title, description, relevant code, and repository rules. Reviewers read
-`AGENTS.md` and the relevant documentation. They judge missing decisions, not
-description length: a precise one-line fix can pass. They assess intended outcome,
+its title, description, full paginated comment thread (including reply parents),
+relevant code, and repository rules. Explicit user decisions can settle earlier
+concerns; a request to bypass review cannot grant a pass. Reviewers read `AGENTS.md`
+and relevant documentation. They judge missing decisions, not description length:
+a precise one-line fix can pass. They assess intended outcome,
 consequential scope decisions, observable completion, and specific unresolved
 security, privacy, data-loss, permission, external-action, or spending risks.
 Documented project-wide security defaults can settle a decision, including when
@@ -68,38 +70,38 @@ model review has a **600-second** timeout; the broker allows another 120 seconds
 for account selection and setup after start. Heartbeats cannot extend that
 deadline. Review callbacks never authorize repository writes themselves.
 
-Azure independently validates every criterion, blocker, and verdict, including
-consistency between them. A valid pass is recorded in `ClusterforkReadiness`
-before development dispatch. Approval binds to the exact title and
-description content revision, project, versioned review policy/schema and project
-configuration, model profile, and target branch commit. Tracker comments, labels,
-and lifecycle updates do not invalidate their own review. Conservatively, any
-target branch change invalidates context, including a preceding queued task's
-merge. Admission, dispatch retries, worker start, account access, the transition
-to coding, and publication recheck approval; coding must use the reviewed base
-commit. Material edits during account selection prevent coding and publication.
+Azure validates every criterion, blocker, verdict, and their consistency. A pass
+is recorded in `ClusterforkReadiness` before development dispatch. Approval binds
+to title and description, project, versioned policy/schema and configuration,
+model profile, and target branch commit. Comments, labels, and lifecycle updates
+do not invalidate their own review. Any target branch change invalidates context,
+including a preceding queued task's merge. Admission, dispatch retries, worker
+start, account access, coding, and publication recheck approval; coding must use
+the reviewed base commit. Material edits during account selection prevent coding
+and publication.
 
-A valid `needs_clarification` result returns the issue to its team's Backlog,
-adds only `clusterfork: needs clarification`, and updates one stable review
-comment with one to four missing decisions, their consequences, and answerable
-questions. The team must have a unique backlog-type state named Backlog, or a
-single backlog-type state. Unrelated labels and human status changes are
-preserved. Update the description and manually move Backlog to Todo for another
-review. Successful resubmission clears the owned clarification label. Reviews
-and retries use separate receipts, so rejection/resubmission needs no registry
-generation change and never consumes or resets a completed coding receipt.
+A rejected review moves the issue to the configured Blocked state (or a unique
+team state named Blocked), clears `clusterfork: selected` and active stage labels,
+and does not retry automatically. Unrelated labels and human status changes are
+preserved. A valid `needs_clarification` result adds `clusterfork: needs clarification`
+and explains one to four missing decisions, consequences, and answerable questions.
+Invalid results retain a bounded, credential-redacted output snapshot and a specific
+field, consistency, parsing, or binding error. Each attempt keeps a stable review
+comment with its feedback and run link, so later reviews see rejections and replies.
+Address feedback in the description or comments, then manually move Blocked to Todo
+for another review. Resubmission clears the owned clarification label after a pass;
+it needs no generation change and never consumes or resets a completed coding receipt.
 
-Unavailable context, dispatch failures, timeouts, missing/malformed results, and
-reviewer-reported infrastructure uncertainty hold coding with a visible retry
-comment; they do not classify the issue as ambiguous. The shared timer retries
+Unavailable context, dispatch failures, timeouts, quota waits, and infrastructure
+uncertainty hold coding with a visible retry comment. The shared timer retries
 temporary failures after 15 minutes and verifies the old GitHub attempt stopped
 before launching another. An uncertain/crashed dispatch without a confirmed run
 is held for discovery and investigation, never blindly resent. Duplicate issue
 events, project scans, and callbacks share the durable review record. Cancellation,
 archive, loss of enrollment, project moves, or human status changes prevent an
-in-flight result from admitting work. A coding dispatch invalidated while waiting
-for a runner records an admission hold and retries after a fresh pass and after
-the old run stops. Completed coding tasks retain their once-per-generation rule.
+in-flight result from admitting work. An invalidated coding dispatch records an
+admission hold and retries after a fresh pass and after the old run stops.
+Completed coding tasks retain their once-per-generation rule.
 If a manual rerun of Blocked/In Progress work has a stale approval, move the
 issue to Todo to request its new review; the rerun cannot grant itself a pass.
 
@@ -145,7 +147,10 @@ not select waiting issues. The marker means **Azure reserved this repository's
 slot**; it does not confirm that GitHub accepted a dispatch or a runner started.
 It leaves human assignments and unrelated labels intact and coexists with the
 current stage label. It stays through readiness, dispatch retries or uncertainty,
-quota waits, pending PRs, and blockers until the slot is released.
+quota waits, pending PRs, and development blockers until the slot is released.
+Readiness rejection clears it immediately; a durable reporting intent prevents
+reconciliation from restoring it while the rejected runner stops. The queue
+releases that slot and advances once GitHub confirms the old runner stopped.
 
 Release atomically records a new pending label version before Azure removes the
 marker and reports the next admitted issue. Label failures are reporting failures:

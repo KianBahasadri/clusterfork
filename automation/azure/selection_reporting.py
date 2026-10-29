@@ -33,7 +33,7 @@ class SelectionReporter:
                 continue  # A mapped repository may not have a queue yet.
             if slot["active_key"]:
                 active, _ = candidate.get(slot["active_key"])
-                if active["issue_id"] == issue_id:
+                if active["issue_id"] == issue_id and not active.get("readiness_rejected"):
                     return True
         return False
 

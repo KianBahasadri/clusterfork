@@ -82,15 +82,14 @@ class Linear:
     def issue_comments(self, issue_id):
         cursor = None
         while True:
-            result = self.query("""query($id: String!, $after: String) {
-              issue(id: $id) { comments(first: 50, after: $after) {
-                nodes { id body createdAt user { id } botActor { id } }
+            # Query all issue-associated comments, including threaded replies,
+            # rather than relying on the issue's top-level discussion view.
+            comments = self.query("""query($id: ID!, $after: String) {
+              comments(first: 50, after: $after, filter: {issue: {id: {eq: $id}}}) {
+                nodes { id body createdAt user { id } botActor { id } parent { id } }
                 pageInfo { hasNextPage endCursor }
-              } }
-            }""", {"id": issue_id, "after": cursor})["issue"]
-            if not result:
-                return
-            comments = result["comments"]
+              }
+            }""", {"id": issue_id, "after": cursor})["comments"]
             yield from comments["nodes"]
             if not comments["pageInfo"]["hasNextPage"]:
                 return
@@ -131,7 +130,7 @@ class Linear:
         if not result["issueUpdate"]["success"]:
             raise RequestError()
 
-    def backlog_state(self, issue_id):
+    def blocked_state(self, issue_id):
         team = self.query("""query($id: String!) {
           issue(id: $id) { team { states(first: 100) {
             nodes { id name type } pageInfo { hasNextPage }
@@ -139,11 +138,10 @@ class Linear:
         }""", {"id": issue_id})["issue"]["team"]
         if team["states"]["pageInfo"]["hasNextPage"]:
             raise ValueError("Incomplete team workflow states")
-        states = [state for state in team["states"]["nodes"] if state["type"] == "backlog"]
-        named = [state for state in states if state["name"].casefold() == "backlog"]
-        choices = named or states
+        choices = [state for state in team["states"]["nodes"]
+                   if state["name"].casefold() == "blocked" and state["type"] in {"unstarted", "started"}]
         if len(choices) != 1:
-            raise ValueError("Team needs an unambiguous Backlog workflow state")
+            raise ValueError("Team needs an unambiguous Blocked workflow state")
         return choices[0]["id"]
 
     def set_clarification(self, issue_id, enabled):
