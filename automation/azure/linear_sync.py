@@ -121,6 +121,8 @@ class LinearSync:
             if issue["state"]["id"] == states.done:
                 return
             status = run["status"]
+            if run.get("dependency_wait") and run.get("stage", "initializing") in {"initializing", "selecting_account"}:
+                status = "waiting_for_dependencies"
             if status == "running" and run.get("lease_until", 0) <= self.clock():
                 result = self.github.worker_result(route.repository, owner)
                 if result["status"] == "completed":
@@ -140,6 +142,8 @@ class LinearSync:
                 state, reason = "in_progress", "Worker is running."
             elif status == "waiting_for_quota":
                 state, reason = "ready", "Waiting for an account with enough quota; retries automatically."
+            elif status == "waiting_for_dependencies":
+                state, reason = "ready", "Waiting for blocked-by issue prerequisites; coding has not started. See the repository queue comment."
             elif status == "failed":
                 state = "blocked"
                 reason = (failure_summary(json.loads(run["failure"])) if run.get("failure") else

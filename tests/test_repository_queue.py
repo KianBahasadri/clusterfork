@@ -19,6 +19,7 @@ from repository_queue import RepositoryQueue, dispatch_key
 from deployment_control import DeploymentControl
 from worker_core import Accounts, WorkerError, WorkerService
 from test_remote_worker import ApprovedReadiness, MemoryTable, NOW, PROJECT, claims
+from linear_sync import comment_id
 from readiness_policy import PROTOCOL
 from test_linear_sync import pr, checks
 
@@ -30,11 +31,13 @@ class RepositoryQueueTests(unittest.TestCase):
         self.route = self.registry.routes[PROJECT]
         self.repository = self.route.repository
         self.issues, self.remote_runs, self.attempts, self.pulls = {}, {}, {}, {}
+        self.dependencies = defaultdict(list)
         self.selected = set()
         self.queued = set()
         self.receipts, self.runs = MemoryTable(), MemoryTable()
         self.tables = defaultdict(MemoryTable)
         self.linear = Mock(spec=Linear)
+        self.linear.issue_dependencies.side_effect = lambda key: copy.deepcopy(self.dependencies[key])
         self.linear.issue.side_effect = lambda key: copy.deepcopy(self.issues.get(key))
         self.linear.set_selected.side_effect = self.select
         self.linear.set_queued.side_effect = self.wait
@@ -113,6 +116,316 @@ class RepositoryQueueTests(unittest.TestCase):
 
     def slot(self, repository=None):
         return self.tables[(repository or self.repository).lower()].get("slot")[0]
+
+    def block(self, dependent, prerequisite):
+        prerequisite.setdefault("trashed", False)
+        self.dependencies[dependent["id"]].append({
+            "id": str(UUID(int=10_000 + len(self.dependencies[dependent["id"]]))),
+            "type": "blocks", "issue": prerequisite})
+
+    def test_kian_904_waits_for_905_despite_earlier_fifo_and_higher_priority(self):
+        dependent = self.issue(904, priority=1)
+        prerequisite = self.issue(905, priority=4)
+        self.block(dependent, prerequisite)
+        first = self.enqueue(dependent)
+        second = self.enqueue(prerequisite)
+        result = self.queue.advance(self.repository)
+        self.assertEqual(self.slot()["active_key"], second)
+        self.assertEqual(result[first]["status"], "dependency_waiting")
+        self.assertIn("KIAN-905 (unstarted)", result[first]["reason"])
+        self.assertEqual(self.queued, {dependent["id"]})
+        self.assertEqual(self.selected, {prerequisite["id"]})
+        self.assertEqual(self.github.dispatch.call_count, 1)
+        self.start(second)
+        self.finish(second)
+        self.stop(second)
+        prerequisite["state"] = {"id": "done", "type": "completed"}
+        self.dispatcher.process({"type": "Issue", "id": prerequisite["id"]})
+        self.assertEqual(self.slot()["active_key"], first)
+        self.assertEqual(self.github.dispatch.call_count, 2)
+
+    def test_multiple_blockers_require_all_completed_types_and_preserve_runnable_order(self):
+        dependent = self.issue(1, priority=1)
+        completed, unresolved = self.issue(2), self.issue(3)
+        completed["state"] = {"id": "custom-completion", "type": "completed", "name": "Shipped"}
+        unresolved["state"]["name"] = "Done"  # Names cannot grant completion.
+        self.block(dependent, completed)
+        self.block(dependent, unresolved)
+        key = self.enqueue(dependent)
+        normal = self.enqueue(self.issue(4, priority=2))
+        low = self.enqueue(self.issue(5, priority=4))
+        result = self.queue.advance(self.repository)
+        self.assertEqual(self.slot()["active_key"], normal)
+        self.assertNotIn("KIAN-2", result[key]["reason"])
+        self.assertIn("KIAN-3", result[key]["reason"])
+        self.start(normal)
+        self.finish(normal)
+        self.stop(normal)
+        self.queue.advance(self.repository)
+        self.assertEqual(self.slot()["active_key"], low)
+        self.start(low)
+        self.finish(low)
+        self.stop(low)
+        self.queue.advance(self.repository)
+        self.assertEqual(self.slot()["active_key"], "")
+        unresolved["state"]["type"] = "completed"
+        self.restart().reconcile()
+        self.assertEqual(self.slot()["active_key"], key)
+
+    def test_canceled_deleted_missing_and_unverifiable_prerequisites_keep_slot_free(self):
+        for source in (None, {"id": str(UUID(int=2)), "identifier": "KIAN-2", "trashed": False,
+                              "state": {"type": "canceled"}},
+                       {"id": str(UUID(int=2)), "identifier": "KIAN-2", "trashed": True,
+                        "state": {"type": "completed"}},
+                       {"id": str(UUID(int=2)), "identifier": "KIAN-2", "trashed": False, "state": None},
+                       {"id": str(UUID(int=2)), "identifier": "KIAN-2", "state": {"type": "completed"}}):
+            with self.subTest(source=source):
+                self.setUp()
+                dependent = self.issue(1)
+                self.dependencies[dependent["id"]] = [{"id": str(UUID(int=90)), "type": "blocks", "issue": source}]
+                key = self.enqueue(dependent)
+                self.queue.advance(self.repository)
+                self.assertEqual(self.slot()["active_key"], "")
+                self.assertEqual(self.queued, {dependent["id"]})
+                self.assertFalse(self.selected)
+                self.assertFalse(self.github.dispatch.called)
+                body = self.linear.status_comment.call_args.args[2]
+                self.assertIn("prerequisite", body)
+                self.assertEqual(self.linear.status_comment.call_args.args[1], comment_id(key, "queue"))
+                self.dependencies[dependent["id"]] = []  # Explicit relation removal releases it.
+                self.dispatcher.process({"type": "Issue", "id": dependent["id"]})
+                self.assertEqual(self.slot()["active_key"], key)
+
+    def test_dependency_lookup_failure_cannot_reuse_stale_completion_and_recovers(self):
+        active = self.enqueue(self.issue(1))
+        dependent = self.issue(2)
+        prerequisite = self.issue(3)
+        prerequisite["state"]["type"] = "completed"
+        self.block(dependent, prerequisite)
+        waiting = self.enqueue(dependent)
+        self.queue.advance(self.repository)
+        self.start(active)
+        self.finish(active)
+        self.stop(active)
+        self.linear.issue_dependencies.side_effect = RequestError()
+        with self.assertLogs(level="ERROR"):
+            self.restart().reconcile()
+        self.assertEqual(self.slot()["active_key"], "")
+        self.assertEqual(self.queue.table(self.repository).get(waiting)[0]["sequence"], 2)
+        self.assertEqual(self.github.dispatch.call_count, 1)
+        self.linear.issue_dependencies.side_effect = lambda key: copy.deepcopy(self.dependencies[key])
+        self.restart().reconcile()
+        self.assertEqual(self.slot()["active_key"], waiting)
+
+    def test_new_blocker_while_queued_is_refetched_at_handoff_without_webhook(self):
+        active = self.enqueue(self.issue(1))
+        self.queue.advance(self.repository)
+        dependent, prerequisite = self.issue(2, priority=1), self.issue(3, priority=4)
+        waiting, runnable = self.enqueue(dependent), self.enqueue(prerequisite)
+        self.queue.advance(self.repository)
+        self.assertEqual(self.slot()["active_key"], active)
+        self.block(dependent, prerequisite)
+        self.start(active)
+        self.finish(active)
+        self.stop(active)
+        self.queue.advance(self.repository)
+        self.assertEqual(self.slot()["active_key"], runnable)
+        self.assertEqual(self.queue.table(self.repository).get(waiting)[0]["status"], "queued")
+
+    def test_cross_project_unmapped_blocker_event_wakes_waiting_dependent(self):
+        dependent, prerequisite = self.issue(1), self.issue(2)
+        prerequisite["project"] = None
+        self.block(dependent, prerequisite)
+        key = self.enqueue(dependent)
+        self.queue.advance(self.repository)
+        self.assertEqual(self.slot()["active_key"], "")
+        prerequisite["state"] = {"id": "shipped", "type": "completed"}
+        self.dispatcher.process({"type": "Issue", "id": prerequisite["id"]})
+        self.assertEqual(self.slot()["active_key"], key)
+        self.assertEqual(self.github.dispatch.call_count, 1)
+
+    def test_relation_removal_event_refetches_dependencies_and_stable_comment(self):
+        dependent, prerequisite = self.issue(1), self.issue(2)
+        self.block(dependent, prerequisite)
+        key = self.enqueue(dependent)
+        self.queue.advance(self.repository)
+        self.queue.reconcile()
+        self.assertEqual(self.linear.status_comment.call_count, 1)
+        self.assertFalse(self.slot()["active_key"])
+        self.dependencies[dependent["id"]] = []
+        self.dispatcher.process({"type": "IssueRelation", "id": str(UUID(int=80)),
+                                 "issue_ids": [prerequisite["id"], dependent["id"]]})
+        self.assertEqual(self.slot()["active_key"], key)
+        self.assertEqual({call.args[1] for call in self.linear.status_comment.call_args_list}, {comment_id(key, "queue")})
+
+    def test_blocker_completion_refreshes_comment_while_independent_work_is_active(self):
+        active = self.enqueue(self.issue(1))
+        self.queue.advance(self.repository)
+        dependent, prerequisite = self.issue(2), self.issue(3)
+        prerequisite["project"] = None
+        self.block(dependent, prerequisite)
+        key = self.enqueue(dependent)
+        self.queue.advance(self.repository)
+        self.assertIn("KIAN-3", self.queue.table(self.repository).get(key)[0]["reported_reason"])
+        prerequisite["state"]["type"] = "completed"
+        self.dispatcher.process({"type": "Issue", "id": prerequisite["id"]})
+        self.assertEqual(self.slot()["active_key"], active)
+        self.assertEqual(self.queue.table(self.repository).get(key)[0]["reported_reason"],
+                         "Queued behind KIAN-1. Waiting for the previous GitHub worker to stop.")
+
+    def test_cycles_wait_without_workers_or_stalling_independent_work(self):
+        first, second = self.issue(1, priority=1), self.issue(2, priority=1)
+        self.block(first, second)
+        self.block(second, first)
+        keys = [self.enqueue(issue) for issue in (first, second)]
+        self.queue.reconcile()
+        self.assertFalse(self.github.dispatch.called)
+        self.assertFalse(self.slot()["active_key"])
+        independent = self.issue(3, priority=4)
+        self.dispatcher.process({"type": "Issue", "id": independent["id"]})
+        self.assertEqual(self.slot()["active_key"], dispatch_key(self.registry, self.route, independent))
+        for key in keys:
+            self.assertEqual(self.queue.table(self.repository).get(key)[0]["status"], "queued")
+        self.assertEqual(self.github.dispatch.call_count, 1)
+
+    def test_blocker_added_after_dispatch_denies_start_then_returns_position_to_queue(self):
+        dependent = self.issue(1, priority=1)
+        key = self.enqueue(dependent)
+        self.queue.advance(self.repository)
+        prerequisite = self.issue(2, priority=4)
+        prerequisite_key = self.enqueue(prerequisite)
+        self.block(dependent, prerequisite)
+        with self.assertRaisesRegex(WorkerError, "prerequisites"):
+            self.start(key)
+        self.assertFalse(self.runs.list())
+        self.queue.advance(self.repository)
+        self.assertEqual(self.slot()["active_key"], key)  # Dispatched run is still alive.
+        self.stop(key, "failure")
+        self.restart().reconcile()
+        self.assertEqual(self.slot()["active_key"], prerequisite_key)
+        self.assertEqual(self.queued, {dependent["id"]})
+        self.start(prerequisite_key)
+        self.finish(prerequisite_key)
+        self.stop(prerequisite_key)
+        prerequisite["state"] = {"id": "done", "type": "completed"}
+        self.queue.reconcile()
+        self.assertEqual(self.slot()["active_key"], key)
+        self.assertEqual(len(self.remote_runs[key]), 2)
+        self.assertEqual(self.receipts.get(key)[0]["dependency_epoch"],
+                         self.queue.table(self.repository).get(key)[0]["dependency_epoch"])
+        self.start(key)
+
+    def test_final_coding_guard_denies_blocker_added_during_account_selection(self):
+        dependent, prerequisite = self.issue(1), self.issue(2)
+        key = self.enqueue(dependent)
+        self.queue.advance(self.repository)
+        self.start(key)
+        self.service.handle("progress", self.identity(key), {"dispatch_key": key, "stage": "selecting_account"})
+        self.block(dependent, prerequisite)
+        with self.assertRaisesRegex(WorkerError, "prerequisites"):
+            self.service.handle("progress", self.identity(key), {"dispatch_key": key, "stage": "coding"})
+        self.assertEqual(self.runs.get(key)[0]["stage"], "selecting_account")
+        self.finish(key, "failed")
+        self.assertEqual(self.runs.get(key)[0]["status"], "waiting_for_dependencies")
+        self.stop(key, "failure")
+        self.queue.reconcile()
+        self.assertFalse(self.slot()["active_key"])
+
+    def test_added_blocker_does_not_interrupt_already_started_coding(self):
+        dependent, prerequisite = self.issue(1), self.issue(2)
+        key = self.enqueue(dependent)
+        self.queue.advance(self.repository)
+        self.start(key)
+        self.service.handle("progress", self.identity(key), {"dispatch_key": key, "stage": "coding"})
+        self.block(dependent, prerequisite)
+        self.queue.reconcile()
+        self.assertEqual(self.slot()["active_key"], key)
+        self.assertFalse(self.queue.table(self.repository).get(key)[0].get("dependency_hold"))
+        self.service.handle("progress", self.identity(key), {"dispatch_key": key, "stage": "publishing"})
+
+    def test_unavailable_dependencies_hold_only_the_affected_candidate(self):
+        dependent = self.issue(1, priority=1)
+        key = self.enqueue(dependent)
+        runnable = self.enqueue(self.issue(2, priority=4))
+
+        def dependencies(issue_id):
+            if issue_id == dependent["id"]:
+                raise RequestError()
+            return []
+
+        self.linear.issue_dependencies.side_effect = dependencies
+        with self.assertLogs(level="ERROR"):
+            results = self.queue.advance(self.repository)
+        self.assertEqual(results[key]["status"], "dependency_waiting")
+        self.assertEqual(self.slot()["active_key"], runnable)
+        self.assertEqual(self.github.dispatch.call_count, 1)
+
+    def test_final_coding_check_refetches_after_the_initial_broker_check(self):
+        dependent, prerequisite = self.issue(1), self.issue(2)
+        key = self.enqueue(dependent)
+        self.queue.advance(self.repository)
+        self.start(key)
+        self.block(dependent, prerequisite)
+        self.linear.issue_dependencies.side_effect = [[], copy.deepcopy(self.dependencies[dependent["id"]])]
+        with self.assertRaisesRegex(WorkerError, "prerequisites"):
+            self.service.handle("progress", self.identity(key), {"dispatch_key": key, "stage": "coding"})
+        self.assertEqual(self.runs.get(key)[0]["stage"], "initializing")
+        self.assertTrue(self.runs.get(key)[0]["dependency_wait"])
+        self.assertFalse(self.queue.table(self.repository).get(key)[0].get("coding_started"))
+
+    def test_stale_dependency_hold_cannot_interrupt_a_concurrent_coding_start(self):
+        dependent, prerequisite = self.issue(1), self.issue(2)
+        key = self.enqueue(dependent)
+        self.queue.advance(self.repository)
+        self.start(key)
+        self.block(dependent, prerequisite)
+        entered, release = threading.Event(), threading.Event()
+        blocked_snapshot = copy.deepcopy(self.dependencies[dependent["id"]])
+
+        def delayed(issue_id):
+            if not entered.is_set():
+                entered.set()
+                self.assertTrue(release.wait(10))
+                return blocked_snapshot
+            return []
+
+        self.linear.issue_dependencies.side_effect = delayed
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            observation = pool.submit(self.queue.dependencies_ready, dependent, self.route)
+            self.assertTrue(entered.wait(10))
+            try:
+                self.service.handle("progress", self.identity(key), {"dispatch_key": key, "stage": "coding"})
+            finally:
+                release.set()
+            self.assertTrue(observation.result(timeout=10))
+        row, _ = self.queue.table(self.repository).get(key)
+        self.assertTrue(row["coding_started"])
+        self.assertFalse(row.get("dependency_hold"))
+        self.assertFalse(self.runs.get(key)[0].get("dependency_wait"))
+
+    def test_dependency_retry_survives_crash_before_receipt_claim(self):
+        dependent, prerequisite = self.issue(1), self.issue(2)
+        key = self.enqueue(dependent)
+        self.queue.advance(self.repository)
+        self.block(dependent, prerequisite)
+        with self.assertRaises(WorkerError):
+            self.start(key)
+        self.stop(key, "failure")
+        prerequisite["state"]["type"] = "completed"
+        replace_receipt = self.receipts.replace
+
+        def crash(row, etag):
+            if row["status"] == "dispatching":
+                raise OSError("crash before receipt claim")
+            replace_receipt(row, etag)
+
+        with patch.object(self.receipts, "replace", side_effect=crash), self.assertRaises(OSError):
+            self.queue.advance(self.repository)
+        self.assertEqual(len(self.remote_runs[key]), 1)
+        self.restart().reconcile()
+        self.assertEqual(len(self.remote_runs[key]), 2)
+        self.assertEqual(self.slot()["active_key"], key)
+        self.start(key)
 
     def test_project_scan_admits_by_priority_before_creation_order(self):
         issues = [self.issue(n, priority=priority) for n, priority in enumerate((0, 4, 3, 2, 1), 1)]

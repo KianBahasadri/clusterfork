@@ -83,6 +83,9 @@ class ApprovedReadiness:
     def require(self, issue, route):
         return {}
 
+    def prework_stopped(self, issue_id, route):
+        return True
+
 
 def repository_queue(registry, receipts, runs, linear, github, clock=lambda: NOW):
     tables = defaultdict(MemoryTable)
@@ -285,6 +288,8 @@ class WorkerAuthorizationTests(unittest.TestCase):
         class Linear:
             def issue(self, identifier):
                 return copy.deepcopy(issue)
+            def issue_dependencies(self, identifier):
+                return []
         class GitHub:
             permissions = None
             def verify_worker_run(self, *args):

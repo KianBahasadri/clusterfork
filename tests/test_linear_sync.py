@@ -46,6 +46,7 @@ class LifecycleTests(unittest.TestCase):
                       "project": {"id": PROJECT, "archivedAt": None, "labels": {"nodes": [{"name": "clusterfork-symphony"}]}},
                       "title": "Test", "description": "", "url": "https://linear.app/test"}
         self.linear = Mock(spec=Linear)
+        self.linear.issue_dependencies.return_value = []
         self.linear.issue.side_effect = lambda _: copy.deepcopy(self.issue)
         self.linear.set_state.side_effect = lambda _, state: self.issue.update(state={"id": state})
         self.github = Mock(spec=GitHub)
@@ -69,6 +70,18 @@ class LifecycleTests(unittest.TestCase):
     def sync_state(self):
         self.sync.sync(KEY)
         return self.issue["state"]["id"]
+
+    def test_dependency_held_pre_coding_attempt_returns_to_todo_without_failure_state(self):
+        for status in ("running", "failed", "waiting_for_dependencies"):
+            with self.subTest(status=status):
+                self.setUp()
+                self.issue["state"]["id"] = self.states.in_progress
+                self.update_run(status=status, stage="selecting_account", dependency_wait=True,
+                                pull_request="", lease_until=0)
+                self.assertEqual(self.sync_state(), self.route.ready_state_ids[0])
+                self.assertIn("blocked-by issue prerequisites", self.linear.status_comment.call_args.args[2])
+                self.linear.set_stage.assert_called_with(ISSUE, None)
+                self.github.worker_pull.assert_not_called()
 
     def test_pending_ci_stays_in_progress_and_only_merge_marks_done(self):
         checks(self.pull)[0].update(status="IN_PROGRESS", conclusion=None)
