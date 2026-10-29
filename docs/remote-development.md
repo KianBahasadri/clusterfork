@@ -22,6 +22,7 @@ live routing and merge evidence without treating it as current health.
 | `worker_core.py`, `worker_store.py`, `quota_selection.py` | Workflow authorization, account leases, fenced credentials, and quota selection |
 | `linear_sync.py` | Linear lifecycle and PR/CI reconciliation |
 | `repository_queue.py` | Durable repository FIFO, admission, worker fencing, and queue advancement |
+| `selection_reporting.py` | Durable Linear selection-label intent and repair against current slots |
 | `readiness.py`, `readiness_policy.py` | Durable read-only reviews, structured-result validation, clarification, and revision-bound admission |
 | `automation/worker.py`, `automation/codex_runtime.py` | Account inspection, Codex execution, validation, publication, and merge requests |
 | `automation/azure/projects.json` | Project mappings, states, model/effort, validation commands, and merge policy |
@@ -103,12 +104,15 @@ issue to Todo to request its new review; the rerun cannot grant itself a pass.
 **Deployment compatibility:** the Azure readiness modules must match
 `automation/worker.py` and shared policy code on every mapped repository's
 workflow branch. The broker and runner require the
-`readiness-v1:<contract hash>` start protocol (including the prompt, schema, and
-budget hash) and an explicit broker-selected phase. An old runner is denied
-start; a new runner receiving an old broker response stops before
-execution. Readiness dispatches use the existing worker workflow and inputs;
-their separate receipts share the admitted issue's repository slot. No generation reset, new credentials,
-or expanded App permissions are needed; the broker creates `ClusterforkReadiness`.
+`readiness-v1:<contract hash>` start protocol (including the prompt, schema,
+budget, and `repository-selection-v1` reporting contract) and an explicit
+broker-selected phase. An old runner is denied start; a new runner receiving an
+old broker response stops before execution. Selection reporting versions this
+hash too: Azure and every workflow branch need matching shared policy/reporting
+sources. Readiness dispatches use the existing worker workflow and inputs; their
+separate receipts share the admitted issue's repository slot. No generation
+reset, new credentials, or expanded App permissions are needed; the broker
+creates `ClusterforkReadiness`.
 The automatic deployment workflow drains active workers before updating the
 broker. Other mapped repositories also need compatible worker sources.
 
@@ -130,6 +134,27 @@ issues remain Todo without a review/development runner or account. If context ch
 the head can receive another readiness review before coding. Stable queue comments
 explain which issue they follow and whether it is running, waiting for CI/quota,
 blocked, or awaiting confirmation of an ambiguous dispatch.
+
+Admission also records a versioned, pending Linear label update in that same
+transaction. Azure attempts to add the team-scoped `clusterfork: selected` label
+before dispatching either the readiness reviewer or development worker, including
+when the timer advances the queue. Webhook receipt and FIFO insertion alone do
+not select waiting issues. The marker means **Azure reserved this repository's
+slot**; it does not confirm that GitHub accepted a dispatch or a runner started.
+It leaves human assignments and unrelated labels intact and coexists with the
+current stage label. It stays through readiness, dispatch retries or uncertainty,
+quota waits, pending PRs, and blockers until the slot is released.
+
+Release atomically records a new pending label version before Azure removes the
+marker and reports the next admitted issue. Label failures are reporting failures:
+they can temporarily delay the visible marker, but do not discard ownership,
+outcomes, or dispatch receipts, or trigger another worker. Pending additions and
+removals survive restarts and retry on events and the shared timer, including
+removals after the queue empties. Reporters recheck the current slot after writes
+and repair superseded updates without touching stage labels. The timer also
+refreshes previously admitted entries to repair an ambiguous or delayed write
+whose reporting process stopped before recording its result. Dispatch receipts
+keep repositories discoverable for this cleanup after a mapping is removed.
 
 The repository slot has **no expiry**. It spans readiness review, dispatch, coding, validation,
 publication, pending CI, review, and merging. A finish callback or auto-merge

@@ -18,6 +18,8 @@ STAGES = {
     "waiting_for_quota": "waiting for quota",
 }
 STAGE_LABELS = {stage: f"clusterfork: {name}" for stage, name in STAGES.items()}
+SELECTION_LABEL = "clusterfork: selected"
+SELECTION_PROTOCOL = "repository-selection-v1"
 
 
 def usage_report(snapshot):

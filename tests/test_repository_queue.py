@@ -30,10 +30,12 @@ class RepositoryQueueTests(unittest.TestCase):
         self.route = self.registry.routes[PROJECT]
         self.repository = self.route.repository
         self.issues, self.remote_runs, self.attempts, self.pulls = {}, {}, {}, {}
+        self.selected = set()
         self.receipts, self.runs = MemoryTable(), MemoryTable()
         self.tables = defaultdict(MemoryTable)
         self.linear = Mock(spec=Linear)
         self.linear.issue.side_effect = lambda key: copy.deepcopy(self.issues.get(key))
+        self.linear.set_selected.side_effect = self.select
         self.linear.project_issues.side_effect = lambda project: [copy.deepcopy(i) for i in self.issues.values()
                                                                 if i["project"]["id"] == project]
         self.github = Mock(spec=GitHub)
@@ -61,6 +63,12 @@ class RepositoryQueueTests(unittest.TestCase):
 
     def enqueue(self, issue):
         return self.queue.enqueue(issue, self.registry.routes[issue["project"]["id"]])
+
+    def select(self, issue_id, enabled):
+        if enabled:
+            self.selected.add(issue_id)
+        else:
+            self.selected.discard(issue_id)
 
     def dispatch(self, route, inputs):
         key = inputs["dispatch_key"]
@@ -129,6 +137,10 @@ class RepositoryQueueTests(unittest.TestCase):
                               if r.get("status") == "queued"]), 7)
         self.assertTrue(all(i["state"]["id"] == self.route.ready_state_ids[0] for i in issues))
         self.assertFalse(self.runs.list())
+        admitted, _ = self.tables[self.repository.lower()].get(self.slot()["active_key"])
+        self.assertEqual(self.selected, {admitted["issue_id"]})
+        self.assertEqual({call.args[0] for call in self.linear.set_selected.call_args_list
+                          if call.args[1]}, self.selected)
         self.linear.status_comment.assert_called()
         self.assertTrue(any("Queued behind" in call.args[2] for call in self.linear.status_comment.call_args_list))
 
@@ -143,6 +155,7 @@ class RepositoryQueueTests(unittest.TestCase):
         self.queue = self.restart()
         self.queue.advance(self.repository)
         self.assertEqual(self.slot()["active_key"], keys[1])
+        self.assertEqual(self.selected, {str(UUID(int=2))})
         self.assertEqual(self.github.dispatch.call_count, 2)
         self.service.queue = self.queue
         self.start(keys[1])
@@ -150,6 +163,7 @@ class RepositoryQueueTests(unittest.TestCase):
         self.stop(keys[1])
         self.queue.advance(self.repository)
         self.assertEqual(self.slot()["active_key"], keys[2])
+        self.assertEqual(self.selected, {str(UUID(int=5))})
 
     def test_pending_ci_blocked_and_manual_merge_prs_retain_the_slot(self):
         first, second = [self.enqueue(self.issue(n)) for n in (1, 2)]
@@ -160,8 +174,10 @@ class RepositoryQueueTests(unittest.TestCase):
         self.stop(first)
         checks(pull)[0].update(status="IN_PROGRESS", conclusion=None)
         self.assertEqual(self.queue.advance(self.repository)[first]["status"], "waiting")
+        self.assertEqual(self.selected, {str(UUID(int=1))})
         pull["mergeable"] = "CONFLICTING"
         self.assertEqual(self.queue.advance(self.repository)[first]["status"], "blocked")
+        self.assertEqual(self.selected, {str(UUID(int=1))})
         pull.update(mergeable="MERGEABLE", autoMergeRequest=None)
         checks(pull)[0].update(status="COMPLETED", conclusion="SUCCESS")
         self.assertEqual(self.queue.advance(self.repository)[first]["status"], "blocked")
@@ -172,6 +188,7 @@ class RepositoryQueueTests(unittest.TestCase):
         pull.update(state="MERGED", merged=True)
         self.queue.advance(self.repository)
         self.assertEqual(self.slot()["active_key"], second)
+        self.assertEqual(self.selected, {str(UUID(int=2))})
 
     def test_failed_or_expired_worker_does_not_release_slot_or_allow_takeover(self):
         first, _ = [self.enqueue(self.issue(n)) for n in (1, 2)]
@@ -244,6 +261,7 @@ class RepositoryQueueTests(unittest.TestCase):
         self.queue.advance(self.repository)
         self.assertEqual(self.github.dispatch.call_count, 1)
         self.assertEqual(self.slot()["active_key"], first)
+        self.assertEqual(self.selected, {str(UUID(int=1))})
 
     def test_recheck_and_skip_eligibility_changes_before_dispatch(self):
         for change in (lambda i: i["state"].update(id="backlog"),
@@ -310,6 +328,7 @@ class RepositoryQueueTests(unittest.TestCase):
             list(pool.map(lambda _: self.restart().advance(self.repository), range(24)))
         self.assertEqual(self.github.dispatch.call_count, 2)
         self.assertEqual(self.slot()["active_key"], first)
+        self.assertEqual(self.selected, {str(UUID(int=1))})
         self.start(first)
         self.finish(first)
         self.stop(first)
@@ -369,6 +388,7 @@ class RepositoryQueueTests(unittest.TestCase):
         self.assertEqual(self.github.dispatch.call_count, 2)
         self.assertEqual(self.slot()["active_key"], first)
         self.assertEqual(self.slot("owner/another")["active_key"], second)
+        self.assertEqual(self.selected, {str(UUID(int=1)), str(UUID(int=2))})
         self.github.dispatch_runs.side_effect = lambda route, key: (_ for _ in ()).throw(RequestError()) if key == first else copy.deepcopy(self.remote_runs[key])
         self.start(second)
         self.finish(second)
@@ -376,6 +396,7 @@ class RepositoryQueueTests(unittest.TestCase):
         with self.assertLogs(level="ERROR"):
             self.queue.reconcile()
         self.assertEqual(self.slot("owner/another")["active_key"], "")
+        self.assertEqual(self.selected, {str(UUID(int=1))})
 
     def test_dispatch_crash_or_uncertainty_blocks_until_run_and_pr_are_recovered(self):
         for error in (RuntimeError("dispatcher crash"), DispatchError("timeout", uncertain=True)):
@@ -390,12 +411,14 @@ class RepositoryQueueTests(unittest.TestCase):
                 self.queue = self.restart()
                 self.assertEqual(self.queue.advance(self.repository)[first]["status"], "blocked")
                 self.assertEqual(self.github.dispatch.call_count, 1)
+                self.assertEqual(self.selected, {str(UUID(int=1))})
                 # GitHub eventually reveals a run that merged before persisting its outcome.
                 self.remote_runs[first] = [{"id": 100, "run_attempt": 1, "status": "completed", "conclusion": "failure"}]
                 self.pulls[first] = {**pr(), "state": "MERGED", "merged": True}
                 self.github.dispatch.side_effect = self.dispatch
                 self.queue.advance(self.repository)
                 self.assertEqual(self.slot()["active_key"], second)
+                self.assertEqual(self.selected, {str(UUID(int=2))})
 
     def test_rerun_during_completion_observation_fences_stale_release(self):
         first, _ = [self.enqueue(self.issue(n)) for n in (1, 2)]
@@ -471,11 +494,205 @@ class RepositoryQueueTests(unittest.TestCase):
 
     def test_crash_after_reservation_before_receipt_creation_retries_safely(self):
         first, _ = [self.enqueue(self.issue(n)) for n in (1, 2)]
-        self.queue.reserve(self.queue.table(self.repository))
+        table = self.queue.table(self.repository)
+        with patch.object(self.queue.selection, "sync", side_effect=SystemExit), self.assertRaises(SystemExit):
+            self.queue.reserve(table)
+        self.assertTrue(table.get(first)[0]["selection_pending"])
+        self.assertEqual(self.selected, set())
         self.assertFalse(self.receipts.list())
         self.restart().advance(self.repository)
         self.assertEqual(self.github.dispatch.call_count, 1)
         self.assertEqual(self.slot()["active_key"], first)
+        self.assertEqual(self.selected, {str(UUID(int=1))})
+
+    def test_only_admitted_todo_is_marked_before_dispatch_without_changing_assignees(self):
+        issues = [self.issue(n) for n in (1, 2, 3)]
+        issues[0]["state"]["id"] = "backlog"
+        for issue in issues:
+            issue.update(assignee={"id": "human"}, labels=["bug"])
+        before = copy.deepcopy(issues)
+
+        def dispatch(route, inputs):
+            self.assertEqual(self.selected, {issues[1]["id"]})
+            self.assertFalse(self.runs.list())  # No worker has reached start.
+            self.assertFalse(self.remote_runs)
+            self.dispatch(route, inputs)
+
+        self.github.dispatch.side_effect = dispatch
+        self.dispatcher.process({"type": "Project", "id": PROJECT})
+        self.assertEqual(self.selected, {issues[1]["id"]})
+        self.assertEqual(issues, before)
+        self.linear.set_state.assert_not_called()
+        self.linear.set_stage.assert_not_called()
+
+    def test_label_outages_retry_after_restarts_without_releasing_or_redispatching(self):
+        first, second = [self.enqueue(self.issue(n)) for n in (1, 2)]
+        table = self.queue.table(self.repository)
+        self.linear.set_selected.side_effect = RequestError()
+        with self.assertLogs(level="ERROR"):
+            self.queue.advance(self.repository)
+        self.assertEqual(self.github.dispatch.call_count, 1)
+        self.assertEqual(self.slot()["active_key"], first)
+        self.assertTrue(table.get(first)[0]["selection_pending"])
+        self.linear.set_selected.side_effect = self.select
+        self.restart().reconcile()
+        self.assertEqual(self.selected, {str(UUID(int=1))})
+        self.assertFalse(table.get(first)[0]["selection_pending"])
+        self.assertEqual(self.github.dispatch.call_count, 1)
+
+        self.start(first)
+        self.finish(first)
+        self.stop(first)
+        self.linear.set_selected.side_effect = RequestError()
+        with self.assertLogs(level="ERROR"):
+            self.restart().advance(self.repository)
+        self.assertEqual(self.slot()["active_key"], second)
+        self.assertEqual(self.github.dispatch.call_count, 2)
+        self.assertTrue(table.get(first)[0]["selection_pending"])
+        self.assertTrue(table.get(second)[0]["selection_pending"])
+        self.linear.set_selected.side_effect = self.select
+        self.restart().reconcile()
+        self.assertEqual(self.selected, {str(UUID(int=2))})
+        self.assertEqual(self.github.dispatch.call_count, 2)
+
+    def test_failed_removal_retries_with_empty_slot_and_removed_project_mapping(self):
+        key = self.enqueue(self.issue(1))
+        self.queue.advance(self.repository)
+        self.start(key)
+        self.finish(key)
+        self.stop(key)
+        self.linear.set_selected.side_effect = RequestError()
+        with self.assertLogs(level="ERROR"):
+            self.queue.advance(self.repository)
+        self.assertEqual(self.slot()["active_key"], "")
+        self.assertTrue(self.tables[self.repository.lower()].get(key)[0]["selection_pending"])
+        del self.registry.routes[PROJECT]
+        self.linear.set_selected.side_effect = self.select
+        self.restart().reconcile()
+        self.assertEqual(self.selected, set())
+        self.assertFalse(self.tables[self.repository.lower()].get(key)[0]["selection_pending"])
+        self.assertEqual(self.github.dispatch.call_count, 1)
+
+    def test_delayed_selection_add_is_repaired_after_ownership_transfers(self):
+        first, second = [self.enqueue(self.issue(n)) for n in (1, 2)]
+        self.queue.advance(self.repository)
+        self.start(first)
+        self.finish(first)
+        self.stop(first)
+        table = self.queue.table(self.repository)
+        started, resume = threading.Event(), threading.Event()
+        delayed = False
+
+        def update(issue_id, enabled):
+            nonlocal delayed
+            if issue_id == str(UUID(int=1)) and enabled and not delayed:
+                delayed = True
+                started.set()
+                self.assertTrue(resume.wait(timeout=5))
+            self.select(issue_id, enabled)
+
+        self.linear.set_selected.side_effect = update
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(self.queue.selection.sync, table, first, refresh=True)
+            try:
+                self.assertTrue(started.wait(timeout=5))
+                self.queue.advance(self.repository)
+                self.assertEqual(self.slot()["active_key"], second)
+                self.assertEqual(self.selected, {str(UUID(int=2))})
+            finally:
+                resume.set()
+            future.result(timeout=5)
+        self.assertEqual(self.selected, {str(UUID(int=2))})
+        self.linear.set_stage.assert_not_called()
+
+    def test_timer_repairs_late_ambiguous_write_even_if_reporting_process_was_lost(self):
+        for error in (RequestError(), SystemExit()):
+            with self.subTest(error=type(error).__name__):
+                self.setUp()
+                first = self.enqueue(self.issue(1))
+                self.queue.advance(self.repository)
+                self.start(first)
+                self.finish(first)
+                self.stop(first)
+                table = self.queue.table(self.repository)
+                started, resume = threading.Event(), threading.Event()
+                delayed = False
+
+                def update(issue_id, enabled):
+                    nonlocal delayed
+                    if enabled and not delayed:
+                        delayed = True
+                        started.set()
+                        self.assertTrue(resume.wait(timeout=5))
+                        self.select(issue_id, enabled)
+                        raise error
+                    self.select(issue_id, enabled)
+
+                self.linear.set_selected.side_effect = update
+                with patch("selection_reporting.logging.error") as log, ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(self.queue.selection.sync, table, first, refresh=True)
+                    try:
+                        self.assertTrue(started.wait(timeout=5))
+                        self.queue.advance(self.repository)
+                        self.assertEqual(self.selected, set())
+                        self.assertFalse(table.get(first)[0]["selection_pending"])
+                    finally:
+                        resume.set()
+                    if isinstance(error, Exception):
+                        future.result(timeout=5)
+                        log.assert_called_once()
+                        self.assertTrue(table.get(first)[0]["selection_pending"])
+                    else:
+                        with self.assertRaises(SystemExit):
+                            future.result(timeout=5)
+                        self.assertFalse(table.get(first)[0]["selection_pending"])
+                self.assertEqual(self.selected, {str(UUID(int=1))})
+                self.linear.set_selected.side_effect = self.select
+                self.restart().reconcile()
+                self.assertEqual(self.selected, set())
+                self.assertEqual(self.github.dispatch.call_count, 1)
+
+    def test_delayed_removal_preserves_same_issue_readmitted_through_another_project_or_repository(self):
+        for repository in (self.repository, "owner/another"):
+            with self.subTest(repository=repository):
+                self.setUp()
+                issue = self.issue(1)
+                first = self.enqueue(issue)
+                self.queue.advance(self.repository)
+                self.start(first)
+                self.finish(first)
+                self.stop(first)
+                self.queue.advance(self.repository)
+                table = self.queue.table(self.repository)
+                started, resume = threading.Event(), threading.Event()
+                delayed = False
+
+                def update(issue_id, enabled):
+                    nonlocal delayed
+                    if not enabled and not delayed:
+                        delayed = True
+                        started.set()
+                        self.assertTrue(resume.wait(timeout=5))
+                    self.select(issue_id, enabled)
+
+                self.linear.set_selected.side_effect = update
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(self.queue.selection.sync, table, first, refresh=True)
+                    try:
+                        self.assertTrue(started.wait(timeout=5))
+                        other = str(UUID(int=99))
+                        self.registry.routes[other] = replace(self.route, project_id=other, repository=repository)
+                        issue["project"]["id"] = other
+                        second = self.enqueue(issue)
+                        self.queue.advance(repository)
+                        self.assertEqual(self.slot(repository)["active_key"], second)
+                        self.assertEqual(self.selected, {issue["id"]})
+                    finally:
+                        resume.set()
+                    future.result(timeout=5)
+                self.assertEqual(self.selected, {issue["id"]})
+                self.restart().reconcile()
+                self.assertEqual(self.selected, {issue["id"]})
 
     def test_competing_worker_starts_and_manual_runs_are_fenced(self):
         first, _ = [self.enqueue(self.issue(n)) for n in (1, 2)]

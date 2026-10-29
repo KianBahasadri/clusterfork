@@ -14,6 +14,7 @@ from functools import lru_cache
 
 from dispatch_core import DispatchError, Route, eligibility
 from linear_sync import comment_id, pull_outcome
+from selection_reporting import SelectionReporter, selection_changed
 from worker_core import WorkerError
 
 
@@ -39,14 +40,22 @@ class RepositoryQueue:
         self.tables = lru_cache(maxsize=None)(tables)
         self.linear, self.github, self.clock = linear, github, clock
         self.readiness = readiness
+        self.selection = SelectionReporter(linear, self.selection_tables)
         self.control = control
         self.readiness.admitted = self.is_admitted
 
     def is_admitted(self, issue, route):
         if self.control and self.control.is_paused():
             return False
-        state, _ = self.table(route.repository).get("slot")
-        return state["active_key"] == dispatch_key(self.registry, route, issue)
+        table = self.table(route.repository)
+        state, _ = table.get("slot")
+        key = dispatch_key(self.registry, route, issue)
+        if state["active_key"] != key:
+            return False
+        # Readiness timer retries can dispatch without calling queue.advance.
+        # Adopt legacy slots and retry their marker before that dispatch too.
+        state, _ = self.reserve(table)
+        return state["active_key"] == key
 
     def table(self, repository):
         # GitHub names are case insensitive, including across project mappings.
@@ -80,6 +89,9 @@ class RepositoryQueue:
             sequence = state["sequence"] + 1
             row = {"RowKey": key, "sequence": sequence, "status": "submitted" if submitted else "queued",
                    **{k: fields[k] for k in ("issue_id", "identifier", "repository", "project_id")}}
+            if existing:
+                # Rejoining a skipped task must not lose a pending label removal.
+                row.update({k: v for k, v in existing.items() if k.startswith("selection_")})
             state["sequence"] = sequence
             try:
                 table.transaction([(state, etag), (row, version)])
@@ -110,15 +122,24 @@ class RepositoryQueue:
 
     def reserve(self, table):
         state, etag = table.get("slot")
-        if state["active_key"]:
-            return state, etag
-        head = self.head(table)
-        if not head:
-            return state, etag
-        row, version = table.get(head["RowKey"])
-        row["status"] = "active"
-        state.update(active_key=row["RowKey"], owner="")
-        table.transaction([(state, etag), (row, version)])
+        if not state["active_key"]:
+            head = self.head(table)
+            if not head:
+                return state, etag
+            row, version = table.get(head["RowKey"])
+            row["status"] = "active"
+            selection_changed(row)
+            state.update(active_key=row["RowKey"], owner="")
+            table.transaction([(state, etag), (row, version)])
+        else:
+            row, version = table.get(state["active_key"])
+            if not row.get("selection_version"):
+                # Adopt slots created by a broker predating selection reporting.
+                selection_changed(row)
+                table.transaction([(state, etag), (row, version)])
+        # Report before readiness or development dispatch, including recovery
+        # after a reservation interrupted before its dispatch receipt existed.
+        self.selection.sync(table, state["active_key"])
         return table.get("slot")
 
     def assert_worker(self, repository, key, owner):
@@ -227,8 +248,10 @@ class RepositoryQueue:
             return False  # A read-only reviewer also owns the slot until its job stops.
         current, version = table.get(row["RowKey"])
         current.update(status=status, reason=reason)
+        selection_changed(current)
         state.update(active_key="", owner="")
         table.transaction([(state, etag), (current, version)])
+        self.selection.sync(table, row["RowKey"])
         return True
 
     def dispatch(self, table, state, etag, row, route, *, retry=False):
@@ -293,17 +316,18 @@ class RepositoryQueue:
         except Exception:
             logging.error("Repository queue explanation deferred for %s", row["RowKey"])
 
-    def advance(self, repository):
+    def advance(self, repository, *, refresh_selection=False):
         for _ in range(32):
             try:
-                return self._advance(repository)
+                return self._advance(repository, refresh_selection=refresh_selection)
             except WorkerError as exc:
                 if exc.status != 409:
                     raise
         raise WorkerError("Repository queue changed concurrently; retry reconciliation")
 
-    def _advance(self, repository):
+    def _advance(self, repository, *, refresh_selection=False):
         table = self.table(repository)
+        self.selection.reconcile(table, refresh=refresh_selection)
         results = {}
         if self.control and self.control.is_paused():
             reason = "Azure deployment in progress; new workers are paused."
@@ -366,9 +390,19 @@ class RepositoryQueue:
                                                 "reason": f"Waiting for {row['identifier']}: {reason}"}
             return results
 
+    def repositories(self):
+        repositories = {r.repository.lower() for r in self.registry.routes.values()}
+        repositories.update(r["repository"].lower() for r in self.receipts.list())
+        return sorted(repositories)
+
+    def selection_tables(self):
+        # Read existing slots without initializing/importing other repositories.
+        for repository in self.repositories():
+            yield self.tables(repository)
+
     def reconcile(self):
-        for repository in sorted({r.repository.lower() for r in self.registry.routes.values()}):
+        for repository in self.repositories():
             try:
-                self.advance(repository)
+                self.advance(repository, refresh_selection=True)
             except Exception:
                 logging.error("Repository queue reconciliation deferred for %s", repository)

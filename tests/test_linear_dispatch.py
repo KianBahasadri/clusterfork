@@ -70,6 +70,9 @@ class Tracker:
     def status_comment(self, *args):
         pass
 
+    def set_selected(self, issue_id, enabled):
+        pass
+
 
 class Workflows:
     def __init__(self):

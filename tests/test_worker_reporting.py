@@ -19,7 +19,7 @@ from dispatch_clients import Linear, RequestError
 from linear_sync import comment_id
 from readiness_policy import PROTOCOL
 from worker_core import Accounts, WorkerError, WorkerService
-from worker_reporting import STAGE_LABELS, attempt_comment, usage_report, validate_usage
+from worker_reporting import SELECTION_LABEL, STAGE_LABELS, attempt_comment, usage_report, validate_usage
 import test_linear_sync as lifecycle
 from test_remote_worker import KEY, NOW, ISSUE, MemoryTable, auth, claims
 
@@ -168,6 +168,7 @@ class LabelAdapterTests(unittest.TestCase):
 
     def test_stage_updates_only_owned_labels_and_reuses_team_label(self):
         client = self.client(self.label_issue([{"id": "user", "name": "bug"},
+                                              {"id": "selected", "name": SELECTION_LABEL},
                                               {"id": "old", "name": STAGE_LABELS["initializing"]}]),
                              {"issueLabels": {"nodes": [{"id": "coding"}], "pageInfo": {"hasNextPage": False}}},
                              {"issueAddLabel": {"success": True}}, {"issueRemoveLabel": {"success": True}})
@@ -177,13 +178,46 @@ class LabelAdapterTests(unittest.TestCase):
         self.assertIn("team: {id: {eq: $team}}", client.query.call_args_list[1].args[0])
 
     def test_stage_cleanup_and_repeated_stage_do_not_replace_other_labels(self):
-        labels = [{"id": "user", "name": "clusterfork: user label"}, {"id": "coding", "name": STAGE_LABELS["coding"]}]
+        labels = [{"id": "user", "name": "clusterfork: user label"},
+                  {"id": "selected", "name": SELECTION_LABEL}, {"id": "coding", "name": STAGE_LABELS["coding"]}]
         client = self.client(self.label_issue(labels), self.label_issue(labels), {"issueRemoveLabel": {"success": True}})
         client.set_stage(ISSUE, "coding")
         self.assertEqual(client.query.call_count, 1)
         client.set_stage(ISSUE, None)
         self.assertEqual(client.query.call_count, 3)
         self.assertEqual(client.query.call_args.args[1], {"id": ISSUE, "label": "coding"})
+
+    def test_selection_add_and_remove_preserve_stage_labels_and_assignments(self):
+        labels = [{"id": "user", "name": "bug"}, {"id": "coding", "name": STAGE_LABELS["coding"]}]
+        client = self.client(self.label_issue(labels),
+                             {"issueLabels": {"nodes": [{"id": "selected"}], "pageInfo": {"hasNextPage": False}}},
+                             {"issueAddLabel": {"success": True}},
+                             self.label_issue(labels + [{"id": "selected", "name": SELECTION_LABEL}]),
+                             {"issueRemoveLabel": {"success": True}})
+        client.set_selected(ISSUE, True)
+        client.set_selected(ISSUE, False)
+        calls = client.query.call_args_list
+        self.assertEqual(calls[2].args[1], {"id": ISSUE, "label": "selected"})
+        self.assertEqual(calls[4].args[1], {"id": ISSUE, "label": "selected"})
+        self.assertIn("issueAddLabel", calls[2].args[0])
+        self.assertIn("issueRemoveLabel", calls[4].args[0])
+        self.assertEqual(calls[1].args[1]["name"], SELECTION_LABEL)
+        self.assertTrue(all("issueUpdate" not in call.args[0] for call in calls))
+
+    def test_selection_repeated_updates_and_missing_labels_are_idempotent(self):
+        client = self.client(self.label_issue([{"id": "selected", "name": SELECTION_LABEL}]), self.label_issue([]))
+        client.set_selected(ISSUE, True)
+        client.set_selected(ISSUE, False)
+        self.assertEqual(client.query.call_count, 2)
+
+    def test_selection_incomplete_labels_and_failed_mutations_are_recoverable(self):
+        client = self.client(self.label_issue([], more=True))
+        with self.assertRaises(ValueError):
+            client.set_selected(ISSUE, True)
+        client = self.client(self.label_issue([{"id": "selected", "name": SELECTION_LABEL}]),
+                             {"issueRemoveLabel": {"success": False}})
+        with self.assertRaises(RequestError):
+            client.set_selected(ISSUE, False)
 
     def test_concurrent_or_ambiguous_label_creation_recovers_the_same_label(self):
         client = self.client({"issueLabels": {"nodes": [], "pageInfo": {"hasNextPage": False}}},
