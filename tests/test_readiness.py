@@ -165,6 +165,18 @@ class ReadinessTests(unittest.TestCase):
         self.stop(key)
         return key, config
 
+    def test_failed_reviewer_diagnostic_is_saved_and_explained_without_admitting_coding(self):
+        key, _ = self.begin()
+        result = self.call(key, "finish", status="failed", failure={
+            "operation": "broker/checkout", "kind": "timeout", "phase": "readiness",
+            "timeout_seconds": 20, "elapsed_ms": 20000, "message": "private text"})
+        row, _ = self.table.get(key)
+        self.assertEqual(result["status"], "readiness_retry")
+        self.assertNotIn("private text", row["failure"] + self.review_comment(key))
+        self.assertIn("readiness review", self.review_comment(key))
+        self.assertIn("broker/checkout", self.review_comment(key))
+        self.assertFalse(self.runs.list())
+
     def test_short_precise_issue_requires_review_before_coding_or_publication(self):
         self.queue.enqueue(self.issue, self.route)
         review, config = self.begin()

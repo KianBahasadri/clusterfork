@@ -13,6 +13,7 @@ from uuid import UUID
 
 from dispatch_core import DispatchError
 from worker_reporting import QUEUED_LABEL, SELECTION_LABEL, STAGE_LABELS
+from diagnostics import failure, http_operation, operation
 
 
 class RequestError(RuntimeError):
@@ -29,14 +30,15 @@ def request_json(url, *, token, method="GET", data=None):
         headers["X-GitHub-Api-Version"] = "2022-11-28"
     body = None if data is None else json.dumps(data).encode()
     request = Request(url, data=body, headers=headers, method=method)
-    try:
-        with urlopen(request, timeout=20) as response:
-            raw = response.read()
-            return json.loads(raw) if raw else None
-    except HTTPError as exc:
-        raise RequestError(exc.code) from None
-    except (URLError, OSError, ValueError):
-        raise RequestError() from None
+    with operation(http_operation(url, data), timeout_seconds=20):
+        try:
+            with urlopen(request, timeout=20) as response:
+                raw = response.read()
+                return json.loads(raw) if raw else None
+        except (HTTPError, URLError, OSError, ValueError) as exc:
+            error = RequestError(exc.code if isinstance(exc, HTTPError) else None)
+            error.clusterfork_failure = failure(exc, http_operation(url, data))
+            raise error from None
 
 
 ISSUE_FIELDS = """

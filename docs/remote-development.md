@@ -10,6 +10,8 @@ an installation of upstream Symphony.
 
 [Setup](remote-development-setup.md) covers provisioning and enrollment;
 [remote accounts](remote-development-accounts.md) covers credential ownership.
+[Diagnostics](remote-development-observability.md) covers correlated operational
+logs, durable failure explanations, and Azure monitoring.
 [Dated validation records](archive/remote-development-validation.md) retain the
 live routing and merge evidence without treating it as current health.
 

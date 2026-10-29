@@ -20,6 +20,7 @@ from readiness import ReadinessGate
 from deployment_control import DeploymentControl, build_metadata
 from steering import Steering
 from routing_timing import record, timestamps
+from diagnostics import ACTIONS, context, failure, observed, operation, record as diagnostic_record
 
 app = func.FunctionApp()
 QUEUE = "clusterfork-events"
@@ -86,15 +87,21 @@ def worker(req: func.HttpRequest) -> func.HttpResponse:
         data = json.loads(req.get_body())
         if not isinstance(data, dict):
             raise WorkerError("Invalid worker request", 400)
-        result = worker_service().handle(req.route_params["action"], claims, data)
+        action = req.route_params["action"]
+        with context(dispatch_key=data.get("dispatch_key"), run_id=claims.get("run_id"),
+                     run_attempt=claims.get("run_attempt"), request_id=data.get("request_id"), stage=data.get("stage")):
+            with operation(f"broker/{action}" if action in ACTIONS else "azure/worker",
+                           quiet=action in {"heartbeat", "save", "instructions"}):
+                result = worker_service().handle(action, claims, data)
         return func.HttpResponse(json.dumps(result), mimetype="application/json",
                                  headers={"Cache-Control": "no-store"})
     except WorkerError as exc:
+        diagnostic_record("broker_rejected", level=logging.WARNING, **failure(exc, "azure/worker"))
         return func.HttpResponse(str(exc), status_code=exc.status)
     except (ValueError, TypeError, KeyError):
         return func.HttpResponse("Invalid worker request", status_code=400)
-    except Exception:
-        logging.error("Worker broker operation failed")
+    except Exception as exc:
+        diagnostic_record("broker_unavailable", level=logging.ERROR, **failure(exc, "azure/worker"))
         return func.HttpResponse("Worker broker unavailable", status_code=503)
 
 
@@ -104,11 +111,13 @@ def missing_config():
 
 
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@observed("azure/health")
 def health(req: func.HttpRequest) -> func.HttpResponse:
     missing = missing_config()
     mode = "codex-worker" if any(route.workflow == "clusterfork-worker.yml" for route in registry().routes.values()) else "routing-pilot"
     result = {"mode": mode, "missing": missing, "serial_admission": True,
-              "projects": len(registry().routes)}
+              "projects": len(registry().routes), "diagnostics_version": 1,
+              "monitoring_enabled": bool(os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING"))}
     try:
         result.update(deployment=build_metadata(),
                       deployment_paused=worker_service().queue.control.is_paused() if not missing else None)
@@ -121,6 +130,7 @@ def health(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.route(route="linear", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+@observed("azure/webhook")
 def linear_webhook(req: func.HttpRequest) -> func.HttpResponse:
     received_at = time.time()
     try:
@@ -141,6 +151,7 @@ def linear_webhook(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.queue_trigger(arg_name="message", queue_name=QUEUE, connection="AzureWebJobsStorage")
+@observed("azure/route_event")
 def route_event(message: func.QueueMessage):
     event = json.loads(message.get_body())
     event["processing_at"] = time.time()
@@ -154,6 +165,7 @@ def route_event(message: func.QueueMessage):
 
 @app.timer_trigger(arg_name="timer", schedule="0 */15 * * * *", run_on_startup=False,
                    use_monitor=True)
+@observed("azure/reconcile")
 def reconcile(timer: func.TimerRequest):
     # One shared reconciliation timer catches missed webhooks and newly enrolled
     # projects. Durable receipts make repeat scans harmless for this pilot.

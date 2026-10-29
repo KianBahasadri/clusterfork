@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "functionAppName": {"type": "string"},
+    "location": {"type": "string", "defaultValue": "eastus"},
+    "dailyQuotaGb": {"type": "string", "defaultValue": "0.1"}
+  },
+  "variables": {
+    "workspaceName": "[concat(parameters('functionAppName'), '-logs')]",
+    "insightsName": "[concat(parameters('functionAppName'), '-insights')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('workspaceName')]",
+      "location": "[parameters('location')]",
+      "tags": {"application": "clusterfork"},
+      "properties": {
+        "sku": {"name": "PerGB2018"},
+        "retentionInDays": 30,
+        "workspaceCapping": {"dailyQuotaGb": "[json(parameters('dailyQuotaGb'))]"}
+      }
+    },
+    {
+      "type": "Microsoft.Insights/components",
+      "apiVersion": "2020-02-02",
+      "name": "[variables('insightsName')]",
+      "location": "[parameters('location')]",
+      "kind": "web",
+      "tags": {
+        "application": "clusterfork",
+        "[concat('hidden-link:', resourceId('Microsoft.Web/sites', parameters('functionAppName')))]": "Resource"
+      },
+      "dependsOn": ["[resourceId('Microsoft.OperationalInsights/workspaces', variables('workspaceName'))]"],
+      "properties": {
+        "Application_Type": "web",
+        "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('workspaceName'))]",
+        "RetentionInDays": 30,
+        "IngestionMode": "LogAnalytics",
+        "DisableIpMasking": false,
+        "SamplingPercentage": 100
+      }
+    }
+  ]
+}
