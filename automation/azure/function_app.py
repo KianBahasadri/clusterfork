@@ -1,5 +1,6 @@
 """Shared Linear webhook receiver and queued GitHub routing pilot."""
 
+import hashlib
 import json
 import logging
 import os
@@ -8,11 +9,12 @@ from pathlib import Path
 
 import azure.functions as func
 
-from dispatch_clients import AzureReceipts, GitHub, Linear
+from dispatch_clients import GitHub, Linear
 from dispatch_core import Dispatcher, Registry, WebhookError, webhook_event
 from worker_core import Accounts, WorkerError, WorkerService
 from worker_store import AzureTable, verify_oidc
 from linear_sync import LinearSync
+from repository_queue import RepositoryQueue
 
 app = func.FunctionApp()
 QUEUE = "clusterfork-events"
@@ -38,9 +40,8 @@ def enqueue(event):
 
 
 def dispatcher():
-    return Dispatcher(registry(), Linear(os.environ["LINEAR_API_KEY"]),
-                      GitHub(os.environ["GITHUB_APP_ID"], os.environ["GITHUB_APP_PRIVATE_KEY"]),
-                      AzureReceipts(os.environ["AzureWebJobsStorage"]))
+    service = worker_service()
+    return Dispatcher(registry(), service.linear, service.queue)
 
 
 @lru_cache(maxsize=1)
@@ -52,10 +53,14 @@ def worker_service():
     github = GitHub(os.environ["GITHUB_APP_ID"], os.environ["GITHUB_APP_PRIVATE_KEY"])
     sync = LinearSync(registry(), receipts, runs,
                       AzureTable(connection, "ClusterforkLinearSync", "linear"), linear, github)
+    queue = RepositoryQueue(registry(), receipts, runs,
+                            lambda repository: AzureTable(connection, "ClusterforkRepositoryQueue",
+                                                          hashlib.sha256(repository.encode()).hexdigest()),
+                            linear, github)
     return WorkerService(
         registry(), receipts, runs,
         Accounts(AzureTable(connection, "ClusterforkAccounts", "codex")),
-        linear, github, sync=sync)
+        linear, github, queue, sync=sync)
 
 
 @app.route(route="worker/{action}", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
@@ -125,5 +130,6 @@ def reconcile(timer: func.TimerRequest):
     if missing_config():
         return
     worker_service().sync.reconcile()
+    worker_service().queue.reconcile()
     for project_id in registry().routes:
         enqueue({"type": "Project", "id": project_id})

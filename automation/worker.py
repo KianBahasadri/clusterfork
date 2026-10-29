@@ -324,13 +324,16 @@ def execute(broker, config, heartbeat, directory):
         request_auto_merge(config, token, existing, broker.key, branch)
         return "completed", existing
     with git_auth(token, directory) as env:
+        # workflow_dispatch and manual reruns can check out an old SHA. Fetch
+        # after repository admission so preceding merged work is always present.
+        command(["git", "fetch", "origin", f"+refs/heads/{config['ref']}:refs/remotes/origin/{config['ref']}"], env=env)
         # Recover a branch pushed by a previous attempt that stopped before PR creation.
         refs = command(["git", "ls-remote", "--heads", "origin", f"refs/heads/{branch}"], env=env)
         if refs.strip():
             command(["git", "fetch", "origin", f"refs/heads/{branch}"], env=env)
             command(["git", "checkout", "-b", branch, "FETCH_HEAD"])
         else:
-            command(["git", "checkout", "-b", branch])
+            command(["git", "checkout", "-b", branch, f"origin/{config['ref']}"])
     original = command(["git", "rev-parse", "HEAD"]).strip()
     with run_codex(broker, config, heartbeat, directory) as summary:
         if summary is None:

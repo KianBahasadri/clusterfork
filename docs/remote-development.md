@@ -20,6 +20,7 @@ live routing and merge evidence without treating it as current health.
 | `dispatch_core.py`, `dispatch_clients.py` in that directory | Current Linear eligibility, GitHub App dispatch, and durable receipts |
 | `worker_core.py`, `worker_store.py`, `quota_selection.py` | Workflow authorization, account leases, fenced credentials, and quota selection |
 | `linear_sync.py` | Linear lifecycle and PR/CI reconciliation |
+| `repository_queue.py` | Durable repository FIFO, admission, worker fencing, and queue advancement |
 | `automation/worker.py`, `automation/codex_runtime.py` | Account inspection, Codex execution, validation, publication, and merge requests |
 | `automation/azure/projects.json` | Project mappings, states, model/effort, validation commands, and merge policy |
 | `.github/workflows/clusterfork-worker.yml` | Pinned Codex CLI on `ubuntu-24.04`, six-hour job, read/OIDC permissions |
@@ -37,6 +38,63 @@ does not cancel submitted jobs. See
 The shared timer reconciles worker/PR status and scans mapped projects every
 15 minutes. Project labels are fetched once per issue page to stay within
 Linear's query-complexity limit.
+
+## Repository queues
+
+Eligible Todo issues enter a durable FIFO per GitHub repository. Multiple Linear
+projects mapped to the same repository share its queue; repository names are
+case insensitive. Different repositories advance independently. Queue order is
+the sequence of first eligible observations committed to storage. A project scan
+inserts its entire batch before dispatch, ordered by issue creation time and UUID.
+Later deliveries and scans retain existing positions. This does not reconstruct
+the historical order of Todo transitions missed before discovery.
+
+Azure Table `ClusterforkRepositoryQueue` uses a partition derived from the
+lowercase repository name. Transactions assign the next sequence and insert its
+entry together, and atomically reserve the head and repository slot. Waiting
+issues remain Todo without a runner or account. Stable queue comments explain
+which issue they follow and whether it is running, waiting for CI/quota, blocked,
+or awaiting confirmation of an ambiguous dispatch.
+
+The repository slot has **no expiry**. It spans dispatch, coding, validation,
+publication, pending CI, review, and merging. A finish callback or auto-merge
+request does not release it. The shared 15-minute timer advances automatically
+after GitHub confirms all matching runs' latest attempts have stopped and the
+PR has merged, or a successful worker validated that no changes were needed.
+The recorded worker identity is checked directly as well, because run listings
+can lag. Open PRs hold the slot even with manual merging enabled. Worker starts
+and completion observations fence each other using the slot's ETag; stale,
+duplicate, or manual reruns cannot obtain account/publication access after their
+task loses admission. Repository admission is enforced by the broker; the
+existing issue-scoped Actions concurrency only guards duplicate issue jobs.
+
+Failures, missing outcomes, closed unmerged PRs, and merge/CI blockers pause the
+repository. Resolve the PR or manually rerun the **same** admitted task to repair
+it. To abandon it, cancel the Linear issue, stop/cancel its GitHub run, and close
+or merge any remaining PR. Reconciliation verifies those GitHub facts before
+releasing the slot. Changing Linear status to Done, archiving, or removing
+enrollment alone does not abandon active work. An expired worker/account lease
+never proves that the worker stopped.
+
+The head retains its position during quota waits and retries after its existing
+15-minute delay, once its prior GitHub run has stopped. Before every dispatch,
+the dispatcher fetches current enrollment, project, archive, cancellation, and
+ready-state data. Ineligible queued entries are skipped; an undispatched issue
+that later becomes eligible rejoins at the tail. Before coding a newly admitted
+task, the worker fetches the latest target branch and creates its branch from
+that revision, including the preceding task's merged changes.
+
+Dispatch receipts retain their original workflow and target branch so active
+work can still be checked after its project mapping changes or is removed.
+Undispatched entries with removed/remapped destinations are skipped. Legacy
+receipts without those fields require restoring their mapping for verification.
+
+Restart recovery reuses queue entries, slots, and dispatch receipts. Pre-queue
+receipts are imported before new Todo work is admitted. A reservation interrupted
+before receipt creation can resume; a receipt left `dispatching` or `uncertain`
+is never blindly resent. Reconciliation discovers its run and deterministic PR
+branch. If no run can be confirmed, that repository stays paused for investigation
+or explicit cancellation. Incomplete GitHub responses also keep the slot held.
 
 ## Agent profiles
 
@@ -149,7 +207,8 @@ blocker clears, then Done after merging. Unknown/incomplete GitHub responses lea
 the previous state unchanged. Archived issues/projects, removed enrollment labels,
 project moves, and manually completed/canceled issues are respected. Publication
 accepts the worker's In Progress state while preserving other eligibility checks.
-A manual GitHub job rerun can resume Blocked work; status updates alone never
+A manual GitHub job rerun can resume its still-admitted Blocked work after the
+previous worker stops; status updates alone never
 reset the completed dispatch receipt or automatically rerun a failed agent.
 
 ## Retries and troubleshooting
@@ -175,13 +234,15 @@ Workflow-file edits are refused because the App has no Workflows permission.
 Durable agent-session resume and automatic retries after a mid-task usage limit
 are not implemented. Linear credentials stay in Azure and are not sent to the agent.
 
-Azure Table `ClusterforkDispatches` records `dispatching`, `dispatched`, or
+Azure Table `ClusterforkDispatches` records `dispatching`, `dispatched`, `rejected`, or
 `uncertain`. `dispatched` means GitHub accepted the request; verify actual runner
 success in Actions. Atomic receipt creation prevents concurrent delivery duplicates.
-Definite GitHub rejections release the receipt so queue retries can recover. A
+Definite GitHub rejections record `rejected` and retry the same queue head after
+at least 60 seconds, through a later event or timer scan. A
 timeout/server error may have occurred after GitHub accepted a request: that receipt
-is held as `uncertain`, and a crash may leave `dispatching`. Check Actions before
-manually removing such a receipt in Azure Storage Explorer. This prioritizes avoiding
+is held as `uncertain`, and a crash may leave `dispatching`. The repository queue
+keeps the slot while reconciling GitHub; cancel and resolve the task as described
+above to abandon it. Do not remove a receipt to bypass admission. This prioritizes avoiding
 duplicates over automatically retrying an ambiguous request. It does not claim
 exactly-once execution. Inspect `clusterfork-events-poison` after repeated failures.
 

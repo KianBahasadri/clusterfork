@@ -15,7 +15,7 @@ from dispatch_clients import GitHub, Linear, RequestError
 from dispatch_core import Registry, eligibility
 from linear_sync import LinearSync, pull_outcome
 from worker_core import Accounts, WorkerError, WorkerService
-from test_remote_worker import KEY, NOW, PROJECT, ISSUE, MemoryTable, claims, receipt
+from test_remote_worker import KEY, NOW, PROJECT, ISSUE, MemoryTable, claims, receipt, repository_queue
 
 
 def pr():
@@ -49,6 +49,7 @@ class LifecycleTests(unittest.TestCase):
         self.linear.set_state.side_effect = lambda _, state: self.issue.update(state={"id": state})
         self.github = Mock(spec=GitHub)
         self.github.installation_token.return_value = "temporary-token"
+        self.github.worker_result.return_value = {"status": "completed"}
         self.pull = pr()
         self.github.worker_pull.side_effect = lambda *args: copy.deepcopy(self.pull)
         self.receipts, self.runs, self.notes = MemoryTable(), MemoryTable(), MemoryTable()
@@ -58,6 +59,7 @@ class LifecycleTests(unittest.TestCase):
         self.runs.create(self.run)
         self.sync = LinearSync(self.registry, self.receipts, self.runs, self.notes,
                                self.linear, self.github, clock=lambda: NOW)
+        self.queue = repository_queue(self.registry, self.receipts, self.runs, self.linear, self.github)
 
     def update_run(self, **fields):
         row, etag = self.runs.get(KEY)
@@ -204,8 +206,9 @@ class LifecycleTests(unittest.TestCase):
     def test_started_worker_can_publish_after_linear_moves_to_in_progress(self):
         self.runs = MemoryTable()
         self.sync.runs = self.runs
+        self.queue.runs = self.runs
         service = WorkerService(self.registry, self.receipts, self.runs, Accounts(MemoryTable()),
-                                self.linear, self.github, clock=lambda: NOW, sync=self.sync)
+                                self.linear, self.github, self.queue, clock=lambda: NOW, sync=self.sync)
         service.handle("start", claims(), {"dispatch_key": KEY})
         self.assertEqual(self.issue["state"]["id"], self.states.in_progress)
         self.assertEqual(eligibility(self.issue, self.registry)[1], "not_ready")
@@ -218,7 +221,7 @@ class LifecycleTests(unittest.TestCase):
         self.update_run(status="failed", pull_request="")
         self.issue["state"]["id"] = self.states.blocked
         service = WorkerService(self.registry, self.receipts, self.runs, Accounts(MemoryTable()),
-                                self.linear, self.github, clock=lambda: NOW, sync=self.sync)
+                                self.linear, self.github, self.queue, clock=lambda: NOW, sync=self.sync)
         service.handle("start", {**claims(), "run_attempt": "2"}, {"dispatch_key": KEY})
         self.assertEqual(self.issue["state"]["id"], self.states.in_progress)
         self.issue["state"]["id"] = "canceled"
@@ -228,7 +231,8 @@ class LifecycleTests(unittest.TestCase):
     def test_tracker_failure_does_not_lose_the_worker_result(self):
         self.update_run(status="running", lease_until=NOW+120)
         service = WorkerService(self.registry, self.receipts, self.runs, Accounts(MemoryTable()),
-                                self.linear, self.github, clock=lambda: NOW, sync=self.sync)
+                                self.linear, self.github, self.queue, clock=lambda: NOW, sync=self.sync)
+        self.queue.start_worker(self.route.repository, KEY, "123:1")
         self.linear.issue.side_effect = RequestError()
         with self.assertLogs(level="ERROR"):
             service.handle("finish", claims(), {"dispatch_key": KEY, "status": "failed"})
@@ -255,7 +259,8 @@ class LifecycleAdapterTests(unittest.TestCase):
                        {"body": "unrelated"}, {"headRefName": "another-branch"},
                        {"headRepository": {"nameWithOwner": "attacker/fork"}}):
             with self.subTest(change=change):
-                client = GitHub("1", "unused", Mock(return_value={"data": {"repository": {"pullRequest": {**pr(), **change}}}}))
+                client = GitHub("1", "unused", lambda url, **kw: [] if "/pulls?" in url else
+                                {"data": {"repository": {"pullRequest": {**pr(), **change}}}})
                 with patch.object(client, "installation_token", return_value="test-token") as token:
                     if change:
                         with self.assertRaises(RequestError):
@@ -263,6 +268,18 @@ class LifecycleAdapterTests(unittest.TestCase):
                     else:
                         self.assertEqual(client.worker_pull(route, receipt(), KEY, pr()["url"])["url"], pr()["url"])
                 token.assert_called_once_with(route.repository, permissions={"contents": "read", "pull_requests": "read"})
+
+    def test_pr_lookup_checks_all_pages_and_prefers_open_pr_over_stored_merged_url(self):
+        route = Registry.load(ROOT / "automation/azure/projects.json").routes[PROJECT]
+        pull = {**pr(), "url": "https://github.com/KianBahasadri/clusterfork/pull/999"}
+        request = Mock(side_effect=[
+            [{"number": n, "state": "closed", "merged_at": "earlier"} for n in range(1, 101)],
+            [{"number": 999, "state": "open", "merged_at": None}],
+            {"data": {"repository": {"pullRequest": pull}}}])
+        client = GitHub("1", "unused", request)
+        with patch.object(client, "installation_token", return_value="test-token"):
+            self.assertEqual(client.worker_pull(route, receipt(), KEY, pr()["url"]), pull)
+        self.assertEqual(request.call_args.kwargs["data"]["variables"]["number"], 999)
 
     def test_lifecycle_configuration_is_optional_but_complete_and_distinct(self):
         data = json.loads((ROOT / "automation/azure/projects.json").read_text())
