@@ -44,3 +44,4 @@ jobs:
           assert names == {"health", "linear_webhook", "route_event", "reconcile", "worker"}, names
           print("All dispatcher and worker functions index on Python 3.12")
           PY
+      - uses: ./.github/actions/setup-codex

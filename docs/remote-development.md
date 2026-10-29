@@ -149,6 +149,16 @@ omit it fail before agent execution. The health endpoint also reports this flag
 so operators can verify the deployed capability. The automatic deployment
 workflow coordinates broker updates after changes reach main.
 
+The worker and required `routing-runtime` CI check share
+`.github/actions/setup-codex`. On Ubuntu 24.04 it installs the pinned CLI,
+Bubblewrap, and the supplied AppArmor user-namespace profile. Before any account
+is leased, `automation/check_codex_sandbox.py` runs the native read-only sandbox
+without credentials or a model call. It verifies repository reads, denied writes
+inside and outside the repository, and blocked network sockets. Missing sandbox
+support fails the runner setup instead of repeatedly spending quota on reviewers
+that cannot inspect files. The setup follows the
+[Ubuntu sandbox prerequisites](https://learn.chatgpt.com/docs/sandboxing).
+
 Failures, missing outcomes, closed unmerged PRs, and merge/CI blockers pause the
 repository. Resolve the PR or manually rerun the **same** admitted task to repair
 it. To abandon it, cancel the Linear issue, stop/cancel its GitHub run, and close

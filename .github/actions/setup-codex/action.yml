@@ -1,0 +1,20 @@
+name: Set up the Codex worker runtime
+description: Install the pinned CLI and verify its read-only Linux sandbox without credentials.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+    - name: Prepare Ubuntu sandbox support
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install --yes bubblewrap apparmor-profiles
+        sudo apparmor_parser -r /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+    - name: Install pinned Codex CLI
+      shell: bash
+      run: npm install --global @openai/codex@0.165.0
+    - name: Verify read-only sandbox enforcement
+      shell: bash
+      run: python3 automation/check_codex_sandbox.py

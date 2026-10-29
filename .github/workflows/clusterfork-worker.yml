@@ -38,11 +38,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: Install pinned Codex CLI
-        run: npm install --global @openai/codex@0.165.0
+      - uses: ./.github/actions/setup-codex
       - name: Implement issue and open a pull request
         env:
           CLUSTERFORK_BROKER_URL: https://clusterfork-dispatch-7604cac329.azurewebsites.net/api/worker
