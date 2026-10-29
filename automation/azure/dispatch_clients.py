@@ -101,6 +101,47 @@ class Linear:
         if not result["issueUpdate"]["success"]:
             raise RequestError()
 
+    def backlog_state(self, issue_id):
+        team = self.query("""query($id: String!) {
+          issue(id: $id) { team { states(first: 100) {
+            nodes { id name type } pageInfo { hasNextPage }
+          } } }
+        }""", {"id": issue_id})["issue"]["team"]
+        if team["states"]["pageInfo"]["hasNextPage"]:
+            raise ValueError("Incomplete team workflow states")
+        states = [state for state in team["states"]["nodes"] if state["type"] == "backlog"]
+        named = [state for state in states if state["name"].casefold() == "backlog"]
+        choices = named or states
+        if len(choices) != 1:
+            raise ValueError("Team needs an unambiguous Backlog workflow state")
+        return choices[0]["id"]
+
+    def set_clarification(self, issue_id, enabled):
+        from readiness_policy import CLARIFICATION_LABEL
+
+        issue = self.query("""query($id: String!) {
+          issue(id: $id) { team { id } labels(first: 100) {
+            nodes { id name } pageInfo { hasNextPage }
+          } }
+        }""", {"id": issue_id})["issue"]
+        if issue["labels"]["pageInfo"]["hasNextPage"]:
+            raise ValueError("Incomplete issue labels")
+        owned = [label for label in issue["labels"]["nodes"] if label["name"] == CLARIFICATION_LABEL]
+        if enabled and not owned:
+            identifier = self.stage_label(issue["team"]["id"], CLARIFICATION_LABEL)
+            result = self.query("""mutation($id: String!, $label: String!) {
+              issueAddLabel(id: $id, labelId: $label) { success }
+            }""", {"id": issue_id, "label": identifier})["issueAddLabel"]
+            if not result["success"]:
+                raise RequestError()
+        elif not enabled:
+            for label in owned:
+                result = self.query("""mutation($id: String!, $label: String!) {
+                  issueRemoveLabel(id: $id, labelId: $label) { success }
+                }""", {"id": issue_id, "label": label["id"]})["issueRemoveLabel"]
+                if not result["success"]:
+                    raise RequestError()
+
     def stage_label(self, team_id, name):
         def lookup():
             result = self.query("""query($team: ID!, $name: String!) {
@@ -120,7 +161,7 @@ class Linear:
         try:
             result = self.query("""mutation($id: String!, $team: String!, $name: String!) {
               issueLabelCreate(input: {id: $id, teamId: $team, name: $name,
-                description: "Current Clusterfork development stage", color: "#5E6AD2"}) { success }
+                description: "Clusterfork development stage or readiness", color: "#5E6AD2"}) { success }
             }""", {"id": identifier, "team": team_id, "name": name})["issueLabelCreate"]
             if not result["success"]:
                 raise RequestError()
@@ -201,6 +242,16 @@ class GitHub:
         except Exception:
             # No workflow dispatch has been attempted yet, so retry is safe.
             raise DispatchError("GitHub App authentication failed; check its ID, key and installation") from None
+
+    def branch_sha(self, route):
+        import re
+
+        token = self.installation_token(route.repository, permissions={"contents": "read"})
+        result = self.request(f"https://api.github.com/repos/{route.repository}/commits/{quote(route.ref, safe='')}",
+                              token=f"Bearer {token}")
+        if not isinstance(result, dict) or not re.fullmatch(r"[0-9a-f]{40}", result.get("sha", "")):
+            raise RequestError()
+        return result["sha"]
 
     def verify_worker_run(self, repository, claims, dispatch_key):
         from worker_core import WorkerError

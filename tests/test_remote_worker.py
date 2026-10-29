@@ -28,6 +28,7 @@ from dispatch_core import Registry
 from quota_selection import select_account
 from worker_core import Accounts, WorkerError, WorkerService, authorize_claims
 from repository_queue import RepositoryQueue
+from readiness_policy import PROTOCOL
 
 PROJECT = "374f597c-89f5-4e40-9798-07533f57bfba"
 ISSUE = "66547614-8ed4-4928-834e-aac76f01afd2"
@@ -74,9 +75,19 @@ class MemoryTable:
                 self.rows[row["RowKey"]] = (copy.deepcopy(row), 1 if etag is None else etag + 1)
 
 
+class ApprovedReadiness:
+    """Isolate pre-existing queue/lease tests; readiness tests use the real gate."""
+    def ensure(self, issue, route):
+        return {"status": "ready"}
+
+    def require(self, issue, route):
+        return {}
+
+
 def repository_queue(registry, receipts, runs, linear, github, clock=lambda: NOW):
     tables = defaultdict(MemoryTable)
-    return RepositoryQueue(registry, receipts, runs, tables.__getitem__, linear, github, clock=clock)
+    return RepositoryQueue(registry, receipts, runs, tables.__getitem__, linear, github,
+                           ApprovedReadiness(), clock=clock)
 
 
 def auth(identity="account-a", token="access-a"):
@@ -251,7 +262,7 @@ class WorkerAuthorizationTests(unittest.TestCase):
 
     def test_publication_token_has_only_contents_and_pull_requests_permissions(self):
         service, github, _ = self.service()
-        config = service.handle("start", claims(), {"dispatch_key": KEY})
+        config = service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
         self.assertEqual((config["model"], config["effort"]), ("gpt-6.1-sol", "max"))
         self.assertTrue(config["auto_merge"])
         self.assertEqual(config["agent_timeout_minutes"], 300)
@@ -260,27 +271,27 @@ class WorkerAuthorizationTests(unittest.TestCase):
 
     def test_removing_project_enrollment_prevents_publication(self):
         service, _, issue = self.service()
-        service.handle("start", claims(), {"dispatch_key": KEY})
+        service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
         issue["project"]["labels"]["nodes"] = []
         with self.assertRaises(WorkerError):
             service.handle("github", claims(), {"dispatch_key": KEY})
 
     def test_competing_run_cannot_take_an_active_worker_lease(self):
         service, _, _ = self.service()
-        service.handle("start", claims(), {"dispatch_key": KEY})
+        service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
         with self.assertRaises(WorkerError):
-            service.handle("start", {**claims(), "run_id": "456"}, {"dispatch_key": KEY})
+            service.handle("start", {**claims(), "run_id": "456"}, {"dispatch_key": KEY, "protocol": PROTOCOL})
 
     def test_completed_issues_cannot_be_executed_again(self):
         service, _, _ = self.service()
-        service.handle("start", claims(), {"dispatch_key": KEY})
+        service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
         service.handle("finish", claims(), {"dispatch_key": KEY, "status": "completed"})
         with self.assertRaises(WorkerError):
-            service.handle("start", {**claims(), "run_attempt": "2"}, {"dispatch_key": KEY})
+            service.handle("start", {**claims(), "run_attempt": "2"}, {"dispatch_key": KEY, "protocol": PROTOCOL})
 
     def test_depleted_accounts_schedule_reconciliation_retry(self):
         service, _, _ = self.service()
-        service.handle("start", claims(), {"dispatch_key": KEY})
+        service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
         service.handle("finish", claims(), {"dispatch_key": KEY, "status": "waiting_for_quota"})
         self.assertEqual(service.receipts.get(KEY)[0]["retry_after"], NOW + 900)
 

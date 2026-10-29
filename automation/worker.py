@@ -24,6 +24,7 @@ from codex_runtime import CodexError, inspect_account, quota_snapshot, read_usag
 from dispatch_core import AgentProfile
 from quota_selection import SelectionPolicy, select_account
 from worker_reporting import usage_report
+from readiness_policy import PROTOCOL, RESULT_SCHEMA, review_prompt
 
 
 class WorkerFailure(RuntimeError):
@@ -190,6 +191,7 @@ def run_codex(broker, config, worker_heartbeat, directory):
                     continue
                 account = details.get("account") or {}
                 broker.call("progress", stage="coding", account_id=selection.account_id,
+                            context_sha=config.get("checkout_sha"),
                             account_email=account.get("email"), account_plan=account.get("planType"),
                             usage_before=usage_report(fresh))
                 print(f"Running {selection.model} ({selection.effort}); minimum quota headroom {selection.remaining_percent:g}%", flush=True)
@@ -245,6 +247,58 @@ def git_auth(token, directory):
     askpass.chmod(0o700)
     yield {**clean_environment(), "GIT_ASKPASS": str(askpass), "GIT_TERMINAL_PROMPT": "0",
            "CLUSTERFORK_GIT_TOKEN": token}
+
+
+def review_readiness(broker, config, worker_heartbeat, directory):
+    """Review in Codex's enforced read-only sandbox, using the normal quota pool."""
+    token = broker.call("checkout")["token"]
+    with git_auth(token, directory) as env:
+        command(["git", "fetch", "origin", f"+refs/heads/{config['ref']}:refs/remotes/origin/{config['ref']}"], env=env)
+    command(["git", "checkout", "--detach", config["binding"]["context_sha"]])
+    if (command(["git", "rev-parse", "HEAD"]).strip() != config["binding"]["context_sha"]
+            or command(["git", "status", "--porcelain"]).strip()):
+        raise WorkerFailure("Readiness checkout does not match its clean, reviewed context")
+    snapshots, profiles, policy = choose_account(broker, config, worker_heartbeat)
+    while True:
+        selected = select_account(snapshots, profiles, policy, now=time.time())
+        if not selected:
+            broker.call("finish", status="waiting_for_quota")
+            return "readiness_retry"
+        snapshots = [row for row in snapshots if row.account_id != selected.account_id]
+        try:
+            with account_lease(broker, selected.account_id) as (home, heartbeat):
+                _, limits = inspect_account(home, config["model"], config["effort"])
+                fresh = quota_snapshot(selected.account_id, config["model"], limits)
+                if not select_account([fresh], profiles, policy, now=time.time()):
+                    continue
+                schema, output = directory / "readiness-schema.json", directory / "readiness-result.json"
+                schema.write_text(json.dumps(RESULT_SCHEMA))
+                command(["codex", "exec", "--ignore-user-config", "--ignore-rules", "--ephemeral",
+                         "--color", "never", "--sandbox", "read-only", "--model", config["model"],
+                         "-c", 'approval_policy="never"',
+                         "-c", f'model_reasoning_effort="{config["effort"]}"',
+                         "-c", 'cli_auth_credentials_store="file"',
+                         "--output-schema", str(schema), "--output-last-message", str(output), "-"],
+                        stdin=review_prompt(config["issue"]),
+                        env={**clean_environment(), "CODEX_HOME": str(home)},
+                        timeout=config["review_timeout_seconds"],
+                        failure_signals=[heartbeat.failed, worker_heartbeat.failed])
+                if (command(["git", "rev-parse", "HEAD"]).strip() != config["binding"]["context_sha"]
+                        or command(["git", "status", "--porcelain"]).strip()):
+                    raise WorkerFailure("Readiness review changed repository contents")
+                try:
+                    # Invalid JSON is still submitted as an invalid result so Azure
+                    # records a retry, never a fabricated clarification decision.
+                    result = json.loads(output.read_text()) if output.stat().st_size <= 28_000 else None
+                except (OSError, ValueError):
+                    result = None
+            return broker.call("review", binding=config["binding"], result=result)["status"]
+        except HTTPError as exc:
+            if exc.code in {404, 409} and getattr(exc, "clusterfork_action", "claim") == "claim":
+                continue
+            raise
+        except CodexError:
+            continue
 
 
 def find_pr(config, token, branch):
@@ -318,9 +372,10 @@ def request_auto_merge(config, token, pull_url, dispatch_key, branch, *, expecte
 def execute(broker, config, heartbeat, directory):
     issue = config["issue"]
     branch = f"clusterfork/{issue['identifier'].lower()}-{broker.key[:8]}"
-    token = broker.call("github")["token"]
+    token = broker.call("checkout")["token"]
     existing = find_pr(config, token, branch)
     if existing:
+        token = broker.call("github")["token"]
         request_auto_merge(config, token, existing, broker.key, branch)
         return "completed", existing
     with git_auth(token, directory) as env:
@@ -335,6 +390,9 @@ def execute(broker, config, heartbeat, directory):
         else:
             command(["git", "checkout", "-b", branch, f"origin/{config['ref']}"])
     original = command(["git", "rev-parse", "HEAD"]).strip()
+    config = {**config, "checkout_sha": command(["git", "rev-parse", f"origin/{config['ref']}"]).strip()}
+    if config.get("readiness", {}).get("context_sha", config["checkout_sha"]) != config["checkout_sha"]:
+        raise WorkerFailure("Coding checkout changed after readiness approval; request another review")
     with run_codex(broker, config, heartbeat, directory) as summary:
         if summary is None:
             return "waiting_for_quota", None
@@ -377,17 +435,23 @@ def main():
     broker = Broker(os.environ["CLUSTERFORK_BROKER_URL"], os.environ["DISPATCH_KEY"])
     started = False
     try:
-        config = broker.call("start")
+        config = broker.call("start", protocol=PROTOCOL)
         started = True
+        if config.get("protocol") != PROTOCOL or config.get("phase") not in {"readiness", "development"}:
+            raise WorkerFailure("Deploy a compatible readiness worker and broker")
         with Heartbeat(lambda: broker.call("heartbeat")) as heartbeat, \
              tempfile.TemporaryDirectory(prefix="clusterfork-worker-") as directory:
-            status, pull = execute(broker, config, heartbeat, Path(directory))
-        broker.call("finish", status=status, pull_request=pull or "")
+            if config["phase"] == "readiness":
+                status, pull = review_readiness(broker, config, heartbeat, Path(directory)), None
+            else:
+                status, pull = execute(broker, config, heartbeat, Path(directory))
+        if config["phase"] == "development":
+            broker.call("finish", status=status, pull_request=pull or "")
         print(f"Worker outcome: {status}" + (f"; {pull}" if pull else ""))
         summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary_path:
             with open(summary_path, "a") as stream:
-                stream.write(f"### Clusterfork Codex worker\n\nIssue: {config['issue']['identifier']}\n\n"
+                stream.write(f"### Clusterfork Codex {config['phase']} worker\n\nIssue: {config['issue']['identifier']}\n\n"
                              f"Model: `{config['model']}` / `{config['effort']}`\n\nOutcome: {status}\n\n"
                              + (f"Pull request: {pull}\n" if pull else ""))
                 if pull:

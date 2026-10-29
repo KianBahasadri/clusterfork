@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from dispatch_core import eligibility
 from worker_reporting import STAGES, validate_usage
+from readiness_policy import PROTOCOL
 
 AUDIENCE = "clusterfork-worker"
 ISSUER = "https://token.actions.githubusercontent.com"
@@ -115,7 +116,22 @@ class WorkerService:
         key = data.get("dispatch_key", "")
         if not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key):
             raise WorkerError("Invalid dispatch key", 400)
-        receipt, _ = self.receipts.get(key)
+        if action == "start" and data.get("protocol") != PROTOCOL:
+            raise WorkerError("Deploy a compatible readiness worker and broker", 403)
+        try:
+            receipt, _ = self.receipts.get(key)
+        except WorkerError as exc:
+            if exc.status != 404:
+                raise
+            review, _ = self.queue.readiness.table.get(key)
+            result = self.queue.readiness.handle(action, claims, data, review)
+            if action == "review" and result.get("status") == "passed":
+                issue = self.linear.issue(review["issue_id"])
+                current, _ = eligibility(issue or {}, self.registry)
+                if current:
+                    self.queue.enqueue(issue, current)
+                    self.queue.advance(current.repository)
+            return result
         route = authorize_claims(claims, self.registry, receipt)
         owner = f"{claims['run_id']}:{claims['run_attempt']}"
         if action == "start":
@@ -128,6 +144,19 @@ class WorkerService:
         row["lease_until"] = int(self.clock()) + LEASE_SECONDS
         # The runner serializes broker requests; the ETag fences duplicate jobs.
         self.runs.replace(row, etag)
+        if action in {"accounts", "claim", "github", "checkout"} or (
+                action == "progress" and data.get("stage") in {"coding", "publishing"}):
+            issue = self.linear.issue(receipt["issue_id"])
+            extra = (route.linear_states.in_progress, route.linear_states.blocked) if route.linear_states else ()
+            current, _ = eligibility(issue or {}, self.registry, additional_state_ids=extra)
+            if current != route:
+                raise WorkerError("Issue is no longer eligible", 403)
+            approval = self.queue.readiness.require(issue, route)
+            if approval.get("review_key", "") != row.get("readiness_review_key", ""):
+                raise WorkerError("Worker readiness approval was superseded", 403)
+            if (action == "progress" and data.get("stage") == "coding" and approval.get("context_sha")
+                    and data.get("context_sha") != approval["context_sha"]):
+                raise WorkerError("Coding checkout does not match the reviewed repository context", 403)
         if action == "heartbeat":
             return {"running": True}
         if action == "progress":
@@ -175,6 +204,9 @@ class WorkerService:
             self.accounts.save(identity, owner, data.get("lease"), data.get("auth"),
                                release=data.get("release") is True)
             return {"saved": True}
+        if action == "checkout":
+            return {"token": self.github.installation_token(
+                route.repository, permissions={"contents": "read", "pull_requests": "read"})}
         if action == "github":
             issue = self.linear.issue(receipt["issue_id"])
             extra = (route.linear_states.in_progress,) if route.linear_states else ()
@@ -225,8 +257,35 @@ class WorkerService:
             raise WorkerError("Issue is no longer eligible", 403)
         if not route.validation_commands:
             raise WorkerError("Repository validation commands must be configured", 400)
+        # Fence the admitted task before requesting any fresh review. A stale
+        # manual rerun must not review a completed or no-longer-admitted task.
         self.queue.start_worker(route.repository, key, owner)
+        try:
+            previous, _ = self.runs.get(key)
+        except WorkerError as exc:
+            if exc.status != 404:
+                raise
+        else:
+            if previous.get("status") == "completed":
+                raise WorkerError("Issue already completed")
+        try:
+            approval = self.queue.readiness.require(issue, route)
+        except WorkerError:
+            self.queue.readiness.ensure(issue, route)
+            # A dispatch can become stale while GitHub is scheduling it. Record
+            # a retryable admission hold without starting coding or consuming an account.
+            for _ in range(32):
+                updated, etag = self.receipts.get(key)
+                updated.update(readiness_wait_owner=owner, retry_after=int(self.clock()) + 900)
+                try:
+                    self.receipts.replace(updated, etag)
+                    break
+                except WorkerError as exc:
+                    if exc.status != 409:
+                        raise
+            raise WorkerError("Coding start held for a current passing readiness review", 403) from None
         row = {"RowKey": key, "owner": owner, "status": "running", "stage": "initializing",
+               "readiness_review_key": approval.get("review_key", ""),
                "started_at": int(self.clock()), "report_version": 0,
                "lease_until": int(self.clock()) + LEASE_SECONDS}
         if not self.runs.create(row):
@@ -240,7 +299,8 @@ class WorkerService:
             self.runs.replace(row, etag)
         self.sync_linear(key)
         profile = self.registry.agent_profiles["codex"]
-        return {"model": profile.model, "effort": profile.effort,
+        return {"protocol": PROTOCOL, "phase": "development", "readiness": approval,
+                "model": profile.model, "effort": profile.effort,
                 "selection": {"min_remaining_percent": self.registry.agent_selection.min_remaining_percent,
                               "max_snapshot_age_seconds": self.registry.agent_selection.max_snapshot_age_seconds},
                 "repository": route.repository, "ref": route.ref,

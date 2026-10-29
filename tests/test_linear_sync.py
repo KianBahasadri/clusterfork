@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "automation/azure"))
 from dispatch_clients import GitHub, Linear, RequestError
 from dispatch_core import Registry, eligibility
 from linear_sync import LinearSync, pull_outcome
+from readiness_policy import PROTOCOL
 from worker_core import Accounts, WorkerError, WorkerService
 from test_remote_worker import KEY, NOW, PROJECT, ISSUE, MemoryTable, claims, receipt, repository_queue
 
@@ -209,7 +210,7 @@ class LifecycleTests(unittest.TestCase):
         self.queue.runs = self.runs
         service = WorkerService(self.registry, self.receipts, self.runs, Accounts(MemoryTable()),
                                 self.linear, self.github, self.queue, clock=lambda: NOW, sync=self.sync)
-        service.handle("start", claims(), {"dispatch_key": KEY})
+        service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
         self.assertEqual(self.issue["state"]["id"], self.states.in_progress)
         self.assertEqual(eligibility(self.issue, self.registry)[1], "not_ready")
         self.assertEqual(service.handle("github", claims(), {"dispatch_key": KEY})["token"], "temporary-token")
@@ -222,7 +223,7 @@ class LifecycleTests(unittest.TestCase):
         self.issue["state"]["id"] = self.states.blocked
         service = WorkerService(self.registry, self.receipts, self.runs, Accounts(MemoryTable()),
                                 self.linear, self.github, self.queue, clock=lambda: NOW, sync=self.sync)
-        service.handle("start", {**claims(), "run_attempt": "2"}, {"dispatch_key": KEY})
+        service.handle("start", {**claims(), "run_attempt": "2"}, {"dispatch_key": KEY, "protocol": PROTOCOL})
         self.assertEqual(self.issue["state"]["id"], self.states.in_progress)
         self.issue["state"]["id"] = "canceled"
         with self.assertRaises(WorkerError):

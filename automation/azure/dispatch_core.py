@@ -215,8 +215,12 @@ class Dispatcher:
         for issue in issues:
             route, reason = eligibility(issue, self.registry)
             if route:
-                key = self.queue.enqueue(issue, route)
-                results.append({"status": "already_claimed", "dispatch_key": key})
+                review = self.queue.prepare(issue, route)
+                if review["status"] == "ready":
+                    key = self.queue.enqueue(issue, route)
+                    results.append({"status": "already_claimed", "dispatch_key": key})
+                else:
+                    results.append(review)
             else:
                 results.append({"status": reason})
             mapped = self.registry.routes.get((issue.get("project") or {}).get("id"))
