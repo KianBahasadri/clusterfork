@@ -13,7 +13,6 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
-import threading
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
@@ -25,6 +24,7 @@ sys.path.insert(0, str(SOURCE))
 from dispatch_clients import GitHub, Linear, RequestError, request_json  # noqa: E402
 from dispatch_core import (Dispatcher, DispatchError, Registry, WebhookError,
                            eligibility, webhook_event)  # noqa: E402
+from test_remote_worker import MemoryTable, repository_queue
 
 spec = importlib.util.spec_from_file_location("clusterfork_pilot", ROOT / "automation" / "pilot.py")
 pilot = importlib.util.module_from_spec(spec)
@@ -55,25 +55,6 @@ def signed(payload=None):
     return body, {"Linear-Signature": signature}
 
 
-class Receipts:
-    def __init__(self):
-        self.rows = {}
-        self.lock = threading.Lock()
-
-    def claim(self, key, fields):
-        with self.lock:
-            if key in self.rows:
-                return False
-            self.rows[key] = {"status": "dispatching", **fields}
-            return True
-
-    def finish(self, key, status):
-        self.rows[key]["status"] = status
-
-    def release(self, key):
-        del self.rows[key]
-
-
 class Tracker:
     def __init__(self):
         self.current = issue()
@@ -86,6 +67,9 @@ class Tracker:
     def project_issues(self, project_id):
         return [self.current]
 
+    def status_comment(self, *args):
+        pass
+
 
 class Workflows:
     def __init__(self):
@@ -96,6 +80,12 @@ class Workflows:
         if self.failure:
             raise self.failure
         self.calls.append((route, inputs))
+
+    def dispatch_runs(self, route, key):
+        return [{"id": 1, "run_attempt": 1, "status": "in_progress"}] if self.calls else []
+
+    def worker_pull(self, *args):
+        return None
 
 
 class WebhookTests(unittest.TestCase):
@@ -148,8 +138,9 @@ class WebhookTests(unittest.TestCase):
 class RoutingTests(unittest.TestCase):
     def setUp(self):
         self.registry = Registry.load(SOURCE / "projects.json")
-        self.tracker, self.github, self.receipts = Tracker(), Workflows(), Receipts()
-        self.dispatcher = Dispatcher(self.registry, self.tracker, self.github, self.receipts)
+        self.tracker, self.github, self.receipts = Tracker(), Workflows(), MemoryTable()
+        self.queue = repository_queue(self.registry, self.receipts, MemoryTable(), self.tracker, self.github)
+        self.dispatcher = Dispatcher(self.registry, self.tracker, self.queue)
         self.event = {"type": "Issue", "id": ISSUE}
 
     def test_signed_linear_event_reaches_configured_repository(self):
@@ -161,7 +152,7 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(route.ref, "main")
         self.assertEqual(inputs["linear_issue_id"], ISSUE)
         self.assertEqual(inputs["linear_project_id"], PROJECT)
-        self.assertEqual(self.receipts.rows[result["dispatch_key"]]["status"], "dispatched")
+        self.assertEqual(self.receipts.get(result["dispatch_key"])[0]["status"], "dispatched")
 
     def test_issue_label_cannot_enroll_project(self):
         self.tracker.current["project"]["labels"]["nodes"] = []
@@ -195,31 +186,32 @@ class RoutingTests(unittest.TestCase):
     def test_project_enrollment_scan_and_later_issue_event_share_claim(self):
         self.assertEqual(self.dispatcher.process({"type": "Project", "id": PROJECT})[0]["status"],
                          "dispatched")
-        self.assertEqual(self.dispatcher.process(self.event)[0]["status"], "already_claimed")
+        self.assertEqual(self.dispatcher.process(self.event)[0]["status"], "waiting")
         self.assertEqual(len(self.github.calls), 1)
 
     def test_rejected_dispatch_can_retry_after_configuration_is_fixed(self):
         self.github.failure = DispatchError("not installed")
         with self.assertRaises(DispatchError):
             self.dispatcher.process(self.event)
-        self.assertEqual(self.receipts.rows, {})
+        self.assertEqual(next(iter(self.receipts.list()))["status"], "rejected")
         self.github.failure = None
+        self.queue.clock = lambda: NOW + 61
         self.assertEqual(self.dispatcher.process(self.event)[0]["status"], "dispatched")
 
     def test_ambiguous_timeout_does_not_launch_duplicate_on_retry(self):
         self.github.failure = DispatchError("timed out", uncertain=True)
         result = self.dispatcher.process(self.event)[0]
         self.assertEqual(result["status"], "uncertain")
-        self.assertEqual(self.receipts.rows[result["dispatch_key"]]["status"], "uncertain")
+        self.assertEqual(self.receipts.get(result["dispatch_key"])[0]["status"], "uncertain")
         self.github.failure = None
-        self.assertEqual(self.dispatcher.process(self.event)[0]["status"], "already_claimed")
+        self.assertEqual(self.dispatcher.process(self.event)[0]["status"], "blocked")
         self.assertEqual(self.github.calls, [])
 
     def test_failed_receipt_write_does_not_allow_duplicate_dispatch(self):
-        with patch.object(self.receipts, "finish", side_effect=RuntimeError("storage down")):
+        with patch.object(self.receipts, "replace", side_effect=RuntimeError("storage down")):
             with self.assertRaises(RuntimeError):
                 self.dispatcher.process(self.event)
-        self.assertEqual(self.dispatcher.process(self.event)[0]["status"], "already_claimed")
+        self.assertEqual(self.dispatcher.process(self.event)[0]["status"], "waiting")
         self.assertEqual(len(self.github.calls), 1)
 
 
@@ -258,6 +250,34 @@ class ClientTests(unittest.TestCase):
             client.dispatch(route, {"linear_issue_id": ISSUE})
         self.assertEqual(calls[0][0], "https://api.github.com/repos/KianBahasadri/clusterfork/actions/workflows/clusterfork-worker.yml/dispatches")
         self.assertEqual(calls[0][1]["data"]["ref"], "main")
+
+    def test_dispatch_run_listing_paginates_and_observes_latest_manual_attempt(self):
+        route = Registry.load(SOURCE / "projects.json").routes[PROJECT]
+        key = "a" * 64
+        run = {"id": 123, "run_attempt": 4, "status": "in_progress", "display_title": key,
+               "event": "workflow_dispatch", "path": ".github/workflows/clusterfork-worker.yml",
+               "actor": {"login": "clusterfork[bot]"}, "repository": {"full_name": route.repository}}
+        calls = []
+        def request(url, **kwargs):
+            calls.append(url)
+            return {"total_count": 101, "workflow_runs": ([{"display_title": "unrelated"}] * 100
+                                                          if "&page=1" in url else [run])}
+        client = GitHub("1", "unused", request)
+        with patch.object(client, "installation_token", return_value="test-token"):
+            self.assertEqual(client.dispatch_runs(route, key), [run])
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(any("status=" in url or "event=" in url or "created=" in url for url in calls))
+
+    def test_partial_or_untrusted_run_listings_cannot_prove_completion(self):
+        route = Registry.load(SOURCE / "projects.json").routes[PROJECT]
+        key = "a" * 64
+        for response in ({"total_count": 3, "workflow_runs": []},
+                         {"total_count": 1, "workflow_runs": [{"display_title": key, "event": "push"}]}):
+            client = GitHub("1", "unused", lambda *a, **kw: response)
+            with self.subTest(response=response), \
+                 patch.object(client, "installation_token", return_value="test-token"), \
+                 self.assertRaises(RequestError):
+                client.dispatch_runs(route, key)
 
     def test_only_ambiguous_dispatch_errors_keep_claims(self):
         route = Registry.load(SOURCE / "projects.json").routes[PROJECT]

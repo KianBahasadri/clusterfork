@@ -1,6 +1,7 @@
 """Worker trust boundaries, credential fencing, and real Git publication behavior."""
 
 import copy
+from collections import defaultdict
 from contextlib import contextmanager, redirect_stdout
 import importlib.util
 import io
@@ -26,6 +27,7 @@ from codex_runtime import CodexError, quota_snapshot
 from dispatch_core import Registry
 from quota_selection import select_account
 from worker_core import Accounts, WorkerError, WorkerService, authorize_claims
+from repository_queue import RepositoryQueue
 
 PROJECT = "374f597c-89f5-4e40-9798-07533f57bfba"
 ISSUE = "66547614-8ed4-4928-834e-aac76f01afd2"
@@ -36,26 +38,45 @@ NOW = 1_800_000_000
 class MemoryTable:
     def __init__(self):
         self.rows = {}
+        self.lock = threading.RLock()
 
     def create(self, row):
-        if row["RowKey"] in self.rows:
-            return False
-        self.rows[row["RowKey"]] = (copy.deepcopy(row), 1)
-        return True
+        with self.lock:
+            if row["RowKey"] in self.rows:
+                return False
+            self.rows[row["RowKey"]] = (copy.deepcopy(row), 1)
+            return True
 
     def get(self, key):
-        if key not in self.rows:
-            raise WorkerError("missing", 404)
-        row, version = self.rows[key]
-        return copy.deepcopy(row), version
+        with self.lock:
+            if key not in self.rows:
+                raise WorkerError("missing", 404)
+            row, version = self.rows[key]
+            return copy.deepcopy(row), version
 
     def list(self):
-        return [copy.deepcopy(row) for row, _ in self.rows.values()]
+        with self.lock:
+            return [copy.deepcopy(row) for row, _ in self.rows.values()]
 
     def replace(self, row, etag):
-        if self.rows[row["RowKey"]][1] != etag:
-            raise WorkerError("concurrent modification")
-        self.rows[row["RowKey"]] = (copy.deepcopy(row), etag + 1)
+        with self.lock:
+            if self.rows[row["RowKey"]][1] != etag:
+                raise WorkerError("concurrent modification")
+            self.rows[row["RowKey"]] = (copy.deepcopy(row), etag + 1)
+
+    def transaction(self, changes):
+        with self.lock:
+            for row, etag in changes:
+                current = self.rows.get(row["RowKey"])
+                if (etag is None and current is not None) or (etag is not None and (not current or current[1] != etag)):
+                    raise WorkerError("concurrent modification")
+            for row, etag in changes:
+                self.rows[row["RowKey"]] = (copy.deepcopy(row), 1 if etag is None else etag + 1)
+
+
+def repository_queue(registry, receipts, runs, linear, github, clock=lambda: NOW):
+    tables = defaultdict(MemoryTable)
+    return RepositoryQueue(registry, receipts, runs, tables.__getitem__, linear, github, clock=clock)
 
 
 def auth(identity="account-a", token="access-a"):
@@ -220,8 +241,11 @@ class WorkerAuthorizationTests(unittest.TestCase):
             def installation_token(self, repository, *, permissions):
                 self.permissions = permissions
                 return "temporary-token"
+            def worker_result(self, *args):
+                return {"status": "in_progress"}
         github = GitHub()
         service = WorkerService(self.registry, receipts, runs, Accounts(MemoryTable()), Linear(), github,
+                                repository_queue(self.registry, receipts, runs, Linear(), github),
                                 clock=lambda: NOW)
         return service, github, issue
 
@@ -365,6 +389,15 @@ class GitPublicationTests(unittest.TestCase):
             subprocess.run(["git", "-C", str(checkout), "-c", "user.name=Test", "-c", "user.email=test@example.com",
                             "commit", "-m", "initial"], check=True, capture_output=True)
             subprocess.run(["git", "-C", str(checkout), "push", "origin", "main"], check=True, capture_output=True)
+            # The workflow checkout predates a preceding task's merge. The
+            # admitted worker must fetch that merge before starting its agent.
+            upstream = root / "upstream"
+            subprocess.run(["git", "clone", str(remote), str(upstream)], check=True, capture_output=True)
+            (upstream / "preceding.txt").write_text("preceding task merged\n")
+            subprocess.run(["git", "-C", str(upstream), "add", "."], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(upstream), "-c", "user.name=Test", "-c", "user.email=test@example.com",
+                            "commit", "-m", "preceding task"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(upstream), "push", "origin", "main"], check=True, capture_output=True)
             main_before = subprocess.check_output(["git", "--git-dir", str(remote), "rev-parse", "main"], text=True)
             class Broker:
                 key = KEY
@@ -377,6 +410,7 @@ class GitPublicationTests(unittest.TestCase):
                 "validation_commands": [[sys.executable, "-c", "from pathlib import Path; assert Path('file.txt').read_text() == 'updated\\n'"]]}
             @contextmanager
             def implement(*args):
+                self.assertEqual((checkout / "preceding.txt").read_text(), "preceding task merged\n")
                 (checkout / "file.txt").write_text("updated\n")
                 yield "Updated the file and validated it."
             old = Path.cwd()

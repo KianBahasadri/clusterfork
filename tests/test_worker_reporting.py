@@ -38,11 +38,12 @@ class ProgressTests(unittest.TestCase):
     def setUp(self):
         lifecycle.LifecycleTests.setUp(self)
         self.runs = self.sync.runs = MemoryTable()
+        self.queue.runs = self.runs
         self.now = NOW
         self.accounts = Accounts(MemoryTable(), clock=lambda: self.now)
         self.identity = self.accounts.enroll(auth())
         self.service = WorkerService(self.registry, self.receipts, self.runs, self.accounts,
-                                     self.linear, self.github, clock=lambda: self.now, sync=self.sync)
+                                     self.linear, self.github, self.queue, clock=lambda: self.now, sync=self.sync)
         self.service.handle("start", claims(), {"dispatch_key": KEY})
 
     def call(self, action, **data):

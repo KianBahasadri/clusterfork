@@ -39,7 +39,7 @@ def request_json(url, *, token, method="GET", data=None):
 
 
 ISSUE_FIELDS = """
-id identifier title description url archivedAt
+id identifier title description url archivedAt createdAt
 state { id type }
 """
 PROJECT_FIELDS = "id archivedAt labels(first: 100) { nodes { name } pageInfo { hasNextPage } }"
@@ -225,6 +225,37 @@ class GitHub:
             f"https://api.github.com/repos/{repository}/actions/runs/{run_id}/attempts/{attempt}",
             token=f"Bearer {token}")
 
+    def dispatch_runs(self, route, key):
+        """List every matching run's latest attempt, including manual reruns.
+
+        Do not filter by creation time/status: an old run can be rerun today.
+        Avoid search filters and their 1,000-result cap; paginate the workflow.
+        """
+        token = self.installation_token(route.repository, permissions={"actions": "read"})
+        matches, page, seen = [], 1, 0
+        while True:
+            result = self.request(
+                f"https://api.github.com/repos/{route.repository}/actions/workflows/"
+                f"{quote(route.workflow, safe='')}/runs?per_page=100&page={page}", token=f"Bearer {token}")
+            runs = result["workflow_runs"]
+            for run in runs:
+                if key not in run.get("display_title", ""):
+                    continue
+                if (run.get("event") != "workflow_dispatch"
+                        or run.get("path") != f".github/workflows/{route.workflow}"
+                        or run.get("actor", {}).get("login") != "clusterfork[bot]"
+                        or run.get("repository", {}).get("full_name", "").lower() != route.repository.lower()
+                        or not isinstance(run.get("id"), int) or not isinstance(run.get("run_attempt"), int)
+                        or run.get("status") not in {"queued", "in_progress", "completed", "waiting", "requested", "pending"}):
+                    raise RequestError()
+                matches.append(run)
+            seen += len(runs)
+            if len(runs) < 100:
+                if seen < result["total_count"]:
+                    raise RequestError()  # A truncated listing cannot prove the worker stopped.
+                return matches
+            page += 1
+
     def worker_pull(self, route, receipt, key, url=""):
         import re
         from urllib.parse import urlencode
@@ -232,18 +263,32 @@ class GitHub:
         repository = route.repository
         token = self.installation_token(repository, permissions={"contents": "read", "pull_requests": "read"})
         branch = f"clusterfork/{receipt['identifier'].lower()}-{key[:8]}"
+        number = None
         if url:
             match = re.fullmatch(re.escape(f"https://github.com/{repository}/pull/") + r"([1-9][0-9]*)", url)
             if not match:
                 raise ValueError("Invalid stored PR URL")
             number = int(match[1])
-        else:
-            query = urlencode({"state": "all", "head": f"{repository.split('/')[0]}:{branch}", "base": route.ref})
-            pulls = self.request(f"https://api.github.com/repos/{repository}/pulls?{query}", token=f"Bearer {token}")
-            if not pulls:
-                return None
-            # Prefer the same open/merged PR that publication recovery would use.
-            number = next((p["number"] for p in pulls if p.get("state") == "open" or p.get("merged_at")), pulls[0]["number"])
+        pulls, page = [], 1
+        while True:
+            query = urlencode({"state": "all", "head": f"{repository.split('/')[0]}:{branch}",
+                               "base": route.ref, "per_page": 100, "page": page})
+            batch = self.request(f"https://api.github.com/repos/{repository}/pulls?{query}", token=f"Bearer {token}")
+            if not isinstance(batch, list):
+                raise RequestError()
+            pulls.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+        # An open PR always wins, even if an older stored URL is already merged
+        # or closed. Otherwise retain that URL to handle deleted branch refs.
+        opened = next((p for p in pulls if p.get("state") == "open"), None)
+        if opened:
+            number = opened["number"]
+        elif number is None and pulls:
+            number = next((p["number"] for p in pulls if p.get("merged_at")), pulls[0]["number"])
+        if number is None:
+            return None
         result = self.request("https://api.github.com/graphql", token=f"Bearer {token}", method="POST", data={
             "query": """query($owner: String!, $name: String!, $number: Int!) {
               repository(owner: $owner, name: $name) { pullRequest(number: $number) {
@@ -280,39 +325,3 @@ class GitHub:
             # limits as a rejection too; the queue can retry after its visibility delay.
             uncertain = exc.status is None or exc.status >= 500
             raise DispatchError(str(exc), uncertain=uncertain) from None
-
-
-class AzureReceipts:
-    def __init__(self, connection):
-        from azure.data.tables import TableServiceClient
-
-        self.table = TableServiceClient.from_connection_string(connection).create_table_if_not_exists(
-            "ClusterforkDispatches")
-
-    def claim(self, key, fields):
-        from azure.core.exceptions import ResourceExistsError
-
-        try:
-            self.table.create_entity({"PartitionKey": "pilot", "RowKey": key,
-                                      "status": "dispatching", "created_at": int(time.time()), **fields})
-            return True
-        except ResourceExistsError:
-            from azure.core import MatchConditions
-            from azure.core.exceptions import ResourceModifiedError
-            row = self.table.get_entity("pilot", key)
-            if not row.get("retry_after") or row["retry_after"] > time.time():
-                return False
-            try:
-                self.table.update_entity({"PartitionKey": "pilot", "RowKey": key,
-                                          "retry_after": 0, "status": "dispatching"},
-                                         etag=row.metadata["etag"],
-                                         match_condition=MatchConditions.IfNotModified)
-                return True
-            except ResourceModifiedError:
-                return False
-
-    def finish(self, key, status):
-        self.table.update_entity({"PartitionKey": "pilot", "RowKey": key, "status": status})
-
-    def release(self, key):
-        self.table.delete_entity("pilot", key)

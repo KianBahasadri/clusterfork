@@ -40,6 +40,23 @@ class AzureTable:
         except (ResourceModifiedError, ResourceNotFoundError):
             raise WorkerError("State changed concurrently; retry the operation") from None
 
+    def transaction(self, changes):
+        """Atomically create/replace rows in this repository's partition."""
+        from azure.core import MatchConditions
+        from azure.data.tables import TableTransactionError, UpdateMode
+        operations = []
+        for row, etag in changes:
+            entity = {**row, "PartitionKey": self.partition}
+            operations.append(("create", entity) if etag is None else (
+                "update", entity, {"mode": UpdateMode.REPLACE, "etag": etag,
+                                   "match_condition": MatchConditions.IfNotModified}))
+        try:
+            self.table.submit_transaction(operations)
+        except TableTransactionError as exc:
+            if exc.status_code not in {404, 409, 412}:
+                raise
+            raise WorkerError("State changed concurrently; retry the operation") from None
+
     def delete(self, key, etag):
         from azure.core import MatchConditions
         self.table.delete_entity(self.partition, key, etag=etag,

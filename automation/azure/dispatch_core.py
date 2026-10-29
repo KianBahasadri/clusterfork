@@ -167,6 +167,8 @@ def eligibility(issue, registry, *, additional_state_ids=()):
     labels = project["labels"]["nodes"]
     if not any(label["name"] == registry.enrollment_label for label in labels):
         return None, "project_not_enrolled"
+    if issue["state"].get("type") == "canceled":
+        return None, "canceled"
     if issue["state"]["id"] not in (*route.ready_state_ids, *additional_state_ids):
         return None, "not_ready"
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*-\d+", issue["identifier"]):
@@ -184,11 +186,10 @@ class DispatchError(RuntimeError):
 
 
 class Dispatcher:
-    def __init__(self, registry, linear, github, receipts):
+    def __init__(self, registry, linear, queue):
         self.registry = registry
         self.linear = linear
-        self.github = github
-        self.receipts = receipts
+        self.queue = queue
 
     def process(self, event):
         event_type = event.get("type")
@@ -199,34 +200,29 @@ class Dispatcher:
             project_id = uuid_string(event["id"])
             if project_id not in self.registry.routes:
                 return [{"status": "unmapped_project"}]
-            return [self.route(issue) for issue in self.linear.project_issues(project_id)]
+            # Persist the complete scan before dispatching its head. Repeated
+            # scans retain their original sequence; batch ties are deterministic.
+            issues = sorted(self.linear.project_issues(project_id),
+                            key=lambda i: (i.get("createdAt", ""), i["id"]))
+            return self.route_issues(issues)
         raise ValueError("unsupported queued event")
 
     def route(self, issue):
-        route, reason = eligibility(issue, self.registry)
-        if not route:
-            return {"status": reason}
-        # Pilot: one smoke run per issue and generation. Editing a Todo issue must
-        # not launch another run. Production retries require a separate run model.
-        key = hashlib.sha256(
-            f"{self.registry.generation}:{route.project_id}:{issue['id']}".encode()
-        ).hexdigest()
-        fields = {"issue_id": issue["id"], "identifier": issue["identifier"],
-                  "repository": route.repository, "project_id": route.project_id}
-        if not self.receipts.claim(key, fields):
-            return {"status": "already_claimed", "dispatch_key": key}
-        inputs = {"linear_issue_id": issue["id"], "linear_identifier": issue["identifier"],
-                  "linear_project_id": route.project_id, "dispatch_key": key}
-        try:
-            self.github.dispatch(route, inputs)
-        except DispatchError as exc:
-            if exc.uncertain:
-                # Do not blindly resend after a timeout: the first request may
-                # already be queued by GitHub. Keep this receipt for inspection.
-                self.receipts.finish(key, "uncertain")
-                return {"status": "uncertain", "dispatch_key": key}
-            self.receipts.release(key)
-            raise
-        # A crash here leaves a claim instead of risking a duplicate dispatch.
-        self.receipts.finish(key, "dispatched")
-        return {"status": "dispatched", "dispatch_key": key, **fields}
+        return self.route_issues([issue])[0]
+
+    def route_issues(self, issues):
+        results, repositories = [], set()
+        for issue in issues:
+            route, reason = eligibility(issue, self.registry)
+            if route:
+                key = self.queue.enqueue(issue, route)
+                results.append({"status": "already_claimed", "dispatch_key": key})
+            else:
+                results.append({"status": reason})
+            mapped = self.registry.routes.get((issue.get("project") or {}).get("id"))
+            if mapped:
+                repositories.add(mapped.repository.lower())
+        advanced = {}
+        for repository in sorted(repositories):
+            advanced.update(self.queue.advance(repository))
+        return [advanced.get(result.get("dispatch_key"), result) for result in results]

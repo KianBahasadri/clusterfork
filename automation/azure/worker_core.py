@@ -96,10 +96,11 @@ class Accounts:
 
 
 class WorkerService:
-    def __init__(self, registry, receipts, runs, accounts, linear, github, clock=time.time, sync=None):
+    def __init__(self, registry, receipts, runs, accounts, linear, github, queue, clock=time.time, sync=None):
         self.registry, self.receipts, self.runs = registry, receipts, runs
         self.accounts, self.linear, self.github, self.clock = accounts, linear, github, clock
         self.sync = sync
+        self.queue = queue
 
     def sync_linear(self, key):
         if self.sync:
@@ -119,6 +120,7 @@ class WorkerService:
         owner = f"{claims['run_id']}:{claims['run_attempt']}"
         if action == "start":
             return self.start(key, owner, claims, receipt, route)
+        self.queue.assert_worker(route.repository, key, owner)
         row, etag = self.runs.get(key)
         if (row.get("owner") != owner or row.get("status") != "running"
                 or row.get("lease_until", 0) <= self.clock()):
@@ -195,9 +197,20 @@ class WorkerService:
             row["auto_merge_requested"] = route.auto_merge and status == "completed" and bool(url)
             self.runs.replace(row, etag)
             if status == "waiting_for_quota":
-                receipt, receipt_etag = self.receipts.get(key)
-                receipt["retry_after"] = int(self.clock()) + 900
-                self.receipts.replace(receipt, receipt_etag)
+                for _ in range(32):
+                    # A very fast quota wait can finish while the dispatcher is
+                    # still persisting GitHub's acceptance. Merge that write;
+                    # contention must not turn a capacity wait into a failure.
+                    receipt, receipt_etag = self.receipts.get(key)
+                    receipt["retry_after"] = int(self.clock()) + 900
+                    try:
+                        self.receipts.replace(receipt, receipt_etag)
+                        break
+                    except WorkerError as exc:
+                        if exc.status != 409:
+                            raise
+                else:
+                    raise WorkerError("Dispatch receipt changed concurrently; retry quota scheduling")
             self.sync_linear(key)
             return {"status": status}
         raise WorkerError("Unknown worker action", 404)
@@ -212,6 +225,7 @@ class WorkerService:
             raise WorkerError("Issue is no longer eligible", 403)
         if not route.validation_commands:
             raise WorkerError("Repository validation commands must be configured", 400)
+        self.queue.start_worker(route.repository, key, owner)
         row = {"RowKey": key, "owner": owner, "status": "running", "stage": "initializing",
                "started_at": int(self.clock()), "report_version": 0,
                "lease_until": int(self.clock()) + LEASE_SECONDS}
@@ -219,9 +233,8 @@ class WorkerService:
             existing, etag = self.runs.get(key)
             if existing.get("status") == "completed":
                 raise WorkerError("Issue already completed")
-            if (existing.get("owner") != owner and existing.get("status") == "running"
-                    and existing.get("lease_until", 0) > self.clock()):
-                raise WorkerError("Another worker is active")
+            # Repository admission checked the previous GitHub attempt, even
+            # when its heartbeat expired or its finish callback already ran.
             if existing.get("owner") == owner and existing.get("status") == "running":
                 row = {**existing, "lease_until": row["lease_until"]}
             self.runs.replace(row, etag)
