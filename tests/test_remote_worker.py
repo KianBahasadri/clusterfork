@@ -28,7 +28,7 @@ from dispatch_core import Registry
 from quota_selection import select_account
 from worker_core import Accounts, WorkerError, WorkerService, authorize_claims
 from repository_queue import RepositoryQueue
-from readiness_policy import PROTOCOL
+from readiness_policy import POLICY, PROTOCOL, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS, digest
 
 PROJECT = "374f597c-89f5-4e40-9798-07533f57bfba"
 ISSUE = "66547614-8ed4-4928-834e-aac76f01afd2"
@@ -138,6 +138,14 @@ class WorkerAdmissionTests(unittest.TestCase):
         self.assertEqual(result, 0)
         execute.assert_called_once()
         broker.call.assert_called_with("finish", status="completed", pull_request="")
+
+    def test_worker_rejects_broker_predating_selection_reporting(self):
+        previous = "readiness-v1:" + digest([POLICY, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS])
+        result, broker, execute = self.run_worker({"serial_admission": True,
+                                                  "protocol": previous, "phase": "development"})
+        self.assertEqual(result, 1)
+        execute.assert_not_called()
+        broker.call.assert_called_with("finish", status="failed")
 
 
 class AccountLeaseTests(unittest.TestCase):

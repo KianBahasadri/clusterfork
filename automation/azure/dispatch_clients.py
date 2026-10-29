@@ -11,7 +11,7 @@ from urllib.request import Request, urlopen
 from uuid import UUID
 
 from dispatch_core import DispatchError
-from worker_reporting import STAGE_LABELS
+from worker_reporting import SELECTION_LABEL, STAGE_LABELS
 
 
 class RequestError(RuntimeError):
@@ -119,6 +119,12 @@ class Linear:
     def set_clarification(self, issue_id, enabled):
         from readiness_policy import CLARIFICATION_LABEL
 
+        self.set_label(issue_id, CLARIFICATION_LABEL, enabled)
+
+    def set_selected(self, issue_id, enabled):
+        self.set_label(issue_id, SELECTION_LABEL, enabled)
+
+    def set_label(self, issue_id, name, enabled):
         issue = self.query("""query($id: String!) {
           issue(id: $id) { team { id } labels(first: 100) {
             nodes { id name } pageInfo { hasNextPage }
@@ -126,9 +132,9 @@ class Linear:
         }""", {"id": issue_id})["issue"]
         if issue["labels"]["pageInfo"]["hasNextPage"]:
             raise ValueError("Incomplete issue labels")
-        owned = [label for label in issue["labels"]["nodes"] if label["name"] == CLARIFICATION_LABEL]
+        owned = [label for label in issue["labels"]["nodes"] if label["name"] == name]
         if enabled and not owned:
-            identifier = self.stage_label(issue["team"]["id"], CLARIFICATION_LABEL)
+            identifier = self.stage_label(issue["team"]["id"], name)
             result = self.query("""mutation($id: String!, $label: String!) {
               issueAddLabel(id: $id, labelId: $label) { success }
             }""", {"id": issue_id, "label": identifier})["issueAddLabel"]
@@ -161,7 +167,7 @@ class Linear:
         try:
             result = self.query("""mutation($id: String!, $team: String!, $name: String!) {
               issueLabelCreate(input: {id: $id, teamId: $team, name: $name,
-                description: "Clusterfork development stage or readiness", color: "#5E6AD2"}) { success }
+                description: "Clusterfork repository selection, development stage or readiness", color: "#5E6AD2"}) { success }
             }""", {"id": identifier, "team": team_id, "name": name})["issueLabelCreate"]
             if not result["success"]:
                 raise RequestError()

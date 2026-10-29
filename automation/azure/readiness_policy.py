@@ -4,6 +4,8 @@ from dataclasses import asdict
 import hashlib
 import json
 
+from worker_reporting import SELECTION_PROTOCOL
+
 
 REVIEW_TIMEOUT_SECONDS = 600
 RETRY_SECONDS = 900
@@ -83,8 +85,9 @@ def digest(value):
                                      ensure_ascii=True).encode()).hexdigest()
 
 
-# A different prompt/schema/budget cannot silently use an older runner contract.
-PROTOCOL = "readiness-v1:" + digest([POLICY, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS])
+# Both phases must agree on readiness and repository selection reporting. An
+# older broker must not silently start a runner without the selection behavior.
+PROTOCOL = "readiness-v1:" + digest([POLICY, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS, SELECTION_PROTOCOL])
 
 
 def issue_revision(issue):

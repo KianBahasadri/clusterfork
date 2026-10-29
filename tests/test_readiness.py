@@ -23,7 +23,7 @@ from dispatch_core import Dispatcher, DispatchError, Registry
 from linear_sync import comment_id
 from readiness import ReadinessGate
 from readiness_policy import (CLARIFICATION_LABEL, CRITERIA, POLICY, PROTOCOL, RESULT_SCHEMA,
-                              issue_revision, review_prompt, validate_result)
+                              REVIEW_TIMEOUT_SECONDS, digest, issue_revision, review_prompt, validate_result)
 from repository_queue import RepositoryQueue, dispatch_key
 from worker_core import Accounts, WorkerError, WorkerService
 from test_remote_worker import MemoryTable, NOW, PROJECT, auth, claims
@@ -164,6 +164,47 @@ class ReadinessTests(unittest.TestCase):
         self.call(coding, "github")
         self.assertEqual(self.github.installation_token.call_args.kwargs["permissions"],
                          {"contents": "write", "pull_requests": "write"})
+
+    def test_selection_is_reported_before_readiness_runner_dispatch(self):
+        waiting = self.make_issue(2)
+
+        def dispatch(route, inputs):
+            self.linear.set_selected.assert_called_once_with(self.issue["id"], True)
+            self.assertFalse(self.attempts)
+            self.dispatch(route, inputs)
+
+        self.github.dispatch.side_effect = dispatch
+        self.dispatcher.process({"type": "Project", "id": PROJECT})
+        self.assertEqual(self.github.dispatch.call_count, 1)
+        self.assertEqual(waiting["state"]["id"], self.route.ready_state_ids[0])
+
+    def test_readiness_timer_reports_selection_for_legacy_and_unreported_slots_before_retry(self):
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                self.setUp()
+                self.linear.set_selected.side_effect = RequestError()
+                self.github.dispatch.side_effect = DispatchError("rejected")
+                with self.assertLogs(level="ERROR"):
+                    self.dispatcher.process({"type": "Issue", "id": self.issue["id"]})
+                table = self.queue.table(self.route.repository)
+                key = dispatch_key(self.registry, self.route, self.issue)
+                if legacy:
+                    row, etag = table.get(key)
+                    row.pop("selection_version")
+                    row.pop("selection_pending")
+                    table.replace(row, etag)
+                self.now += 901
+                self.linear.set_selected.reset_mock(side_effect=True)
+
+                def dispatch(route, inputs):
+                    self.linear.set_selected.assert_called_once_with(self.issue["id"], True)
+                    self.dispatch(route, inputs)
+
+                self.github.dispatch.side_effect = dispatch
+                self.gate.reconcile()  # Runs before queue reconciliation in the timer.
+                self.assertEqual(self.github.dispatch.call_count, 2)
+                self.assertFalse(table.get(key)[0]["selection_pending"])
+                self.assertFalse(self.receipts.list())
 
     def test_multiple_todos_share_one_slot_before_any_review_starts(self):
         others = [self.make_issue(number) for number in (2, 3)]
@@ -450,6 +491,18 @@ class ReadinessTests(unittest.TestCase):
         self.queue.enqueue(self.issue, self.route)
         self.queue.advance(self.route.repository)
         self.assertFalse(self.receipts.list())
+
+    def test_broker_rejects_old_selection_contract_in_both_worker_phases(self):
+        previous = "readiness-v1:" + digest([POLICY, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS])
+        review, _ = self.begin()
+        with self.assertRaisesRegex(WorkerError, "compatible"):
+            self.call(review, "start", protocol=previous)
+        self.submit(review)
+        self.stop(review)
+        coding = dispatch_key(self.registry, self.route, self.issue)
+        with self.assertRaisesRegex(WorkerError, "compatible"):
+            self.call(coding, "start", protocol=previous)
+        self.assertFalse(self.runs.list())
 
     def test_completed_coding_receipt_is_not_consumed_by_review_resubmission(self):
         old, _ = self.pass_review()
