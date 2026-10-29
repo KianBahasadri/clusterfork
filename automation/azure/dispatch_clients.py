@@ -42,7 +42,7 @@ def request_json(url, *, token, method="GET", data=None):
 
 
 ISSUE_FIELDS = """
-id identifier title description url archivedAt createdAt
+id identifier title description url archivedAt createdAt priority
 state { id type }
 """
 PROJECT_FIELDS = "id archivedAt labels(first: 100) { nodes { name } pageInfo { hasNextPage } }"

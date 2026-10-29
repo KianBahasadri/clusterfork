@@ -1,4 +1,4 @@
-"""Repository FIFO safety across deliveries, worker crashes, PRs, and reruns."""
+"""Repository admission safety across priorities, deliveries, crashes, and reruns."""
 
 import copy
 from collections import defaultdict
@@ -54,8 +54,9 @@ class RepositoryQueueTests(unittest.TestCase):
         return RepositoryQueue(self.registry, self.receipts, self.runs, self.tables.__getitem__,
                                self.linear, self.github, ApprovedReadiness(), clock=lambda: self.now)
 
-    def issue(self, number, project=PROJECT):
+    def issue(self, number, project=PROJECT, *, priority=0):
         issue = {"id": str(UUID(int=number)), "identifier": f"KIAN-{number}", "title": "Test",
+                 "priority": priority,
                  "state": {"id": self.registry.routes[project].ready_state_ids[0], "type": "unstarted"},
                  "createdAt": f"2026-10-01T00:00:{number:02d}Z", "archivedAt": None,
                  "project": {"id": project, "archivedAt": None,
@@ -112,6 +113,206 @@ class RepositoryQueueTests(unittest.TestCase):
 
     def slot(self, repository=None):
         return self.tables[(repository or self.repository).lower()].get("slot")[0]
+
+    def test_project_scan_admits_by_priority_before_creation_order(self):
+        issues = [self.issue(n, priority=priority) for n, priority in enumerate((0, 4, 3, 2, 1), 1)]
+        keys = [dispatch_key(self.registry, self.route, issue) for issue in issues]
+        self.dispatcher.process({"type": "Project", "id": PROJECT})
+        table = self.queue.table(self.repository)
+        self.assertEqual([table.get(key)[0]["priority"] for key in keys], [0, 4, 3, 2, 1])
+        self.assertEqual([table.get(key)[0]["sequence"] for key in keys], [1, 2, 3, 4, 5])
+        for index in (4, 3, 2, 1, 0):
+            self.assertEqual(self.slot()["active_key"], keys[index])
+            self.assertEqual(self.selected, {issues[index]["id"]})
+            self.assertEqual(self.queued, {issue["id"] for issue in issues[:index]})
+            self.start(keys[index])
+            self.finish(keys[index])
+            self.stop(keys[index])
+            self.queue.reconcile()
+        self.assertEqual(self.slot()["active_key"], "")
+        self.assertEqual(self.selected | self.queued, set())
+        self.assertEqual(self.github.dispatch.call_count, 5)
+
+    def test_equal_priority_fifo_survives_scans_retries_and_restarts(self):
+        for priority in range(5):
+            with self.subTest(priority=priority):
+                self.setUp()
+                issues = [self.issue(n, priority=priority) for n in (8, 2, 5)]
+                keys = [self.enqueue(issue) for issue in issues]
+                table = self.queue.table(self.repository)
+                before = {key: table.get(key)[0] for key in keys}
+                self.github.dispatch.side_effect = DispatchError("temporarily rejected")
+                with self.assertRaises(DispatchError):
+                    self.queue.advance(self.repository)
+                self.now += 61
+                self.github.dispatch.side_effect = self.dispatch
+                for _ in range(2):
+                    self.dispatcher.process({"type": "Project", "id": PROJECT})
+                self.queue = self.restart()
+                self.service.queue = self.dispatcher.queue = self.queue
+                for key in keys:
+                    self.queue.reconcile()
+                    self.assertEqual(self.slot()["active_key"], key)
+                    self.start(key)
+                    self.finish(key)
+                    self.stop(key)
+                for key in keys:
+                    after = table.get(key)[0]
+                    self.assertEqual(after["sequence"], before[key]["sequence"])
+                    self.assertEqual(after["queued_at"], before[key]["queued_at"])
+
+    def test_equal_priority_batch_uses_creation_time_then_uuid_after_existing_entries(self):
+        existing = self.issue(9, priority=2)
+        self.enqueue(existing)
+        issues = [self.issue(n, priority=2) for n in (3, 1, 2)]
+        issues[1]["createdAt"] = issues[0]["createdAt"]
+        self.dispatcher.process({"type": "Project", "id": PROJECT})
+        for issue in (existing, issues[2], issues[1], issues[0]):
+            key = dispatch_key(self.registry, self.route, issue)
+            self.assertEqual(self.slot()["active_key"], key)
+            self.start(key)
+            self.finish(key)
+            self.stop(key)
+            self.queue.reconcile()
+
+    def test_waiting_priority_edits_refresh_through_events_and_timer(self):
+        for source in ("Issue", "Project", "timer"):
+            for priority in (1, 0):
+                with self.subTest(source=source, priority=priority):
+                    self.setUp()
+                    active = self.enqueue(self.issue(1))
+                    self.queue.advance(self.repository)
+                    second = self.enqueue(self.issue(2, priority=2))
+                    issue = self.issue(3, priority=4 if priority == 1 else 1)
+                    third = self.enqueue(issue)
+                    self.queue.advance(self.repository)
+                    table = self.queue.table(self.repository)
+                    before = table.get(third)[0]
+                    self.now += 10
+                    issue["priority"] = priority
+                    if source == "timer":
+                        self.restart().reconcile()
+                    else:
+                        self.dispatcher.process({"type": source, "id": issue["id"] if source == "Issue" else PROJECT})
+                    after = table.get(third)[0]
+                    self.assertEqual(after["priority"], priority)
+                    for field in ("sequence", "queued_at", "selection_version"):
+                        self.assertEqual(after[field], before[field])
+                    self.assertEqual(self.slot()["active_key"], active)
+                    self.assertEqual(self.selected, {str(UUID(int=1))})
+                    self.assertEqual(self.queued, {str(UUID(int=2)), issue["id"]})
+                    self.assertEqual(self.github.dispatch.call_count, 1)
+                    self.start(active)
+                    self.finish(active)
+                    self.stop(active)
+                    self.restart().reconcile()
+                    self.assertEqual(self.slot()["active_key"], third if priority == 1 else second)
+
+    def test_handoff_refreshes_priorities_before_reserving_next_slot(self):
+        first, second, third = [self.enqueue(self.issue(n, priority=3)) for n in (1, 2, 3)]
+        self.queue.advance(self.repository)
+        self.start(first)
+        self.issues[str(UUID(int=3))]["priority"] = 1  # No issue webhook or project scan yet.
+        self.finish(first)
+        self.stop(first)
+        self.restart().reconcile()
+        self.assertEqual(self.slot()["active_key"], third)
+        self.assertEqual(self.selected, {str(UUID(int=3))})
+        self.assertEqual(self.queued, {str(UUID(int=2))})
+        self.assertEqual(self.queue.table(self.repository).get(second)[0]["status"], "queued")
+        self.assertEqual(self.github.dispatch.call_count, 2)
+
+    def test_priority_edit_keeps_original_fifo_position_within_new_priority(self):
+        first = self.enqueue(self.issue(1))
+        self.queue.advance(self.repository)
+        earlier = self.issue(8, priority=4)
+        second = self.enqueue(earlier)
+        self.enqueue(self.issue(2, priority=2))
+        earlier["priority"] = 2
+        self.dispatcher.process({"type": "Issue", "id": earlier["id"]})
+        self.start(first)
+        self.finish(first)
+        self.stop(first)
+        self.restart().reconcile()
+        self.assertEqual(self.slot()["active_key"], second)
+        self.assertEqual(self.selected, {earlier["id"]})
+        self.assertEqual(self.queued, {str(UUID(int=2))})
+
+    def test_urgent_arrival_cannot_preempt_selected_or_running_task(self):
+        for phase in ("selected", "running"):
+            with self.subTest(phase=phase):
+                self.setUp()
+                first = self.enqueue(self.issue(1, priority=4))
+                self.queue.advance(self.repository)
+                if phase == "running":
+                    self.start(first)
+                self.enqueue(self.issue(2, priority=3))
+                urgent = self.issue(3, priority=1)
+                key = dispatch_key(self.registry, self.route, urgent)
+                self.dispatcher.process({"type": "Issue", "id": urgent["id"]})
+                self.issues[str(UUID(int=1))]["priority"] = 0
+                self.dispatcher.process({"type": "Issue", "id": str(UUID(int=1))})
+                self.assertEqual(self.slot()["active_key"], first)
+                self.assertEqual(self.selected, {str(UUID(int=1))})
+                self.assertEqual(self.queued, {str(UUID(int=2)), urgent["id"]})
+                self.assertEqual(self.github.dispatch.call_count, 1)
+                if phase == "selected":
+                    self.start(first)
+                self.finish(first)
+                self.queue.reconcile()
+                self.assertEqual(self.slot()["active_key"], first)
+                self.stop(first)
+                self.queue.reconcile()
+                self.assertEqual(self.slot()["active_key"], key)
+                self.assertEqual(self.selected, {urgent["id"]})
+                self.assertEqual(self.queued, {str(UUID(int=2))})
+                self.assertEqual(self.github.dispatch.call_count, 2)
+
+    def test_legacy_waiting_priorities_are_backfilled_before_admission(self):
+        first = self.enqueue(self.issue(1, priority=4))
+        second = self.enqueue(self.issue(2, priority=1))
+        table = self.queue.table(self.repository)
+        for key in (first, second):
+            row, version = table.get(key)
+            del row["priority"]
+            table.replace(row, version)
+        self.restart().reconcile()
+        self.assertEqual(self.slot()["active_key"], second)
+        self.assertEqual(table.get(first)[0]["priority"], 4)
+        self.assertEqual(table.get(second)[0]["priority"], 1)
+        self.assertEqual([table.get(key)[0]["sequence"] for key in (first, second)], [1, 2])
+
+    def test_priority_edit_racing_admission_retries_the_choice(self):
+        for source in ("enqueue", "refresh"):
+            with self.subTest(source=source):
+                self.setUp()
+                first = self.enqueue(self.issue(1, priority=3))
+                urgent = self.issue(2, priority=4)
+                second = self.enqueue(urgent)
+                table = self.queue.table(self.repository)
+                head = self.queue.head
+                edited = False
+
+                def edit_during_selection(table):
+                    nonlocal edited
+                    candidate = head(table)
+                    if not edited:
+                        edited = True
+                        urgent["priority"] = 1
+                        if source == "enqueue":
+                            self.enqueue(urgent)
+                        else:
+                            self.queue.refresh_waiting_entry(table, second)
+                    return candidate
+
+                with patch.object(self.queue, "head", side_effect=edit_during_selection):
+                    self.queue.advance(self.repository)
+                self.assertTrue(edited)
+                self.assertEqual(self.slot()["active_key"], second)
+                self.assertEqual(self.selected, {urgent["id"]})
+                self.assertEqual(self.queued, {str(UUID(int=1))})
+                self.assertEqual([table.get(key)[0]["sequence"] for key in (first, second)], [1, 2])
+                self.assertEqual(self.github.dispatch.call_count, 1)
 
     def test_deployment_pause_holds_new_work_but_allows_current_worker_to_finish(self):
         control = DeploymentControl(MemoryTable())
@@ -463,7 +664,7 @@ class RepositoryQueueTests(unittest.TestCase):
         key = "f" * 64
         self.receipts.create({"RowKey": key, "issue_id": old["id"], "identifier": old["identifier"],
                               "project_id": PROJECT, "repository": self.repository, "status": "uncertain"})
-        self.enqueue(self.issue(2))
+        self.enqueue(self.issue(2, priority=1))
         self.queue.advance(self.repository)
         self.assertEqual(self.slot()["active_key"], key)
         self.github.dispatch.assert_not_called()
@@ -638,11 +839,12 @@ class RepositoryQueueTests(unittest.TestCase):
         self.assertEqual(self.github.dispatch.call_count, 2)
 
     def test_waiting_cleanup_survives_github_outage_and_preserves_position_on_linear_outage(self):
-        first, second = [self.enqueue(self.issue(n)) for n in (1, 2)]
+        first, second = [self.enqueue(self.issue(n, priority=2)) for n in (1, 2)]
         self.queue.advance(self.repository)
         table = self.queue.table(self.repository)
         position = table.get(second)[0]["sequence"]
         issue_id = str(UUID(int=2))
+        self.issues[issue_id]["priority"] = 1
 
         def unavailable(key):
             if key == issue_id:
@@ -654,6 +856,7 @@ class RepositoryQueueTests(unittest.TestCase):
             self.restart().reconcile()
         self.assertEqual(table.get(second)[0]["sequence"], position)
         self.assertEqual(table.get(second)[0]["status"], "queued")
+        self.assertEqual(table.get(second)[0]["priority"], 2)
         self.assertEqual(self.queued, {issue_id})
         self.issues[issue_id]["state"]["id"] = "backlog"
         self.linear.issue.side_effect = lambda key: copy.deepcopy(self.issues.get(key))
@@ -699,6 +902,43 @@ class RepositoryQueueTests(unittest.TestCase):
         self.assertEqual(table.get(second)[0]["status"], "queued")
         self.assertEqual(self.queued, {issue["id"]})
         self.assertEqual(self.slot()["active_key"], first)
+        self.assertEqual(self.github.dispatch.call_count, 1)
+
+    def test_delayed_priority_observation_cannot_overwrite_newer_edit(self):
+        first = self.enqueue(self.issue(1))
+        self.queue.advance(self.repository)
+        issue = self.issue(2, priority=4)
+        second = self.enqueue(issue)
+        table = self.queue.table(self.repository)
+        sequence = table.get(second)[0]["sequence"]
+        issue["priority"] = 2
+        started, resume = threading.Event(), threading.Event()
+        delayed = False
+
+        def observe(key):
+            nonlocal delayed
+            snapshot = copy.deepcopy(self.issues.get(key))
+            if key == issue["id"] and not delayed:
+                delayed = True
+                started.set()
+                self.assertTrue(resume.wait(5))
+            return snapshot
+
+        self.linear.issue.side_effect = observe
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(self.queue.refresh_waiting_entry, table, second)
+            try:
+                self.assertTrue(started.wait(5))
+                issue["priority"] = 1
+                self.dispatcher.process({"type": "Issue", "id": issue["id"]})
+            finally:
+                resume.set()
+            future.result(timeout=5)
+        self.assertEqual(table.get(second)[0]["priority"], 1)
+        self.assertEqual(table.get(second)[0]["sequence"], sequence)
+        self.assertEqual(self.slot()["active_key"], first)
+        self.assertEqual(self.selected, {str(UUID(int=1))})
+        self.assertEqual(self.queued, {issue["id"]})
         self.assertEqual(self.github.dispatch.call_count, 1)
 
     def test_backlog_removal_failure_and_todo_reentry_join_tail_without_losing_intent(self):
