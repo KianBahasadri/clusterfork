@@ -1,8 +1,8 @@
 # Remote development setup
 
 Read [the runtime overview](remote-development.md) before enrolling a project.
-Cloud automation is independent of the dotfile installer. These commands are
-operator setup steps; repository tests and packaging do not deploy anything.
+Cloud automation is independent of the dotfile installer. Infrastructure is
+managed through [Terraform](azure-infrastructure.md); tests and packaging remain local.
 
 ## Local configuration
 
@@ -62,32 +62,18 @@ again; it is not a targeted retry switch.
 
 ## Azure deployment
 
+[Azure infrastructure](azure-infrastructure.md) owns Terraform provisioning,
+existing-resource adoption, protected state, runtime credentials, and cloud roles.
+Use that workflow for resource and configuration changes. `pilot.py` remains a
+local configuration check and source packager; it no longer provisions Azure or
+writes app settings.
+
 Routine source updates use [automatic deployment](remote-development.md#automatic-deployments).
-Initial provisioning and local recovery use the helper, with Azure CLI
-authenticated to the intended subscription:
+The workflow reconciles Terraform before deploying the tested source package.
+The package uses an explicit allowlist and excludes `.env`, PEMs, auth caches,
+and unrelated local keys.
 
-```bash
-az account show --query '{name:name,state:state}'
-python3 automation/pilot.py deploy
-```
-
-The helper creates `rg-clusterfork-automation` in `eastus`, a deterministic
-subscription-derived StorageV2 account, the event queue, and a Python 3.12
-Flex Consumption Function App. New apps use 512 MB instances, a 40-instance
-maximum, and no always-ready instances. The helper also provisions
-[bounded Azure monitoring](remote-development-observability.md#azure-monitoring-setup).
-Normal Azure compute/storage charges and allowances apply.
-
-Credentials go to app settings through a temporary mode-0600 file. The source
-ZIP uses an explicit allowlist and remote dependency build; it excludes the
-root `.env`, PEM, auth caches, and unrelated local keys. `configure` updates
-runtime credentials without redeploying source:
-
-```bash
-python3 automation/pilot.py configure
-```
-
-The recorded deployment uses these resources:
+The existing deployment uses:
 
 | Resource | Name |
 | --- | --- |
@@ -95,49 +81,30 @@ The recorded deployment uses these resources:
 | Storage account | `cfdispatch7604cac329` |
 | Resource group | `rg-clusterfork-automation` |
 
-The helper accepts `--resource-group` and `--location`. Moving the deployment
-also requires updating the broker URL allowlist in `automation/worker.py`, the
-workflow's broker URL, and the storage/group names in `automation/accounts.py`.
-Creating differently named Azure resources alone does not relocate the worker.
-
-The helper prints `/api/linear` and `/api/health` URLs. With no webhook secret,
-health returns 503, webhook requests are rejected, and the timer stays idle.
-Azure hostname responses are accepted at either the root or `properties` level;
-a missing hostname is an error.
+Relocating it also requires updating the broker URL allowlist in
+`automation/worker.py`, the workflow's broker URL, and storage/group names in
+`automation/accounts.py`. Creating new resources alone does not relocate workers.
 
 ## Automatic deployment identity
 
 The `azure-production` GitHub environment permits only main and has no required
 reviewers. Its `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID`
-variables identify the user-assigned managed identity `clusterfork-github-deploy`.
-Its federated credential trusts issuer
-`https://token.actions.githubusercontent.com`, subject
-`repo:KianBahasadri/clusterfork:environment:azure-production`, and audience
-`api://AzureADTokenExchange`.
+variables identify the user-assigned deployment identity. Azure permissions and
+GitHub OIDC federation are declared in Terraform; see
+[credentials and identity](azure-infrastructure.md#credentials-and-identity).
 
-The identity has Website Contributor on the existing Function App and Storage
-Table Data Contributor on the `ClusterforkOperations` table only. It uses OIDC
-instead of a client secret or publish profile. Runtime Linear/App credentials
-continue to be configured separately through the provisioning helper; deployment
-does not copy the local `.env` or authentication caches to GitHub. The control
-table must exist before the deployment identity accesses it.
-
-The workflow uses Python 3.12, pinned Azure actions, and the explicit package
-allowlist. Run a recovery against the current tested main with:
+Run a recovery against the current tested main with:
 
 ```bash
 gh workflow run deploy-azure.yml --repo KianBahasadri/clusterfork --ref main
 ```
-
-References: [Azure Functions GitHub Actions deployment](https://learn.microsoft.com/en-us/azure/azure-functions/functions-how-to-github-actions),
-[Azure OIDC authentication](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect).
 
 ## Linear webhook and first run
 
 1. Create one Linear webhook under workspace **API → Webhooks**, targeting the
    printed `/api/linear` URL. Select the mapped team and **Issues** and
    **Projects** resource types.
-2. Set its signing secret in `LINEAR_WEBHOOK_SECRET`, then run `configure`.
+2. Store its signing secret through the Terraform credential workflow.
 3. Check `/api/health` returns 200 and `"missing": []`. This verifies runtime
    configuration presence, not account quota or an end-to-end coding run.
 4. Inspect the mapped project's ready issues before adding the **project label**

@@ -14,7 +14,6 @@ from urllib.error import HTTPError, URLError
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
 import diagnostics
-import monitoring
 import worker
 from dispatch_clients import RequestError, request_json
 import test_worker_reporting as reporting
@@ -155,28 +154,6 @@ class DurableFailureTests(unittest.TestCase):
         self.assertTrue(any("publication" in body and "broker/github" in body and "20s" in body for body in comments))
         self.assertFalse(any("SECRET" in body for body in comments))
         self.assertEqual(self.issue["state"]["id"], self.states.blocked)
-
-
-class MonitoringSetupTests(unittest.TestCase):
-    def test_monitoring_keeps_connection_string_private_and_preserves_other_settings(self):
-        calls = []
-        def command(args, **kwargs):
-            calls.append(args)
-            self.assertTrue(kwargs["sensitive"])
-            if "resource" in args:
-                return "InstrumentationKey=SECRET"
-            if "appsettings" in args:
-                path = Path(args[args.index("--settings") + 1][1:])
-                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-                self.assertEqual(json.loads(path.read_text()), {"APPLICATIONINSIGHTS_CONNECTION_STRING": "InstrumentationKey=SECRET"})
-            return ""
-        with patch("sys.stdout", io.StringIO()) as output:
-            monitoring.configure({"group": "fixture", "app": "fixture"}, "eastus", command)
-        self.assertNotIn("SECRET", output.getvalue() + str(calls))
-        template = json.loads((ROOT / "automation/monitoring.json").read_text())
-        workspace = template["resources"][0]["properties"]
-        self.assertEqual(workspace["retentionInDays"], 30)
-        self.assertEqual(template["parameters"]["dailyQuotaGb"]["defaultValue"], "0.1")
 
 
 if __name__ == "__main__":

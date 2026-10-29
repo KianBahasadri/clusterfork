@@ -8,6 +8,22 @@ permissions:
   contents: read
 
 jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: '1.15.9'
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive infra
+      - name: Validate Terraform without cloud credentials
+        run: |
+          for stack in infra/bootstrap infra/azure; do
+            terraform -chdir="$stack" init -backend=false -input=false -lockfile=readonly
+            terraform -chdir="$stack" validate
+          done
+
   test:
     runs-on: ubuntu-latest
     steps:

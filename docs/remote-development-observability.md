@@ -56,20 +56,20 @@ subprocess output continues to be withheld from public Actions logs.
 
 ## Azure monitoring setup
 
-Provision or repair the monitoring resources using the authenticated operator's
-Azure CLI session; this does not require `.env` credentials:
+Monitoring is owned by the [Azure Terraform stack](azure-infrastructure.md).
+Provisioning, adoption, state, and normal deployment follow that topic. To inspect
+or reconcile configuration:
 
 ```bash
-python3 automation/pilot.py monitor
+python3 automation/infrastructure.py plan
+python3 automation/infrastructure.py apply
 ```
 
-`automation/monitoring.json` creates an Application Insights component named
+Terraform declares an Application Insights component named
 `<function-app>-insights`, backed by a dedicated Log Analytics workspace named
 `<function-app>-logs`. Both use 30-day retention. The workspace has a 0.1 GB daily
-ingestion cap. The helper attaches only `APPLICATIONINSIGHTS_CONNECTION_STRING`
-to the existing Function App, preserving other settings and keeping the connection
-string out of command arguments and output. Local provisioning via `pilot.py deploy`
-also configures these resources; routine source deployment preserves the setting.
+ingestion cap. The Function App's monitoring connection is also declared in
+Terraform and reconciled during deployment.
 
 `host.json` enables function request results and operational Information logs.
 Requests, exceptions, and traces are excluded from adaptive sampling so a failure's

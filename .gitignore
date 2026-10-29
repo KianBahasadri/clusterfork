@@ -4,6 +4,12 @@ notify-prefs
 auth.json*
 __pycache__/
 *.py[cod]
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.auto.tfvars.json
+crash.log
 .commandcode/taste/
 .codeview/*
 !.codeview/modules/
