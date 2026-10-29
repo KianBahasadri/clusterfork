@@ -14,7 +14,7 @@ class AzureTable:
 
     def __init__(self, connection, name, partition):
         from azure.data.tables import TableServiceClient
-        self.table = TableServiceClient.from_connection_string(connection).create_table_if_not_exists(name)
+        self.table = TableServiceClient.from_connection_string(connection).get_table_client(name)
         self.partition = partition
 
     def get(self, key):

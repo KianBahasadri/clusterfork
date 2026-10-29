@@ -239,8 +239,8 @@ cannot be attributed without its traces; default polling was a plausible contrib
 ## Automatic deployments
 
 `.github/workflows/deploy-azure.yml` runs on pushes to main and supports manual
-recovery with `workflow_dispatch`. It compares the allowlisted broker source
-digest with the deployed package and skips unchanged, unpaused deployments.
+recovery with `workflow_dispatch`. Every run reconciles the
+[Azure Terraform stack](azure-infrastructure.md) before publishing the package.
 Deployment runs are serialized, with later pushes retaining the newest pending
 run. [Setup](remote-development-setup.md#automatic-deployment-identity) owns the
 GitHub environment and Azure identity configuration.
