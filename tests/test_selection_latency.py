@@ -75,6 +75,7 @@ class HandlerTimingTests(unittest.TestCase):
             response = self.app.linear_webhook(self.request)
             self.assertEqual(response.status_code, 200)
             self.assertEqual(self.case.selected, set())  # Receipt and queue send do not select.
+            self.assertEqual(self.case.queued, set())
             self.assertNotIn("description", sent[0])
             self.case.now += 0.5
             message = Mock()
@@ -108,6 +109,7 @@ class HandlerTimingTests(unittest.TestCase):
             response = self.app.linear_webhook(self.request)
         self.assertEqual(response.status_code, 503)
         self.assertEqual(self.case.selected, set())
+        self.assertEqual(self.case.queued, set())
         self.assertNotIn("private service response", "\n".join(logs.output))
 
 

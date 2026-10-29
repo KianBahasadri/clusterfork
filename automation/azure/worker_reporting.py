@@ -19,6 +19,7 @@ STAGES = {
 }
 STAGE_LABELS = {stage: f"clusterfork: {name}" for stage, name in STAGES.items()}
 SELECTION_LABEL = "clusterfork: selected"
+QUEUED_LABEL = "clusterfork: queued"
 SELECTION_PROTOCOL = "repository-selection-v1"
 
 

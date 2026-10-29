@@ -119,6 +119,8 @@ class RepositoryQueue:
             if existing:
                 # Rejoining a skipped task must not lose a pending label removal.
                 row.update({k: v for k, v in existing.items() if k.startswith("selection_")})
+            if not submitted:
+                selection_changed(row)
             state["sequence"] = sequence
             try:
                 table.transaction([(state, etag), (row, version)])
@@ -347,6 +349,52 @@ class RepositoryQueue:
         except Exception:
             logging.error("Repository queue explanation deferred for %s", row["RowKey"])
 
+    def refresh_waiting_entry(self, table, key):
+        for _ in range(32):
+            state, etag = table.get("slot")
+            row, version = table.get(key)
+            if row["status"] != "queued" or state["active_key"] == key:
+                return
+            issue = self.linear.issue(row["issue_id"])
+            route, reason = eligibility(issue or {}, self.registry)
+            if (not route or route.project_id != row["project_id"]
+                    or route.repository.lower() != row["repository"].lower()):
+                if route:
+                    reason = "project_or_repository_changed"
+                row.update(status="skipped", reason=f"No longer eligible for this queue ({reason}).")
+            elif row.get("selection_version"):
+                return
+            # Fence removal/adoption against concurrent admission and reentry.
+            selection_changed(row)
+            try:
+                table.transaction([(state, etag), (row, version)])
+                return
+            except WorkerError as exc:
+                if exc.status != 409:
+                    raise
+        raise WorkerError("Waiting issue changed concurrently; retry reconciliation")
+
+    def refresh_waiting(self, table, issue_ids=None):
+        for row in table.list():
+            if row.get("status") == "queued" and (issue_ids is None or row["issue_id"] in issue_ids):
+                try:
+                    self.refresh_waiting_entry(table, row["RowKey"])
+                except Exception:
+                    # Unavailable Linear data cannot revoke a durable position.
+                    logging.error("Waiting issue eligibility deferred for %s", row["RowKey"])
+
+    def observe_issues(self, issues):
+        # A moved issue may no longer point to its original repository. Repair
+        # those waiting entries too, without advancing unrelated repositories.
+        observed = {issue["id"] for issue in issues}
+        if not observed:
+            return
+        for table in self.selection_tables():
+            self.refresh_waiting(table, observed)
+            for row in table.list():
+                if row.get("issue_id") in observed:
+                    self.selection.sync(table, row["RowKey"])
+
     def advance(self, repository, *, refresh_selection=False):
         table = None
         try:
@@ -361,6 +409,7 @@ class RepositoryQueue:
         finally:
             if table is not None:
                 # Retain repair even when GitHub observation/dispatch fails.
+                self.refresh_waiting(table)
                 self.selection.reconcile(table, refresh=refresh_selection)
                 for row in table.list():
                     if row.get("status") in TERMINAL and row.get("reason"):

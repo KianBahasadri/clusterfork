@@ -231,14 +231,15 @@ class Dispatcher:
             # scans retain their original sequence; batch ties are deterministic.
             issues = sorted(self.linear.project_issues(project_id),
                             key=lambda i: (i.get("createdAt", ""), i["id"]))
-            return self.route_issues(issues, timing=event)
+            return self.route_issues(issues, timing=event,
+                                     repositories=(self.registry.routes[project_id].repository,))
         raise ValueError("unsupported queued event")
 
     def route(self, issue):
         return self.route_issues([issue])[0]
 
-    def route_issues(self, issues, *, timing=None):
-        results, repositories = [], set()
+    def route_issues(self, issues, *, timing=None, repositories=()):
+        results, repositories = [], {repository.lower() for repository in repositories}
         for issue in issues:
             route, reason = eligibility(issue, self.registry)
             if route:
@@ -254,6 +255,7 @@ class Dispatcher:
             for repository in sorted(repositories):
                 advanced.update(self.queue.advance(repository))
         finally:
+            self.queue.observe_issues(issues)
             # Full comment scans and acknowledgement writes must not delay the
             # first visible evidence of durable repository admission.
             if self.steering:

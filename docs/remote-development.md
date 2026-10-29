@@ -23,7 +23,7 @@ live routing and merge evidence without treating it as current health.
 | `linear_sync.py` | Linear lifecycle and PR/CI reconciliation |
 | `steering.py`, `automation/agent_session.py` | Durable Linear instructions and delivery into the live Codex turn |
 | `repository_queue.py` | Durable repository FIFO, admission, worker fencing, and queue advancement |
-| `selection_reporting.py` | Durable Linear selection-label intent and repair against current slots |
+| `selection_reporting.py` | Durable Linear queued/selected-label intent and repair against current queue state |
 | `readiness.py`, `readiness_policy.py` | Durable read-only reviews, structured-result validation, clarification, and revision-bound admission |
 | `automation/worker.py`, `automation/codex_runtime.py` | Account inspection, Codex execution, validation, publication, and merge requests |
 | `automation/azure/projects.json` | Project mappings, states, model/effort, validation commands, and merge policy |
@@ -132,23 +132,31 @@ its sequence and atomically reserve the head/slot. Waiting issues remain Todo wi
 changes can require another readiness review before coding. Stable queue comments identify the preceding issue and
 whether it is running, waiting for CI/quota, blocked, or awaiting confirmation of an ambiguous dispatch.
 
+FIFO insertion also records pending intent for the team-scoped `clusterfork: queued` label. Azure adds it only after
+current eligibility passes and the waiting entry commits, through either webhook ingestion or timer/project-scan
+recovery. Raw webhook receipt does not add it. The marker means **received and waiting**; it does not assert that
+readiness passed or guarantee coding. Waiting issues retain Todo, human labels, stage labels, and project enrollment
+through `clusterfork-symphony`. They start no readiness review, development runner, or account lease.
+
 Admission also records a versioned, pending Linear label update in that same transaction. Azure attempts to add the
-team-scoped `clusterfork: selected` label immediately after reservation, before steering comment scans, historical
-label/comment repairs, or dispatching the readiness reviewer/development worker. This includes timer-driven admission.
-Webhook receipt and FIFO insertion alone do not select waiting issues. The marker means **Azure reserved this
-repository's slot**; it does not confirm that GitHub accepted a dispatch or a runner started. It leaves human
-assignments and unrelated labels intact and coexists with the current stage label. It stays through readiness, dispatch
+team-scoped `clusterfork: selected` label and remove `clusterfork: queued` immediately after reservation, before steering
+comment scans, historical label/comment repairs, or dispatching the readiness reviewer/development worker, including on
+the timer. An immediately admitted issue ends up selected without a queued marker. Webhook receipt and FIFO insertion
+alone do not select waiting issues. The selected marker means **Azure reserved this repository's slot**; it does not
+confirm that GitHub accepted a dispatch or a runner started. It leaves human assignments and unrelated labels intact
+and coexists with the current stage label. It stays through readiness, dispatch
 retries or uncertainty, quota waits, pending PRs, and development blockers until the slot is released. Readiness
 rejection clears it immediately; a durable reporting intent prevents reconciliation from restoring it while the rejected
 runner stops. The queue releases that slot and advances once GitHub confirms the old runner stopped.
 
 Release atomically records a new pending label version. Azure reports the next admitted issue before repairing
 historical removals and comments. Label failures are reporting failures: they can temporarily delay the visible marker,
-but do not discard ownership, outcomes, or dispatch receipts, or trigger another worker. Pending additions and removals
-survive restarts and retry on events and the shared timer, including removals after the queue empties. Reporters recheck
-the current slot after writes and repair superseded updates without touching stage labels. The timer also refreshes
-previously admitted entries to repair an ambiguous or delayed write whose reporting process stopped before recording its
-result. Dispatch receipts keep repositories discoverable for this cleanup after a mapping is removed.
+but do not discard ownership, outcomes, FIFO positions, or dispatch receipts, or trigger another worker. Pending queued
+and selected additions/removals survive restarts and retry on events and the shared timer, including removals after the
+queue empties. Reporters recheck current queue/slot state across repositories after writes and repair superseded updates
+without touching stage labels. The timer also refreshes waiting and historical entries to repair an ambiguous or delayed
+write whose reporting process stopped before recording its result. Dispatch receipts keep repositories discoverable for
+this cleanup after a mapping is removed.
 
 The repository slot has **no expiry**. It spans readiness review, dispatch, coding, validation, publication, pending CI,
 review, and merging. A finish callback or auto-merge request does not release it. The shared 15-minute timer advances
@@ -179,9 +187,12 @@ never proves that the worker stopped.
 
 The head retains its position during quota waits and retries after its existing 15-minute delay, once its prior GitHub
 run has stopped. Before every dispatch, the dispatcher fetches current enrollment, project, archive, cancellation, and
-ready-state data. Ineligible queued entries are skipped; an undispatched issue that later becomes eligible rejoins at
-the tail. Before coding a newly admitted task, the worker fetches the latest target branch and creates its branch from
-that revision, including the preceding task's merged changes.
+ready-state data. Events and reconciliation also recheck waiting entries while the head is active, including empty
+project scans and issues moved out of mapped projects. Leaving Todo, cancellation, issue/project archive, project moves,
+or loss of enrollment durably skips a waiting entry and removes its queued marker without waiting for the active task
+to finish. An undispatched issue that later becomes eligible rejoins at the tail. A temporary eligibility-read failure
+retains its durable position for retry. Before coding a newly admitted task, the worker fetches the latest target branch
+and creates its branch from that revision, including the preceding task's merged changes.
 
 Dispatch receipts retain their original workflow and target branch so active work can still be checked after its project
 mapping changes or is removed. Undispatched entries with removed/remapped destinations are skipped. Legacy receipts
@@ -211,9 +222,9 @@ not shorten the timer or failed-message retry backoff.
 UTC epoch seconds only. Queue rows retain the first observation's `source_updated_at` (issue webhook `updatedAt`, when
 present), `webhook_at`, `received_at`, `enqueued_at`, `processing_at`, and `queued_at`. `selected_at` is stamped in the
 reservation transaction; `repository_admitted.at` confirms its commit. `selection_reported_at` records the last
-acknowledged label projection checked against the current slot/version. Compare processing minus enqueue for queue wait
-and label-written minus admission for reporting latency. A write acknowledgement measures Linear API acceptance; it
-cannot measure the user's UI refresh. Project scans lack an issue transition timestamp, and duplicate events retain the
+acknowledged queued/selected projection checked against current queue/slot state and version. Compare processing minus
+enqueue for queue wait and label-written minus admission for reporting latency. A write acknowledgement measures Linear
+API acceptance; it cannot measure the user's UI refresh. Project scans lack an issue transition timestamp, and duplicate events retain the
 original queue timestamps. No issue content or credentials enter these diagnostics.
 
 KIAN-903 measurements (2026-10-29) compared the original and changed handlers with a virtual clock and mocked services.

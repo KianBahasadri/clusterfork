@@ -12,7 +12,7 @@ from urllib.request import Request, urlopen
 from uuid import UUID
 
 from dispatch_core import DispatchError
-from worker_reporting import SELECTION_LABEL, STAGE_LABELS
+from worker_reporting import QUEUED_LABEL, SELECTION_LABEL, STAGE_LABELS
 
 
 class RequestError(RuntimeError):
@@ -152,6 +152,9 @@ class Linear:
     def set_selected(self, issue_id, enabled):
         self.set_label(issue_id, SELECTION_LABEL, enabled)
 
+    def set_queued(self, issue_id, enabled):
+        self.set_label(issue_id, QUEUED_LABEL, enabled)
+
     def set_label(self, issue_id, name, enabled):
         issue = self.query("""query($id: String!) {
           issue(id: $id) { team { id } labels(first: 100) {
@@ -195,7 +198,7 @@ class Linear:
         try:
             result = self.query("""mutation($id: String!, $team: String!, $name: String!) {
               issueLabelCreate(input: {id: $id, teamId: $team, name: $name,
-                description: "Clusterfork repository selection, development stage or readiness", color: "#5E6AD2"}) { success }
+                description: "Clusterfork repository queue, selection, development stage or readiness", color: "#5E6AD2"}) { success }
             }""", {"id": identifier, "team": team_id, "name": name})["issueLabelCreate"]
             if not result["success"]:
                 raise RequestError()

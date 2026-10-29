@@ -73,6 +73,9 @@ class Tracker:
     def set_selected(self, issue_id, enabled):
         pass
 
+    def set_queued(self, issue_id, enabled):
+        pass
+
 
 class Workflows:
     def __init__(self):

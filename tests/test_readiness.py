@@ -26,8 +26,9 @@ from readiness_policy import (CLARIFICATION_LABEL, CRITERIA, POLICY, PROTOCOL, R
                               REVIEW_TIMEOUT_SECONDS, digest, issue_revision, review_prompt, validate_result)
 from repository_queue import RepositoryQueue, dispatch_key
 from worker_core import Accounts, WorkerError, WorkerService
-from worker_reporting import SELECTION_LABEL, STAGE_LABELS
+from worker_reporting import QUEUED_LABEL, SELECTION_LABEL, STAGE_LABELS
 from test_remote_worker import MemoryTable, NOW, PROJECT, auth, claims
+from test_linear_sync import pr
 
 DEFAULT_RESULT = object()
 
@@ -70,6 +71,7 @@ class ReadinessTests(unittest.TestCase):
         self.linear.blocked_state.return_value = self.route.linear_states.blocked
         self.linear.set_clarification.side_effect = self.label
         self.linear.set_selected.side_effect = lambda key, enabled: self.label(key, enabled, SELECTION_LABEL)
+        self.linear.set_queued.side_effect = lambda key, enabled: self.label(key, enabled, QUEUED_LABEL)
         self.linear.set_stage.side_effect = self.stage
         self.github = Mock(spec=GitHub)
         self.github.branch_sha.side_effect = lambda route: self.sha
@@ -194,6 +196,7 @@ class ReadinessTests(unittest.TestCase):
 
         def dispatch(route, inputs):
             self.linear.set_selected.assert_called_once_with(self.issue["id"], True)
+            self.assertNotIn(QUEUED_LABEL, self.issue["labels"])
             self.assertFalse(self.attempts)
             self.dispatch(route, inputs)
 
@@ -201,6 +204,44 @@ class ReadinessTests(unittest.TestCase):
         self.dispatcher.process({"type": "Project", "id": PROJECT})
         self.assertEqual(self.github.dispatch.call_count, 1)
         self.assertEqual(waiting["state"]["id"], self.route.ready_state_ids[0])
+        self.assertIn(QUEUED_LABEL, waiting["labels"])
+        self.assertNotIn(SELECTION_LABEL, waiting["labels"])
+        self.assertFalse(self.accounts.table.get(self.identity)[0]["owner"])
+
+    def test_merged_coding_task_hands_queued_issue_to_readiness_with_selected_label(self):
+        self.pass_review()
+        coding = dispatch_key(self.registry, self.route, self.issue)
+        self.call(coding, "start")
+        waiting = self.make_issue(2)
+        self.dispatcher.process({"type": "Issue", "id": waiting["id"]})
+        self.assertIn(QUEUED_LABEL, waiting["labels"])
+        with self.assertRaises(WorkerError):
+            self.key(waiting)
+        pull = pr()
+        self.github.worker_pull.return_value = pull
+        self.call(coding, "finish", status="completed", pull_request=pull["url"])
+        self.queue.reconcile()  # A finish callback cannot release a running worker.
+        self.assertIn(QUEUED_LABEL, waiting["labels"])
+        self.stop(coding)
+        self.queue.reconcile()  # The open PR still retains the repository slot.
+        self.assertIn(QUEUED_LABEL, waiting["labels"])
+        self.assertEqual(self.github.dispatch.call_count, 2)
+
+        def dispatch(route, inputs):
+            self.assertEqual(inputs["linear_issue_id"], waiting["id"])
+            self.assertNotIn(QUEUED_LABEL, waiting["labels"])
+            self.assertIn(SELECTION_LABEL, waiting["labels"])
+            self.dispatch(route, inputs)
+
+        pull.update(state="MERGED", merged=True)
+        self.sha = "c" * 40
+        self.github.dispatch.side_effect = dispatch
+        self.queue.reconcile()
+        self.assertEqual(self.github.dispatch.call_count, 3)
+        self.assertNotIn(SELECTION_LABEL, self.issue["labels"])
+        review, _ = self.table.get(self.key(waiting))
+        self.assertEqual(review["status"], "dispatched")
+        self.assertEqual(len(self.receipts.list()), 1)  # Next task has no coding receipt.
 
     def test_readiness_timer_reports_selection_for_legacy_and_unreported_slots_before_retry(self):
         for legacy in (False, True):
@@ -239,6 +280,8 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(self.tables[self.route.repository.lower()].get("slot")[0]["active_key"],
                          dispatch_key(self.registry, self.route, self.issue))
         for issue in others:
+            self.assertIn(QUEUED_LABEL, issue["labels"])
+            self.assertNotIn(SELECTION_LABEL, issue["labels"])
             self.assertEqual(self.gate.ensure(issue, self.route)["status"], "queued")
             with self.assertRaises(WorkerError):
                 self.key(issue)
@@ -261,9 +304,18 @@ class ReadinessTests(unittest.TestCase):
                 self.assertNotIn(SELECTION_LABEL, self.issue["labels"])
                 self.assertFalse(set(STAGE_LABELS.values()).intersection(self.issue["labels"]))
                 self.assertIn("user-owned", self.issue["labels"])
+                self.assertNotIn(QUEUED_LABEL, self.issue["labels"])
+                self.assertIn(QUEUED_LABEL, second["labels"])
                 self.assertEqual(self.tables[self.route.repository.lower()].get("slot")[0]["active_key"],
                                  dispatch_key(self.registry, self.route, self.issue))
                 self.stop(review)
+
+                def dispatch(route, inputs):
+                    self.assertIn(SELECTION_LABEL, second["labels"])
+                    self.assertNotIn(QUEUED_LABEL, second["labels"])
+                    self.dispatch(route, inputs)
+
+                self.github.dispatch.side_effect = dispatch
                 self.queue.reconcile()
                 self.assertEqual(self.github.dispatch.call_count, 2)
                 self.assertEqual(self.tables[self.route.repository.lower()].get("slot")[0]["active_key"],
