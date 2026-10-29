@@ -80,7 +80,10 @@ def package(destination, revision=None):
         for name in PACKAGE_FILES:
             archive.write(SOURCE / name, name)
         if revision:
-            archive.writestr("deployment.json", json.dumps({"revision": revision, "digest": source_digest()}))
+            metadata = zipfile.ZipInfo("deployment.json")
+            metadata.create_system = 3
+            metadata.external_attr = 0o100644 << 16
+            archive.writestr(metadata, json.dumps({"revision": revision, "digest": source_digest()}))
 
 
 def command(args, *, sensitive=False):

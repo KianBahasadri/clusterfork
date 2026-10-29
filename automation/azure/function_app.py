@@ -99,11 +99,17 @@ def missing_config():
 def health(req: func.HttpRequest) -> func.HttpResponse:
     missing = missing_config()
     mode = "codex-worker" if any(route.workflow == "clusterfork-worker.yml" for route in registry().routes.values()) else "routing-pilot"
-    return func.HttpResponse(json.dumps({"mode": mode, "missing": missing, "serial_admission": True,
-                                        "deployment": build_metadata(),
-                                        "deployment_paused": worker_service().queue.control.is_paused() if not missing else None,
-                                        "projects": len(registry().routes)}),
-                             status_code=503 if missing else 200, mimetype="application/json")
+    result = {"mode": mode, "missing": missing, "serial_admission": True,
+              "projects": len(registry().routes)}
+    try:
+        result.update(deployment=build_metadata(),
+                      deployment_paused=worker_service().queue.control.is_paused() if not missing else None)
+    except Exception as exc:
+        # Public health diagnostics reveal the error class, never credentials or response bodies.
+        result["runtime_error"] = type(exc).__name__
+    return func.HttpResponse(json.dumps(result),
+                             status_code=503 if missing or "runtime_error" in result else 200,
+                             mimetype="application/json")
 
 
 @app.route(route="linear", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)

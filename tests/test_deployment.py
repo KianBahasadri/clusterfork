@@ -1,11 +1,13 @@
 """Deployment pauses, tested revisions, draining, and recovery boundaries."""
 
+import io
 import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
+from urllib.error import HTTPError
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +45,7 @@ class DeploymentTests(unittest.TestCase):
                 self.assertEqual(set(archive.namelist()), set(pilot.PACKAGE_FILES) | {"deployment.json"})
                 self.assertEqual(json.loads(archive.read("deployment.json")),
                                  {"revision": REVISION, "digest": pilot.source_digest()})
+                self.assertEqual((archive.getinfo("deployment.json").external_attr >> 16) & 0o777, 0o644)
 
     def test_deployment_waits_for_both_main_ci_and_existing_workers(self):
         with patch.object(deploy, "control", return_value=self.control), \
@@ -100,6 +103,13 @@ class DeploymentTests(unittest.TestCase):
         with patch.object(deploy, "github", side_effect=[{"workflow_runs": first},
                       {"workflow_runs": [{"id": 101, "status": "queued"}]}]):
             self.assertEqual(deploy.active_workers(), [101])
+
+    def test_unhealthy_response_exposes_only_safe_error_class(self):
+        error = HTTPError(deploy.HEALTH, 503, "unavailable", {},
+                          io.BytesIO(json.dumps({"runtime_error": "PermissionError",
+                                                 "private": "do not log this"}).encode()))
+        with patch.object(deploy, "urlopen", side_effect=error):
+            self.assertEqual(deploy.health(), {"http_status": 503, "runtime_error": "PermissionError"})
 
     def test_ci_requires_the_same_main_push_revision(self):
         with patch.object(deploy, "github", return_value={"workflow_runs": [

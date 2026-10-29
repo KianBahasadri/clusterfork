@@ -196,7 +196,8 @@ to stop. Draining allows 330 minutes within a six-hour deployment job.
 Only the allowlisted Function App ZIP is published, using Flex Consumption's
 remote build. `deployment.json` stamps its Git revision and broker source digest.
 The health endpoint returns this metadata, the serial-admission capability, and
-the deployment pause state. The workflow resumes dispatch only after the live
+the deployment pause state. Startup failures return 503 with a `runtime_error`
+class, without credentials or raw exception messages. The workflow resumes dispatch only after the live
 revision/digest match the package, configuration is complete, and main still
 points to that revision. If main advances, the newer deployment inherits the
 pause. CI, drain, deployment, or health failures leave the pause in place; a

@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import sys
 import time
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import pilot
@@ -30,6 +30,14 @@ def health():
     try:
         with urlopen(HEALTH, timeout=15) as response:
             return json.load(response)
+    except HTTPError as exc:
+        try:
+            kind = json.load(exc).get("runtime_error", "")
+            if isinstance(kind, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,100}", kind):
+                return {"http_status": exc.code, "runtime_error": kind}
+        except (ValueError, AttributeError):
+            pass
+        return {}
     except (URLError, OSError, ValueError):
         return {}
 
@@ -100,6 +108,8 @@ def verify(revision, owner):
     deadline = time.monotonic() + 240
     while time.monotonic() < deadline:
         result = health()
+        if result.get("runtime_error"):
+            print(f"Waiting for healthy Azure startup ({result['runtime_error']}).", flush=True)
         if (result.get("deployment") == expected and result.get("serial_admission") is True
                 and result.get("missing") == []):
             if github("commits/main")["sha"] == revision:
