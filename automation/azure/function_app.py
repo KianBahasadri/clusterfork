@@ -22,6 +22,10 @@ from steering import Steering
 from routing_timing import record, timestamps
 from diagnostics import ACTIONS, context, failure, observed, operation, record as diagnostic_record
 
+# Azure SDK Information logs include HTTP headers and overwhelm operational records.
+# Keep SDK warnings/errors; our explicit timings describe the application operations.
+logging.getLogger("azure").setLevel(logging.WARNING)
+
 app = func.FunctionApp()
 QUEUE = "clusterfork-events"
 

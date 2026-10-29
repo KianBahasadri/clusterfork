@@ -47,8 +47,8 @@ Account-release failures are logged separately when another exception is already
 being handled, preserving the original failure. A release failure on an otherwise
 successful execution still fails that execution.
 
-Logs and durable failure fields exclude request/response bodies, headers, tokens,
-credential files, full URLs, command arguments/output, agent transcripts, exception
+Clusterfork operational records and durable failure fields exclude request/response
+bodies, headers, tokens, credential files, full URLs, command arguments/output, agent transcripts, exception
 messages, source excerpts, and local variables. Safe stack locations contain only
 repository Python basenames and line numbers. Unknown failure fields are dropped;
 operation names and classifications must belong to the shared allowlist. Raw
@@ -77,6 +77,8 @@ diagnostic trail is retained. Other telemetry is sampled at five items/second pe
 host. Debug, live metrics, performance counters, and extended HTTP trigger details
 are disabled. Volume control comes primarily from emitting bounded records and
 keeping repetitive worker operations at Debug.
+Python Azure SDK logs are restricted to Warning and above; their verbose HTTP
+request/response records are not collected.
 
 The daily cap is a backup against ingestion spikes, not a strict monetary budget:
 Azure can overshoot it, and collection stops until reset if it is reached. Normal
