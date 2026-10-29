@@ -7,6 +7,7 @@ import time
 from uuid import uuid4
 
 from dispatch_core import uuid_string
+from pending_writes import PendingWrites
 from worker_core import WorkerError
 
 DELIVERY_SECONDS = 90
@@ -19,6 +20,39 @@ class Steering:
     def __init__(self, registry, receipts, runs, table, linear, queue, clock=time.time):
         self.registry, self.receipts, self.runs = registry, receipts, runs
         self.table, self.linear, self.queue, self.clock = table, linear, queue, clock
+        self.writes = PendingWrites("report", clock)
+
+    def accepting(self, run):
+        return (run.get("status") == "running" and run.get("lease_until", 0) > self.clock()
+                and run.get("stage") in OPEN_STAGES and not run.get("steering_closed")
+                and bool(run.get("attempt_id")))
+
+    @staticmethod
+    def pending(row):
+        return (row.get("issue_id") and (row.get("state") in {"queued", "delivering"}
+                or row.get("reported_state") != row.get("state") or row.get("report_pending")))
+
+    def observation_issues(self):
+        """Select background observations entirely from local active/pending state."""
+        issues = {row["issue_id"] for row in self.table.list() if self.pending(row)}
+        for run in self.runs.list():
+            if not self.accepting(run):
+                continue
+            try:
+                receipt, _ = self.receipts.get(run["RowKey"])
+            except WorkerError as exc:
+                if exc.status != 404:
+                    raise
+                continue
+            route = self.registry.routes.get(receipt["project_id"])
+            if not route or receipt["repository"] != route.repository:
+                continue
+            try:
+                self.queue.assert_worker(route.repository, receipt["RowKey"], run["owner"])
+            except WorkerError:
+                continue
+            issues.add(receipt["issue_id"])
+        return issues
 
     def comment(self, comment_id):
         comment = self.linear.comment(comment_id)
@@ -44,9 +78,7 @@ class Steering:
                 if exc.status != 404:
                     raise
                 continue
-            if (run.get("status") == "running" and run.get("lease_until", 0) > self.clock()
-                    and run.get("stage") in OPEN_STAGES and not run.get("steering_closed")
-                    and run.get("attempt_id")):
+            if self.accepting(run):
                 try:
                     self.queue.assert_worker(route.repository, receipt["RowKey"], run["owner"])
                 except WorkerError:
@@ -125,10 +157,10 @@ class Steering:
         return (row.get("dispatch_key") == key and row.get("owner") == run.get("owner")
                 and row.get("attempt_id") == run.get("attempt_id"))
 
-    def repair(self, issue_id, *, refresh=False, closed_run=None):
+    def repair(self, issue_id, *, closed_run=None):
         table = self.table
         for snapshot in table.list():
-            if snapshot.get("issue_id") != issue_id:
+            if snapshot.get("issue_id") != issue_id or not self.pending(snapshot):
                 continue
             for _ in range(8):
                 row, etag = table.get(snapshot["RowKey"])
@@ -157,14 +189,34 @@ class Steering:
                 except WorkerError as exc:
                     if exc.status != 409:
                         raise
-            self.report(table, snapshot["RowKey"], refresh=refresh)
+            self.report(table, snapshot["RowKey"])
+
+    def defer_report(self, table, key, token):
+        for _ in range(8):
+            row, etag = table.get(key)
+            self.writes.finish(row, token, retry=True)
+            try:
+                table.replace(row, etag)
+                return
+            except WorkerError as exc:
+                if exc.status != 409:
+                    raise
+        raise WorkerError("Instruction acknowledgement changed concurrently; retry")
 
     def report(self, table, key, *, refresh=False):
+        token = None
         try:
             for _ in range(8):
-                row, _ = table.get(key)
-                if not refresh and row.get("reported_state") == row["state"]:
+                row, etag = table.get(key)
+                if not refresh and row.get("reported_state") == row["state"] and not row.get("report_pending"):
                     return
+                token = self.writes.begin(row)
+                try:
+                    table.replace(row, etag)
+                except WorkerError as exc:
+                    if exc.status != 409:
+                        raise
+                    continue
                 link = (f"[worker run](https://github.com/{row['repository']}/actions/runs/"
                         f"{row['owner'].replace(':', '/attempts/')})" if row["owner"] else "this issue")
                 source = f"[comment](https://linear.app/issue/{row['issue_id']}#comment-{key})"
@@ -175,20 +227,32 @@ class Steering:
                 else:
                     message = f"Instruction from {source} for {link}: {row['state']}. {row['reason']}"
                 self.linear.status_comment(row["issue_id"], row["ack_id"], "Clusterfork steering: " + message)
-                current, etag = table.get(key)
-                if current["state"] != row["state"]:
-                    refresh = True
-                    continue  # Repair an external write that raced a newer acknowledgement.
-                current["reported_state"] = current["state"]
-                try:
-                    table.replace(current, etag)
+                for _ in range(8):
+                    current, etag = table.get(key)
+                    changed = current["state"] != row["state"]
+                    self.writes.finish(current, token, retry=changed)
+                    if not changed:
+                        current["reported_state"] = current["state"]
+                    try:
+                        table.replace(current, etag)
+                        break
+                    except WorkerError as exc:
+                        if exc.status != 409:
+                            raise
+                else:
+                    raise WorkerError("Instruction acknowledgement changed concurrently; retry")
+                token = None
+                if not changed:
                     return
-                except WorkerError as exc:
-                    if exc.status != 409:
-                        raise
-                    refresh = True
-        except Exception:
-            # Stable ack IDs and timer refresh also recover an ambiguous Linear write.
+                refresh = True  # Repair a write that raced a newer acknowledgement.
+            raise WorkerError("Instruction acknowledgement changed concurrently; retry")
+        except BaseException as exc:
+            try:
+                self.defer_report(table, key, token)
+            except Exception:
+                pass  # A lost writer's durable in-flight marker remains pending.
+            if not isinstance(exc, Exception):
+                raise
             logging.error("Linear instruction acknowledgement deferred for %s", key)
 
     def poll(self, receipt, run):
@@ -248,12 +312,13 @@ class Steering:
         return {"status": status}
 
     def reconcile(self):
-        # Known issues include completed workers, so late comments receive an answer.
-        issues = {row["issue_id"] for row in self.receipts.list()}
-        issues.update(row["issue_id"] for row in self.table.list() if row.get("issue_id"))
-        for issue_id in issues:
+        # Late comments on completed work are answered by Issue/Comment webhooks.
+        for issue_id in self.observation_issues():
             try:
                 self.observe(issue_id)
-                self.repair(issue_id, refresh=True)
             except Exception:
                 logging.error("Linear instruction reconciliation deferred for %s", issue_id)
+            try:
+                self.repair(issue_id)
+            except Exception:
+                logging.error("Linear instruction repair deferred for %s", issue_id)

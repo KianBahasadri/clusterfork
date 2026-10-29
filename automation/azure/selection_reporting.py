@@ -2,13 +2,14 @@
 
 Label intent changes in the same transaction as enqueue/admission/release. External
 writes cannot be fenced by Azure ETags, so late responses are repaired against
-the current queue/slot state. Timer refreshes also repair a process lost after a late write.
+the current queue/slot state. Durable in-flight markers recover lost writers.
 """
 
 import logging
 import time
 from itertools import chain
 
+from pending_writes import PendingWrites
 from routing_timing import record, timestamps
 from worker_core import WorkerError
 
@@ -22,6 +23,7 @@ class SelectionReporter:
         self.linear = linear
         self.tables = tables
         self.clock = clock
+        self.writes = PendingWrites("selection", clock)
 
     def labels(self, table, issue_id):
         # An issue can reenter through another project, generation, or repository.
@@ -60,13 +62,10 @@ class SelectionReporter:
         if error is not None:
             raise error
 
-    @staticmethod
-    def defer(table, key):
+    def defer(self, table, key, token):
         for _ in range(32):
             row, etag = table.get(key)
-            if row.get("selection_pending"):
-                return
-            row["selection_pending"] = True
+            self.writes.finish(row, token, retry=True)
             try:
                 table.replace(row, etag)
                 return
@@ -76,12 +75,20 @@ class SelectionReporter:
         raise WorkerError("Selection reporting changed concurrently; retry")
 
     def sync(self, table, key, *, refresh=False):
+        token = None
         try:
             for _ in range(32):
-                row, _ = table.get(key)
+                row, etag = table.get(key)
                 if not refresh and not row.get("selection_pending"):
                     return
                 selected, queued = self.labels(table, row["issue_id"])
+                token = self.writes.begin(row)
+                try:
+                    table.replace(row, etag)
+                except WorkerError as exc:
+                    if exc.status != 409:
+                        raise
+                    continue
                 started_at = self.clock()
                 record("selection_label_started", at=started_at, dispatch_key=key, issue_id=row["issue_id"],
                        selected=selected, queued=queued, selection_version=row.get("selection_version"), **timestamps(row))
@@ -90,34 +97,40 @@ class SelectionReporter:
                 record("selection_label_written", at=reported_at, dispatch_key=key, issue_id=row["issue_id"],
                        selected=selected, queued=queued, selection_version=row.get("selection_version"),
                        started_at=started_at, **timestamps(row))
-                latest, etag = table.get(key)
-                if (latest.get("selection_version") != row.get("selection_version")
-                        or self.labels(table, row["issue_id"]) != (selected, queued)):
-                    # Our external write may have arrived after a newer report.
-                    # Repair even if that reporter already acknowledged its intent.
-                    refresh = True
-                    continue
-                latest["selection_pending"] = False
-                latest["selection_reported_at"] = reported_at
-                try:
-                    table.replace(latest, etag)
+                for _ in range(32):
+                    latest, etag = table.get(key)
+                    changed = (latest.get("selection_version") != row.get("selection_version")
+                               or self.labels(table, row["issue_id"]) != (selected, queued))
+                    self.writes.finish(latest, token, retry=changed)
+                    if not changed:
+                        latest["selection_reported_at"] = reported_at
+                    try:
+                        table.replace(latest, etag)
+                        break
+                    except WorkerError as exc:
+                        if exc.status != 409:
+                            raise
+                else:
+                    raise WorkerError("Selection reporting changed concurrently; retry")
+                token = None
+                if not changed:
                     return
-                except WorkerError as exc:
-                    if exc.status != 409:
-                        raise
-                    refresh = True
+                # Our external write may have arrived after a newer report.
+                refresh = True
             raise WorkerError("Selection reporting changed concurrently; retry")
-        except Exception as exc:
+        except BaseException as exc:
             # An ambiguous label response can have changed Linear after another
             # reporter acknowledged a newer version. Persist a retry in that case.
             try:
-                self.defer(table, key)
+                self.defer(table, key, token)
             except Exception:
-                pass  # Timer refresh also repairs acknowledged historical rows.
+                pass  # The persisted in-flight marker still requires repair.
+            if not isinstance(exc, Exception):
+                raise
             record("selection_label_deferred", at=self.clock(), dispatch_key=key, error_type=type(exc).__name__)
             logging.error("Linear repository labels deferred for %s", key)
 
-    def reconcile(self, table, *, refresh=False):
+    def reconcile(self, table):
         for row in table.list():
-            if row.get("selection_version") and (refresh or row.get("selection_pending")):
-                self.sync(table, row["RowKey"], refresh=refresh)
+            if row.get("selection_version") and row.get("selection_pending"):
+                self.sync(table, row["RowKey"])

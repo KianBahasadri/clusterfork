@@ -20,6 +20,7 @@ from deployment_control import DeploymentControl
 from worker_core import Accounts, WorkerError, WorkerService
 from test_remote_worker import ApprovedReadiness, MemoryTable, NOW, PROJECT, claims
 from linear_sync import comment_id
+from pending_writes import WRITE_SECONDS
 from readiness_policy import PROTOCOL
 from test_linear_sync import pr, checks
 
@@ -1682,7 +1683,9 @@ class RepositoryQueueTests(unittest.TestCase):
                         self.assertTrue(started.wait(timeout=5))
                         self.queue.advance(self.repository)
                         self.assertEqual(self.selected, set())
-                        self.assertFalse(table.get(first)[0]["selection_pending"])
+                        # The newer removal must retain the older in-flight writer.
+                        self.assertTrue(table.get(first)[0]["selection_pending"])
+                        self.assertTrue(table.get(first)[0]["selection_inflight"])
                     finally:
                         resume.set()
                     if isinstance(error, Exception):
@@ -1692,12 +1695,47 @@ class RepositoryQueueTests(unittest.TestCase):
                     else:
                         with self.assertRaises(SystemExit):
                             future.result(timeout=5)
-                        self.assertFalse(table.get(first)[0]["selection_pending"])
+                        self.assertTrue(table.get(first)[0]["selection_pending"])
                 self.assertEqual(self.selected, {str(UUID(int=1))})
                 self.linear.set_selected.side_effect = self.select
                 self.restart().reconcile()
                 self.assertEqual(self.selected, set())
                 self.assertEqual(self.github.dispatch.call_count, 1)
+
+    def test_lost_selection_writer_expires_without_refreshing_settled_history(self):
+        key = self.enqueue(self.issue(1))
+        self.queue.advance(self.repository)
+        self.start(key)
+        self.finish(key)
+        self.stop(key)
+        self.queue.advance(self.repository)
+        table = self.queue.table(self.repository)
+
+        def interrupted(issue_id, enabled):
+            row, _ = table.get(key)
+            self.assertTrue(row["selection_pending"])
+            self.assertTrue(row["selection_inflight"])
+            self.select(issue_id, enabled)
+            raise SystemExit()
+
+        # No cleanup can run when a process disappears after the external write.
+        self.linear.set_selected.side_effect = interrupted
+        with patch.object(self.queue.selection, "defer", side_effect=WorkerError("process lost")), \
+             self.assertRaises(SystemExit):
+            self.queue.selection.sync(table, key, refresh=True)
+        self.assertTrue(table.get(key)[0]["selection_pending"])
+        self.assertTrue(table.get(key)[0]["selection_inflight"])
+        self.now += WRITE_SECONDS + 1
+        self.linear.set_selected.side_effect = self.select
+        self.restart().reconcile()
+        self.assertFalse(table.get(key)[0]["selection_pending"])
+        self.assertNotIn("selection_inflight", table.get(key)[0])
+        self.linear.reset_mock()
+        self.github.reset_mock()
+        for _ in range(3):
+            self.restart().reconcile()
+        self.assertEqual(self.linear.mock_calls, [])
+        self.assertEqual(self.github.mock_calls, [])
 
     def test_delayed_removal_preserves_same_issue_readmitted_through_another_project_or_repository(self):
         for repository in (self.repository, "owner/another"):

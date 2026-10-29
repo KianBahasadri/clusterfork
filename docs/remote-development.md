@@ -46,6 +46,30 @@ The shared timer reconciles worker/PR status and scans mapped projects every
 15 minutes. Project labels are fetched once per issue page to stay within
 Linear's query-complexity limit.
 
+Per-issue Linear and GitHub reconciliation calls are limited to active work and
+pending reports. Readiness checks local review state before fetching an issue:
+reported passes and applied rejections need no timer lookup. Todo reentry is
+discovered by Issue webhooks and project issue-list scans. Selection reporting
+retries only queue rows with durable pending label intent. Steering comment
+scans cover workers still accepting instructions and issues with queued,
+in-flight, or unreported instructions. Acknowledgement repair retries changed or
+pending reports; it does not refresh every historical acknowledgement.
+
+Label and steering acknowledgement writers persist pending intent and a unique
+in-flight marker before calling Linear. A newer successful reporter preserves
+any older writer's marker, so a late write, failed response, or interrupted
+process remains recoverable. Successful reports retire only their own marker;
+abandoned markers expire after five minutes and are repaired on the next timer
+pass. Stable comment IDs prevent duplicate steering acknowledgements, and
+reporting retries never resend instructions to an agent.
+
+Once the worker, repository queue, readiness review, labels, lifecycle sync, and
+steering reports have settled, later ticks and Project scans make no per-issue
+Linear or GitHub calls for that historical task. Paginated project issue-list
+scans and local durable-state scans continue. Late `@clusterfork` comments on
+completed issues receive non-delivery replies through Issue or Comment webhooks;
+the timer does not poll completed issue threads to discover them.
+
 ## Todo readiness gate
 
 An enrolled issue in a configured Todo state enters its repository queue first.

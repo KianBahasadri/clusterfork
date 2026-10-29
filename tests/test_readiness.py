@@ -966,6 +966,36 @@ class ReadinessTests(unittest.TestCase):
         newer, _ = self.begin()
         self.assertNotEqual(newer, key)
 
+    def test_reported_passes_and_applied_rejections_skip_all_remote_timer_calls(self):
+        for result in (ready(), clarification(), {**ready(), "verdict": "invalid"}):
+            with self.subTest(verdict=result["verdict"]):
+                self.setUp()
+                key, _ = self.begin()
+                self.submit(key, result)
+                row, _ = self.table.get(key)
+                self.assertTrue(row["reported"])
+                if result["verdict"] != "ready":
+                    self.assertTrue(row["applied"])
+                self.linear.reset_mock()
+                self.github.reset_mock()
+                for _ in range(3):
+                    self.gate.reconcile()
+                self.assertEqual(self.linear.mock_calls, [])
+                self.assertEqual(self.github.mock_calls, [])
+
+    def test_applied_rejection_reentry_is_discovered_by_project_scan(self):
+        key, _ = self.begin()
+        self.submit(key, clarification())
+        self.stop(key)
+        self.issue["state"] = {"id": self.route.ready_state_ids[0], "type": "unstarted"}
+        self.linear.reset_mock()
+        self.gate.reconcile()
+        self.linear.issue.assert_not_called()
+        self.assertEqual(self.key(), key)
+        self.dispatcher.process({"type": "Project", "id": PROJECT})
+        self.assertNotEqual(self.key(), key)
+        self.assertEqual(self.github.dispatch.call_count, 2)
+
     def test_manual_review_reruns_are_fenced_and_cannot_replace_an_accepted_result(self):
         key, _ = self.begin()
         self.call(key, "finish", status="failed")

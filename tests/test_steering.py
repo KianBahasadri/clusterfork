@@ -21,9 +21,10 @@ sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
 
 from agent_session import run_agent
 from codex_runtime import AppServer, CodexError, CodexRejected
-from dispatch_clients import Linear
+from dispatch_clients import Linear, RequestError
 from dispatch_core import Dispatcher, Registry, webhook_event
 from readiness_policy import PROTOCOL
+from pending_writes import WRITE_SECONDS
 from steering import DELIVERY_SECONDS, Steering
 from test_linear_dispatch import SECRET, signed
 from test_remote_worker import ISSUE, KEY, NOW, MemoryTable, claims, receipt
@@ -367,6 +368,105 @@ class SteeringTests(unittest.TestCase):
         self.linear.after_report = advance
         self.steering.report(table, item["id"], refresh=True)
         self.assertIn("Agent accepted", next(iter(self.linear.acks.values())))
+
+    def test_late_acknowledgement_write_retains_pending_intent_across_interruptions(self):
+        for error in (None, RequestError(503), SystemExit()):
+            with self.subTest(error=type(error).__name__):
+                self.setUp()
+                item = comment()
+                self.linear.comments = [item]
+                self.steering.observe(ISSUE)
+                started, resume = threading.Event(), threading.Event()
+                write = self.linear.status_comment
+                delayed = False
+
+                def update(issue_id, ack_id, body):
+                    nonlocal delayed
+                    row = self.row(item)
+                    self.assertTrue(row["report_pending"])
+                    self.assertTrue(row["report_inflight"])
+                    if not delayed:
+                        delayed = True
+                        started.set()
+                        self.assertTrue(resume.wait(5))
+                        write(issue_id, ack_id, body)
+                        if error is not None:
+                            raise error
+                    else:
+                        write(issue_id, ack_id, body)
+
+                with patch.object(self.linear, "status_comment", side_effect=update), \
+                     patch("steering.logging.error"), ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(self.steering.report, self.table, item["id"], refresh=True)
+                    try:
+                        self.assertTrue(started.wait(5))
+                        instruction = self.call("instructions")["instruction"]
+                        self.acknowledge(instruction)
+                        row = self.row(item)
+                        self.assertEqual(row["reported_state"], "accepted")
+                        self.assertTrue(row["report_pending"])
+                        self.assertTrue(row["report_inflight"])
+                    finally:
+                        resume.set()
+                    if isinstance(error, SystemExit):
+                        with self.assertRaises(SystemExit):
+                            future.result(timeout=5)
+                    else:
+                        future.result(timeout=5)
+                self.change_run(status="completed", steering_closed=True)
+                self.steering.reconcile()
+                row = self.row(item)
+                self.assertEqual(row["reported_state"], "accepted")
+                self.assertFalse(row["report_pending"])
+                self.assertNotIn("report_inflight", row)
+                self.assertIn("Agent accepted", self.linear.acks[row["ack_id"]])
+                self.assertEqual(len(self.linear.acks), 1)
+                self.linear.writes.clear()
+                with patch.object(self.linear, "issue") as issue, \
+                     patch.object(self.linear, "issue_comments") as comments:
+                    for _ in range(3):
+                        self.steering.reconcile()
+                    issue.assert_not_called()
+                    comments.assert_not_called()
+                self.assertEqual(self.linear.writes, [])
+
+    def test_lost_acknowledgement_writer_expires_and_repairs_without_replaying_instruction(self):
+        item = comment()
+        self.linear.comments = [item]
+        self.acknowledge(self.call("instructions")["instruction"])
+        self.change_run(status="completed", steering_closed=True)
+
+        def interrupted(*args):
+            self.assertTrue(self.row(item)["report_pending"])
+            self.assertTrue(self.row(item)["report_inflight"])
+            raise SystemExit()
+
+        with patch.object(self.linear, "status_comment", side_effect=interrupted), \
+             patch.object(self.steering, "defer_report", side_effect=WorkerError("process lost")), \
+             self.assertRaises(SystemExit):
+            self.steering.report(self.table, item["id"], refresh=True)
+        self.assertTrue(self.row(item)["report_pending"])
+        self.assertTrue(self.row(item)["report_inflight"])
+        self.now += WRITE_SECONDS + 1
+        self.steering.reconcile()
+        row = self.row(item)
+        self.assertEqual(row["state"], "accepted")
+        self.assertEqual(row["reported_state"], "accepted")
+        self.assertFalse(row["report_pending"])
+        self.assertNotIn("report_inflight", row)
+        self.assertEqual(len(self.linear.acks), 1)
+
+    def test_acknowledgement_repair_continues_when_issue_observation_fails(self):
+        item = comment()
+        self.linear.comments = [item]
+        self.acknowledge(self.call("instructions")["instruction"])
+        row, etag = self.table.get(item["id"])
+        row["reported_state"] = "delivering"
+        self.table.replace(row, etag)
+        self.change_run(status="completed", steering_closed=True)
+        with patch.object(self.linear, "issue", side_effect=RequestError(503)), self.assertLogs(level="ERROR"):
+            self.steering.reconcile()
+        self.assertEqual(self.row(item)["reported_state"], "accepted")
 
     def test_oidc_owner_issue_delivery_token_and_session_are_all_fenced(self):
         self.linear.comments = [comment()]

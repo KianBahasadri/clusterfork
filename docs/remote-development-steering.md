@@ -22,8 +22,7 @@ Azure every **10 seconds**, delivering at most one instruction per poll. Normal
 latency is one poll plus service and agent safe-point latency, even without
 Comment webhooks. Initialization/account selection can queue instructions until
 coding starts. The shared **15-minute**
-timer also scans mapped issues and known instruction records, recovering missed
-events and late comments when no runner is polling.
+timer follows the [runtime reconciliation rules](remote-development.md#components-and-dispatch).
 
 Azure Table `ClusterforkInstructions` (partition `instructions`) freezes the first
 observed addressed comment, its issue, dispatch key, exact GitHub run/attempt, and
@@ -51,7 +50,7 @@ attempt; a late confirmation from the same
 live session can correct uncertainty. Acceptance confirms receipt, not completion
 of the requested change. Broker/Linear outages delay observation or reporting;
 result acknowledgements retry without resending agent input, and stable comment
-IDs plus timer refresh repair failed/ambiguous Linear writes. The running agent
+IDs plus durable pending reports repair failed/ambiguous Linear writes. The running agent
 continues during polling outages while its existing leases remain valid. Pause,
 cancel, resume, and automatic job restarts are outside this interface.
 

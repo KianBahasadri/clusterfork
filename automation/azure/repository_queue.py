@@ -556,7 +556,7 @@ class RepositoryQueue:
                 if row.get("issue_id") in observed:
                     self.selection.sync(table, row["RowKey"])
 
-    def advance(self, repository, *, refresh_selection=False):
+    def advance(self, repository):
         table = None
         try:
             for _ in range(32):
@@ -571,7 +571,7 @@ class RepositoryQueue:
             if table is not None:
                 # Retain repair even when GitHub observation/dispatch fails.
                 self.refresh_waiting(table)
-                self.selection.reconcile(table, refresh=refresh_selection)
+                self.selection.reconcile(table)
                 for row in table.list():
                     if row.get("status") in TERMINAL and row.get("reason"):
                         self.report(table, row, row["reason"])
@@ -694,6 +694,6 @@ class RepositoryQueue:
     def reconcile(self):
         for repository in self.repositories():
             try:
-                self.advance(repository, refresh_selection=True)
+                self.advance(repository)
             except Exception:
                 logging.error("Repository queue reconciliation deferred for %s", repository)
