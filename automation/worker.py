@@ -21,6 +21,7 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).parent / "azure"))
 from codex_runtime import CodexError, inspect_account, quota_snapshot, read_usage, write_private
+from agent_session import run_agent
 from dispatch_core import AgentProfile
 from quota_selection import SelectionPolicy, select_account
 from worker_reporting import usage_report
@@ -198,25 +199,15 @@ def run_codex(broker, config, worker_heartbeat, directory):
                 issue = config["issue"]
                 prompt = (
                     f"Implement Linear issue {issue['identifier']}: {issue['title']}\n"
-                    f"Issue URL: {issue['url']}\n\n{issue.get('description') or ''}\n\n"
-                    "Read and follow AGENTS.md and the repository docs. Make the requested change, "
-                    "run appropriate tests, and update the owning documentation when behavior changes. "
-                    "Do not commit, push, open a PR, change authentication, or deploy anything; "
-                    "the worker publishes the result. Work as one agent without spawning subagents. "
-                    "Finish with a concise description of changes and validation."
+                    f"Issue URL: {issue['url']}\n\n{issue.get('description') or ''}"
                 )
                 env = {**clean_environment(), "CODEX_HOME": str(home)}
-                summary = directory / "summary.md"
                 ran_agent = True
                 try:
-                    command(["codex", "exec", "--ignore-user-config", "--ephemeral", "--color", "never",
-                             "--dangerously-bypass-approvals-and-sandbox", "--model", selection.model,
-                             "-c", f'model_reasoning_effort="{selection.effort}"',
-                             "-c", 'cli_auth_credentials_store="file"',
-                             "--output-last-message", str(summary), "-"],
-                            stdin=prompt, env=env, timeout=config.get("agent_timeout_minutes", 300) * 60,
-                            failure_signals=[heartbeat.failed, worker_heartbeat.failed])
-                    yield summary.read_text() if summary.exists() else "Codex completed the issue."
+                    summary = run_agent(broker, config, home, Path.cwd(), prompt, env,
+                                        timeout=config.get("agent_timeout_minutes", 300) * 60,
+                                        failure_signals=[heartbeat.failed, worker_heartbeat.failed])
+                    yield summary
                     return
                 finally:
                     try:

@@ -123,7 +123,7 @@ class WebhookTests(unittest.TestCase):
         self.assertEqual(error.exception.status, 503)
 
     def test_removed_issues_and_unrelated_events_are_ignored(self):
-        for kind, action in [("Issue", "remove"), ("Comment", "create")]:
+        for kind, action in [("Issue", "remove"), ("Reaction", "create"), ("Comment", "remove")]:
             body, headers = signed({"type": kind, "action": action, "data": {"id": ISSUE},
                                     "webhookTimestamp": NOW * 1000})
             self.assertIsNone(webhook_event(body, headers, SECRET, now=NOW))

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass
@@ -53,6 +54,7 @@ class Registry:
     agent_profiles: dict[str, AgentProfile]
     agent_selection: SelectionPolicy
     routes: dict[str, Route]
+    steering_user_ids: tuple[str, ...] = ()
 
     @classmethod
     def load(cls, path):
@@ -114,7 +116,14 @@ class Registry:
             routes[project_id] = Route(project_id, row["repository"], row["workflow"],
                                        row["ref"], states, tuple(tuple(c) for c in commands), auto_merge,
                                        linear_states, agent_timeout)
-        return cls(label, generation, profiles, SelectionPolicy.load(data["agent_selection"]), routes)
+        steering = data.get("steering", {})
+        if not isinstance(steering, dict) or set(steering) - {"trusted_user_ids"}:
+            raise ValueError("steering supports only trusted_user_ids")
+        users = steering.get("trusted_user_ids", [])
+        if not isinstance(users, list):
+            raise ValueError("steering.trusted_user_ids must be an array of Linear user UUIDs")
+        return cls(label, generation, profiles, SelectionPolicy.load(data["agent_selection"]), routes,
+                   tuple(uuid_string(user) for user in users))
 
 
 class WebhookError(ValueError):
@@ -143,7 +152,7 @@ def webhook_event(body, headers, secret, *, now=None):
         clock = time.time() if now is None else now
         if not abs(clock * 1000 - timestamp) <= 300_000:
             raise WebhookError(401, "expired webhook")
-        if payload["type"] not in {"Issue", "Project"}:
+        if payload["type"] not in {"Issue", "Project", "Comment"}:
             return None
         if payload["action"] not in {"create", "update"}:
             return None
@@ -186,13 +195,18 @@ class DispatchError(RuntimeError):
 
 
 class Dispatcher:
-    def __init__(self, registry, linear, queue):
+    def __init__(self, registry, linear, queue, steering=None):
         self.registry = registry
         self.linear = linear
         self.queue = queue
+        self.steering = steering
 
     def process(self, event):
         event_type = event.get("type")
+        if event_type == "Comment":
+            if self.steering:
+                self.steering.comment(uuid_string(event["id"]))
+            return [{"status": "steering_observed"}]
         if event_type == "Issue":
             issue = self.linear.issue(uuid_string(event["id"]))
             return [self.route(issue)] if issue else [{"status": "missing_issue"}]
@@ -213,6 +227,11 @@ class Dispatcher:
     def route_issues(self, issues):
         results, repositories = [], set()
         for issue in issues:
+            if self.steering:
+                try:
+                    self.steering.observe(issue["id"], issue=issue)
+                except Exception:
+                    logging.error("Linear instruction observation deferred for %s", issue["id"])
             route, reason = eligibility(issue, self.registry)
             if route:
                 key = self.queue.enqueue(issue, route)

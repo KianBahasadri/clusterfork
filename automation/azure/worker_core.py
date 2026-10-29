@@ -97,11 +97,21 @@ class Accounts:
 
 
 class WorkerService:
-    def __init__(self, registry, receipts, runs, accounts, linear, github, queue, clock=time.time, sync=None):
+    def __init__(self, registry, receipts, runs, accounts, linear, github, queue, clock=time.time, sync=None,
+                 steering=None):
         self.registry, self.receipts, self.runs = registry, receipts, runs
         self.accounts, self.linear, self.github, self.clock = accounts, linear, github, clock
         self.sync = sync
         self.queue = queue
+        self.steering = steering
+
+    def sync_steering(self, issue_id):
+        if self.steering:
+            import logging
+            try:
+                self.steering.repair(issue_id)
+            except Exception:
+                logging.error("Instruction boundary update deferred for %s", issue_id)
 
     def sync_linear(self, key):
         if self.sync:
@@ -171,6 +181,36 @@ class WorkerService:
                 raise WorkerError("Coding checkout does not match the reviewed repository context", 403)
         if action == "heartbeat":
             return {"running": True}
+        if action in {"steering_open", "instructions", "instruction_result", "steering_close"}:
+            if not self.steering:
+                raise WorkerError("Instruction steering is unavailable", 503)
+            if row.get("stage") != "coding" or row.get("steering_closed"):
+                raise WorkerError("The agent is no longer accepting instructions")
+            for field in ("thread_id", "turn_id"):
+                value = data.get(field)
+                if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", value):
+                    raise WorkerError("Invalid agent session identity", 400)
+                if row.get(field, value) != value:
+                    raise WorkerError("Agent session cannot be replaced within an attempt", 403)
+            if action == "steering_open":
+                row, etag = self.runs.get(key)
+                if (row.get("owner") != owner or row.get("status") != "running" or row.get("steering_closed")
+                        or any(row.get(field, data[field]) != data[field] for field in ("thread_id", "turn_id"))):
+                    raise WorkerError("Agent session was superseded", 403)
+                row.update(thread_id=data["thread_id"], turn_id=data["turn_id"])
+                self.runs.replace(row, etag)
+                return {"accepting": True}
+            if not row.get("thread_id"):
+                raise WorkerError("Agent session has not registered")
+            if action == "steering_close":
+                row, etag = self.runs.get(key)
+                row["steering_closed"] = True
+                self.runs.replace(row, etag)
+                self.sync_steering(receipt["issue_id"])
+                return {"accepting": False}
+            if action == "instructions":
+                return self.steering.poll(receipt, row)
+            return self.steering.result(receipt, row, data)
         if action == "progress":
             stage = data.get("stage", row.get("stage", "initializing"))
             if stage not in STAGES or stage in {"review", "waiting_for_quota"}:
@@ -202,8 +242,11 @@ class WorkerService:
                     raise WorkerError("Account selection was not recorded", 400)
                 row["usage_after"] = json.dumps(validate_usage(data["usage_after"]))
             row.update(stage=stage, report_version=row.get("report_version", 0) + 1)
+            if stage in {"testing", "publishing"}:
+                row["steering_closed"] = True
             self.runs.replace(row, etag)
             self.sync_linear(key)
+            self.sync_steering(receipt["issue_id"])
             return {"stage": stage}
         if action == "accounts":
             return {"accounts": self.accounts.list()}
@@ -233,6 +276,7 @@ class WorkerService:
                 raise WorkerError("Invalid worker outcome", 400)
             row, etag = self.runs.get(key)
             row.update(status=status, lease_until=0, finished_at=int(self.clock()),
+                       steering_closed=True,
                        report_version=row.get("report_version", 0) + 1)
             url = data.get("pull_request", "")
             if url and not re.fullmatch(re.escape(f"https://github.com/{route.repository}/pull/") + r"[1-9][0-9]*", url):
@@ -256,6 +300,7 @@ class WorkerService:
                 else:
                     raise WorkerError("Dispatch receipt changed concurrently; retry quota scheduling")
             self.sync_linear(key)
+            self.sync_steering(receipt["issue_id"])
             return {"status": status}
         raise WorkerError("Unknown worker action", 404)
 
@@ -297,6 +342,7 @@ class WorkerService:
                         raise
             raise WorkerError("Coding start held for a current passing readiness review", 403) from None
         row = {"RowKey": key, "owner": owner, "status": "running", "stage": "initializing",
+               "attempt_id": str(uuid4()), "steering_started_at": self.clock(),
                "readiness_review_key": approval.get("review_key", ""),
                "started_at": int(self.clock()), "report_version": 0,
                "lease_until": int(self.clock()) + LEASE_SECONDS}
@@ -310,10 +356,12 @@ class WorkerService:
                 row = {**existing, "lease_until": row["lease_until"]}
             self.runs.replace(row, etag)
         self.sync_linear(key)
+        self.sync_steering(receipt["issue_id"])
         profile = self.registry.agent_profiles["codex"]
         return {"protocol": PROTOCOL, "phase": "development", "readiness": approval,
                 "model": profile.model, "effort": profile.effort,
                 "serial_admission": True,
+                "attempt_id": row["attempt_id"], "owner": owner,
                 "selection": {"min_remaining_percent": self.registry.agent_selection.min_remaining_percent,
                               "max_snapshot_age_seconds": self.registry.agent_selection.max_snapshot_age_seconds},
                 "repository": route.repository, "ref": route.ref,

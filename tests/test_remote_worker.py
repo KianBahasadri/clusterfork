@@ -352,10 +352,11 @@ class LiveQuotaShapeTests(unittest.TestCase):
                      patch.object(worker, "account_lease", return_value=lease), \
                      patch.object(worker, "inspect_account", return_value=({}, {})), \
                      patch.object(worker, "quota_snapshot"), patch.object(worker, "read_usage", return_value={}), \
-                     patch.object(worker, "command") as command:
+                     patch.object(worker, "run_agent", return_value="Completed") as run_agent:
                     with worker.run_codex(Mock(), config, heartbeat, Path(directory)):
                         pass
-                self.assertEqual(command.call_args.kwargs["timeout"], expected)
+                self.assertEqual(run_agent.call_args.kwargs["timeout"], expected)
+                self.assertEqual(run_agent.call_args.args[3], Path.cwd())
 
     def test_broker_authentication_or_storage_failure_is_not_reported_as_exhausted_quota(self):
         class Broker:
