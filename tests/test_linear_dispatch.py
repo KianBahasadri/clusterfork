@@ -92,10 +92,23 @@ class Workflows:
 
 
 class WebhookTests(unittest.TestCase):
-    def test_raw_body_signature_returns_only_routing_ids(self):
+    def test_raw_body_signature_returns_routing_ids_and_timestamp(self):
         body, headers = signed()
         self.assertEqual(webhook_event(body, headers, SECRET, now=NOW),
-                         {"type": "Issue", "id": ISSUE})
+                         {"type": "Issue", "id": ISSUE, "webhook_at": NOW})
+
+    def test_source_timestamp_is_diagnostic_without_copying_issue_content(self):
+        payload = {"type": "Issue", "action": "update", "webhookTimestamp": NOW * 1000,
+                   "data": {"id": ISSUE, "updatedAt": "2026-10-29T18:23:05Z",
+                            "title": "private title", "description": "private description"}}
+        event = webhook_event(*signed(payload), SECRET, now=NOW)
+        self.assertEqual(event, {"type": "Issue", "id": ISSUE, "webhook_at": NOW,
+                                 "source_updated_at": 1793298185.0})
+        for updated in (None, 12, "bad", "2026-10-29T18:23:05"):
+            with self.subTest(updated=updated):
+                payload["data"]["updatedAt"] = updated
+                self.assertEqual(webhook_event(*signed(payload), SECRET, now=NOW),
+                                 {"type": "Issue", "id": ISSUE, "webhook_at": NOW})
 
     def test_tampering_with_body_is_rejected(self):
         body, headers = signed()

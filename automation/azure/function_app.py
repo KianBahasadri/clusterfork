@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from repository_queue import RepositoryQueue
 from readiness import ReadinessGate
 from deployment_control import DeploymentControl, build_metadata
 from steering import Steering
+from routing_timing import record, timestamps
 
 app = func.FunctionApp()
 QUEUE = "clusterfork-events"
@@ -39,7 +41,9 @@ def queue_client():
 
 
 def enqueue(event):
+    event = {**event, "enqueued_at": time.time()}
     queue_client().send_message(json.dumps(event))
+    record("event_enqueued", event_type=event["type"], entity_id=event["id"], **timestamps(event))
 
 
 def dispatcher():
@@ -118,11 +122,15 @@ def health(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="linear", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def linear_webhook(req: func.HttpRequest) -> func.HttpResponse:
+    received_at = time.time()
     try:
         event = webhook_event(req.get_body(), req.headers, os.environ.get("LINEAR_WEBHOOK_SECRET"))
     except WebhookError as exc:
         return func.HttpResponse(str(exc), status_code=exc.status)
     if event:
+        event["received_at"] = received_at
+        record("webhook_received", at=received_at, event_type=event["type"], entity_id=event["id"],
+               **timestamps(event))
         try:
             enqueue(event)
         except Exception:
@@ -134,7 +142,11 @@ def linear_webhook(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.queue_trigger(arg_name="message", queue_name=QUEUE, connection="AzureWebJobsStorage")
 def route_event(message: func.QueueMessage):
-    results = dispatcher().process(json.loads(message.get_body()))
+    event = json.loads(message.get_body())
+    event["processing_at"] = time.time()
+    record("event_processing", at=event["processing_at"], event_type=event["type"], entity_id=event["id"],
+           **timestamps(event))
+    results = dispatcher().process(event)
     # No issue descriptions, webhook bodies, API responses, or credentials in logs.
     for result in results:
         logging.info("Clusterfork routing: %s", json.dumps(result))

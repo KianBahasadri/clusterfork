@@ -6,8 +6,10 @@ the current slot. Timer refreshes also repair a process lost after a late write.
 """
 
 import logging
+import time
 from itertools import chain
 
+from routing_timing import record, timestamps
 from worker_core import WorkerError
 
 
@@ -16,9 +18,10 @@ def selection_changed(row):
 
 
 class SelectionReporter:
-    def __init__(self, linear, tables):
+    def __init__(self, linear, tables, clock=time.time):
         self.linear = linear
         self.tables = tables
+        self.clock = clock
 
     def selected(self, table, issue_id):
         # An issue can reenter through another project, generation, or repository.
@@ -59,7 +62,14 @@ class SelectionReporter:
                 if not refresh and not row.get("selection_pending"):
                     return
                 selected = self.selected(table, row["issue_id"])
+                started_at = self.clock()
+                record("selection_label_started", at=started_at, dispatch_key=key, issue_id=row["issue_id"],
+                       selected=selected, selection_version=row.get("selection_version"), **timestamps(row))
                 self.linear.set_selected(row["issue_id"], selected)
+                reported_at = self.clock()
+                record("selection_label_written", at=reported_at, dispatch_key=key, issue_id=row["issue_id"],
+                       selected=selected, selection_version=row.get("selection_version"),
+                       started_at=started_at, **timestamps(row))
                 latest, etag = table.get(key)
                 if (latest.get("selection_version") != row.get("selection_version")
                         or self.selected(table, row["issue_id"]) != selected):
@@ -68,6 +78,7 @@ class SelectionReporter:
                     refresh = True
                     continue
                 latest["selection_pending"] = False
+                latest["selection_reported_at"] = reported_at
                 try:
                     table.replace(latest, etag)
                     return
@@ -76,13 +87,14 @@ class SelectionReporter:
                         raise
                     refresh = True
             raise WorkerError("Selection reporting changed concurrently; retry")
-        except Exception:
+        except Exception as exc:
             # An ambiguous label response can have changed Linear after another
             # reporter acknowledged a newer version. Persist a retry in that case.
             try:
                 self.defer(table, key)
             except Exception:
                 pass  # Timer refresh also repairs acknowledged historical rows.
+            record("selection_label_deferred", at=self.clock(), dispatch_key=key, error_type=type(exc).__name__)
             logging.error("Linear selection label update deferred for %s", key)
 
     def reconcile(self, table, *, refresh=False):

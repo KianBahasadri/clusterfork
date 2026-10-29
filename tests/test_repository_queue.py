@@ -525,6 +525,156 @@ class RepositoryQueueTests(unittest.TestCase):
         self.linear.set_state.assert_not_called()
         self.linear.set_stage.assert_not_called()
 
+    def test_slow_steering_cannot_delay_admission_or_the_first_label(self):
+        issue = self.issue(1)
+        self.dispatcher.steering = Mock()
+        markers = {}
+
+        def steering(*args, **kwargs):
+            self.assertEqual(self.selected, {issue["id"]})
+            self.now += 12
+            markers["steering_finished"] = self.now
+
+        def selected(issue_id, enabled):
+            self.now += 0.3
+            self.select(issue_id, enabled)
+            markers["label_acknowledged"] = self.now
+
+        self.dispatcher.steering.observe.side_effect = steering
+        self.linear.set_selected.side_effect = selected
+        self.dispatcher.process({"type": "Issue", "id": issue["id"]})
+        self.assertAlmostEqual(markers["label_acknowledged"] - NOW, 0.3)
+        self.assertAlmostEqual(markers["steering_finished"] - NOW, 12.3)
+
+    def test_issue_event_can_select_while_an_unrelated_scan_is_stalled(self):
+        issue = self.issue(1)
+        scanning, resume = threading.Event(), threading.Event()
+
+        def scan(project):
+            scanning.set()
+            if not resume.wait(5):
+                raise TimeoutError("test did not resume project scan")
+            return [copy.deepcopy(issue)]
+
+        self.linear.project_issues.side_effect = scan
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            project = pool.submit(self.dispatcher.process, {"type": "Project", "id": PROJECT})
+            try:
+                self.assertTrue(scanning.wait(5))
+                event = pool.submit(self.dispatcher.process, {"type": "Issue", "id": issue["id"]})
+                event.result(timeout=5)
+                self.assertEqual(self.selected, {issue["id"]})
+                self.assertFalse(project.done())
+            finally:
+                resume.set()
+            project.result(timeout=5)
+        self.assertEqual(self.github.dispatch.call_count, 1)
+
+    def test_new_selection_precedes_historical_label_and_comment_repairs(self):
+        first = self.enqueue(self.issue(1))
+        self.queue.advance(self.repository)
+        self.start(first)
+        self.finish(first)
+        self.stop(first)
+        self.queue.advance(self.repository)
+        second = self.enqueue(self.issue(2))
+        table = self.tables[self.repository.lower()]
+        row, etag = table.get(first)
+        row.update(selection_pending=True, reported_reason="")
+        table.replace(row, etag)
+        markers = {}
+
+        def selected(issue_id, enabled):
+            self.now += 0.3 if enabled else 8
+            self.select(issue_id, enabled)
+            if enabled:
+                self.assertEqual(self.slot()["active_key"], second)
+                markers["label_acknowledged"] = self.now
+
+        def comment(*args):
+            self.now += 4
+
+        self.linear.set_selected.side_effect = selected
+        self.linear.status_comment.side_effect = comment
+        self.queue.advance(self.repository)
+        self.assertAlmostEqual(markers["label_acknowledged"] - NOW, 0.3)
+        self.assertFalse(table.get(first)[0]["selection_pending"])
+        self.assertEqual(self.selected, {str(UUID(int=2))})
+        self.assertTrue(table.get(first)[0]["reported_reason"])
+
+    def test_handoff_reports_next_selection_before_the_old_removal(self):
+        first, second = [self.enqueue(self.issue(n)) for n in (1, 2)]
+        self.queue.advance(self.repository)
+        self.start(first)
+        self.finish(first)
+        self.stop(first)
+        writes = []
+
+        def selected(issue_id, enabled):
+            writes.append((issue_id, enabled))
+            if enabled:
+                self.assertEqual(self.slot()["active_key"], second)
+            self.select(issue_id, enabled)
+
+        self.linear.set_selected.side_effect = selected
+        self.queue.advance(self.repository)
+        self.assertEqual(writes, [(str(UUID(int=2)), True), (str(UUID(int=1)), False)])
+        self.assertEqual(self.selected, {str(UUID(int=2))})
+
+    def test_timing_follows_first_eligible_observation_and_durable_selection(self):
+        issue = self.issue(1)
+        timing = {"source_updated_at": NOW - 1, "webhook_at": NOW - 0.9, "received_at": NOW - 0.8,
+                  "enqueued_at": NOW - 0.7, "processing_at": NOW - 0.1}
+        first = self.queue.enqueue(issue, self.route, timing=timing)
+        self.assertFalse(self.tables[self.repository.lower()].get(first)[0].get("selected_at"))
+        self.linear.set_selected.assert_not_called()
+        self.now += 1
+        self.queue.enqueue(issue, self.route, timing={"received_at": self.now})
+        self.queue.advance(self.repository)
+        row, _ = self.tables[self.repository.lower()].get(first)
+        for name, value in timing.items():
+            self.assertEqual(row[name], value)
+        self.assertEqual(row["queued_at"], NOW)
+        self.assertEqual(row["selected_at"], NOW + 1)
+        self.assertEqual(row["selection_reported_at"], NOW + 1)
+
+    def test_label_failure_can_recover_on_the_same_event_without_redispatch(self):
+        first = self.enqueue(self.issue(1))
+        attempts = []
+
+        def selected(issue_id, enabled):
+            attempts.append((issue_id, enabled))
+            if len(attempts) == 1:
+                raise RequestError(429)
+            self.select(issue_id, enabled)
+
+        self.linear.set_selected.side_effect = selected
+        with self.assertLogs(level="ERROR"):
+            self.queue.advance(self.repository)
+        self.assertEqual(self.github.dispatch.call_count, 1)
+        self.assertEqual(self.slot()["active_key"], first)
+        self.assertEqual(self.selected, {str(UUID(int=1))})
+        self.assertFalse(self.tables[self.repository.lower()].get(first)[0]["selection_pending"])
+
+    def test_historical_removal_still_recovers_when_active_github_observation_fails(self):
+        first, _ = [self.enqueue(self.issue(n)) for n in (1, 2)]
+        self.queue.advance(self.repository)
+        self.start(first)
+        self.finish(first)
+        self.stop(first)
+        self.queue.advance(self.repository)
+        table = self.tables[self.repository.lower()]
+        row, etag = table.get(first)
+        row["selection_pending"] = True
+        table.replace(row, etag)
+        self.selected.add(str(UUID(int=1)))  # A late write needs repair.
+        self.github.dispatch_runs.side_effect = RequestError()
+        with self.assertRaises(RequestError):
+            self.queue.advance(self.repository)
+        self.assertEqual(self.selected, {str(UUID(int=2))})
+        self.assertFalse(table.get(first)[0]["selection_pending"])
+        self.assertEqual(self.github.dispatch.call_count, 2)
+
     def test_label_outages_retry_after_restarts_without_releasing_or_redispatching(self):
         first, second = [self.enqueue(self.issue(n)) for n in (1, 2)]
         table = self.queue.table(self.repository)

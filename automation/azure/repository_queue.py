@@ -15,6 +15,7 @@ from functools import lru_cache
 from dispatch_core import DispatchError, Route, eligibility
 from linear_sync import comment_id, pull_outcome
 from selection_reporting import SelectionReporter, selection_changed
+from routing_timing import record, timestamps
 from worker_core import WorkerError
 
 
@@ -40,7 +41,7 @@ class RepositoryQueue:
         self.tables = lru_cache(maxsize=None)(tables)
         self.linear, self.github, self.clock = linear, github, clock
         self.readiness = readiness
-        self.selection = SelectionReporter(linear, self.selection_tables)
+        self.selection = SelectionReporter(linear, self.selection_tables, clock=clock)
         self.control = control
         self.readiness.admitted = self.is_admitted
         self.readiness.review_selection = self.review_selection
@@ -113,6 +114,7 @@ class RepositoryQueue:
                 return key
             sequence = state["sequence"] + 1
             row = {"RowKey": key, "sequence": sequence, "status": "submitted" if submitted else "queued",
+                   "queued_at": self.clock(), **timestamps(fields),
                    **{k: fields[k] for k in ("issue_id", "identifier", "repository", "project_id")}}
             if existing:
                 # Rejoining a skipped task must not lose a pending label removal.
@@ -126,13 +128,14 @@ class RepositoryQueue:
                     raise
         raise WorkerError("Repository queue is busy; retry admission")
 
-    def enqueue(self, issue, route):
+    def enqueue(self, issue, route, *, timing=None):
         key = dispatch_key(self.registry, route, issue)
         for _ in range(32):
             try:
                 self.insert(self.table(route.repository), key,
                             {"issue_id": issue["id"], "identifier": issue["identifier"],
-                             "repository": route.repository, "project_id": route.project_id})
+                             "repository": route.repository, "project_id": route.project_id,
+                             **timestamps(timing or {})})
                 return key
             except WorkerError as exc:
                 if exc.status != 409:
@@ -153,9 +156,12 @@ class RepositoryQueue:
                 return state, etag
             row, version = table.get(head["RowKey"])
             row["status"] = "active"
+            row["selected_at"] = self.clock()
             selection_changed(row)
             state.update(active_key=row["RowKey"], owner="")
             table.transaction([(state, etag), (row, version)])
+            record("repository_admitted", at=self.clock(), dispatch_key=row["RowKey"],
+                   issue_id=row["issue_id"], repository=row["repository"], **timestamps(row))
         else:
             row, version = table.get(state["active_key"])
             if not row.get("selection_version"):
@@ -276,7 +282,8 @@ class RepositoryQueue:
         selection_changed(current)
         state.update(active_key="", owner="")
         table.transaction([(state, etag), (current, version)])
-        self.selection.sync(table, row["RowKey"])
+        # The next head's addition takes priority over historical removals and
+        # comments. advance repairs all durable intents after reporting it.
         return True
 
     def dispatch(self, table, state, etag, row, route, *, retry=False):
@@ -287,7 +294,6 @@ class RepositoryQueue:
             message = f"No longer eligible ({reason})."
             if not self.finish_entry(table, state, etag, row, "skipped", message):
                 return {"status": "waiting", "dispatch_key": key, "reason": "Waiting for the readiness worker to stop."}
-            self.report(table, row, message)
             return {"status": "skipped", "dispatch_key": key}
         review = self.readiness.ensure(issue, route)
         if review["status"] != "ready":
@@ -342,17 +348,25 @@ class RepositoryQueue:
             logging.error("Repository queue explanation deferred for %s", row["RowKey"])
 
     def advance(self, repository, *, refresh_selection=False):
-        for _ in range(32):
-            try:
-                return self._advance(repository, refresh_selection=refresh_selection)
-            except WorkerError as exc:
-                if exc.status != 409:
-                    raise
-        raise WorkerError("Repository queue changed concurrently; retry reconciliation")
+        table = None
+        try:
+            for _ in range(32):
+                try:
+                    table = self.table(repository)
+                    return self._advance(table)
+                except WorkerError as exc:
+                    if exc.status != 409:
+                        raise
+            raise WorkerError("Repository queue changed concurrently; retry reconciliation")
+        finally:
+            if table is not None:
+                # Retain repair even when GitHub observation/dispatch fails.
+                self.selection.reconcile(table, refresh=refresh_selection)
+                for row in table.list():
+                    if row.get("status") in TERMINAL and row.get("reason"):
+                        self.report(table, row, row["reason"])
 
-    def _advance(self, repository, *, refresh_selection=False):
-        table = self.table(repository)
-        self.selection.reconcile(table, refresh=refresh_selection)
+    def _advance(self, table):
         results = {}
         if self.control and self.control.is_paused():
             reason = "Azure deployment in progress; new workers are paused."
@@ -361,9 +375,6 @@ class RepositoryQueue:
                     self.report(table, row, reason)
                     results[row["RowKey"]] = {"status": "deployment_paused", "dispatch_key": row["RowKey"]}
             return results
-        for row in table.list():
-            if row.get("status") in TERMINAL and row.get("reason"):
-                self.report(table, row, row["reason"])
         while True:
             state, etag = self.reserve(table)
             key = state["active_key"]
@@ -377,7 +388,6 @@ class RepositoryQueue:
                 if not self.finish_entry(table, state, etag, row, "skipped", reason):
                     return {key: {"status": "waiting", "dispatch_key": key,
                                   "reason": "Waiting for the readiness worker to stop."}}
-                self.report(table, row, reason)
                 results[key] = {"status": "skipped", "dispatch_key": key, "reason": reason}
                 continue
             if route is None:
@@ -397,7 +407,6 @@ class RepositoryQueue:
                     if not self.finish_entry(table, state, etag, row, action, reason):
                         return {key: {"status": "waiting", "dispatch_key": key,
                                       "reason": "Waiting for the admitted worker to stop."}}
-                    self.report(table, row, reason)
                     results[key] = {"status": action, "dispatch_key": key, "reason": reason}
                     continue
                 if action == "retry":
