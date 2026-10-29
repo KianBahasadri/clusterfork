@@ -5,8 +5,12 @@ the instruction, for example `@clusterfork Keep the historical investigation
 notes, but move them out of the setup guide.` No Linear bot user or actual mention
 is required; the prefix is case insensitive. Discussion, quoted/code examples,
 bot-authored comments, status comments, and description edits are not instructions.
-The Linear personal API key's `viewer.id` is authorized by default. To trust other
-people, explicitly add their Linear user UUIDs to the top-level
+The authenticated Linear `viewer.id` is authorized by default. With the
+`Clusterfork` OAuth2 Application's `client_credentials` token, that is the app
+actor (`a76cf048-2395-425b-ae2b-15779a1de587`); with a personal API key, it is the key's
+owner. The shipped registry explicitly trusts Kian Bahasadri's user UUID
+(`62a4e98c-29f0-4b6c-8062-ede9c6176c1d`) so his instructions remain authorized under
+the app identity. To trust other people, add their Linear user UUIDs to the top-level
 `"steering": {"trusted_user_ids": ["<user UUID>"]}` in
 `automation/azure/projects.json`. Names, email addresses, and issue assignment
 do not grant steering permission.

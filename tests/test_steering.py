@@ -161,6 +161,15 @@ class SteeringTests(unittest.TestCase):
         self.assertIn("not authorized", self.linear.acks[self.row(stranger)["ack_id"]])
         self.assertEqual(self.row(stranger)["text"], "")
 
+    def test_kian_remains_authorized_when_viewer_is_the_clusterfork_oauth_app(self):
+        kian = comment(author="62a4e98c-29f0-4b6c-8062-ede9c6176c1d")
+        stranger = comment(author=STRANGER, at=NOW + 2)
+        self.linear.comments = [kian, stranger]
+        with patch.object(self.linear, "viewer_id", return_value="a76cf048-2395-425b-ae2b-15779a1de587"):
+            instruction = self.call("instructions")["instruction"]
+        self.assertEqual(instruction["comment_id"], kian["id"])
+        self.assertEqual(self.row(stranger)["state"], "rejected")
+
     def test_owner_lookup_failure_cannot_authorize_a_comment(self):
         self.linear.comments = [comment()]
         with patch.object(self.linear, "viewer_id", side_effect=OSError("unavailable")):

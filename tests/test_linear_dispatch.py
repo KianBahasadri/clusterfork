@@ -13,9 +13,11 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import traceback
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -326,15 +328,185 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(str(caught.exception), "remote request failed (HTTP 403)")
 
 
+class LinearOAuthTests(unittest.TestCase):
+    def setUp(self):
+        self.now = NOW
+        self.exchange = Mock(return_value=self.credentials())
+        self.graphql = Mock(return_value={"data": {"issue": issue()}})
+        self.client = self.client_credentials()
+        self.transport = patch("dispatch_clients.urlopen", side_effect=self.urlopen)
+        self.open = self.transport.start()
+        self.addCleanup(self.transport.stop)
+
+    @staticmethod
+    def credentials(token="test-only-access-token", expires_in=3600):
+        return {"access_token": token, "token_type": "Bearer", "expires_in": expires_in}
+
+    def client_credentials(self):
+        return Linear("test-only-api-key", client_id="test-client-id", client_secret="test-only-client&secret=+",
+                      clock=lambda: self.now)
+
+    def urlopen(self, request, *, timeout):
+        self.assertEqual(timeout, 20)
+        if request.full_url == "https://api.linear.app/oauth/token":
+            result = self.exchange(request)
+        else:
+            self.assertEqual(request.full_url, "https://api.linear.app/graphql")
+            result = self.graphql(request)
+        return io.BytesIO(result if isinstance(result, bytes) else json.dumps(result).encode())
+
+    def headers(self):
+        return [call.args[0].get_header("Authorization") for call in self.graphql.call_args_list]
+
+    def test_client_credentials_exchange_prefers_oauth_and_reuses_token(self):
+        for _ in range(2):
+            self.assertEqual(self.client.issue(ISSUE), issue())
+        self.exchange.assert_called_once()
+        request = self.exchange.call_args.args[0]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.get_header("Content-type"), "application/x-www-form-urlencoded")
+        self.assertIsNone(request.get_header("Authorization"))
+        self.assertEqual(parse_qs(request.data.decode()), {
+            "grant_type": ["client_credentials"], "client_id": ["test-client-id"],
+            "client_secret": ["test-only-client&secret=+"],
+            "scope": ["read,write,comments:create,issues:create"]})
+        self.assertEqual(self.headers(), ["Bearer test-only-access-token"] * 2)
+        self.assertTrue(all(call.args[0].get_header("Content-type") == "application/json"
+                            for call in self.graphql.call_args_list))
+
+    def test_token_refreshes_five_minutes_before_reported_expiry(self):
+        self.client.issue(ISSUE)
+        self.now += 3299
+        self.client.issue(ISSUE)
+        self.exchange.assert_called_once()
+        self.now += 1
+        self.exchange.return_value = self.credentials("test-refreshed-token")
+        self.client.issue(ISSUE)
+        self.assertEqual(self.exchange.call_count, 2)
+        self.assertEqual(self.headers(), ["Bearer test-only-access-token"] * 2 + ["Bearer test-refreshed-token"])
+
+    def test_short_lived_tokens_are_reused_and_refreshed_before_expiry(self):
+        self.exchange.return_value = self.credentials(expires_in=120)
+        self.client.issue(ISSUE)
+        self.now += 59
+        self.client.issue(ISSUE)
+        self.exchange.assert_called_once()
+        self.now += 1
+        self.client.issue(ISSUE)
+        self.assertEqual(self.exchange.call_count, 2)
+
+    def test_concurrent_graphql_calls_share_one_token(self):
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(self.client.issue, [ISSUE] * 24))
+        self.assertEqual(results, [issue()] * 24)
+        self.exchange.assert_called_once()
+        self.assertEqual(self.headers(), ["Bearer test-only-access-token"] * 24)
+
+    def test_unauthorized_graphql_refreshes_and_retries_the_same_request_once(self):
+        self.exchange.side_effect = [self.credentials(), self.credentials("test-refreshed-token")]
+        self.graphql.side_effect = [HTTPError("https://api.linear.app/graphql", 401, "unauthorized", {}, None),
+                                    {"data": {"issue": issue()}}, {"data": {"issue": issue()}}]
+        with self.assertLogs(level="ERROR"):
+            self.assertEqual(self.client.issue(ISSUE), issue())
+        self.client.issue(ISSUE)
+        self.assertEqual(self.exchange.call_count, 2)
+        self.assertEqual(self.headers(), ["Bearer test-only-access-token"] + ["Bearer test-refreshed-token"] * 2)
+        self.assertEqual(self.graphql.call_args_list[0].args[0].data, self.graphql.call_args_list[1].args[0].data)
+
+    def test_second_unauthorized_response_stops_and_discards_rejected_token(self):
+        self.graphql.side_effect = HTTPError("https://api.linear.app/graphql", 401, "unauthorized", {}, None)
+        with self.assertLogs(level="ERROR"), self.assertRaises(RequestError) as caught:
+            self.client.issue(ISSUE)
+        self.assertEqual(caught.exception.status, 401)
+        self.assertEqual(self.exchange.call_count, 2)
+        self.assertEqual(self.graphql.call_count, 2)
+        self.graphql.side_effect = None
+        self.client.issue(ISSUE)
+        self.assertEqual(self.exchange.call_count, 3)
+
+    def test_api_key_fallback_when_either_oauth_credential_is_missing(self):
+        for client_id, client_secret in ((None, None), ("test-client-id", None),
+                                         (None, "test-only-client-secret"), ("", "test-only-client-secret"),
+                                         ("test-client-id", "")):
+            with self.subTest(client_id=bool(client_id), client_secret=bool(client_secret)):
+                self.graphql.reset_mock()
+                client = Linear("test-only-api-key", client_id=client_id, client_secret=client_secret)
+                self.assertEqual(client.issue(ISSUE), issue())
+                self.assertEqual(self.headers(), ["test-only-api-key"])
+                self.exchange.assert_not_called()
+
+    def test_api_key_unauthorized_response_is_not_retried(self):
+        self.graphql.side_effect = HTTPError("https://api.linear.app/graphql", 401, "unauthorized", {}, None)
+        with self.assertLogs(level="ERROR"), self.assertRaises(RequestError):
+            Linear("test-only-api-key").issue(ISSUE)
+        self.exchange.assert_not_called()
+        self.graphql.assert_called_once()
+
+    def test_other_graphql_failures_do_not_refresh_or_retry(self):
+        for status in (403, 429, 500, 503):
+            with self.subTest(status=status):
+                self.graphql.reset_mock()
+                self.exchange.reset_mock()
+                self.graphql.side_effect = HTTPError("https://api.linear.app/graphql", status, "failed", {}, None)
+                with self.assertLogs(level="ERROR"), self.assertRaises(RequestError) as caught:
+                    self.client_credentials().issue(ISSUE)
+                self.assertEqual(caught.exception.status, status)
+                self.exchange.assert_called_once()
+                self.graphql.assert_called_once()
+
+    def test_token_exchange_and_graphql_failures_redact_secrets_and_response_bodies(self):
+        secrets = ("test-only-client&secret=+", "test-only-access-token", "test-only-api-key", "private-response-body")
+        private = " ".join(secrets)
+        for endpoint in ("token", "graphql"):
+            for mode in ("http", "transport", "json", "response"):
+                with self.subTest(endpoint=endpoint, mode=mode):
+                    self.exchange.reset_mock(side_effect=True)
+                    self.graphql.reset_mock(side_effect=True)
+                    self.exchange.return_value = self.credentials()
+                    self.graphql.return_value = {"data": {"issue": issue()}}
+                    target = self.exchange if endpoint == "token" else self.graphql
+                    if mode == "http":
+                        target.side_effect = HTTPError("https://api.linear.app/" + endpoint, 403, private,
+                                                       {"Private": private}, io.BytesIO(private.encode()))
+                    elif mode == "transport":
+                        target.side_effect = URLError(private)
+                    elif mode == "json":
+                        target.return_value = private.encode()
+                    else:
+                        target.return_value = {"errors": [{"message": private}]}
+                    with self.assertLogs(level="INFO") as logs, self.assertRaises(RequestError) as caught:
+                        self.client_credentials().issue(ISSUE)
+                    rendered = ("\n".join(logs.output) + str(caught.exception) + repr(caught.exception)
+                                + json.dumps(getattr(caught.exception, "clusterfork_failure", {}))
+                                + "".join(traceback.format_exception(caught.exception)))
+                    for secret in secrets:
+                        self.assertNotIn(secret, rendered)
+                    self.exchange.assert_called_once()
+                    self.assertEqual(self.graphql.call_count, 0 if endpoint == "token" else 1)
+
+    def test_malformed_token_responses_fail_closed_without_exposing_values(self):
+        for response in (None, [], {"access_token": "test-only-access-token"},
+                         self.credentials(token=""), self.credentials(token="test-only-access-token\r\nprivate"),
+                         self.credentials(expires_in="private-expiry"), self.credentials(expires_in=True),
+                         self.credentials(expires_in=0), self.credentials(expires_in=-1),
+                         self.credentials(expires_in=float("nan")), self.credentials(expires_in=float("inf"))):
+            with self.subTest(response_type=type(response).__name__):
+                self.exchange.return_value = response
+                with self.assertRaises(RequestError) as caught:
+                    self.client_credentials().issue(ISSUE)
+                self.assertEqual(str(caught.exception), "remote request failed (HTTP unavailable)")
+                self.graphql.assert_not_called()
+
+
 class SetupTests(unittest.TestCase):
-    def run_check(self, data):
+    def run_check(self, data, linear_config="LINEAR_API_KEY=check-only-api-key\n"):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory)
             (source / "projects.json").write_text(json.dumps(data))
             key = source / "app.pem"
             key.write_text("local check only; not a live private key")
             env_file = source / ".env"
-            env_file.write_text("LINEAR_API_KEY=check-only-api-key\nGITHUB_APP_ID=123\n"
+            env_file.write_text(linear_config + "GITHUB_APP_ID=123\n"
                                 f"GITHUB_APP_PRIVATE_KEY_FILE='{key}'\n")
             output = io.StringIO()
             with patch.object(pilot, "SOURCE", source), \
@@ -344,6 +516,23 @@ class SetupTests(unittest.TestCase):
                  redirect_stdout(output):
                 result = pilot.main()
         return result, output.getvalue()
+
+    def test_check_accepts_either_linear_authentication_mode_and_rejects_partial_oauth(self):
+        data = json.loads((SOURCE / "projects.json").read_text())
+        oauth = "LINEAR_OAUTH_CLIENT_ID=check-client-id\nLINEAR_OAUTH_CLIENT_SECRET=check-only-client-secret\n"
+        key = "LINEAR_API_KEY=check-only-api-key\n"
+        for config, valid in ((oauth, True), (key, True), (oauth + key, True),
+                              ("LINEAR_OAUTH_CLIENT_ID=check-client-id\n", False),
+                              ("LINEAR_OAUTH_CLIENT_SECRET=check-only-client-secret\n", False),
+                              (key + "LINEAR_OAUTH_CLIENT_ID=check-client-id\n", True), ("", False)):
+            with self.subTest(config_names=[line.split("=")[0] for line in config.splitlines()]):
+                result, output = self.run_check(data, config)
+                self.assertEqual(result, 0 if valid else 1)
+                self.assertEqual("Required before deployment" in output, not valid)
+                for credential in ("check-client-id", "check-only-client-secret", "check-only-api-key"):
+                    self.assertNotIn(credential, output)
+                self.assertIn("LINEAR_OAUTH_CLIENT_ID: ", output)
+                self.assertIn("LINEAR_OAUTH_CLIENT_SECRET: ", output)
 
     def test_check_reports_configured_codex_worker_without_launching_it(self):
         data = json.loads((SOURCE / "projects.json").read_text())
@@ -395,6 +584,16 @@ class SetupTests(unittest.TestCase):
             with patch.dict(os.environ, {}, clear=True):
                 values = pilot.settings(path)
             self.assertEqual(values, {"LINEAR_API_KEY": "$(this must not execute)", "GITHUB_APP_ID": ""})
+
+    def test_oauth_dotenv_values_are_literal_and_environment_takes_precedence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".env"
+            path.write_text("LINEAR_OAUTH_CLIENT_ID=file-client-id\n"
+                            "LINEAR_OAUTH_CLIENT_SECRET='$(literal secret & value)'\n")
+            with patch.dict(os.environ, {"LINEAR_OAUTH_CLIENT_ID": "environment-client-id"}, clear=True):
+                values = pilot.settings(path)
+            self.assertEqual(values, {"LINEAR_OAUTH_CLIENT_ID": "environment-client-id",
+                                      "LINEAR_OAUTH_CLIENT_SECRET": "$(literal secret & value)"})
 
     def test_blank_credentials_are_reported_without_values(self):
         with tempfile.TemporaryDirectory() as directory:

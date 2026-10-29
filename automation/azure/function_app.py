@@ -61,7 +61,9 @@ def worker_service():
     connection = os.environ["AzureWebJobsStorage"]
     receipts = AzureTable(connection, "ClusterforkDispatches", "pilot")
     runs = AzureTable(connection, "ClusterforkWorkers", "worker")
-    linear = Linear(os.environ["LINEAR_API_KEY"])
+    linear = Linear(os.environ.get("LINEAR_API_KEY"),
+                    client_id=os.environ.get("LINEAR_OAUTH_CLIENT_ID"),
+                    client_secret=os.environ.get("LINEAR_OAUTH_CLIENT_SECRET"))
     github = GitHub(os.environ["GITHUB_APP_ID"], os.environ["GITHUB_APP_PRIVATE_KEY"])
     accounts = Accounts(AzureTable(connection, "ClusterforkAccounts", "codex"))
     readiness = ReadinessGate(registry(), AzureTable(connection, "ClusterforkReadiness", "readiness"),
@@ -110,8 +112,12 @@ def worker(req: func.HttpRequest) -> func.HttpResponse:
 
 
 def missing_config():
-    return [name for name in ("LINEAR_API_KEY", "LINEAR_WEBHOOK_SECRET", "GITHUB_APP_ID",
-                              "GITHUB_APP_PRIVATE_KEY") if not os.environ.get(name)]
+    missing = [name for name in ("LINEAR_WEBHOOK_SECRET", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY")
+               if not os.environ.get(name)]
+    if not (os.environ.get("LINEAR_API_KEY") or (os.environ.get("LINEAR_OAUTH_CLIENT_ID")
+                                                and os.environ.get("LINEAR_OAUTH_CLIENT_SECRET"))):
+        missing.insert(0, "LINEAR_API_KEY or (LINEAR_OAUTH_CLIENT_ID and LINEAR_OAUTH_CLIENT_SECRET)")
+    return missing
 
 
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)

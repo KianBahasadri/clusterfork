@@ -52,6 +52,12 @@ User access. Its app settings contain versionless Key Vault references. Public
 application identifiers, storage connections, monitoring linkage, runtime, sizing,
 and other settings are declared in Terraform.
 
+Terraform already declares the `Clusterfork` app's `LINEAR_OAUTH_CLIENT_ID` and
+the `LINEAR_OAUTH_CLIENT_SECRET` Key Vault reference, alongside the fallback
+`LINEAR_API_KEY` reference. Configure or rotate these through this workflow;
+`pilot.py` only reads local values. [Remote setup](remote-development-setup.md#local-configuration)
+owns OAuth `client_credentials` selection and token handling.
+
 Initial adoption supplies the existing credential values through an ephemeral
 Terraform variable. `azurerm_key_vault_secret.value_wo` writes them without saving
 the input in the Terraform plan or state. Later runs read the current values with
