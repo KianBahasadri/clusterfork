@@ -17,7 +17,7 @@ import time
 import unittest
 from types import SimpleNamespace
 from urllib.error import HTTPError
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import ANY, MagicMock, Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
@@ -129,7 +129,7 @@ class WorkerAdmissionTests(unittest.TestCase):
                 execute.assert_not_called()
                 self.assertEqual(broker.call.call_args_list[0].args, ("start",))
                 self.assertEqual(broker.call.call_args_list[0].kwargs, {"protocol": worker.PROTOCOL})
-                broker.call.assert_called_with("finish", status="failed")
+                broker.call.assert_called_with("finish", status="failed", failure=ANY)
                 self.assertEqual(broker.call.call_count, 2)
 
     def test_confirmed_serial_admission_allows_normal_execution(self):
@@ -145,7 +145,7 @@ class WorkerAdmissionTests(unittest.TestCase):
                                                   "protocol": previous, "phase": "development"})
         self.assertEqual(result, 1)
         execute.assert_not_called()
-        broker.call.assert_called_with("finish", status="failed")
+        broker.call.assert_called_with("finish", status="failed", failure=ANY)
 
 
 class AccountLeaseTests(unittest.TestCase):

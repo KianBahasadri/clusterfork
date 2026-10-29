@@ -74,7 +74,8 @@ python3 automation/pilot.py deploy
 The helper creates `rg-clusterfork-automation` in `eastus`, a deterministic
 subscription-derived StorageV2 account, the event queue, and a Python 3.12
 Flex Consumption Function App. New apps use 512 MB instances, a 40-instance
-maximum, no always-ready instances, and no Application Insights resource.
+maximum, and no always-ready instances. The helper also provisions
+[bounded Azure monitoring](remote-development-observability.md#azure-monitoring-setup).
 Normal Azure compute/storage charges and allowances apply.
 
 Credentials go to app settings through a temporary mode-0600 file. The source

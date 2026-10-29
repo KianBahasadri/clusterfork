@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 from worker_core import WorkerError
 from worker_reporting import STAGES, attempt_comment
+from diagnostics import failure_summary
 
 
 def comment_id(key, kind):
@@ -133,12 +134,16 @@ class LinearSync:
                 state, reason = pull_outcome(pull, route.auto_merge)
                 if status == "failed" and state == "in_progress":
                     state, reason = "blocked", "Worker execution or PR publication failed. See the worker run."
+                if status == "failed" and state != "done" and run.get("failure"):
+                    reason = failure_summary(json.loads(run["failure"])) + " " + reason
             elif status == "running":
                 state, reason = "in_progress", "Worker is running."
             elif status == "waiting_for_quota":
                 state, reason = "ready", "Waiting for an account with enough quota; retries automatically."
             elif status == "failed":
-                state, reason = "blocked", "Worker failed, was canceled, or ended without recording a result. See the worker run."
+                state = "blocked"
+                reason = (failure_summary(json.loads(run["failure"])) if run.get("failure") else
+                          "Worker failed, was canceled, or ended without recording a result. See the worker run.")
             elif status == "completed":
                 state, reason = "done", "Worker completed successfully; no repository changes were needed."
             else:

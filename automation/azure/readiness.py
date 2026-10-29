@@ -316,7 +316,15 @@ class ReadinessGate:
                                            for comment in comments]}}
         if (action == "finish" and data.get("status") in {"failed", "waiting_for_quota"}
                 and row.get("owner") == owner and row["status"] == "running"):
-            row = self.retry(row, "Reviewer failed or account capacity was unavailable; awaiting retry.")
+            reason = "Reviewer failed or account capacity was unavailable; awaiting retry."
+            if data.get("status") == "failed" and "failure" in data:
+                from diagnostics import failure_summary, validate_failure
+
+                diagnostic = validate_failure(data["failure"])
+                diagnostic.update(dispatch_key=row["RowKey"], run_id=claims["run_id"], run_attempt=claims["run_attempt"])
+                row = self.update(row["RowKey"], expected=row, failure=json.dumps(diagnostic))
+                reason = failure_summary(diagnostic)
+            row = self.retry(row, reason)
             self.report_hold(issue, row)
             return {"status": "readiness_retry"}
         if (row.get("owner") != owner or row["status"] != "running"

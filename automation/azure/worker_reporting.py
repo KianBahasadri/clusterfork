@@ -116,6 +116,10 @@ def attempt_comment(run, repository, *, finished=False):
             body += f"Total worker time: {hours}h {minutes}m {seconds}s. Outcome: {run['status']}.\n\n"
         else:
             body += f"Total worker time: unavailable. Outcome: {run['status']}.\n\n"
+        if run.get("failure"):
+            from diagnostics import failure_summary
+
+            body += failure_summary(json.loads(run["failure"])) + "\n\n"
         after = json.loads(run["usage_after"]) if run.get("usage_after") else None
         body += f"Usage before ({timestamp(before['observed_at'])}) and after"
         body += f" ({timestamp(after['observed_at'])}):\n\n{usage_lines(before, after)}" if after else (

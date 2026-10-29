@@ -16,6 +16,16 @@
     "version": "[4.0.0, 5.0.0)"
   },
   "logging": {
-    "logLevel": {"default": "Warning", "Function": "Information"}
+    "logLevel": {"default": "Warning", "Function": "Information", "Host.Results": "Information",
+                 "Host.Aggregator": "Information", "Worker": "Information"},
+    "applicationInsights": {
+      "samplingSettings": {"isEnabled": true, "maxTelemetryItemsPerSecond": 5,
+                           "excludedTypes": "Request;Exception;Trace"},
+      "enableLiveMetrics": false,
+      "enablePerformanceCountersCollection": false,
+      "httpAutoCollectionOptions": {"enableHttpTriggerExtendedInfoCollection": false,
+                                    "enableW3CDistributedTracing": true,
+                                    "enableResponseHeaderInjection": false}
+    }
   }
 }

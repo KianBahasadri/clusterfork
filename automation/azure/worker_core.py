@@ -11,6 +11,7 @@ from uuid import uuid4
 from dispatch_core import eligibility
 from worker_reporting import STAGES, validate_usage
 from readiness_policy import PROTOCOL
+from diagnostics import failure, operation, record, validate_failure
 
 AUDIENCE = "clusterfork-worker"
 ISSUER = "https://token.actions.githubusercontent.com"
@@ -110,17 +111,18 @@ class WorkerService:
             import logging
             try:
                 self.steering.repair(issue_id)
-            except Exception:
-                logging.error("Instruction boundary update deferred for %s", issue_id)
+            except Exception as exc:
+                record("steering_sync_deferred", level=logging.ERROR, **failure(exc, "worker/steering_sync"))
 
     def sync_linear(self, key):
         if self.sync:
             import logging
             try:
-                self.sync.sync(key)
-            except Exception:
+                with operation("worker/linear_sync"):
+                    self.sync.sync(key)
+            except Exception as exc:
                 # Tracker outages must not lose execution/publication outcomes.
-                logging.error("Linear lifecycle update deferred for %s", key)
+                record("linear_sync_deferred", level=logging.ERROR, **failure(exc, "worker/linear_sync"))
 
     def handle(self, action, claims, data):
         key = data.get("dispatch_key", "")
@@ -274,6 +276,7 @@ class WorkerService:
             status = data.get("status")
             if status not in {"completed", "failed", "waiting_for_quota"}:
                 raise WorkerError("Invalid worker outcome", 400)
+            diagnostic = validate_failure(data["failure"]) if status == "failed" and "failure" in data else None
             row, etag = self.runs.get(key)
             row.update(status=status, lease_until=0, finished_at=int(self.clock()),
                        steering_closed=True,
@@ -282,6 +285,10 @@ class WorkerService:
             if url and not re.fullmatch(re.escape(f"https://github.com/{route.repository}/pull/") + r"[1-9][0-9]*", url):
                 raise WorkerError("Invalid pull request URL", 400)
             row["pull_request"] = url
+            if diagnostic:
+                # Run identity is authoritative; a callback cannot attribute a failure to another run.
+                diagnostic.update(dispatch_key=key, run_id=claims["run_id"], run_attempt=claims["run_attempt"])
+                row["failure"] = json.dumps(diagnostic)
             row["auto_merge_requested"] = route.auto_merge and status == "completed" and bool(url)
             self.runs.replace(row, etag)
             if status == "waiting_for_quota":

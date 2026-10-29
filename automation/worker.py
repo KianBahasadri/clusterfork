@@ -6,6 +6,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import base64
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -18,6 +19,7 @@ import time
 from urllib.error import HTTPError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
+from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).parent / "azure"))
 from codex_runtime import CodexError, inspect_account, quota_snapshot, read_usage, write_private
@@ -26,19 +28,21 @@ from dispatch_core import AgentProfile
 from quota_selection import SelectionPolicy, select_account
 from worker_reporting import usage_report
 from readiness_policy import PROTOCOL, RESULT_SCHEMA, review_prompt
+from diagnostics import CONTEXT, context, failure, failure_summary, http_operation, identifiers, operation, record
 
 
 class WorkerFailure(RuntimeError):
     pass
 
 
-def json_request(url, token, data=None, method=None):
+def json_request(url, token, data=None, method=None, *, operation_name=None):
     request = Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json",
                                     "Content-Type": "application/json", "User-Agent": "clusterfork-worker"},
                       data=None if data is None else json.dumps(data).encode(), method=method)
-    with urlopen(request, timeout=20) as response:
-        raw = response.read()
-        return json.loads(raw) if raw else None
+    with operation(operation_name or http_operation(url, data), quiet=True, timeout_seconds=20):
+        with urlopen(request, timeout=20) as response:
+            raw = response.read()
+            return json.loads(raw) if raw else None
 
 
 class Broker:
@@ -49,21 +53,33 @@ class Broker:
         self.url, self.key = url.rstrip("/"), dispatch_key
         self.lock = threading.RLock()
         self.token, self.expires = "", 0
+        self.stage = "initializing"
 
     def call(self, action, **data):
-        with self.lock:
+        if action == "progress" and data.get("stage"):
+            self.stage = data["stage"]
+            CONTEXT.set({**CONTEXT.get(), "stage": self.stage})
+        with self.lock, context(dispatch_key=self.key, run_id=os.environ.get("GITHUB_RUN_ID", ""),
+                                run_attempt=os.environ.get("GITHUB_RUN_ATTEMPT", ""), stage=self.stage,
+                                request_id=str(uuid4())):
             if self.expires < time.time() + 60:
                 oidc_url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
                 oidc_url += ("&" if "?" in oidc_url else "?") + urlencode({"audience": "clusterfork-worker"})
-                response = json_request(oidc_url, os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"])
+                with operation("http/oidc", timeout_seconds=20):
+                    response = json_request(oidc_url, os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"], operation_name="http/oidc")
                 self.token = response["value"]
                 payload = self.token.split(".")[1]
                 self.expires = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["exp"]
-            try:
-                return json_request(f"{self.url}/{action}", self.token, {"dispatch_key": self.key, **data})
-            except HTTPError as exc:
-                exc.clusterfork_action = action
-                raise
+            with operation(f"broker/{action}", quiet=action in {"heartbeat", "save", "instructions"}, timeout_seconds=20):
+                try:
+                    return json_request(f"{self.url}/{action}", self.token,
+                                        {"dispatch_key": self.key, **data, "request_id": CONTEXT.get()["request_id"]})
+                except Exception as exc:
+                    exc.clusterfork_action = action
+                    # The broker action is more useful than the generic HTTP transport name.
+                    if getattr(exc, "clusterfork_failure", {}).get("operation") == "http/other":
+                        exc.clusterfork_failure["operation"] = f"broker/{action}"
+                    raise
 
 
 class Heartbeat:
@@ -77,7 +93,9 @@ class Heartbeat:
         while not self.stop.wait(20):
             try:
                 self.operation()
-            except Exception:
+            except Exception as exc:
+                self.error = exc
+                record("heartbeat_failed", level=logging.ERROR, **failure(exc, "worker/heartbeat"))
                 self.failed.set()
                 return
 
@@ -110,12 +128,26 @@ def account_lease(broker, identity):
         with Heartbeat(save) as heartbeat:
             try:
                 yield home, heartbeat
-            finally:
-                # Persist rotated tokens even if Codex or repository validation fails.
+            except BaseException:
+                # A cleanup failure must not replace the original operational failure.
+                try:
+                    save(release=True)
+                except Exception as exc:
+                    record("account_release_failed", level=logging.ERROR, **failure(exc, "worker/account_release"))
+                raise
+            else:
                 save(release=True)
 
 
-def command(args, *, env=None, timeout=1200, failure_signals=(), stdin=None, allowed_returncodes=(0,)):
+def command(args, *, env=None, timeout=1200, failure_signals=(), stdin=None, allowed_returncodes=(0,), diagnostic_operation=None):
+    binary = Path(args[0]).name
+    name = diagnostic_operation or "command/" + ({"git": "git", "gh": "gh", "python3": "python", "python": "python", "codex": "codex"}.get(binary, "other"))
+    with operation(name, quiet=diagnostic_operation is None, timeout_seconds=timeout):
+        return _command(args, env=env, timeout=timeout, failure_signals=failure_signals,
+                        stdin=stdin, allowed_returncodes=allowed_returncodes, diagnostic_operation=name)
+
+
+def _command(args, *, env, timeout, failure_signals, stdin, allowed_returncodes, diagnostic_operation):
     with tempfile.TemporaryFile(mode="w+") as log:
         process = subprocess.Popen(args, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
                                    stdout=log, stderr=log, env=env, text=True, start_new_session=True)
@@ -127,14 +159,19 @@ def command(args, *, env=None, timeout=1200, failure_signals=(), stdin=None, all
             if time.monotonic() > deadline or any(event.is_set() for event in failure_signals):
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
-                raise WorkerFailure("Command stopped after timeout or loss of its credential lease")
+                exc = WorkerFailure("Command stopped after timeout or loss of its credential lease")
+                failure(exc, diagnostic_operation, kind="lease_lost" if any(event.is_set() for event in failure_signals) else "timeout",
+                        timeout_seconds=timeout)
+                raise exc
             try:
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 continue
         if process.returncode not in allowed_returncodes:
             # Never copy raw Codex/auth/transport output into public Actions logs.
-            raise WorkerFailure(f"Command failed: {Path(args[0]).name} (exit {process.returncode})")
+            exc = WorkerFailure("Command failed")
+            failure(exc, diagnostic_operation, kind="command_failed", exit_code=process.returncode)
+            raise exc
         log.seek(0)
         return log.read()
 
@@ -204,9 +241,10 @@ def run_codex(broker, config, worker_heartbeat, directory):
                 env = {**clean_environment(), "CODEX_HOME": str(home)}
                 ran_agent = True
                 try:
-                    summary = run_agent(broker, config, home, Path.cwd(), prompt, env,
-                                        timeout=config.get("agent_timeout_minutes", 300) * 60,
-                                        failure_signals=[heartbeat.failed, worker_heartbeat.failed])
+                    with operation("worker/agent", timeout_seconds=config.get("agent_timeout_minutes", 300) * 60):
+                        summary = run_agent(broker, config, home, Path.cwd(), prompt, env,
+                                            timeout=config.get("agent_timeout_minutes", 300) * 60,
+                                            failure_signals=[heartbeat.failed, worker_heartbeat.failed])
                     yield summary
                     return
                 finally:
@@ -216,10 +254,11 @@ def run_codex(broker, config, worker_heartbeat, directory):
                         final = quota_snapshot(selection.account_id, selection.model, read_usage(home),
                                                allow_exhausted=True)
                         broker.call("progress", usage_after=usage_report(final))
-                    except Exception:
+                    except Exception as exc:
                         # Keep the execution outcome even if provider usage is
                         # unavailable. The finish comment explicitly says so.
                         print("Final quota reading unavailable; usage change will be reported as unknown", flush=True)
+                        record("final_usage_unavailable", level=logging.WARNING, **failure(exc, "worker/final_usage"))
         except HTTPError as exc:
             if (exc.code in {404, 409} and not ran_agent
                     and getattr(exc, "clusterfork_action", "claim") == "claim"):
@@ -410,8 +449,9 @@ def execute(broker, config, heartbeat, directory):
         if any(path.startswith(".github/workflows/") for path in paths):
             raise WorkerFailure("Workflow file changes require a separate Workflows permission")
         print("Running repository validation", flush=True)
-        for args in config["validation_commands"]:
-            command(list(args), env=clean_environment(), failure_signals=[heartbeat.failed])
+        for index, args in enumerate(config["validation_commands"], 1):
+            command(list(args), env=clean_environment(), failure_signals=[heartbeat.failed],
+                    diagnostic_operation=f"validation/{index}")
         broker.call("progress", stage="publishing")
         token = broker.call("github")["token"]
         if changed:
@@ -436,6 +476,10 @@ def execute(broker, config, heartbeat, directory):
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    CONTEXT.set(identifiers({"dispatch_key": os.environ.get("DISPATCH_KEY", ""),
+                             "run_id": os.environ.get("GITHUB_RUN_ID", ""),
+                             "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""), "stage": "initializing"}))
     broker = Broker(os.environ["CLUSTERFORK_BROKER_URL"], os.environ["DISPATCH_KEY"])
     started = False
     try:
@@ -446,6 +490,7 @@ def main():
                                 "deploy the matching broker before starting workers")
         if config.get("protocol") != PROTOCOL or config.get("phase") not in {"readiness", "development"}:
             raise WorkerFailure("Deploy a compatible readiness worker and broker")
+        CONTEXT.set({**CONTEXT.get(), "phase": config["phase"]})
         with Heartbeat(lambda: broker.call("heartbeat")) as heartbeat, \
              tempfile.TemporaryDirectory(prefix="clusterfork-worker-") as directory:
             if config["phase"] == "readiness":
@@ -466,16 +511,21 @@ def main():
                                  if config.get("auto_merge", True) else "manual merge (project override)\n"))
         return 0
     except Exception as exc:
+        with context(dispatch_key=os.environ.get("DISPATCH_KEY", ""), run_id=os.environ.get("GITHUB_RUN_ID", ""),
+                     run_attempt=os.environ.get("GITHUB_RUN_ATTEMPT", ""), stage=getattr(broker, "stage", "initializing")):
+            diagnostic = failure(exc)
+            record("worker_failed", level=logging.ERROR, **diagnostic)
         if started:
             try:
-                broker.call("finish", status="failed")
-            except Exception:
-                pass
-        if isinstance(exc, HTTPError):
-            detail = f"broker/{getattr(exc, 'clusterfork_action', 'request')} HTTP {exc.code}"
-        else:
-            detail = str(exc) if isinstance(exc, WorkerFailure) else type(exc).__name__
-        print(f"Worker failed: {detail}. No authentication or agent transcripts were logged.", file=sys.stderr)
+                broker.call("finish", status="failed", failure=diagnostic)
+            except Exception as report_error:
+                record("failure_report_deferred", level=logging.ERROR, **failure(report_error))
+        detail = failure_summary(diagnostic)
+        print(f"Worker failed: {detail} No authentication or agent transcripts were logged.", file=sys.stderr)
+        if os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
+                stream.write(f"### Clusterfork worker failed\n\n{detail}\n\n"
+                             f"Run: `{os.environ.get('GITHUB_RUN_ID', '')}` / attempt `{os.environ.get('GITHUB_RUN_ATTEMPT', '')}`\n")
         return 1
 
 

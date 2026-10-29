@@ -24,7 +24,7 @@ CONFIG_NAMES = ("LINEAR_API_KEY", "LINEAR_WEBHOOK_SECRET", "GITHUB_APP_ID",
                 "GITHUB_APP_PRIVATE_KEY_FILE", "COMMAND_CODE_API_KEY")
 PACKAGE_FILES = ("function_app.py", "dispatch_core.py", "dispatch_clients.py", "quota_selection.py",
                  "worker_core.py", "worker_store.py", "worker_reporting.py", "linear_sync.py", "repository_queue.py",
-                 "selection_reporting.py", "routing_timing.py", "steering.py",
+                 "selection_reporting.py", "routing_timing.py", "steering.py", "diagnostics.py",
                  "readiness.py", "readiness_policy.py", "deployment_control.py",
                  "host.json", "requirements.txt", "projects.json")
 
@@ -149,6 +149,9 @@ def deploy(args, values, names):
                  "--maximum-instance-count", "40", "--disable-app-insights", "true",
                  "-o", "none", "--only-show-errors"])
     configure(values, names)
+    import monitoring
+
+    monitoring.configure(names, args.location, command)
     with tempfile.TemporaryDirectory(prefix="clusterfork-package-") as directory:
         path = Path(directory) / "function.zip"
         package(path)
@@ -159,13 +162,18 @@ def deploy(args, values, names):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["check", "package", "deploy", "configure"])
+    parser.add_argument("action", choices=["check", "package", "deploy", "configure", "monitor"])
     parser.add_argument("--env-file", type=Path, default=ROOT / ".env")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--resource-group", default="rg-clusterfork-automation")
     parser.add_argument("--location", default="eastus")
     args = parser.parse_args()
     registry = Registry.load(SOURCE / "projects.json")
+    if args.action == "monitor":
+        import monitoring
+
+        monitoring.configure(azure_names(args), args.location, command)
+        return 0
     if args.action == "package":
         if not args.output:
             parser.error("package requires --output PATH")
