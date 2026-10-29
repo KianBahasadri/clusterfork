@@ -563,18 +563,22 @@ class ProtocolTests(unittest.TestCase):
     def test_linear_owner_lookup_and_all_comment_pages_are_read_in_azure(self):
         calls = []
         first, second = comment(), comment(at=NOW + 2)
+        first["parent"], second["parent"] = None, {"id": first["id"]}
         def request(url, **kwargs):
             query, variables = kwargs["data"]["query"], kwargs["data"]["variables"]
             calls.append((query, variables))
             if "viewer" in query:
                 return {"data": {"viewer": {"id": OWNER}}}
             after = variables["after"]
-            return {"data": {"issue": {"comments": {"nodes": [second if after else first],
-                    "pageInfo": {"hasNextPage": not after, "endCursor": "page-two" if not after else None}}}}}
+            return {"data": {"comments": {"nodes": [second if after else first],
+                    "pageInfo": {"hasNextPage": not after, "endCursor": "page-two" if not after else None}}}}
         linear = Linear("fake-key", request=request)
         self.assertEqual(linear.viewer_id(), OWNER)
         self.assertEqual(linear.viewer_id(), OWNER)
         self.assertEqual(list(linear.issue_comments(ISSUE)), [first, second])
+        self.assertIn("parent { id }", calls[1][0])
+        self.assertIn("filter: {issue: {id: {eq: $id}}}", calls[1][0])
+        self.assertEqual([call[1].get("after") for call in calls[1:]], [None, "page-two"])
         self.assertEqual(len(calls), 3)
 
     def test_app_server_preserves_events_received_before_rpc_response_and_strips_job_credentials(self):

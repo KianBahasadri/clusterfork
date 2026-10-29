@@ -9,8 +9,12 @@ from uuid import uuid4
 from dispatch_core import DispatchError, eligibility
 from linear_sync import comment_id
 from readiness_policy import (PROTOCOL, RETRY_SECONDS, REVIEW_TIMEOUT_SECONDS, digest,
-                              issue_revision, policy_version, validate_result)
+                              issue_revision, policy_version, redact_review_text, redact_review_value,
+                              result_snapshot, validate_result)
 from worker_core import LEASE_SECONDS, WorkerError, authorize_claims
+
+REJECTIONS = {"needs_clarification", "rejected"}
+DECISIONS = {"passed", *REJECTIONS}
 
 
 def optional(table, key):
@@ -27,6 +31,7 @@ class ReadinessGate:
         self.registry, self.table, self.accounts = registry, table, accounts
         self.linear, self.github, self.clock = linear, github, clock
         self.admitted = lambda issue, route: False
+        self.review_selection = lambda issue, route, rejected: None
 
     def pointer(self, issue):
         return "issue-" + digest(issue["id"])
@@ -85,9 +90,11 @@ class ReadinessGate:
                     raise
         raise WorkerError("Readiness state changed concurrently; retry")
 
-    def comment(self, issue, body):
-        self.linear.status_comment(issue["id"], comment_id(issue["id"], "readiness"),
-                                   "Clusterfork readiness review: " + body)
+    def comment(self, issue, body, row=None):
+        # Each attempt keeps its discussion, including replies to old rejections.
+        key = row["RowKey"] if row else issue["id"]
+        self.linear.status_comment(issue["id"], comment_id(key, "readiness"),
+                                   "Clusterfork readiness review: " + redact_review_text(body))
 
     def retry(self, row, reason):
         return self.update(row["RowKey"], expected=row, status="retry", reason=reason, lease_until=0,
@@ -96,40 +103,52 @@ class ReadinessGate:
     def report_hold(self, issue, row):
         current, _ = self.table.get(row["RowKey"])
         pointer, _ = self.table.get(self.pointer(issue))
-        if current["status"] in {"passed", "needs_clarification"} or pointer["review_key"] != row["RowKey"]:
+        if current["status"] in DECISIONS or pointer["review_key"] != row["RowKey"]:
             return
-        link = ""
-        if row.get("owner"):
-            run, attempt = row["owner"].split(":")
-            link = f"\n\n[Readiness run](https://github.com/{row['repository']}/actions/runs/{run}/attempts/{attempt})"
         self.comment(issue, (row.get("reason") or "Waiting for the read-only reviewer.")
                      + "\n\nCoding and publication are held. The timer retries temporary failures "
                      "after 15 minutes, once the previous GitHub attempt has stopped. "
-                     "An unconfirmed dispatch is held for run discovery; it is never blindly resent." + link)
+                     "An unconfirmed dispatch is held for run discovery; it is never blindly resent."
+                     + self.run_link(row), row)
         # A callback can finish while the Linear request is in flight. Repair a
-        # late hold message without reapplying labels or a Backlog transition.
-        pointer, _ = self.table.get(self.pointer(issue))
-        latest, _ = self.table.get(pointer["review_key"])
-        if latest["status"] in {"passed", "needs_clarification"}:
-            self.comment(issue, self.review_body(latest))
+        # late hold message without reapplying labels or a state transition.
+        latest, _ = self.table.get(row["RowKey"])
+        if latest["status"] in DECISIONS:
+            self.comment(issue, self.review_body(latest), latest)
 
     @staticmethod
-    def review_body(row):
-        result = json.loads(row["result"])
-        body = ("Passed. " if row["status"] == "passed" else "Needs clarification. ") + result["summary"]
-        for number, blocker in enumerate(result["blockers"], 1):
-            body += (f"\n\n{number}. {blocker['decision']}\n"
-                     f"Consequence: {blocker['consequence']}\nQuestion: {blocker['question']}")
-        if result["policy_references"]:
-            body += "\n\nRepository policy/context: " + "; ".join(result["policy_references"])
+    def run_link(row):
+        if not row.get("owner"):
+            return ""
+        run, attempt = row["owner"].split(":")
+        return f"\n\n[Readiness run](https://github.com/{row['repository']}/actions/runs/{run}/attempts/{attempt})"
+
+    @classmethod
+    def review_body(cls, row):
+        if row["status"] == "rejected":
+            # Do not parse rejected output or assume it matches the result schema.
+            snapshot = row["rejected_result"].replace("`", "\\u0060")
+            body = ("Rejected: invalid reviewer result. Validation failed: " + row["reason"]
+                    + "\n\nRejected reviewer output (credentials redacted):\n```json\n" + snapshot + "\n```")
+        else:
+            result = json.loads(row["result"])
+            body = ("Passed. " if row["status"] == "passed" else "Needs clarification. ") + result["summary"]
+            for number, blocker in enumerate(result["blockers"], 1):
+                body += (f"\n\n{number}. {blocker['decision']}\n"
+                         f"Consequence: {blocker['consequence']}\nQuestion: {blocker['question']}")
+            if result["policy_references"]:
+                body += "\n\nRepository policy/context: " + "; ".join(result["policy_references"])
         binding = json.loads(row["binding"])
         body += (f"\n\nIssue content revision: `{binding['issue_revision']}`; "
                  f"policy: `{binding['policy_version']}`; repository: `{binding['context_sha']}`.")
         if row["status"] == "passed":
             body += "\n\nReady for development in the admitted repository slot. This is not a security certification."
         else:
-            body += "\n\nUpdate the description and move this issue from Backlog to Todo to request another review."
-        return body
+            body += ("\n\nBlocked; this review will not retry automatically. Address the feedback in the "
+                     "description or comments, or record an explicit decision in a reply. For invalid output, "
+                     "inspect the validation error and review run. Move this issue from Blocked to Todo "
+                     "to request another review; the reviewer will read this discussion.")
+        return body + cls.run_link(row)
 
     def sync(self, row, issue, route):
         if row.get("reported") or not self.current(row, issue, route):
@@ -137,21 +156,24 @@ class ReadinessGate:
         current, _ = eligibility(issue, self.registry)
         if current != route:
             return  # Preserve cancellation, archive, project moves and human status changes.
-        self.comment(issue, self.review_body(row))
+        if row["status"] in REJECTIONS:
+            self.review_selection(issue, route, True)
+        self.comment(issue, self.review_body(row), row)
         latest = self.linear.issue(issue["id"])
         if (not latest or latest.get("state") != issue.get("state")
                 or eligibility(latest, self.registry)[0] != route or not self.current(row, latest, route)):
             return
         self.linear.set_clarification(issue["id"], row["status"] == "needs_clarification")
-        if row["status"] == "needs_clarification":
-            backlog = self.linear.backlog_state(issue["id"])
+        if row["status"] in REJECTIONS:
+            self.linear.set_stage(issue["id"], None)
+            blocked = route.linear_states.blocked if route.linear_states else self.linear.blocked_state(issue["id"])
             latest = self.linear.issue(issue["id"])
             if (not latest or latest.get("state") != issue.get("state")
                     or eligibility(latest, self.registry)[0] != route or not self.current(row, latest, route)):
                 return
             # Save the intent so a lost state-update response can be recovered.
-            self.update(row["RowKey"], rejection_target=backlog)
-            self.linear.set_state(issue["id"], backlog)
+            self.update(row["RowKey"], rejection_target=blocked)
+            self.linear.set_state(issue["id"], blocked)
             self.update(row["RowKey"], applied=True, reported=True)
         else:
             self.update(row["RowKey"], reported=True)
@@ -190,7 +212,7 @@ class ReadinessGate:
         binding = self.binding(issue, route)
         pointer, etag = optional(self.table, self.pointer(issue))
         row, _ = optional(self.table, pointer["review_key"]) if pointer else (None, None)
-        if row and row["status"] == "needs_clarification" and row.get("applied"):
+        if row and row["status"] in REJECTIONS and row.get("applied"):
             # Another delivery may have fetched Todo before our rejection completed.
             # Only a fresh Todo observation is a resubmission, never that stale snapshot.
             latest = self.linear.issue(issue["id"])
@@ -198,12 +220,14 @@ class ReadinessGate:
                 return {"status": "not_ready"}
             if issue_revision(latest) != issue_revision(issue):
                 return self.ensure(latest, route)
+            if not self.stopped(row, route)[0]:
+                return {"status": "readiness_pending"}
         if (not row or json.loads(row["binding"]) != binding
-                or (row["status"] == "needs_clarification" and row.get("applied"))):
+                or (row["status"] in REJECTIONS and row.get("applied"))):
             row = self.new(issue, route, binding, etag)
-        if row["status"] in {"passed", "needs_clarification"}:
+        if row["status"] in DECISIONS:
             self.sync(row, issue, route)
-            return {"status": "ready" if row["status"] == "passed" else "needs_clarification"}
+            return {"status": "ready" if row["status"] == "passed" else row["status"]}
         if row["status"] == "running" and (
                 row["lease_until"] <= self.clock() or row["deadline"] <= self.clock()):
             row = self.retry(row, "Reviewer timed out or lost its lease; no readiness decision was accepted.")
@@ -218,6 +242,7 @@ class ReadinessGate:
             current["status"] = "dispatching"
             self.table.replace(current, version)  # Exactly one caller crosses dispatch.
             row = current
+            self.review_selection(issue, route, False)
             try:
                 self.github.dispatch(route, {
                     "linear_issue_id": issue["id"], "linear_identifier": issue["identifier"],
@@ -240,9 +265,9 @@ class ReadinessGate:
             stopped, runs = self.stopped(row, route)
             if stopped and runs:
                 row = self.retry(row, "Reviewer stopped without a valid result; awaiting retry.")
-        if row["status"] in {"passed", "needs_clarification"}:
+        if row["status"] in DECISIONS:
             self.sync(row, issue, route)
-            return {"status": "ready" if row["status"] == "passed" else "needs_clarification"}
+            return {"status": "ready" if row["status"] == "passed" else row["status"]}
         self.report_hold(issue, row)
         return {"status": "readiness_retry" if row["status"] == "retry" else "readiness_pending"}
 
@@ -261,13 +286,17 @@ class ReadinessGate:
             if data.get("protocol") != PROTOCOL:
                 raise WorkerError("Deploy a compatible readiness worker and broker", 403)
             self.github.verify_worker_run(route.repository, claims, row["RowKey"])
-            if row["status"] in {"passed", "needs_clarification"}:
+            if row["status"] in DECISIONS:
                 raise WorkerError("This review already has a result")
             if row["status"] == "retry" and row.get("owner") == owner:
                 raise WorkerError("This readiness attempt already failed; await a retry")
             if row.get("owner") and row["owner"] != owner:
                 if self.github.worker_result(route.repository, row["owner"])["status"] != "completed":
                     raise WorkerError("Previous readiness worker has not stopped")
+            # A complete, paginated discussion snapshot is required for assessment.
+            # Failure leaves the attempt retryable, never silently description-only.
+            comments = sorted(self.linear.issue_comments(issue["id"]),
+                              key=lambda comment: (comment["createdAt"], comment["id"]))
             current, version = self.table.get(row["RowKey"])
             if current != row:
                 raise WorkerError("Readiness worker changed concurrently")
@@ -281,7 +310,10 @@ class ReadinessGate:
                     "binding": json.loads(row["binding"]), "review_timeout_seconds": REVIEW_TIMEOUT_SECONDS,
                     "selection": {"min_remaining_percent": self.registry.agent_selection.min_remaining_percent,
                                   "max_snapshot_age_seconds": self.registry.agent_selection.max_snapshot_age_seconds},
-                    "issue": {k: issue.get(k) for k in ("id", "identifier", "title", "description", "url")}}
+                    "issue": {**{k: issue.get(k) for k in ("id", "identifier", "title", "description", "url")},
+                              "comments": [{k: comment.get(k) for k in
+                                            ("id", "body", "createdAt", "user", "botActor", "parent")}
+                                           for comment in comments]}}
         if (action == "finish" and data.get("status") in {"failed", "waiting_for_quota"}
                 and row.get("owner") == owner and row["status"] == "running"):
             row = self.retry(row, "Reviewer failed or account capacity was unavailable; awaiting retry.")
@@ -312,12 +344,31 @@ class ReadinessGate:
             try:
                 if data.get("binding") != json.loads(row["binding"]):
                     raise ValueError("Review binding mismatch")
+                output_error = data.get("result_error")
+                if output_error:
+                    errors = {"invalid_json": "Readiness output is not valid JSON",
+                              "missing_output": "Readiness output file is missing or unreadable",
+                              "output_too_large": "Readiness output exceeds the 28,000-byte output limit",
+                              "invalid_encoding": "Readiness output is not valid UTF-8"}
+                    reason = errors.get(output_error, "Unrecognized readiness output error")
+                    location = data.get("result_location")
+                    if (output_error == "invalid_json" and isinstance(location, dict)
+                            and all(type(location.get(k)) is int and 0 < location[k] <= 28_001
+                                    for k in ("line", "column"))):
+                        reason += f" at line {location['line']}, column {location['column']}"
+                    raise ValueError(reason)
                 result = validate_result(data.get("result"))
-            except (ValueError, TypeError):
-                row = self.retry(row, "Reviewer returned an invalid result; awaiting retry.")
-                self.report_hold(issue, row)
-                return {"status": "readiness_retry"}
+            except (ValueError, TypeError) as exc:
+                # Only our validator's diagnostics are public; never forward raw exceptions.
+                reason = str(exc) if isinstance(exc, ValueError) else "result: expected JSON-compatible review data"
+                row = self.update(row["RowKey"], expected=row, status="rejected", reason=reason,
+                                  rejected_result=result_snapshot(data.get("result")), lease_until=0,
+                                  retry_after=0, reported=False)
+                self.sync(row, issue, route)
+                return {"status": "rejected"}
             if result["verdict"] == "retry":
+                row = self.update(row["RowKey"], expected=row,
+                                  result=json.dumps(redact_review_value(result), ensure_ascii=False))
                 row = self.retry(row, "Reviewer could not complete the assessment. " + result["summary"])
                 self.report_hold(issue, row)
                 return {"status": "readiness_retry"}
@@ -326,7 +377,7 @@ class ReadinessGate:
             if current != row:
                 raise WorkerError("Readiness result was superseded")
             row.update(status="passed" if result["verdict"] == "ready" else "needs_clarification",
-                       result=json.dumps(result, ensure_ascii=False), lease_until=0)
+                       result=json.dumps(redact_review_value(result), ensure_ascii=False), lease_until=0)
             self.table.replace(row, version)
             self.sync(row, issue, route)
             return {"status": row["status"]}
@@ -345,7 +396,7 @@ class ReadinessGate:
                 route, _ = eligibility(issue or {}, self.registry)
                 row, _ = self.table.get(pointer["review_key"])
                 if (issue and row.get("rejection_target") == issue["state"]["id"]
-                        and row["status"] == "needs_clarification" and not row.get("applied")):
+                        and row["status"] in REJECTIONS and not row.get("applied")):
                     self.update(row["RowKey"], applied=True, reported=True)
                 elif route and (row["status"] != "passed" or not row.get("reported")):
                     # A reported pass is rechecked by queue admission/dispatch,

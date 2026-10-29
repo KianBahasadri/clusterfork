@@ -43,6 +43,31 @@ class RepositoryQueue:
         self.selection = SelectionReporter(linear, self.selection_tables)
         self.control = control
         self.readiness.admitted = self.is_admitted
+        self.readiness.review_selection = self.review_selection
+
+    def review_selection(self, issue, route, rejected):
+        """Clear rejected work's marker while its runner drains under the slot fence."""
+        table = self.table(route.repository)
+        key = dispatch_key(self.registry, route, issue)
+        for _ in range(32):
+            state, etag = table.get("slot")
+            if state["active_key"] != key:
+                return
+            row, version = table.get(key)
+            if bool(row.get("readiness_rejected")) == rejected:
+                self.selection.sync(table, key)
+                return
+            row["readiness_rejected"] = rejected
+            selection_changed(row)
+            try:
+                table.transaction([(state, etag), (row, version)])
+            except WorkerError as exc:
+                if exc.status != 409:
+                    raise
+                continue
+            self.selection.sync(table, key)
+            return
+        raise WorkerError("Review selection changed concurrently; retry")
 
     def is_admitted(self, issue, route):
         if self.control and self.control.is_paused():
