@@ -9,6 +9,7 @@ import time
 from uuid import uuid4
 
 from dispatch_core import eligibility
+from worker_reporting import STAGES, validate_usage
 
 AUDIENCE = "clusterfork-worker"
 ISSUER = "https://token.actions.githubusercontent.com"
@@ -127,6 +128,40 @@ class WorkerService:
         self.runs.replace(row, etag)
         if action == "heartbeat":
             return {"running": True}
+        if action == "progress":
+            stage = data.get("stage", row.get("stage", "initializing"))
+            if stage not in STAGES or stage in {"review", "waiting_for_quota"}:
+                raise WorkerError("Invalid worker stage", 400)
+            row, etag = self.runs.get(key)
+            if list(STAGES).index(stage) < list(STAGES).index(row.get("stage", "initializing")):
+                raise WorkerError("Worker stage cannot move backwards", 400)
+            if "account_id" in data:
+                identity = data["account_id"]
+                if not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{64}", identity):
+                    raise WorkerError("Invalid account identity", 400)
+                account, _ = self.accounts.table.get(identity)
+                if account.get("owner") != owner or account.get("lease_until", 0) <= self.clock():
+                    raise WorkerError("Selected account lease was lost")
+                if stage != "coding" or row.get("account_id", identity) != identity:
+                    raise WorkerError("Invalid account selection", 400)
+                if not row.get("usage_before"):
+                    row["usage_before"] = json.dumps(validate_usage(data.get("usage_before")))
+                    row["account_id"] = identity
+                    for field in ("account_email", "account_plan"):
+                        value = data.get(field)
+                        if value is not None and (not isinstance(value, str) or len(value) > 200):
+                            raise WorkerError("Invalid account description", 400)
+                        row[field] = value or ""
+                    profile = self.registry.agent_profiles["codex"]
+                    row.update(model=profile.model, effort=profile.effort)
+            if "usage_after" in data:
+                if not row.get("usage_before"):
+                    raise WorkerError("Account selection was not recorded", 400)
+                row["usage_after"] = json.dumps(validate_usage(data["usage_after"]))
+            row.update(stage=stage, report_version=row.get("report_version", 0) + 1)
+            self.runs.replace(row, etag)
+            self.sync_linear(key)
+            return {"stage": stage}
         if action == "accounts":
             return {"accounts": self.accounts.list()}
         if action in {"claim", "save"}:
@@ -151,7 +186,8 @@ class WorkerService:
             if status not in {"completed", "failed", "waiting_for_quota"}:
                 raise WorkerError("Invalid worker outcome", 400)
             row, etag = self.runs.get(key)
-            row.update(status=status, lease_until=0)
+            row.update(status=status, lease_until=0, finished_at=int(self.clock()),
+                       report_version=row.get("report_version", 0) + 1)
             url = data.get("pull_request", "")
             if url and not re.fullmatch(re.escape(f"https://github.com/{route.repository}/pull/") + r"[1-9][0-9]*", url):
                 raise WorkerError("Invalid pull request URL", 400)
@@ -176,7 +212,8 @@ class WorkerService:
             raise WorkerError("Issue is no longer eligible", 403)
         if not route.validation_commands:
             raise WorkerError("Repository validation commands must be configured", 400)
-        row = {"RowKey": key, "owner": owner, "status": "running",
+        row = {"RowKey": key, "owner": owner, "status": "running", "stage": "initializing",
+               "started_at": int(self.clock()), "report_version": 0,
                "lease_until": int(self.clock()) + LEASE_SECONDS}
         if not self.runs.create(row):
             existing, etag = self.runs.get(key)
@@ -185,6 +222,8 @@ class WorkerService:
             if (existing.get("owner") != owner and existing.get("status") == "running"
                     and existing.get("lease_until", 0) > self.clock()):
                 raise WorkerError("Another worker is active")
+            if existing.get("owner") == owner and existing.get("status") == "running":
+                row = {**existing, "lease_until": row["lease_until"]}
             self.runs.replace(row, etag)
         self.sync_linear(key)
         profile = self.registry.agent_profiles["codex"]

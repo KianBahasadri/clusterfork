@@ -1,7 +1,7 @@
 """Worker trust boundaries, credential fencing, and real Git publication behavior."""
 
 import copy
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 import importlib.util
 import io
 import json
@@ -16,7 +16,7 @@ import time
 import unittest
 from types import SimpleNamespace
 from urllib.error import HTTPError
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
@@ -275,8 +275,10 @@ class LiveQuotaShapeTests(unittest.TestCase):
                      patch.object(worker, "select_account", return_value=selection), \
                      patch.object(worker, "account_lease", return_value=lease), \
                      patch.object(worker, "inspect_account", return_value=({}, {})), \
-                     patch.object(worker, "quota_snapshot"), patch.object(worker, "command") as command:
-                    worker.run_codex(object(), config, heartbeat, Path(directory))
+                     patch.object(worker, "quota_snapshot"), patch.object(worker, "read_usage", return_value={}), \
+                     patch.object(worker, "command") as command:
+                    with worker.run_codex(Mock(), config, heartbeat, Path(directory)):
+                        pass
                 self.assertEqual(command.call_args.kwargs["timeout"], expected)
 
     def test_broker_authentication_or_storage_failure_is_not_reported_as_exhausted_quota(self):
@@ -366,16 +368,17 @@ class GitPublicationTests(unittest.TestCase):
             main_before = subprocess.check_output(["git", "--git-dir", str(remote), "rev-parse", "main"], text=True)
             class Broker:
                 key = KEY
-                def call(self, action):
+                def call(self, action, **data):
                     return {"token": "temporary-test-token"}
             class Heartbeat:
                 failed = threading.Event()
             config = {"repository": "owner/repo", "ref": "main", "auto_merge": False, "issue": {
                 "id": ISSUE, "identifier": "KIAN-891", "title": "Improve file", "url": "https://linear.app/test"},
                 "validation_commands": [[sys.executable, "-c", "from pathlib import Path; assert Path('file.txt').read_text() == 'updated\\n'"]]}
+            @contextmanager
             def implement(*args):
                 (checkout / "file.txt").write_text("updated\n")
-                return "Updated the file and validated it."
+                yield "Updated the file and validated it."
             old = Path.cwd()
             try:
                 os.chdir(checkout)
