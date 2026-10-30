@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import threading
 
-from readiness_policy import PRIVATE_KEY_PATTERN, TOKEN_PATTERN
+from readiness_policy import PRIVATE_KEY_PATTERN, TOKEN_PATTERN, redact_review_text
 
 
 class PublicationBlocked(RuntimeError):
@@ -69,6 +69,16 @@ class PublicationGuard:
             paths = tuple(self._auth_paths)
         for path in paths:
             self.capture_auth(path)
+
+    def scrub(self, text):
+        """Refresh live credentials before retaining private command evidence."""
+        self.refresh_auth()
+        text = text.replace("\x00", "")
+        with self._lock:
+            values = sorted(self._values, key=len, reverse=True)
+        for value in values:
+            text = text.replace(value, "[REDACTED]")
+        return redact_review_text(text)
 
     def check(self, text, *, static=True):
         with self._lock:

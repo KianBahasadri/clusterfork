@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from contextvars import ContextVar
 import base64
 import json
 import logging
@@ -30,10 +31,14 @@ from worker_core import account_provider, valid_account_id
 from dispatch_core import AgentProfile
 from quota_selection import SelectionPolicy, select_account
 from worker_reporting import usage_report, worker_branch
-from readiness_policy import PROTOCOL, RESULT_SCHEMA, review_prompt, workflow_publication_policy
+from readiness_policy import (PROTOCOL, RESULT_SCHEMA, review_prompt, workflow_publication_policy,
+                              MAX_CORRECTION_TURNS, MAX_FAILURE_OUTPUT_BYTES)
 from publication_guard import PublicationBlocked, PublicationGuard, PublicationScanError, changed_lines
 from issue_images import image_prompt, materialize_images
-from diagnostics import CONTEXT, context, failure, failure_summary, http_operation, identifiers, operation, record
+from diagnostics import (CONTEXT, context, failure, failure_summary, http_operation, identifiers, operation, record,
+                         permits_failure_output)
+
+COMMAND_CONTEXT = ContextVar("clusterfork_command_context", default={})
 
 
 class WorkerFailure(RuntimeError):
@@ -167,16 +172,50 @@ def account_lease(broker, identity):
                 save(release=True)
 
 
-def command(args, *, env=None, timeout=1200, failure_signals=(), stdin=None, allowed_returncodes=(0,), diagnostic_operation=None):
+@contextmanager
+def command_context(**values):
+    token = COMMAND_CONTEXT.set({**COMMAND_CONTEXT.get(), **values})
+    try:
+        yield
+    finally:
+        COMMAND_CONTEXT.reset(token)
+
+
+def command(args, *, env=None, timeout=1200, failure_signals=(), stdin=None, allowed_returncodes=(0,), diagnostic_operation=None,
+            publication_guard=None):
     binary = Path(args[0]).name
     name = diagnostic_operation or "command/" + ({"git": "git", "gh": "gh", "python3": "python", "python": "python", "codex": "codex"}.get(binary, "other"))
+    settings = COMMAND_CONTEXT.get()
+    if settings.get("deadline") is not None:
+        timeout = max(0, min(timeout, settings["deadline"] - time.monotonic()))
+    failure_signals = (*failure_signals, *settings.get("failure_signals", ()))
     with operation(name, quiet=diagnostic_operation is None, timeout_seconds=timeout):
         return _command(args, env=env, timeout=timeout, failure_signals=failure_signals,
-                        stdin=stdin, allowed_returncodes=allowed_returncodes, diagnostic_operation=name)
+                        stdin=stdin, allowed_returncodes=allowed_returncodes, diagnostic_operation=name,
+                        publication_guard=publication_guard or settings.get("publication_guard"))
 
 
-def _command(args, *, env, timeout, failure_signals, stdin, allowed_returncodes, diagnostic_operation):
-    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="surrogateescape", newline="") as log:
+def command_failure_output(log, name, guard):
+    if not permits_failure_output(name):
+        return {}
+    try:
+        log.seek(0, os.SEEK_END)
+        log.seek(max(0, log.tell() - MAX_FAILURE_OUTPUT_BYTES))
+        output = (guard or PublicationGuard()).scrub(log.read().decode("utf-8", errors="ignore"))
+        return {"failure_output": output.encode("utf-8")[-MAX_FAILURE_OUTPUT_BYTES:].decode("utf-8", errors="ignore")}
+    except (OSError, PublicationScanError):
+        # An unreadable live cache cannot safely produce retained output.
+        return {}
+
+
+def _command(args, *, env, timeout, failure_signals, stdin, allowed_returncodes, diagnostic_operation, publication_guard=None):
+    if timeout <= 0 or any(event.is_set() for event in failure_signals):
+        exc = WorkerFailure("Command stopped after timeout or loss of its credential lease")
+        failure(exc, diagnostic_operation,
+                kind="lease_lost" if any(event.is_set() for event in failure_signals) else "timeout",
+                timeout_seconds=timeout)
+        raise exc
+    with tempfile.TemporaryFile(mode="w+b") as log:
         process = subprocess.Popen(args, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
                                    stdout=log, stderr=log, env=env, text=True, start_new_session=True)
         if stdin is not None:
@@ -189,19 +228,21 @@ def _command(args, *, env, timeout, failure_signals, stdin, allowed_returncodes,
                 process.wait()
                 exc = WorkerFailure("Command stopped after timeout or loss of its credential lease")
                 failure(exc, diagnostic_operation, kind="lease_lost" if any(event.is_set() for event in failure_signals) else "timeout",
-                        timeout_seconds=timeout)
+                        timeout_seconds=timeout, exit_code=process.returncode,
+                        **command_failure_output(log, diagnostic_operation, publication_guard))
                 raise exc
             try:
-                process.wait(timeout=2)
+                process.wait(timeout=min(2, max(0.01, deadline - time.monotonic())))
             except subprocess.TimeoutExpired:
                 continue
         if process.returncode not in allowed_returncodes:
             # Never copy raw Codex/auth/transport output into public Actions logs.
             exc = WorkerFailure("Command failed")
-            failure(exc, diagnostic_operation, kind="command_failed", exit_code=process.returncode)
+            failure(exc, diagnostic_operation, kind="command_failed", exit_code=process.returncode,
+                    **command_failure_output(log, diagnostic_operation, publication_guard))
             raise exc
         log.seek(0)
-        return log.read()
+        return log.read().decode("utf-8", errors="surrogateescape")
 
 
 def clean_environment():
@@ -282,9 +323,9 @@ def select_account_for_run(broker, config, heartbeat):
 
 
 @contextmanager
-def run_codex(broker, config, worker_heartbeat, directory):
+def run_codex(broker, config, worker_heartbeat, directory, *, validate=None):
     if account_provider(config.get("account_id")) == "cursor":
-        with run_cursor(broker, config, worker_heartbeat, directory) as summary:
+        with run_cursor(broker, config, worker_heartbeat, directory, validate=validate) as summary:
             yield summary
         return
     # Keep the selected account leased through validation and publication so the
@@ -333,6 +374,7 @@ def run_codex(broker, config, worker_heartbeat, directory):
                 )
                 env = {**clean_environment(), "CODEX_HOME": str(home)}
                 ran_agent = True
+                config["_coding_started"] = True
                 try:
                     copy_sessions(sessions, home / "sessions")
                     if deadline is None:
@@ -343,6 +385,7 @@ def run_codex(broker, config, worker_heartbeat, directory):
                                 summary = run_agent(broker, config, home, Path.cwd(), prompt, env,
                                                     timeout=timeout, deadline=deadline, thread_id=thread_id,
                                                     image_paths=image_paths,
+                                                    validate=validate,
                                                     failure_signals=[heartbeat.failed, worker_heartbeat.failed])
                             except CodexUsageLimit as exc:
                                 limited = exc
@@ -393,7 +436,7 @@ def run_codex(broker, config, worker_heartbeat, directory):
 
 
 @contextmanager
-def run_cursor(broker, config, worker_heartbeat, directory):
+def run_cursor(broker, config, worker_heartbeat, directory, *, validate=None):
     """The selected Cursor account stays leased through testing/publication."""
     image_paths = materialize_images(config, directory)
     broker.call("progress", stage="selecting_account")
@@ -422,11 +465,13 @@ def run_cursor(broker, config, worker_heartbeat, directory):
                       + workflow_publication_policy(config.get("workflow_changes_allowed"))
                       + f"\n\n{issue.get('description') or ''}" + image_prompt(config.get("images", [])))
             ran = True
+            config["_coding_started"] = True
             try:
                 timeout = config.get("agent_timeout_minutes", 300) * 60
                 summary = cursor_runtime.run_agent(
                     broker, config, home, Path.cwd(), prompt, clean_environment(),
                     timeout=timeout, image_paths=image_paths,
+                    validate=validate,
                     failure_signals=[heartbeat.failed, worker_heartbeat.failed])
                 broker.publication_guard.capture_auth(cursor_runtime.auth_path(home))
                 yield summary
@@ -647,7 +692,73 @@ def scan_publication(broker, base, metadata, *, staged=False):
             raise exc from None
 
 
+def check_checkout(branch, expected_head):
+    if (command(["git", "rev-parse", "HEAD"]).strip() != expected_head
+            or command(["git", "branch", "--show-current"]).strip() != branch):
+        exc = WorkerFailure("Agent changed the worker's Git history or branch")
+        failure(exc, reason_code="git_integrity_changed")
+        raise exc
+
+
+def check_workflow_changes(config):
+    paths = command(["git", "diff", "--name-only", "-z", "HEAD"]).split("\0")
+    paths += command(["git", "ls-files", "--others", "--exclude-standard", "-z"]).split("\0")
+    changed_files = len(set(paths) - {""})
+    paths += command(["git", "diff", "--name-only", "-z", f"origin/{config['ref']}...HEAD"]).split("\0")
+    if (any(path.startswith(".github/workflows/") for path in paths)
+            and config.get("workflow_changes_allowed") is not True):
+        exc = WorkerFailure("Workflow file changes require an approved Workflows write permission")
+        failure(exc, reason_code="workflows_permission_missing")
+        raise exc
+    return changed_files
+
+
+def publication_metadata(issue, summary, target_key):
+    title = f"{issue['identifier']}: {issue['title']}"[:250]
+    body = (f"Implements [{issue['identifier']}]({issue['url']}).\n\n{summary[:40_000]}\n\n"
+            f"Validation: all configured repository checks passed.\n\n"
+            f"<!-- clusterfork-dispatch:{target_key} -->")
+    return [title, body, summary, issue["title"]]
+
+
+def preserve_wip(broker, config, directory, branch, expected_head, target_key):
+    """Save only credential-clean unpublished work, without updating an open PR."""
+    check_checkout(branch, expected_head)
+    check_workflow_changes(config)
+    dirty = command(["git", "status", "--porcelain"]).strip()
+    token = broker.call("checkout")["token"]
+    broker.publication_guard.remember(token)
+    with git_auth(token, directory) as env:
+        refs = command(["git", "ls-remote", "--heads", "origin", f"refs/heads/{branch}"], env=env)
+    remote_head = refs.split()[0] if refs.strip() else None
+    published_head = remote_head or command(["git", "rev-parse", f"origin/{config['ref']}"]).strip()
+    if not dirty and published_head == expected_head:
+        return {}
+    existing = find_pr(config, token, branch)
+    pull = published_pull(config, token, existing, target_key, branch) if existing else {}
+    destination = branch.replace("clusterfork/", "clusterfork-wip/", 1) if pull.get("state") == "open" else branch
+    token = broker.call("github")["token"]
+    broker.publication_guard.remember(token)
+    command(["git", "add", "-A"])
+    scan_publication(broker, config["ref"], (), staged=True)
+    scan_publication(broker, config["ref"], ())
+    if command(["git", "diff", "--cached", "--name-only"]).strip():
+        command(["git", "-c", "user.name=clusterfork[bot]", "-c",
+                 "user.email=clusterfork[bot]@users.noreply.github.com", "commit", "-m",
+                 f"{config['issue']['identifier']}: preserve unfinished work"])
+    scan_publication(broker, config["ref"], ())
+    sha = command(["git", "rev-parse", "HEAD"]).strip()
+    with git_auth(token, directory) as env:
+        command(["git", "push", "origin", f"HEAD:refs/heads/{destination}"], env=env)
+    return {"wip_branch": destination, "wip_commit_sha": sha}
+
+
 def execute(broker, config, heartbeat, directory):
+    with command_context(publication_guard=broker.publication_guard):
+        return _execute(broker, config, heartbeat, directory)
+
+
+def _execute(broker, config, heartbeat, directory):
     issue = config["issue"]
     repair = config.get("repair")
     target_key = repair["target_dispatch_key"] if repair else broker.key
@@ -685,41 +796,76 @@ def execute(broker, config, heartbeat, directory):
     config = {**config, "checkout_sha": command(["git", "rev-parse", f"origin/{config['ref']}"]).strip()}
     if config.get("readiness", {}).get("context_sha", config["checkout_sha"]) != config["checkout_sha"]:
         raise WorkerFailure("Coding checkout changed after readiness approval; request another review")
-    with run_codex(broker, config, heartbeat, directory) as summary:
+    corrections, changed_files, publication_token = 0, 0, None
+
+    def validate(summary, *, deadline, failure_signals):
+        nonlocal corrections, changed_files, publication_token
+        broker.call("progress", stage="testing")
+        check_name = "Git branch and HEAD integrity"
+        try:
+            with command_context(deadline=deadline, failure_signals=failure_signals):
+                check_checkout(branch, original)
+                check_name = "Workflow-file permission check"
+                changed_files = check_workflow_changes(config)
+                print("Running repository validation", flush=True)
+                for index, args in enumerate(config["validation_commands"], 1):
+                    check_name = f"validation/{index}"
+                    command(list(args), env=clean_environment(), diagnostic_operation=f"validation/{index}")
+                # Validation itself can change tracked or generated files.
+                check_name = "Git branch and HEAD integrity after validation"
+                check_checkout(branch, original)
+                check_name = "Workflow-file permission check after validation"
+                changed_files = check_workflow_changes(config)
+                check_name = "Pre-commit staging and PublicationGuard"
+                command(["git", "add", "-A"])
+                publication_token = broker.call("github")["token"]
+                broker.publication_guard.remember(publication_token)
+                metadata = publication_metadata(issue, summary, target_key)
+                if existing:
+                    metadata += [pull.get("title") or "", pull.get("body") or ""]
+                scan_publication(broker, config["ref"], metadata, staged=True)
+                scan_publication(broker, config["ref"], metadata)
+            return None
+        except WorkerFailure as exc:
+            diagnostic = failure(exc)
+            if (corrections >= MAX_CORRECTION_TURNS or time.monotonic() >= deadline
+                    or any(event.is_set() for event in failure_signals) or diagnostic["kind"] == "lease_lost"):
+                raise
+            corrections += 1
+            detail = failure_summary(diagnostic)
+            command_info = ""
+            if diagnostic["operation"].startswith("validation/"):
+                index = int(diagnostic["operation"].split("/")[1])
+                command_info = "\nCommand: " + json.dumps(config["validation_commands"][index - 1])
+            prompt = (f"Worker check failed: {check_name} (correction {corrections}/{MAX_CORRECTION_TURNS}).\n{detail}{command_info}\n"
+                      f"Scrubbed stdout/stderr tail:\n{diagnostic.get('failure_output', '(no subprocess output)')}\n\n"
+                      "Fix the cause in the existing workspace, retaining the task and authorized follow-ups. "
+                      "Do not commit, push, open a PR, or change authentication. "
+                      "The worker will re-run all integrity, workflow permission, validation, and publication checks.")
+            try:
+                prompt = broker.publication_guard.scrub(prompt)
+            except PublicationScanError:
+                raise exc  # Preserve the original check failure if output cannot be safely scrubbed.
+            broker.call("progress", stage="coding", context_sha=config["checkout_sha"])
+            return prompt
+
+    expected_head = original
+
+    def publish(summary):
+        nonlocal expected_head
         if summary is None:
             return "waiting_for_quota", None
-        broker.call("progress", stage="testing")
-        if (command(["git", "rev-parse", "HEAD"]).strip() != original
-                or command(["git", "branch", "--show-current"]).strip() != branch):
-            raise WorkerFailure("Agent changed the worker's Git history or branch")
         changed = command(["git", "status", "--porcelain"]).strip()
-        paths = command(["git", "diff", "--name-only", "HEAD"]).splitlines()
-        paths += command(["git", "ls-files", "--others", "--exclude-standard"]).splitlines()
-        changed_files = len(set(paths))
-        paths += command(["git", "diff", "--name-only", f"origin/{config['ref']}...HEAD"]).splitlines()
-        if (any(path.startswith(".github/workflows/") for path in paths)
-                and config.get("workflow_changes_allowed") is not True):
-            exc = WorkerFailure("Workflow file changes require an approved Workflows write permission")
-            failure(exc, reason_code="workflows_permission_missing")
-            raise exc
-        print("Running repository validation", flush=True)
-        for index, args in enumerate(config["validation_commands"], 1):
-            command(list(args), env=clean_environment(), failure_signals=[heartbeat.failed],
-                    diagnostic_operation=f"validation/{index}")
         broker.call("progress", stage="publishing", **({"repair_validation_passed": True} if repair else {}))
-        token = broker.call("github")["token"]
-        broker.publication_guard.remember(token)
-        title = f"{issue['identifier']}: {issue['title']}"[:250]
-        body = (f"Implements [{issue['identifier']}]({issue['url']}).\n\n{summary[:40_000]}\n\n"
-                f"Validation: all configured repository checks passed.\n\n"
-                f"<!-- clusterfork-dispatch:{target_key} -->")
-        metadata = [title, body, summary, issue["title"]]
+        token = publication_token
+        metadata = publication_metadata(issue, summary, target_key)
+        title, body = metadata[:2]
         if changed:
-            command(["git", "add", "-A"])
-            scan_publication(broker, config["ref"], metadata, staged=True)
+            # The live validation callback staged and scanned this exact index.
             command(["git", "-c", "user.name=clusterfork[bot]", "-c",
                      "user.email=clusterfork[bot]@users.noreply.github.com", "commit", "-m",
                      f"{issue['identifier']}: {issue['title'][:180]}"])
+            expected_head = command(["git", "rev-parse", "HEAD"]).strip()
         delta = command(["git", "diff", "--name-only", f"origin/{config['ref']}...HEAD"]).strip()
         if repair:
             broker.call("progress", stage="publishing", repair_result={
@@ -744,6 +890,17 @@ def execute(broker, config, heartbeat, directory):
                            expected_sha=command(["git", "rev-parse", "HEAD"]).strip())
         return "completed", pull["html_url"]
 
+    try:
+        with run_codex(broker, config, heartbeat, directory, validate=validate) as summary:
+            return publish(summary)
+    except Exception as exc:
+        if config.get("_coding_started"):
+            try:
+                exc.clusterfork_wip = preserve_wip(broker, config, directory, branch, expected_head, target_key)
+            except Exception as preservation_error:
+                record("wip_preservation_failed", level=logging.ERROR, **failure(preservation_error))
+        raise
+
 
 def main(*, select_only=False):
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -766,7 +923,8 @@ def main(*, select_only=False):
             raise WorkerFailure("Account preflight must assign one agent account before execution")
         CONTEXT.set({**CONTEXT.get(), "phase": config["phase"]})
         with Heartbeat(lambda: broker.call("heartbeat")) as heartbeat, \
-             tempfile.TemporaryDirectory(prefix="clusterfork-worker-") as directory:
+             tempfile.TemporaryDirectory(prefix="clusterfork-worker-") as directory, \
+             command_context(publication_guard=broker.publication_guard):
             if select_only:
                 selected = select_account_for_run(broker, config, heartbeat)
                 with open(os.environ["GITHUB_OUTPUT"], "a") as output:
@@ -812,7 +970,7 @@ def main(*, select_only=False):
             record("worker_failed", level=logging.ERROR, **diagnostic)
         if started:
             try:
-                broker.call("finish", status="failed", failure=diagnostic)
+                broker.call("finish", status="failed", failure=diagnostic, **getattr(exc, "clusterfork_wip", {}))
             except Exception as report_error:
                 record("failure_report_deferred", level=logging.ERROR, **failure(report_error))
         detail = failure_summary(diagnostic)

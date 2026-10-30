@@ -102,6 +102,9 @@ def digest(value):
 STEERING_PROTOCOL = "linear-steering-v1"
 AUTO_REPAIR_PROTOCOL = "auto-repair-v1"
 ACCOUNT_ISOLATION_PROTOCOL = "codex-first-cursor-grok-high-single-account-v3"
+WORKER_RECOVERY_PROTOCOL = "in-session-validation-private-failures-wip-v1"
+MAX_CORRECTION_TURNS = 2
+MAX_FAILURE_OUTPUT_BYTES = 16_000
 WORKFLOW_PUBLICATION = {
     True: ("Workflow publication: the GitHub App installation has approved Workflows write permission. "
            "Changes under .github/workflows/ can be published through the normal validation and PR process."),
@@ -112,6 +115,7 @@ WORKFLOW_PUBLICATION = {
 PROTOCOL = "readiness-v1:" + digest([POLICY, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS,
                                     SELECTION_PROTOCOL, STEERING_PROTOCOL, AUTO_REPAIR_PROTOCOL,
                                     WORKFLOW_PUBLICATION, ACCOUNT_ISOLATION_PROTOCOL,
+                                    WORKER_RECOVERY_PROTOCOL, MAX_CORRECTION_TURNS, MAX_FAILURE_OUTPUT_BYTES,
                                     IMAGE_PROTOCOL, MAX_IMAGES, MAX_IMAGE_BYTES, MAX_TOTAL_BYTES,
                                     MAX_PIXELS, MAX_SIDE, DOWNLOAD_SECONDS])
 

@@ -13,7 +13,7 @@ from worker_core import WorkerError
 DELIVERY_SECONDS = 90
 OBSERVATION_SECONDS = 90
 MAX_INSTRUCTION_BYTES = 16_000
-OPEN_STAGES = {"initializing", "selecting_account", "coding"}
+OPEN_STAGES = {"initializing", "selecting_account", "coding", "testing"}
 
 
 class Steering:
@@ -175,6 +175,8 @@ class Steering:
                 closed = (not self.bound(row, row["dispatch_key"], run)
                           or run.get("status") != "running" or run.get("lease_until", 0) <= self.clock()
                           or run.get("steering_closed") or run.get("stage") not in OPEN_STAGES
+                          or (row["state"] == "delivering" and any(
+                              row.get(field) != run.get(field) for field in ("thread_id", "turn_id")))
                           or (closed_run is not None and self.bound(row, *closed_run)))
                 expired = row["state"] == "delivering" and row["delivery_until"] <= self.clock()
                 if not closed and not expired:

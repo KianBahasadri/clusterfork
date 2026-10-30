@@ -38,8 +38,9 @@ changes from **queued** (no agent confirmation) to **agent accepted** only after
 Codex confirms `turn/steer`. The pinned CLI's [app-server interface](https://developers.openai.com/codex/app-server)
 uses the existing thread and expected active turn ID, retaining files, context,
 and the selected account lease. GitHub OIDC still authenticates every broker
-request; Linear credentials stay in Azure. Validation, CI-gated PR publication,
-and auto-merge continue after that turn ends. Testing/publication, a finished or
+request; Linear credentials stay in Azure. Instructions observed during validation
+queue for a possible correction turn on the same thread. Only a new turn ID may
+replace the registered session identity within an attempt. Publication, a finished or
 missing agent, or a comment predating the current attempt produces a clear
 non-delivery response. No comment starts a workflow or changes issue state.
 

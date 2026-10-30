@@ -12,6 +12,8 @@ import traceback
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 
+from readiness_policy import MAX_FAILURE_OUTPUT_BYTES, redact_review_text
+
 CONTEXT = ContextVar("clusterfork_diagnostics", default={})
 STAGES = {"initializing", "selecting_account", "coding", "testing", "publishing", "review", "waiting_for_quota"}
 ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "bind_account", "exhaust_account", "checkout", "github", "progress", "finish",
@@ -53,6 +55,7 @@ FAILURE_REASONS = {
     "workflows_permission_missing": "workflow publication requires the GitHub App installation's approved Workflows write permission",
     "publication_credentials_detected": "publication blocked because a credential was detected in changes or PR metadata",
     "publication_scan_failed": "publication blocked because the credential scan could not read an auth cache",
+    "git_integrity_changed": "Agent changed the worker's Git history or branch",
 }
 
 
@@ -87,7 +90,11 @@ def record(event, *, level=logging.INFO, **fields):
     # Values supplied here are controlled operation names, counts, IDs and statuses.
     # Payloads, URLs, headers, argv, exception messages and locals never enter logs.
     logging.log(level, "Clusterfork: %s", json.dumps(
-        {"event": event, **CONTEXT.get(), **fields}, sort_keys=True))
+        {"event": event, **CONTEXT.get(), **{k: v for k, v in fields.items() if k != "failure_output"}}, sort_keys=True))
+
+
+def permits_failure_output(name):
+    return name in {"command/git", "command/gh"} or bool(re.fullmatch(r"validation/[1-9][0-9]{0,2}", name))
 
 
 def validate_failure(value):
@@ -119,6 +126,13 @@ def validate_failure(value):
         raise ValueError("Invalid failure locations")
     if locations:
         result["locations"] = locations
+    if "failure_output" in value:
+        output = value["failure_output"]
+        if (not isinstance(output, str) or "\x00" in output
+                or len(output.encode("utf-8")) > MAX_FAILURE_OUTPUT_BYTES
+                or not permits_failure_output(value["operation"])):
+            raise ValueError("Invalid private failure output")
+        result["failure_output"] = redact_review_text(output).encode("utf-8")[-MAX_FAILURE_OUTPUT_BYTES:].decode("utf-8", errors="ignore")
     return result
 
 

@@ -335,8 +335,8 @@ class SteeringTests(unittest.TestCase):
                 self.assertIsNone(self.call("instructions")["instruction"])
                 self.assertEqual(self.row(item)["state"], "failed")
 
-    def test_close_or_testing_fails_queued_instructions_without_restarting(self):
-        for action, data in (("steering_close", {}), ("progress", {"stage": "testing"})):
+    def test_close_or_publication_fails_queued_instructions_without_restarting(self):
+        for action, data in (("steering_close", {}), ("progress", {"stage": "publishing"})):
             with self.subTest(action=action):
                 self.setUp()
                 item = comment()
@@ -346,6 +346,41 @@ class SteeringTests(unittest.TestCase):
                 self.assertEqual(self.row(item)["state"], "failed")
                 with self.assertRaises(WorkerError):
                     self.call("instructions")
+
+    def test_testing_queues_instructions_for_a_correction_on_the_same_thread(self):
+        item = comment()
+        self.linear.comments = [item]
+        self.call("progress", stage="testing")
+        self.steering.observe(ISSUE)
+        self.assertEqual(self.row(item)["state"], "queued")
+        self.assertFalse(self.runs.get(KEY)[0].get("steering_closed"))
+        with self.assertRaises(WorkerError):
+            self.call("instructions")
+        self.call("progress", stage="coding")
+        with self.assertRaises(WorkerError):
+            self.call("steering_open", thread_id="different-thread", turn_id="correction-turn")
+        self.session["turn_id"] = "correction-turn"
+        self.call("steering_open")
+        instruction = self.call("instructions")["instruction"]
+        self.assertEqual((instruction["thread_id"], instruction["turn_id"]), ("thread-one", "correction-turn"))
+        self.acknowledge(instruction)
+        self.assertEqual(self.row(item)["state"], "accepted")
+        self.call("progress", stage="testing")
+        self.call("progress", stage="publishing")
+        with self.assertRaises(WorkerError):
+            self.call("progress", stage="coding")
+
+    def test_previous_turn_handoff_becomes_uncertain_without_replay_on_correction(self):
+        item = comment()
+        self.linear.comments = [item]
+        self.call("instructions")
+        self.call("progress", stage="testing")
+        self.assertEqual(self.row(item)["state"], "delivering")
+        self.call("progress", stage="coding")
+        self.session["turn_id"] = "correction-turn"
+        self.call("steering_open")
+        self.assertIsNone(self.call("instructions")["instruction"])
+        self.assertEqual(self.row(item)["state"], "uncertain")
 
     def test_lost_handoff_is_uncertain_and_never_replayed_but_late_confirmation_can_repair(self):
         item = comment()
@@ -651,6 +686,32 @@ class LiveSessionTests(unittest.TestCase):
                           failure_signals=[lost], server_factory=lambda *a, **kw: server)
             self.assertTrue(server.closed)
             self.assertNotIn("turn/steer", server.methods)
+
+    def test_validation_cannot_start_a_correction_after_lease_loss_or_deadline(self):
+        for stop in ("lease", "deadline"):
+            with self.subTest(stop=stop):
+                lost = threading.Event()
+                clock = [0]
+                server = Mock()
+                server.call.side_effect = [{"thread": {"id": "thread-one"}}, {"turn": {"id": "turn-one"}}]
+                server.next_event.side_effect = [{"method": "turn/completed", "params": {
+                    "threadId": "thread-one", "turn": {"id": "turn-one", "status": "completed"}}}, None]
+                broker = Mock()
+                broker.call.return_value = {"accepting": True}
+                def validate(*args, **kwargs):
+                    self.assertEqual(kwargs["deadline"], 10)
+                    self.assertEqual(kwargs["failure_signals"], [lost])
+                    if stop == "lease":
+                        lost.set()
+                    else:
+                        clock[0] = 10
+                    return "Fix validation/1."
+                with patch("agent_session.time.monotonic", side_effect=lambda: clock[0]), self.assertRaises(CodexError):
+                    run_agent(broker, {"model": "test", "effort": "max"}, ROOT, ROOT, "Task", {},
+                              validate=validate, failure_signals=[lost], deadline=10,
+                              server_factory=lambda *a, **kw: server)
+                self.assertEqual([call.args[0] for call in server.call.call_args_list], ["thread/start", "turn/start"])
+                server.close.assert_called_once()
 
 
 class FakeAgent:

@@ -49,8 +49,22 @@ Account-release failures are logged separately when another exception is already
 being handled, preserving the original failure. A release failure on an otherwise
 successful execution still fails that execution.
 
-Clusterfork operational records and durable failure fields exclude request/response
-bodies, headers, tokens, credential files, full URLs, command arguments/output, agent transcripts, exception
+Failed validation commands and Git/gh subprocesses retain the last **16,000 bytes**
+of combined stdout/stderr as optional `failure_output` in the private
+`ClusterforkWorkers.failure` JSON. UTF-8 boundary errors are ignored and NULs removed.
+Before retaining text, the publication guard refreshes live auth caches and redacts
+all tracked credentials; shared review redaction also removes static tokens, private
+keys, authorization headers, secret assignments, and credential-bearing URLs. Azure
+validates the byte limit and NUL-free string and applies shared redaction again.
+Unreadable auth caches withhold output. Codex and OIDC operations never attach it.
+The same private evidence can return to the active agent during correction. It is
+excluded from structured logs, Actions stdout/stderr, step summaries, and Linear
+comments, including automatic repair reports. WIP push identity is stored separately
+on the worker row; [runtime recovery](remote-development.md#retries-and-troubleshooting)
+owns that publication behavior.
+
+Clusterfork operational records otherwise exclude request/response bodies, headers,
+tokens, credential files, full URLs, command arguments/output, agent transcripts, exception
 messages, source excerpts, and local variables. Safe stack locations contain only
 repository Python basenames and line numbers. Unknown failure fields are dropped;
 operation names and classifications must belong to the shared allowlist. Raw

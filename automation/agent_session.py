@@ -1,4 +1,4 @@
-"""One live Codex turn, retaining its workspace while accepting broker instructions."""
+"""A live Codex conversation, including validation and bounded correction turns."""
 
 import time
 from urllib.error import HTTPError
@@ -18,7 +18,8 @@ WORKER_RULES = (
 
 
 def run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), *,
-              timeout=18_000, server_factory=AppServer, image_paths=(), thread_id=None, deadline=None):
+              timeout=18_000, server_factory=AppServer, image_paths=(), thread_id=None, deadline=None,
+              validate=None):
     deadline = deadline if deadline is not None else time.monotonic() + timeout
     if time.monotonic() >= deadline:
         raise CodexError("Codex stopped after timeout or loss of its credential lease")
@@ -59,6 +60,16 @@ def run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), 
             broker.call("instruction_result", **session, **pending)
             pending = None
 
+    def start_turn(inputs):
+        nonlocal registered, completed, usage_limited, summary
+        if time.monotonic() >= deadline or any(event.is_set() for event in failure_signals):
+            raise CodexError("Codex stopped after timeout or loss of its credential lease")
+        turn = server.call("turn/start", {"threadId": session["thread_id"], "effort": config["effort"],
+                          "input": inputs})
+        session["turn_id"] = turn["turn"]["id"]
+        registered, completed, usage_limited = False, None, False
+        summary = "Codex completed the issue."
+
     try:
         if any(event.is_set() for event in failure_signals):
             raise CodexError("Codex stopped after timeout or loss of its credential lease")
@@ -77,9 +88,7 @@ def run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), 
             "and authorized follow-ups, and finish the remaining work.")}]
             if thread_id else [{"type": "text", "text": prompt}]
             + [{"type": "localImage", "path": path} for path in image_paths])
-        turn = server.call("turn/start", {"threadId": session["thread_id"], "effort": config["effort"],
-                          "input": inputs})
-        session["turn_id"] = turn["turn"]["id"]
+        start_turn(inputs)
         next_poll = 0
         while True:
             if time.monotonic() >= deadline or any(event.is_set() for event in failure_signals):
@@ -89,7 +98,7 @@ def run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), 
             if time.monotonic() >= next_poll:
                 next_poll = time.monotonic() + POLL_SECONDS
                 try:
-                    if not registered and (not completed or thread_id or usage_limited):
+                    if not registered and (validate is not None or not completed or thread_id or usage_limited):
                         try:
                             registered = broker.call("steering_open", **session).get("accepting") is True
                         except HTTPError as exc:
@@ -142,7 +151,18 @@ def run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), 
                         resuming = True
                         raise CodexUsageLimit(session["thread_id"])
                     raise CodexError("Codex turn failed or was interrupted")
-                return summary
+                follow_up = validate(summary, deadline=deadline, failure_signals=failure_signals) if validate else None
+                if time.monotonic() >= deadline or any(event.is_set() for event in failure_signals):
+                    raise CodexError("Codex stopped after timeout or loss of its credential lease")
+                if follow_up is None:
+                    return summary
+                try:
+                    confirm()
+                except Exception:
+                    pass  # An unconfirmed old-turn handoff remains uncertain; never replay it.
+                pending = None
+                start_turn([{"type": "text", "text": follow_up}])
+                next_poll = 0
     finally:
         try:
             confirm()

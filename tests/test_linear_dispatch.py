@@ -26,7 +26,10 @@ sys.path.insert(0, str(SOURCE))
 from dispatch_clients import GitHub, Linear, RequestError, request_json  # noqa: E402
 from dispatch_core import (Dispatcher, DispatchError, Registry, WebhookError,
                            dependency_status, eligibility, webhook_event)  # noqa: E402
-from test_remote_worker import MemoryTable, repository_queue
+from test_remote_worker import KEY, MemoryTable, claims, repository_queue
+import test_remote_worker as worker_fixtures
+from readiness_policy import PROTOCOL
+from worker_core import WorkerError
 from call_budget import record_api_calls
 
 spec = importlib.util.spec_from_file_location("clusterfork_pilot", ROOT / "automation" / "pilot.py")
@@ -441,6 +444,20 @@ class ClientTests(unittest.TestCase):
         with patch("dispatch_clients.urlopen", side_effect=error), self.assertRaises(RequestError) as caught:
             request_json("https://example.com", token="secret-value")
         self.assertEqual(str(caught.exception), "remote request failed (HTTP 403)")
+
+
+class WorkerRecoveryContractTests(unittest.TestCase):
+    def test_broker_requires_the_validation_private_output_and_wip_contract_before_dispatch_start(self):
+        self.registry = Registry.load(SOURCE / "projects.json")
+        service, _, _ = worker_fixtures.WorkerAuthorizationTests.service(self)
+        previous = "readiness-v1:e166075e8f6bf59aefc63e156f3c90c6aa810cfaa2b7013ba75fd8d5cda99ab8"
+        with self.assertRaises(WorkerError) as caught:
+            service.handle("start", claims(), {"dispatch_key": KEY, "protocol": previous})
+        self.assertEqual(caught.exception.status, 403)
+        self.assertEqual(service.runs.list(), [])
+        result = service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
+        self.assertEqual(result["protocol"], PROTOCOL)
+        self.assertEqual(result["phase"], "development")
 
 
 class LinearOAuthTests(unittest.TestCase):
