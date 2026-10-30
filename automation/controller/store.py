@@ -1,0 +1,114 @@
+"""One process owns a local transactional database; readers get committed views."""
+
+from contextlib import contextmanager
+import fcntl
+import os
+from pathlib import Path
+import sqlite3
+import threading
+
+from .model import Rejected
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS tasks (
+ sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+ task_id TEXT NOT NULL UNIQUE,
+ issue_id TEXT NOT NULL, project_id TEXT NOT NULL, generation TEXT NOT NULL,
+ repository TEXT NOT NULL, identifier TEXT NOT NULL,
+ phase TEXT NOT NULL CHECK(phase IN ('queued','reviewing','ready','executing','published','held','completed','skipped','canceled')),
+ eligible INTEGER NOT NULL CHECK(eligible IN (0,1)),
+ dependencies_ready INTEGER NOT NULL CHECK(dependencies_ready IN (0,1)),
+ priority INTEGER NOT NULL CHECK(priority BETWEEN 0 AND 4), sort_order REAL NOT NULL,
+ content_revision TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+ revision INTEGER NOT NULL DEFAULT 1, spec TEXT,
+ current_attempt TEXT, repair_used INTEGER NOT NULL DEFAULT 0 CHECK(repair_used IN (0,1)),
+ UNIQUE(generation, project_id, issue_id)
+);
+CREATE TABLE IF NOT EXISTS grants (
+ repository TEXT PRIMARY KEY,
+ task_id TEXT NOT NULL UNIQUE REFERENCES tasks(task_id)
+);
+CREATE TABLE IF NOT EXISTS attempts (
+ attempt_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(task_id),
+ ordinal INTEGER NOT NULL CHECK(ordinal > 0),
+ dispatch_status TEXT NOT NULL CHECK(dispatch_status IN ('intent','accepted','rejected','unknown')),
+ run_id TEXT NOT NULL DEFAULT '', run_attempt INTEGER NOT NULL DEFAULT 0,
+ stopped INTEGER NOT NULL DEFAULT 0, all_stopped INTEGER NOT NULL DEFAULT 0,
+ publication_checked INTEGER NOT NULL DEFAULT 0,
+ conclusion TEXT NOT NULL DEFAULT '', review_result TEXT,
+ agent_outcome TEXT NOT NULL DEFAULT '', stage TEXT NOT NULL DEFAULT 'initializing',
+ coding_started INTEGER NOT NULL DEFAULT 0,
+ pull_request TEXT NOT NULL DEFAULT '', pull_state TEXT NOT NULL DEFAULT '',
+ retry_kind TEXT NOT NULL DEFAULT '', retry_at REAL NOT NULL DEFAULT 0,
+ started_at REAL NOT NULL DEFAULT 0,
+ UNIQUE(task_id,ordinal), UNIQUE(run_id,run_attempt,attempt_id)
+);
+CREATE TABLE IF NOT EXISTS sessions (
+ attempt_id TEXT NOT NULL REFERENCES attempts(attempt_id),
+ phase TEXT NOT NULL CHECK(phase IN ('review','coding')),
+ account_id TEXT NOT NULL DEFAULT '', agent_started INTEGER NOT NULL DEFAULT 0,
+ selector_started INTEGER NOT NULL DEFAULT 0,
+ finished INTEGER NOT NULL DEFAULT 0, deadline REAL NOT NULL DEFAULT 0,
+ data TEXT NOT NULL DEFAULT '{}',
+ PRIMARY KEY(attempt_id,phase)
+);
+CREATE TABLE IF NOT EXISTS holds (owner TEXT PRIMARY KEY, reason TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS effects (
+ effect_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(task_id),
+ kind TEXT NOT NULL, payload TEXT NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('pending','claimed','done')) DEFAULT 'pending'
+);
+CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+PRAGMA user_version=1;
+"""
+
+
+class Database:
+    def __init__(self, path):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._lock = threading.RLock()
+        self._owner = os.open(str(self.path) + ".owner", os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(self._owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(self._owner)
+            self._owner = None
+            raise Rejected("Another controller owns this task database") from None
+        self.connection = sqlite3.connect(self.path, isolation_level=None, check_same_thread=False)
+        os.chmod(self.path, 0o600)
+        self.connection.row_factory = sqlite3.Row
+        self.connection.execute("PRAGMA foreign_keys=ON")
+        self.connection.execute("PRAGMA journal_mode=WAL")
+        self.connection.execute("PRAGMA synchronous=FULL")
+        version = self.connection.execute("PRAGMA user_version").fetchone()[0]
+        if version not in (0, 1):
+            self.close()
+            raise Rejected("Unsupported task database version")
+        self.connection.executescript(SCHEMA)
+
+    @contextmanager
+    def transaction(self):
+        with self._lock:
+            self.connection.execute("BEGIN IMMEDIATE")
+            try:
+                yield self.connection
+            except BaseException:
+                self.connection.rollback()
+                raise
+            else:
+                self.connection.commit()
+
+    def close(self):
+        if getattr(self, "connection", None):
+            self.connection.close()
+            self.connection = None
+        if self._owner is not None:
+            os.close(self._owner)
+            self._owner = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()

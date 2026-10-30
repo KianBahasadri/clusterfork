@@ -62,7 +62,9 @@ def json_request(url, token, data=None, method=None, *, operation_name=None):
 class Broker:
     def __init__(self, url, dispatch_key, *, sleep=time.sleep, retry_delays=(2, 4, 5, 5, 5)):
         parsed = urlparse(url)
-        if parsed.scheme != "https" or parsed.netloc != "clusterfork-dispatch-7604cac329.azurewebsites.net":
+        if parsed.scheme != "https" or parsed.netloc not in {
+                "clusterfork-dispatch-7604cac329.azurewebsites.net",
+                "clusterfork-controller-7604cac329.eastus.cloudapp.azure.com"}:
             raise WorkerFailure("Unrecognized credential broker")
         self.url, self.key = url.rstrip("/"), dispatch_key
         self.lock = threading.RLock()
@@ -834,7 +836,10 @@ def execute(broker, config, heartbeat, directory):
 def _execute(broker, config, heartbeat, directory):
     issue = config["issue"]
     repair = config.get("repair")
-    target_key = repair["target_dispatch_key"] if repair else broker.key
+    target_key = repair["target_dispatch_key"] if repair else (
+        config.get("target_dispatch_key", broker.key) if config.get("task_controller") is True else broker.key)
+    if not isinstance(target_key, str) or not re.fullmatch(r"[0-9a-f]{64}", target_key):
+        raise WorkerFailure("Invalid target task identity")
     branch = worker_branch(repair["target_identifier"] if repair else issue["identifier"], target_key)
     if repair and (repair["target_branch"] != branch or not re.fullmatch(r"[0-9a-f]{64}", target_key)):
         raise WorkerFailure("Auto-repair branch does not match its parent dispatch")
@@ -1046,6 +1051,12 @@ def main(*, select_only=False):
                 return 0
             if config["phase"] == "readiness":
                 status, pull = review_readiness(broker, config, heartbeat, Path(directory)), None
+                # The combined workflow advances through a native needs edge.
+                # This output is a scheduling hint; the broker verifies the
+                # persisted review and actual successful review job independently.
+                if os.environ.get("GITHUB_OUTPUT"):
+                    with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                        output.write(f"ready={str(status == 'passed').lower()}\n")
             else:
                 status, pull = execute(broker, config, heartbeat, Path(directory))
         if config["phase"] == "development":

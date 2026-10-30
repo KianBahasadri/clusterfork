@@ -2,7 +2,9 @@
 
 Date: 2026-10-30.
 
-Status: proposed implementation plan. Implementation remains paused.
+Status: implementation in progress. Production admission remains halted during
+the rebuild. Implementation notes and dated evidence live in
+[the controller topic](docs/remote-development-controller.md).
 
 ## Scope
 
@@ -159,8 +161,8 @@ completion and the next repository admission.
   before the second starts, without a routine manual step.
 
 These are compatibility requirements for the two changes, not additional redesign
-workstreams. The current implementation pause and initial cloud halt are lifted
-only through the owner's explicit resume instruction.
+workstreams. Production admission remains halted while implementation and live
+acceptance are outstanding; deployment cannot clear an independent operator halt.
 
 Current behavior and safeguards are documented in
 [the remote runtime](docs/remote-development.md),
