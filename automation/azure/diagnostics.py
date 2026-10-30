@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 CONTEXT = ContextVar("clusterfork_diagnostics", default={})
 STAGES = {"initializing", "selecting_account", "coding", "testing", "publishing", "review", "waiting_for_quota"}
-ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "bind_account", "checkout", "github", "progress", "finish",
+ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "bind_account", "exhaust_account", "checkout", "github", "progress", "finish",
            "review", "steering_open", "instructions", "instruction_result", "steering_close"}
 LINEAR_OPERATIONS = {"issue", "project", "comments", "viewer", "comment", "issueUpdate", "issueLabels",
                      "issueCreate", "issueLabelCreate", "issueAddLabel", "issueRemoveLabel", "commentUpdate", "commentCreate"}

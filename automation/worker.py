@@ -22,7 +22,8 @@ from urllib.request import Request, urlopen
 from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).parent / "azure"))
-from codex_runtime import CodexError, inspect_account, quota_snapshot, read_usage, write_private
+from codex_runtime import (CodexError, CodexUsageLimit, copy_sessions, inspect_account,
+                           quota_snapshot, read_usage, write_private)
 from agent_session import run_agent
 from dispatch_core import AgentProfile
 from quota_selection import SelectionPolicy, select_account
@@ -147,9 +148,10 @@ def account_lease(broker, identity):
             broker.call("save", account_id=identity, lease=claimed["lease"],
                         auth=auth, release=release)
 
-        with broker.publication_guard.watch_auth(home / "auth.json"), Heartbeat(save) as heartbeat:
+        with broker.publication_guard.watch_auth(home / "auth.json"):
             try:
-                yield home, heartbeat
+                with Heartbeat(save) as heartbeat:
+                    yield home, heartbeat
             except BaseException:
                 # A cleanup failure must not replace the original operational failure.
                 try:
@@ -204,14 +206,19 @@ def clean_environment():
             if key in {"PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "SYSTEMROOT"}}
 
 
-def choose_account(broker, config, worker_heartbeat, *, preflight=False):
+def choose_account(broker, config, worker_heartbeat, *, preflight=False, replacement=False, deadline=None):
     profiles = {"codex": AgentProfile(config["model"], config["effort"])}
     policy = SelectionPolicy(**config["selection"])
     snapshots = []
-    # Pool credentials only ever reach the separate, non-agent preflight VM.
-    identities = broker.call("accounts")["accounts"] if preflight else [config["account_id"]]
+    if worker_heartbeat.failed.is_set() or deadline is not None and time.monotonic() >= deadline:
+        raise WorkerFailure("Codex stopped after timeout or loss of its credential lease")
+    # Initial pool access belongs to preflight. Coding may probe replacements
+    # only after the broker has recorded release of its exhausted identity.
+    identities = broker.call("accounts")["accounts"] if preflight or replacement else [config["account_id"]]
     print(f"Inspecting quota for {len(identities)} Codex accounts", flush=True)
     for identity in identities:
+        if (worker_heartbeat.failed.is_set() or deadline is not None and time.monotonic() >= deadline):
+            raise WorkerFailure("Codex stopped after timeout or loss of its credential lease")
         try:
             with account_lease(broker, identity) as (home, heartbeat):
                 _, limits = inspect_account(home, config["model"], config["effort"])
@@ -250,14 +257,24 @@ def run_codex(broker, config, worker_heartbeat, directory):
     image_paths = materialize_images(config, directory)
     broker.call("progress", stage="selecting_account")
     snapshots, profiles, policy = choose_account(broker, config, worker_heartbeat)
+    thread_id, deadline, replacement = None, None, False
+    timeout = config.get("agent_timeout_minutes", 300) * 60
+    sessions = directory / "codex-sessions"
     while True:
+        if deadline is not None and (time.monotonic() >= deadline or worker_heartbeat.failed.is_set()):
+            raise WorkerFailure("Codex stopped after timeout or loss of its credential lease")
         selected = select_account(snapshots, profiles, policy, now=time.time())
         if not selected:
+            if replacement:
+                print("Quota unavailable: no eligible replacement Codex account remains for this attempt", flush=True)
             yield None
             return
         snapshots = [row for row in snapshots if row.account_id != selected.account_id]
         ran_agent = False
+        limited = None
         try:
+            if replacement:
+                broker.call("bind_account", account_id=selected.account_id)
             with account_lease(broker, selected.account_id) as (home, heartbeat):
                 details, limits = inspect_account(home, config["model"], config["effort"])
                 broker.publication_guard.capture_auth(home / "auth.json")
@@ -282,26 +299,53 @@ def run_codex(broker, config, worker_heartbeat, directory):
                 env = {**clean_environment(), "CODEX_HOME": str(home)}
                 ran_agent = True
                 try:
-                    with operation("worker/agent", timeout_seconds=config.get("agent_timeout_minutes", 300) * 60):
-                        summary = run_agent(broker, config, home, Path.cwd(), prompt, env,
-                                            timeout=config.get("agent_timeout_minutes", 300) * 60,
-                                            image_paths=image_paths,
-                                            failure_signals=[heartbeat.failed, worker_heartbeat.failed])
-                    broker.publication_guard.capture_auth(home / "auth.json")
-                    yield summary
-                    return
+                    copy_sessions(sessions, home / "sessions")
+                    if deadline is None:
+                        deadline = time.monotonic() + timeout
+                    try:
+                        with operation("worker/agent", timeout_seconds=timeout):
+                            try:
+                                summary = run_agent(broker, config, home, Path.cwd(), prompt, env,
+                                                    timeout=timeout, deadline=deadline, thread_id=thread_id,
+                                                    image_paths=image_paths,
+                                                    failure_signals=[heartbeat.failed, worker_heartbeat.failed])
+                            except CodexUsageLimit as exc:
+                                limited = exc
+                    finally:
+                        # run_agent has stopped the old app-server before copying.
+                        # Neither auth.json nor other account caches cross homes.
+                        copy_sessions(home / "sessions", sessions)
+                    if limited is None:
+                        broker.publication_guard.capture_auth(home / "auth.json")
+                        yield summary
+                        return
                 finally:
                     try:
                         if heartbeat.failed.is_set() or worker_heartbeat.failed.is_set():
                             raise WorkerFailure("Credential lease was lost")
                         final = quota_snapshot(selection.account_id, selection.model, read_usage(home),
                                                allow_exhausted=True)
-                        broker.call("progress", usage_after=usage_report(final))
+                        broker.call("progress", usage_account_id=selection.account_id, usage_after=usage_report(final))
                     except Exception as exc:
                         # Keep the execution outcome even if provider usage is
                         # unavailable. The finish comment explicitly says so.
                         print("Final quota reading unavailable; usage change will be reported as unknown", flush=True)
                         record("final_usage_unavailable", level=logging.WARNING, **failure(exc, "worker/final_usage"))
+            if limited is not None:
+                # Normal context exit must successfully save/release the lease
+                # and delete its entire auth home before pool access is granted.
+                if home.exists():
+                    raise WorkerFailure("Exhausted Codex credential home was not removed")
+                if worker_heartbeat.failed.is_set() or time.monotonic() >= deadline:
+                    raise WorkerFailure("Codex stopped after timeout or loss of its credential lease")
+                if not any(sessions.rglob("rollout-*.jsonl")):
+                    raise WorkerFailure("Codex conversation history is unavailable for resume")
+                thread_id = limited.thread_id
+                broker.call("exhaust_account", account_id=selection.account_id, thread_id=thread_id)
+                print(f"Account {selection.account_id[:8]} exhausted; selecting a replacement for the same conversation", flush=True)
+                replacement = True
+                snapshots, profiles, policy = choose_account(
+                    broker, config, worker_heartbeat, replacement=True, deadline=deadline)
         except HTTPError as exc:
             if (exc.code in {404, 409} and not ran_agent
                     and getattr(exc, "clusterfork_action", "claim") == "claim"):

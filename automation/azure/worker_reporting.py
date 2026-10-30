@@ -132,11 +132,26 @@ def attempt_comment(run, repository, *, finished=False):
             from diagnostics import failure_summary
 
             body += failure_summary(json.loads(run["failure"])) + "\n\n"
-        after = json.loads(run["usage_after"]) if run.get("usage_after") else None
-        body += f"Usage before ({timestamp(before['observed_at'])}) and after"
-        body += f" ({timestamp(after['observed_at'])}):\n\n{usage_lines(before, after)}" if after else (
-            f": final reading unavailable; usage change unavailable.\n\nBefore:\n\n{usage_lines(before)}")
-        body += "\n\nUsage changes compare account quota readings; provider reporting may lag or include other activity."
+        segments = json.loads(run.get("usage_segments", "[]")) or [{
+            "account_id": run["account_id"], "usage_before": before,
+            "usage_after": json.loads(run["usage_after"]) if run.get("usage_after") else None}]
+        exhausted = json.loads(run.get("exhausted_account_ids", "[]"))
+        if len(segments) > 1:
+            body += f"Account changes: {len(segments) - 1}. Resumed the same conversation after quota exhaustion.\n\n"
+        if exhausted and run["status"] == "waiting_for_quota":
+            body += "Quota unavailable: no eligible replacement account remains for this attempt.\n\n"
+        for index, segment in enumerate(segments, 1):
+            if len(segments) > 1:
+                label = public_text(segment.get("account_email") or segment["account_id"])
+                plan = public_text(segment.get("account_plan") or "unknown")
+                body += f"Account {index}: {label} (ID `{segment['account_id']}`, plan: {plan})"
+                body += "; usage limit reached.\n\n" if segment["account_id"] in exhausted else ".\n\n"
+            before, after = segment["usage_before"], segment.get("usage_after")
+            body += f"Usage before ({timestamp(before['observed_at'])}) and after"
+            body += f" ({timestamp(after['observed_at'])}):\n\n{usage_lines(before, after)}" if after else (
+                f": final reading unavailable; usage change unavailable.\n\nBefore:\n\n{usage_lines(before)}")
+            body += "\n\n"
+        body += "Usage changes compare account quota readings; provider reporting may lag or include other activity."
     else:
         body += f"Usage before coding ({timestamp(before['observed_at'])}):\n\n{usage_lines(before)}"
     run_id, attempt = run["owner"].split(":")

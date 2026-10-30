@@ -8,6 +8,7 @@ from collections import deque
 from pathlib import Path
 import queue
 import signal
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -20,6 +21,34 @@ class CodexError(RuntimeError):
 
 class CodexRejected(CodexError):
     """An explicit RPC rejection, as distinct from an uncertain transport failure."""
+
+
+class CodexUsageLimit(CodexError):
+    """A failed coding turn with the provider's explicit usage-limit signal."""
+
+    def __init__(self, thread_id):
+        super().__init__("Codex account usage limit reached")
+        self.thread_id = thread_id
+
+
+def copy_sessions(source, destination):
+    """Carry only rollout history between private homes, never credential caches."""
+    source, destination = Path(source), Path(destination)
+    if source.is_symlink() or destination.is_symlink():
+        raise CodexError("Codex session storage must not be a symlink")
+    if not source.exists():
+        return
+    for path in source.rglob("*"):
+        if path.is_symlink():
+            raise CodexError("Codex session files must not be symlinks")
+        if path.is_file() and path.name.startswith("rollout-") and path.suffix == ".jsonl":
+            relative = path.relative_to(source)
+            target = destination / relative
+            if target.is_symlink() or any((destination / parent).is_symlink() for parent in relative.parents):
+                raise CodexError("Codex session destination must not be a symlink")
+            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            shutil.copyfile(path, target)
+            target.chmod(0o600)
 
 
 class AppServer:

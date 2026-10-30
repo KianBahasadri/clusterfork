@@ -171,21 +171,24 @@ deployment, worker draining, startup deferral, and prompt reconciliation after r
 | Codex | `gpt-6.1-sol` | `max` |
 
 The registry requires an explicit Codex profile and supported effort value. Each
-phase uses one account selected by available quota. There is no complexity
+phase starts with an account selected by available quota. There is no complexity
 classifier or model fallback. Antigravity is deferred. The runner verifies that
 the pinned model and effort are in each account's live model catalog before use.
 
 `quota_selection.py` implements the decision over provider-normalized snapshots:
-choose the account with the lowest used percentage in its **most depleted**
-applicable window. Both short and weekly/model limits matter. Skip busy, blocked,
-unknown, stale, and nearly exhausted accounts. Configuration currently requires
-at least 20% remaining, a snapshot at most 60 seconds old, and one active task per
-account. Those are initial configurable operating values, not a prediction of a
-task's consumption. If no account qualifies, return no selection and wait.
+choose the eligible account with the lowest usage score. An identified short
+window (currently five hours) **strictly below 70% used** is ignored for ranking
+when weekly usage is known; score by weekly usage and any other applicable limits.
+At exactly 70% or above, include it in the most-depleted-window score. Missing
+weekly metadata keeps conservative scoring; unknown usage never counts as zero.
+Eligibility still checks **every** window: skip busy, blocked, unknown, stale,
+and nearly exhausted accounts. Configuration requires at least 20% remaining,
+a snapshot at most 60 seconds old, and one active task per account. These guards
+also apply to replacement accounts. If none qualifies, return no selection and wait.
 
 The runner calls Codex app-server `account/read`, `model/list`, and
 `account/rateLimits/read` in isolated temporary Codex homes. It probes available
-accounts under leases, selects by the worst applicable quota window, then
+accounts under leases, applies that ranking policy, then
 reserves and rechecks the chosen account before starting the development app-server
 thread (readiness still uses `codex exec`).
 Unknown or denied usage never counts as unused quota. A lack of capacity records
@@ -289,12 +292,13 @@ After selection and the final quota recheck, a separate start comment records
 the account email (when available), stable account identity, plan, agent, model,
 reasoning effort, and applicable quota windows before coding. Each reading shows
 used/remaining percentages and reset times, with weekly windows identified by
-their provider-reported duration. The selected account stays leased through
-validation and publication. On exit, including execution or validation failure,
-the worker attempts a fresh usage reading before releasing it.
+their provider-reported duration. Each account stays leased until switching or
+exiting; the final one covers validation and publication. Before releasing an
+account, including on failure, the worker attempts a fresh usage reading.
 
-A separate finish comment repeats the account/model details, compares before and
-after usage in percentage points, and reports total time from worker start to its
+A separate finish comment identifies account changes and compares before/after
+usage in percentage points **separately for each account**, retaining the initial
+start snapshot. It also reports total time from worker start to its
 finish callback, including checkout preparation, account selection, coding,
 validation, and publication. It excludes subsequent PR/CI waiting. Window resets,
 missing readings, and unreported weekly windows are explicit rather than counted
@@ -383,8 +387,9 @@ changes recovered from an earlier attempt's branch. Authorized edits follow the 
 validation and PR process. [Setup](remote-development-setup.md#github-app-and-repository)
 owns the installation grant; [accounts](remote-development-accounts.md#worker-credential-boundary)
 owns publication token scope.
-Durable agent-session resume is not implemented. A mid-task usage failure can use
-the same single repair budget. Linear credentials stay in Azure, outside the agent.
+Coding quota failures resume the persistent conversation on another account;
+[accounts](remote-development-accounts.md#coding-account-failover) owns that boundary.
+Linear credentials stay in Azure, outside the agent.
 
 Azure Table `ClusterforkDispatches` records `dispatching`, `dispatched`, `rejected`, or
 `uncertain`. `dispatched` means GitHub accepted the request; verify actual runner
