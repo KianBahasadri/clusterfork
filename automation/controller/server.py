@@ -10,17 +10,28 @@ import threading
 import time
 
 from .model import Hold, InboxQueued, Rejected, identity
+from .deployment import verify_release
 from dispatch_core import WebhookError, webhook_event
 from worker_core import WorkerError
 from worker_store import verify_oidc
 
 
 class Application:
-    def __init__(self, controller, broker, driver, *, webhook_secret, metadata, verify=verify_oidc, clock=time.time):
+    def __init__(self, controller, broker, driver, *, webhook_secret, metadata, verify=verify_oidc, clock=time.time,
+                 resources_idle=lambda: True):
         self.controller, self.broker, self.driver = controller, broker, driver
         self.webhook_secret, self.metadata = webhook_secret, metadata
         self.verify, self.clock = verify, clock
+        self.resources_idle = resources_idle
         self.wakeup = threading.Event()
+
+    def drained(self):
+        for view in self.controller.active():
+            attempt=view.attempt
+            if (not attempt.get("stopped") or not attempt.get("all_stopped")
+                    or not attempt.get("publication_checked") or attempt.get("pull_state") not in {"absent","closed"}):
+                return False
+        return bool(self.resources_idle())
 
     def handle(self, method, path, headers, body):
         if method == "GET" and path == "/api/health":
@@ -138,7 +149,13 @@ class OperatorServer(socketserver.ThreadingUnixStreamServer):
                         result={"holds":application.controller.holds()}
                     elif operation=="inspect":
                         result=asdict(application.controller.inspect(command["task_id"])) if command.get("task_id") else {
-                            "holds":application.controller.holds(),"tasks":[asdict(v) for v in application.controller.active()]}
+                            "holds":application.controller.holds(),"tasks":[asdict(v) for v in application.controller.active()],
+                            "drained":application.drained(),"deployment":application.metadata}
+                    elif operation=="deployment-status":
+                        result={"drained":application.drained(),"deployment":application.metadata,
+                                "active_tasks":len(application.controller.active()),"holds":application.controller.holds()}
+                    elif operation=="verify-release":
+                        result=verify_release(application,command.get("revision"))
                     elif operation=="reconcile":
                         application.wakeup.set()
                         result={"queued":True}

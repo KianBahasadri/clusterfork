@@ -51,7 +51,16 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dispatcher runtime dependencies
-        run: python -m pip install -r automation/azure/requirements.txt
+        run: python -m pip install -r automation/controller/requirements.txt
+      - name: Verify controller runtime imports on the deployed Python version
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path[:0] = ["automation", "automation/azure"]
+          import controller_main
+          from azure.identity import ManagedIdentityCredential
+          PY
+          bash -n automation/controller/host/install.sh
       - name: Index Azure Functions with the deployed Python version
         run: |
           python - <<'PY'

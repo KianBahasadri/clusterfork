@@ -8,7 +8,7 @@ import time
 
 from .authorization import release_ref
 from .model import (Admit, ContextObserved, DispatchObserved, EffectUpdated, ExternalObserved,
-                    Hold, InboxDone, IssueObserved, Rejected, Retry, TaskSpec)
+                    Hold, InboxDone, IssueObserved, Rejected, Retry, TaskSpec, identity)
 from .workflows import ENGINE, WORKFLOW
 from dispatch_core import DispatchError, dependency_status, eligibility
 from issue_images import capture_images, image_digest
@@ -39,6 +39,9 @@ class Driver:
                        ref=release_ref(revision).removeprefix("refs/tags/"), worker_revision="")
 
     def observe_issue(self, issue, *, known=None):
+        if (known and known.phase in {'completed','canceled'}
+                and known.task_id==identity(self.registry.generation,known.project_id,known.issue_id)):
+            return known
         if not issue:
             if known:
                 return self.apply(IssueObserved(known.issue_id, known.project_id, known.repository,
@@ -53,6 +56,8 @@ class Driver:
             return None
         extra = (mapped.linear_states.in_progress, mapped.linear_states.blocked) if known and known.active and mapped.linear_states else ()
         route, reason = eligibility(issue, self.registry, additional_state_ids=extra)
+        if known is None and route != mapped:
+            return None
         try:
             _, dependency_reason = dependency_status(self.linear.issue_dependencies(issue["id"]))
         except Exception:
@@ -199,6 +204,9 @@ class Driver:
     def render(self, view):
         attempt = view.attempt
         body = f"Clusterfork task: {view.phase.value}.\n\n" + redact_review_text(view.reason)
+        if view.phase=='queued' or view.phase=='held' and attempt.get('retry_kind'):
+            for owner,reason in sorted(self.controller.holds().items()):
+                body+='\n\n'+redact_review_text(reason or f'Admission paused by {owner}.')
         if attempt.get("run_id"):
             body += f"\n\n[Worker run](https://github.com/{ENGINE}/actions/runs/{attempt['run_id']}/attempts/{attempt['run_attempt']})"
         if attempt.get("pull_request"):

@@ -17,7 +17,7 @@ from controller.broker import Broker
 from controller.core import Controller
 from controller.driver import Driver
 from controller.instructions import Instructions
-from controller.model import Initialize
+from controller.model import Initialize,LegacyImported
 from controller.release import RequiredRuntime
 from controller.server import Application,HTTPServer,OperatorServer,http_handler
 from controller.store import Database
@@ -44,7 +44,7 @@ def verify_host(expected):
         raise ValueError("Controller host identity does not match configuration")
 
 
-def build(config,manifest,database,credential,*,table_factory=None):
+def build(config,manifest,database,credential,*,table_factory=None,history=None):
     if table_factory is None:
         from azure.data.tables import TableClient
         table_factory=TableClient
@@ -61,11 +61,18 @@ def build(config,manifest,database,credential,*,table_factory=None):
                                for provider in ("codex","cursor")})
     controller=Controller(database)
     controller.apply(Initialize(),now=time.time())
+    if history is not None:
+        controller.apply(LegacyImported(history['generation'],tuple(history['records']),history['source_digest'],
+                                         tuple(tuple(h) for h in history.get('operator_holds',()))),now=time.time())
     instructions=Instructions(controller,registry,table("ClusterforkInstructions","instructions"),linear,clock=time.time)
     driver=Driver(controller,registry,linear,github,manifest["revision"],
                   runtime_ready=RequiredRuntime(github,manifest),steering=instructions)
     broker=Broker(controller,registry,accounts,linear,github,refresh=driver.refresh,steering=instructions)
-    return Application(controller,broker,driver,webhook_secret=secret(credential,vault,"linear-webhook-secret"),metadata=manifest)
+    def resources_idle():
+        return not any(row.get("lease_until",0)>time.time()
+                       for pool in accounts.pools.values() for row in pool.table.list())
+    return Application(controller,broker,driver,webhook_secret=secret(credential,vault,"linear-webhook-secret"),
+                       metadata=manifest,resources_idle=resources_idle)
 
 
 def serve(args):
@@ -75,7 +82,9 @@ def serve(args):
     verify_host(config["vm_resource_id"])
     stop=threading.Event()
     with Database(args.database) as database:
-        application=build(config,manifest,database,ManagedIdentityCredential())
+        history=Path('/etc/clusterfork/migration.json')
+        application=build(config,manifest,database,ManagedIdentityCredential(),
+                          history=json.loads(history.read_text()) if history.exists() else None)
         http=HTTPServer(("127.0.0.1",args.port),http_handler(application))
         operator=OperatorServer(args.socket,application)
         def loop():
@@ -108,7 +117,7 @@ def serve(args):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action",choices=("serve","inspect","pause","resume","reconcile"))
+    parser.add_argument("action",choices=("serve","inspect","pause","resume","reconcile","deployment-status","verify-release"))
     parser.add_argument("--config",type=Path,default=Path("/etc/clusterfork/controller.json"))
     parser.add_argument("--database",type=Path,default=Path("/var/lib/clusterfork/tasks.db"))
     parser.add_argument("--socket",type=Path,default=Path("/run/clusterfork/operator.sock"))
@@ -116,6 +125,7 @@ def main():
     parser.add_argument("--owner",default="operator:rebuild")
     parser.add_argument("--reason",default="")
     parser.add_argument("--task-id")
+    parser.add_argument("--revision")
     args=parser.parse_args()
     logging.basicConfig(level=logging.INFO,format="%(message)s")
     logging.getLogger("azure").setLevel(logging.WARNING)
@@ -124,7 +134,8 @@ def main():
         return
     with socket.socket(socket.AF_UNIX) as client:
         client.connect(str(args.socket))
-        client.sendall(json.dumps({"operation":args.action,"owner":args.owner,"reason":args.reason,"task_id":args.task_id}).encode()+b"\n")
+        client.sendall(json.dumps({"operation":args.action,"owner":args.owner,"reason":args.reason,
+                                   "task_id":args.task_id,"revision":args.revision}).encode()+b"\n")
         response=json.loads(client.makefile("rb").readline())
     if not response.get("ok"):
         raise RuntimeError("Operator command was rejected")

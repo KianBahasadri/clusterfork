@@ -222,9 +222,17 @@ class Initialize:
     pass
 
 
+@dataclass(frozen=True)
+class LegacyImported:
+    generation: str
+    records: tuple[dict, ...]
+    source_digest: str
+    operator_holds: tuple[tuple[str,str], ...] = ()
+
+
 Command = (IssueObserved | Admit | DispatchObserved | Start | Assign | Review | Progress |
            Finish | ExternalObserved | Retry | Hold | SessionUpdated | EffectUpdated | Authorize |
-           ExhaustAccount | ContextObserved | InboxQueued | InboxDone | Initialize)
+           ExhaustAccount | ContextObserved | InboxQueued | InboxDone | Initialize | LegacyImported)
 
 
 @dataclass(frozen=True)

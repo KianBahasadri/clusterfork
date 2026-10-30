@@ -61,10 +61,13 @@ CREATE TABLE IF NOT EXISTS effects (
  state TEXT NOT NULL CHECK(state IN ('pending','claimed','done')) DEFAULT 'pending'
 );
 CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS legacy_history (
+ legacy_key TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(task_id), data TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS inbox (
  event_id TEXT PRIMARY KEY, payload TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0 CHECK(done IN (0,1))
 );
-PRAGMA user_version=3;
+PRAGMA user_version=4;
 """
 
 
@@ -87,7 +90,7 @@ class Database:
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA synchronous=FULL")
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, 3):
+        if version not in (0, 1, 2, 3, 4):
             self.close()
             raise Rejected("Unsupported task database version")
         if version == 1:

@@ -10,7 +10,7 @@ from uuid import UUID
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
 from controller.driver import Driver
-from controller.model import Phase, Role
+from controller.model import Phase, Role, Hold
 from dispatch_core import DispatchError
 from readiness_policy import PROTOCOL
 import test_controller_broker as fixtures
@@ -120,6 +120,26 @@ class ControllerDriverTests(unittest.TestCase):
         f.linear.status_comment.side_effect=None
         self.driver.tick()
         self.assertFalse(f.controller.effects("report"))
+
+    def test_scanning_unseen_ineligible_issues_does_not_create_tasks_or_status_comments(self):
+        f=self.fixture
+        self.second_issue["state"]={"id":"completed-state","type":"completed"}
+        self.driver.tick(scan=True)
+        self.assertEqual([view.issue_id for view in f.controller.tasks()],[f.issue["id"]])
+        self.assertEqual(f.linear.status_comment.call_count,1)
+
+    def test_hold_changes_update_queued_linear_status_without_repeated_comments(self):
+        f=self.fixture
+        self.driver.tick(scan=True)
+        f.linear.status_comment.reset_mock()
+        self.driver.apply(Hold('operator:maintenance','Waiting for the operator to resume.'))
+        self.driver.report()
+        self.assertTrue(any('Waiting for the operator to resume.' in call.args[2]
+                            for call in f.linear.status_comment.call_args_list))
+        f.linear.status_comment.reset_mock()
+        self.driver.apply(Hold('operator:maintenance','Waiting for the operator to resume.'))
+        self.driver.report()
+        f.linear.status_comment.assert_not_called()
 
     def test_one_repair_keeps_original_branch_and_private_wip_evidence(self):
         f=self.fixture

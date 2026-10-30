@@ -218,8 +218,12 @@ resource "azurerm_function_app_flex_consumption" "broker" {
   # The provider owns AzureWebJobsStorage and DEPLOYMENT_STORAGE_CONNECTION_STRING
   # through storage_access_key; repeating them here produces perpetual drift.
   app_settings = merge({
-    GITHUB_APP_ID          = "5503155"
-    LINEAR_OAUTH_CLIENT_ID = "9f7805b369221d513ecad1d2559095ef"
+    GITHUB_APP_ID                          = "5503155"
+    LINEAR_OAUTH_CLIENT_ID                 = "9f7805b369221d513ecad1d2559095ef"
+    "AzureWebJobs.reconcile.Disabled"      = "true"
+    "AzureWebJobs.route_event.Disabled"    = "true"
+    "AzureWebJobs.linear_webhook.Disabled" = "true"
+    "AzureWebJobs.worker.Disabled"         = "true"
   }, { for name, secret in azurerm_key_vault_secret.runtime : name => "@Microsoft.KeyVault(SecretUri=${secret.versionless_id})" })
   lifecycle { prevent_destroy = true }
 }

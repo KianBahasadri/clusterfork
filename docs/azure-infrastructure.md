@@ -1,7 +1,7 @@
 # Azure infrastructure
 
 Terraform owns Clusterfork's Azure resources and configuration. Application source
-and `host.json` remain repository files published by the deployment workflow.
+remains versioned repository content installed by the deployment workflow.
 Account auth caches, queue messages, receipts, leases, and table rows are runtime
 data: Terraform manages their storage resources, not their contents.
 
@@ -10,7 +10,7 @@ data: Terraform manages their storage resources, not their contents.
 | Stack | Resources |
 | --- | --- |
 | `infra/bootstrap` | Dedicated state resource group, storage account, private state containers, and state access roles |
-| `infra/azure` | Automation resource group, runtime storage and containers, queues, eight tables, Flex Consumption plan and Function App, monitoring, Key Vault and credential references, deployment identity, federation, and permissions |
+| `infra/azure` | Automation resource group, runtime storage and containers, queues, eight tables, controller VM/network/disk, retained Flex Consumption plan and Function App, monitoring, Key Vault and credential references, deployment identity, federation, and permissions |
 
 The runtime stack adopts the original resource names. `imports.tf` records the
 existing Azure resource IDs, including the Azure-created plan, package container,
@@ -82,6 +82,31 @@ role assignments. Key Vault Secrets User permits ephemeral reads during plans.
 Permissions are scoped to this application's resources and state container.
 The operator receives Key Vault Secrets Officer for initial setup and rotation.
 
+## Single controller host
+
+`controller.tf` owns one `Standard_B2ats_v2` Ubuntu 24.04 VM in `mexicocentral`,
+an allowed subscription region with verified capacity for this size. It uses a
+pinned image version, a static public address/DNS name, and a separate 32 GiB
+managed disk attached exclusively at LUN 0 without host caching. Deletion and
+replacement protection covers the VM, address, and task disk. The disk denies
+network export; the application database is local to its mounted filesystem.
+
+Only HTTP certificate validation and HTTPS are allowed inbound. The application
+binds to loopback behind Caddy, and operator access uses Azure Run Command and a
+private local socket. An existing operator public SSH key satisfies Azure VM
+creation; no SSH port is exposed. Terraform outputs contain public configuration
+and resource identity, not runtime secrets.
+
+The VM's system-assigned identity has Key Vault Secrets User plus Table Data
+Contributor on the existing account and instruction tables only. It cannot write
+legacy task tables through those grants. The application verifies the configured
+VM resource identity before opening its service. Legacy Function triggers are
+declared disabled; initial cutover also stops the old Function App. Protected
+legacy resources and their runtime data remain available for audit.
+
+The host/disk are provisioned; the replacement runtime's cutover and live
+acceptance are tracked in [controller implementation](remote-development-controller.md).
+
 ## Bootstrap and adoption
 
 Use Terraform 1.15.9 and Azure CLI authenticated to the configured subscription.
@@ -127,12 +152,13 @@ diagnostic summaries. It withholds raw values and Terraform expression context.
 Saved plans use private temporary directories and are removed after use. An apply
 uses the reviewed plan and verifies Key Vault references afterwards.
 
-Every main push or manual deployment waits for the exact revision's CI and for
-workers to drain, then reconciles Terraform before publishing the source ZIP.
-Successful package health verification resumes the deployment pause; the normal
-repository queue still controls whether a task can run. Infrastructure failures
-leave dispatch paused for repair. There are no parallel ARM/CLI provisioning or
-app-setting mutation helpers. `pilot.py` only checks local inputs and packages code.
+The controller deployment workflow, once enabled at cutover, handles main pushes
+that change runtime inputs and manual deployments. It waits for exact-revision
+CI and verified drain, reconciles Terraform through the same plan gate, then
+installs and verifies the controller release. Deployment, migration and hold
+semantics live in [controller implementation](remote-development-controller.md).
+There are no parallel ARM/CLI provisioning or app-setting mutation helpers.
+`pilot.py` remains a local checker and legacy Functions packager.
 
 After adoption, a normal plan should report no resource changes. Monitoring and
 logging are covered by [remote diagnostics](remote-development-observability.md);

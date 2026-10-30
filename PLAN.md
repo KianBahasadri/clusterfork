@@ -76,12 +76,12 @@ fenced. Credentials stay out of task records and Linear status.
 
 ### Work
 
-- [ ] Inventory existing lifecycle writers and map their responsibilities to the
+- [x] Inventory existing lifecycle writers and map their responsibilities to the
   controller. Preserve current product rules and authorization checks.
-- [ ] Implement the task interface, transition logic, and transactional database.
-- [ ] Route Linear events, GitHub observations, broker requests, steering, and
+- [x] Implement the task interface, transition logic, and transactional database.
+- [x] Route Linear events, GitHub observations, broker requests, steering, and
   status reporting through their assigned responsibilities.
-- [ ] Test real database constraints, competing admission requests, duplicate/stale
+- [x] Test real database constraints, competing admission requests, duplicate/stale
   observations, readiness guards, completion evidence, and reporting independence.
 - [ ] At a verified idle boundary, transfer necessary pending task references and
   queue order, disable the old lifecycle writers, and activate one new controller.
@@ -129,13 +129,13 @@ GitHub post-job cleanup.
 
 ### Work
 
-- [ ] Build the combined workflow using pinned runtime references and explicit
+- [x] Build the combined workflow using pinned runtime references and explicit
   dependencies between the four jobs.
-- [ ] Adapt broker authorization and account bindings to the phase-specific roles
+- [x] Adapt broker authorization and account bindings to the phase-specific roles
   while preserving provider-selection, quota, sandbox, and publication safeguards.
 - [ ] Remove the old readiness-completion-to-coding-dispatch path. Keep subsequent
   attempts permitted only by the controller's existing task policy.
-- [ ] Test rejected readiness, wrong-phase requests, duplicate starts, partial
+- [x] Test rejected readiness, wrong-phase requests, duplicate starts, partial
   reruns, separate account assignments, and preservation of runtime files.
 - [ ] Run a real disposable task through readiness, both preflights, coding,
   validation, publication, CI/merge, credential release, post-job cleanup, and

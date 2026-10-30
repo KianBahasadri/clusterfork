@@ -12,6 +12,19 @@ It owns repository grants, task/attempt identity, queue ordering, readiness
 decisions, coding progression, external stop/publication observations, retry
 authorization, and independent admission holds.
 
+The responsibilities previously spread across lifecycle writers map as follows:
+
+| Existing writer | Replacement responsibility |
+| --- | --- |
+| `dispatch_core.Dispatcher`, `repository_queue.RepositoryQueue` | Controller eligibility, ordering, grants and dispatch intents; driver observations |
+| `readiness.ReadinessGate` | Controller review binding/decisions and broker authorization; native review jobs |
+| `worker_core.WorkerService` task records | Broker commands and controller phase/attempt transitions |
+| `linear_sync.LinearSync` | Driver-observed GitHub/PR facts, controller completion, derived Linear reporting |
+| `auto_repair.AutoRepair` | Controller-owned single repair budget and attempts; existing repair prompt/validation helpers |
+
+Existing fenced accounts and instruction resources retain their own storage;
+they cannot independently advance task lifecycle.
+
 `store.py` uses a real local SQLite database with transactions, foreign keys,
 state constraints, and unique repository grants. One process holds an exclusive
 owner-file lock. The lock protects that database on its host; infrastructure must
@@ -52,12 +65,41 @@ they are not public HTTP routes. `controller_main.py` assembles these adapters,
 reads existing secrets through managed identity, and verifies the expected VM
 resource identity before opening the service. A newly initialized database starts
 with an operator hold; restarting an existing database preserves its current
-holds. The Azure host and deployment integration remain outstanding.
+holds. Hold changes create fresh reporting intent for waiting tasks. Project scans
+ignore unseen ineligible issues and retain terminal task identity without adding
+new historical completion comments.
 
 `release.py` packages the exact committed runtime inputs and records their Git
 tree digest. Required runtime changes prevent new admission until deployment;
 target-only changes still reach the next task through its fresh checkout. Local
 worktree files, including untracked credentials, are not packaged.
+
+## Deployment and migration
+
+`controller_deploy.py` waits for exact-revision CI and checks the required runtime
+trees against current main, allowing newer target-only commits. Its private
+deployment hold stops new attempts while current work drains. Stopped, verified
+retries can retain their repository grant across deployment; an unresolved run,
+open PR, or live credential lease prevents the service switch. Terraform owns the
+host resources described in [Azure infrastructure](azure-infrastructure.md).
+
+The installer verifies VM identity, uses the dedicated persistent disk, installs
+the exact committed runtime and dependencies into a separate release directory,
+and stops the old service before switching its current release. HTTPS and private
+operator verification must pass before clearing the deployment's own hold. The
+running application creates/verifies its exact runtime tag before dispatch can
+resume. Operator holds remain intact. The deployment workflow is still disabled
+pending the initial cutover and live acceptance.
+
+`migration.py` imports verified idle terminal queue history through a controller
+command. It proves each legacy generation/key binding, retains branch/publication
+references for audit, and preserves completion identity without inheriting old
+runner authority. Imports require the initial halt and no new attempts, are atomic
+and repeatable, and reject unresolved work or a changed source after import.
+Credentials are excluded. Initial deployment additionally verifies the durable
+legacy halt, account leases, idle queue snapshot and actual GitHub attempts, then
+stops the legacy Function App before starting the new service. Raw historical
+tables remain preserved.
 
 ## Native execution graph
 
@@ -108,9 +150,13 @@ through controller views. Database upgrades preserve task and attempt ownership.
 Runtime tests check host identity, authentication selection, and hold persistence.
 Release tests use real Git repositories to check runtime identity, target-only
 changes, and exclusion of uncommitted files.
+Deployment tests exercise grant/PR/lease draining and runtime tag identity.
+Migration tests reopen real databases and prove completed tasks cannot execute
+again or inherit old credentials.
 
-The replacement still needs its Azure host and deployment path, migration, and
-live acceptance. Unit tests are not cutover evidence.
+The VM and persistent disk were provisioned on 2026-10-30. Service installation,
+initial migration, and live acceptance remain outstanding. Unit tests are not
+cutover evidence.
 
 ## Rebuild baseline
 

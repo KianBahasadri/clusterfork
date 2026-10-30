@@ -10,7 +10,7 @@ import re
 from .model import (Admit, Assign, DispatchObserved, ExternalObserved, Finish, Hold,
                     IssueObserved, Phase, Progress, Rejected, Retry, Review, Role,
                     Start, TaskSpec, TaskView, identity, SessionUpdated, EffectUpdated, Authorize, ExhaustAccount,
-                    ContextObserved, InboxQueued, InboxDone, Initialize)
+                    ContextObserved, InboxQueued, InboxDone, Initialize, LegacyImported)
 
 
 class Controller:
@@ -88,6 +88,10 @@ class Controller:
                 if db.execute("INSERT OR IGNORE INTO metadata VALUES ('initialized','1')").rowcount:
                     db.execute("INSERT OR IGNORE INTO holds VALUES ('operator:rebuild','Production admission is held for rebuild acceptance.')")
                 return None
+            if isinstance(command, LegacyImported):
+                from .migration import import_history
+                import_history(db,command)
+                return None
             if isinstance(command, InboxQueued):
                 if not re.fullmatch(r"[0-9a-f]{64}", command.event_id) or len(json.dumps(command.event)) > 3000:
                     raise Rejected("Invalid event receipt")
@@ -97,13 +101,21 @@ class Controller:
                 db.execute("UPDATE inbox SET done=1 WHERE event_id=?", (command.event_id,))
                 return None
             if isinstance(command, Hold):
-                if not re.fullmatch(r"[\w:./-]{1,200}", command.owner) or not isinstance(command.reason, str):
+                if (not re.fullmatch(r"[\w:./-]{1,200}", command.owner) or not isinstance(command.reason, str)
+                        or len(command.reason)>2000):
                     raise Rejected("Invalid admission hold")
+                previous=db.execute("SELECT reason FROM holds WHERE owner=?",(command.owner,)).fetchone()
+                changed=bool(previous) if command.release else previous is None or previous[0]!=command.reason
                 if command.release:
                     db.execute("DELETE FROM holds WHERE owner=?", (command.owner,))
                 else:
                     db.execute("INSERT INTO holds VALUES (?,?) ON CONFLICT(owner) DO UPDATE SET reason=excluded.reason",
                                (command.owner, command.reason))
+                if changed:
+                    waiting=db.execute("SELECT task_id FROM tasks WHERE phase IN ('queued','held') AND eligible=1").fetchall()
+                    db.execute("UPDATE tasks SET revision=revision+1 WHERE phase IN ('queued','held') AND eligible=1")
+                    for row in waiting:
+                        self._report(db,row[0])
                 return None
             if isinstance(command, IssueObserved):
                 self._issue(db, command)

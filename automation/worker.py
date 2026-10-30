@@ -64,7 +64,7 @@ class Broker:
         parsed = urlparse(url)
         if parsed.scheme != "https" or parsed.netloc not in {
                 "clusterfork-dispatch-7604cac329.azurewebsites.net",
-                "clusterfork-controller-7604cac329.eastus.cloudapp.azure.com"}:
+                "clusterfork-controller-7604cac329.mexicocentral.cloudapp.azure.com"}:
             raise WorkerFailure("Unrecognized credential broker")
         self.url, self.key = url.rstrip("/"), dispatch_key
         self.lock = threading.RLock()
