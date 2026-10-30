@@ -13,11 +13,11 @@ app=func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
 @app.function_name(name='linear_relay')
 @app.route(route='linear',methods=['POST'])
-def linear_relay(request:func.HttpRequest)->func.HttpResponse:
-    body=request.get_body()
+def linear_relay(req:func.HttpRequest)->func.HttpResponse:
+    body=req.get_body()
     if len(body)>1024*1024:
         return func.HttpResponse('Request is too large',status_code=413)
-    signature=request.headers.get('Linear-Signature','')
+    signature=req.headers.get('Linear-Signature','')
     if not signature:
         return func.HttpResponse('Missing signature',status_code=401)
     forwarded=Request(TARGET,data=body,headers={'Content-Type':'application/json','Linear-Signature':signature},method='POST')
@@ -36,7 +36,7 @@ def linear_relay(request:func.HttpRequest)->func.HttpResponse:
 
 @app.function_name(name='health')
 @app.route(route='health',methods=['GET'])
-def health(request:func.HttpRequest)->func.HttpResponse:
+def health(req:func.HttpRequest)->func.HttpResponse:
     path=Path(__file__).parent/'deployment.json'
     metadata=json.loads(path.read_text()) if path.exists() else {}
     return func.HttpResponse(json.dumps({'mode':'webhook-relay','deployment':metadata,'target':TARGET}),

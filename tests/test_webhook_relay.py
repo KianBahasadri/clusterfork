@@ -3,6 +3,7 @@
 from contextlib import nullcontext
 import importlib.util
 import io
+import inspect
 import json
 from pathlib import Path
 import subprocess
@@ -53,7 +54,13 @@ class WebhookRelayTests(unittest.TestCase):
         send.assert_not_called()
 
     def test_only_stateless_http_ingress_and_metadata_health_are_registered(self):
-        self.assertEqual({f.get_function_name() for f in relay.app.get_functions()},{'linear_relay','health'})
+        functions=relay.app.get_functions()
+        self.assertEqual({f.get_function_name() for f in functions},{'linear_relay','health'})
+        for function in functions:
+            bindings=json.loads(function.get_function_json())['bindings']
+            arguments={binding['name'] for binding in bindings if binding['direction'].lower()=='in'}
+            self.assertEqual(set(inspect.signature(function.get_user_function()).parameters),arguments,
+                             'Azure rejects functions whose handler parameters do not match their bindings')
         metadata=json.loads(relay.health(func.HttpRequest('GET','https://existing.example/api/health',body=b'')).get_body())
         self.assertEqual(metadata['mode'],'webhook-relay')
         self.assertEqual(metadata['target'],relay.TARGET)
