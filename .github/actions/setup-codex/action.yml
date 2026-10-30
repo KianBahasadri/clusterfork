@@ -8,7 +8,9 @@ runs:
         python-version: "3.12"
     - name: Install dispatcher and validation dependencies
       shell: bash
-      run: python3 -m pip install -r automation/azure/requirements.txt
+      env:
+        CLUSTERFORK_ACTION_PATH: ${{ github.action_path }}
+      run: python3 -m pip install -r "$CLUSTERFORK_ACTION_PATH/../../../automation/azure/requirements.txt"
     - uses: actions/setup-node@v4
       with:
         node-version: "22"
@@ -23,4 +25,6 @@ runs:
       run: npm install --global @openai/codex@0.165.0
     - name: Verify read-only sandbox enforcement
       shell: bash
-      run: python3 automation/check_codex_sandbox.py
+      env:
+        CLUSTERFORK_ACTION_PATH: ${{ github.action_path }}
+      run: python3 "$CLUSTERFORK_ACTION_PATH/../../../automation/check_codex_sandbox.py"

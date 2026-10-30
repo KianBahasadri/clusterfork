@@ -40,6 +40,7 @@ The links below open the complete rules, including any approval requirements.
 | [generate_docs](../skills/generate_docs/SKILL.md) | Regenerates repo documentation and slim agent instructions from source; `/generate_docs` |
 | [create-github-action-tests](../skills/create-github-action-tests/SKILL.md) | Backfills characterization tests and hosted-runner CI after checking its billing scope; `/create-github-action-tests` |
 | [add-codeview-module](../skills/add-codeview-module/SKILL.md) | Adds a project-specific dashboard tab under `.codeview/modules/`; `/add-codeview-module` |
+| [setup-remote-development](../skills/setup-remote-development/SKILL.md) | Enrolls a GitHub repository and an explicitly selected Linear project in the shared remote development system; `/setup-remote-development` |
 | [design-guide](../skills/design-guide/SKILL.md) | Exact interface specifications and runnable component/dashboard references for building or reviewing UI |
 | [conservative-academic-prose-sweep](../skills/conservative-academic-prose-sweep/SKILL.md) | Removes embellishment and unsupported claims from technical or academic prose while preserving meaning and limitations |
 | [ask-claude](../skills/ask-claude/SKILL.md) | Gets headless help from Claude on difficult work; `/ask-claude` |

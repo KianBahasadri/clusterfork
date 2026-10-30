@@ -34,21 +34,12 @@ jobs:
     uses: ./.github/workflows/clusterfork-select-account.yml
     with:
       dispatch_key: ${{ inputs.dispatch_key }}
+      worker_revision: ${{ github.sha }}
 
   develop:
     needs: select-account
     if: needs.select-account.outputs.selected == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: ./.github/actions/setup-codex
-      - uses: ./.github/actions/setup-cursor
-      - name: Implement issue and open a pull request
-        env:
-          CLUSTERFORK_BROKER_URL: https://clusterfork-dispatch-7604cac329.azurewebsites.net/api/worker
-          DISPATCH_KEY: ${{ inputs.dispatch_key }}
-        run: python3 automation/worker.py
+    uses: ./.github/workflows/clusterfork-develop.yml
+    with:
+      dispatch_key: ${{ inputs.dispatch_key }}
+      worker_revision: ${{ github.sha }}
