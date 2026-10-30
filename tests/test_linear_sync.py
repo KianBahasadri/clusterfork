@@ -110,6 +110,17 @@ class LifecycleTests(unittest.TestCase):
         row, etag = self.runs.get(KEY)
         self.runs.replace({**row, **fields}, etag)
 
+    def test_queue_owned_parent_and_child_repair_lifecycle_is_never_overwritten(self):
+        for metadata in ({"repair_attempted": True, "repair_issue_id": ISSUE},
+                         {"is_auto_repair": True, "repair_parent_key": "b" * 64}):
+            with self.subTest(metadata=metadata):
+                self.setUp()
+                row, version = self.receipts.get(KEY)
+                self.receipts.replace({**row, **metadata}, version)
+                self.sync.sync(KEY)
+                self.assertFalse(self.linear.mock_calls)
+                self.assertFalse(self.github.mock_calls)
+
     def sync_state(self):
         self.sync.sync(KEY)
         return self.issue["state"]["id"]
@@ -541,6 +552,21 @@ class LifecycleAdapterTests(unittest.TestCase):
         with patch.object(client, "installation_token", return_value="test-token"):
             self.assertEqual(client.worker_pull(route, receipt(), KEY, pr()["url"]), pull)
         self.assertEqual(request.call_args.kwargs["data"]["variables"]["number"], 999)
+
+    def test_repair_pr_lookup_uses_parent_branch_and_parent_dispatch_marker(self):
+        route = Registry.load(ROOT / "automation/azure/projects.json").routes[PROJECT]
+        child_key = "d" * 64
+        fields = {**receipt(), "identifier": "KIAN-1000", "is_auto_repair": True,
+                  "target_dispatch_key": KEY, "target_branch": pr()["headRefName"]}
+        request = Mock(side_effect=[[{"number": 1, "state": "open"}],
+                                    {"data": {"repository": {"pullRequest": pr()}}}])
+        client = GitHub("1", "unused", request)
+        with patch.object(client, "installation_token", return_value="test-token"):
+            self.assertEqual(client.worker_pull(route, fields, child_key), pr())
+        self.assertIn("kian-891-aaaaaaaa", request.call_args_list[0].args[0])
+        query = request.call_args.kwargs["data"]["query"]
+        self.assertIn("detailsUrl", query)
+        self.assertIn("targetUrl", query)
 
     def test_lifecycle_configuration_is_optional_but_complete_and_distinct(self):
         data = json.loads((ROOT / "automation/azure/projects.json").read_text())

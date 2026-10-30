@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 from worker_core import WorkerError
 from worker_reporting import STAGES, attempt_comment
+from readiness_policy import redact_review_text
 from diagnostics import context, failure, failure_summary, record
 
 
@@ -17,6 +18,38 @@ def comment_id(key, kind):
     # Linear accepts client-supplied UUIDv4 IDs. Stable IDs recover ambiguous writes.
     digest = hashlib.sha256(f"clusterfork:{key}:{kind}".encode()).digest()
     return str(UUID(bytes=digest[:16], version=4))
+
+
+def repair_managed(receipt):
+    return bool((receipt.get("repair_attempted") and receipt.get("repair_issue_id"))
+                or (receipt.get("is_auto_repair") and receipt.get("repair_parent_key")))
+
+
+def failed_required_checks(pull):
+    """Only completed, failing required checks qualify for automatic repair."""
+    commits = pull.get("commits", {}).get("nodes", [])
+    rollup = commits[-1]["commit"].get("statusCheckRollup") if commits else None
+    if not rollup:
+        return []
+    contexts = rollup["contexts"]
+    if contexts["pageInfo"]["hasNextPage"]:
+        raise ValueError("Incomplete PR check results")
+    required = [check for check in contexts["nodes"] if check["isRequired"]]
+    failures = []
+    for check in required:
+        if check["__typename"] == "CheckRun":
+            if check["status"] != "COMPLETED":
+                return []
+            if check["conclusion"] in {"FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}:
+                failures.append((check["name"], check.get("detailsUrl", "")))
+        elif check["__typename"] == "StatusContext":
+            if check["state"] in {"PENDING", "EXPECTED"}:
+                return []
+            if check["state"] in {"FAILURE", "ERROR"}:
+                failures.append((check["context"], check.get("targetUrl", "")))
+        else:
+            raise ValueError("Unknown PR check type")
+    return failures
 
 
 def pull_outcome(pull, auto_merge):
@@ -60,7 +93,7 @@ def pull_outcome(pull, auto_merge):
     if pending:
         return "in_progress", "Waiting for required CI checks."
     if failures:
-        names = ", ".join(sorted(set(" ".join(name.split())[:120] for name in failures)))
+        names = ", ".join(sorted(set(" ".join(redact_review_text(name).split())[:120] for name in failures)))
         return "blocked", f"Required CI checks failed or were canceled: {names[:600]}."
     if auto_merge:
         if pull.get("mergeStateStatus") == "BEHIND":
@@ -92,6 +125,10 @@ class LinearSync:
 
     def sync(self, key):
         receipt, _ = self.receipts.get(key)
+        if repair_managed(receipt):
+            # The repository queue owns both issues' repair lifecycle, including
+            # stopped-run verification and the durable terminal report.
+            return
         route = self.registry.routes.get(receipt["project_id"])
         if not route or not route.linear_states or receipt["repository"] != route.repository:
             return
@@ -178,6 +215,9 @@ class LinearSync:
             latest = self.linear.issue(issue["id"])
             if (not latest or latest["state"]["id"] != issue["state"]["id"]
                     or latest.get("project") != project or latest.get("archivedAt")):
+                return
+            current_receipt, _ = self.receipts.get(key)
+            if repair_managed(current_receipt):
                 return
             if state == "done":
                 # Persist before any external write. A crash, ambiguous state

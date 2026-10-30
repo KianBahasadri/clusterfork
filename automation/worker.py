@@ -26,7 +26,7 @@ from codex_runtime import CodexError, inspect_account, quota_snapshot, read_usag
 from agent_session import run_agent
 from dispatch_core import AgentProfile
 from quota_selection import SelectionPolicy, select_account
-from worker_reporting import usage_report
+from worker_reporting import usage_report, worker_branch
 from readiness_policy import PROTOCOL, RESULT_SCHEMA, review_prompt
 from diagnostics import CONTEXT, context, failure, failure_summary, http_operation, identifiers, operation, record
 
@@ -354,9 +354,7 @@ def find_pr(config, token, branch):
                  if pull.get("state") == "open" or pull.get("merged_at")), None)
 
 
-def request_auto_merge(config, token, pull_url, dispatch_key, branch, *, expected_sha=None):
-    if not config.get("auto_merge", True):
-        return
+def published_pull(config, token, pull_url, dispatch_key, branch, *, expected_sha=None):
     repository = config["repository"]
     match = re.fullmatch(re.escape(f"https://github.com/{repository}/pull/") + r"([1-9][0-9]*)", pull_url)
     if not match:
@@ -369,6 +367,15 @@ def request_auto_merge(config, token, pull_url, dispatch_key, branch, *, expecte
             or not re.fullmatch(r"[0-9a-f]{40}", head.get("sha", ""))
             or (expected_sha is not None and head["sha"] != expected_sha)):
         raise WorkerFailure("Pull request does not match the worker's published change")
+    return pull
+
+
+def request_auto_merge(config, token, pull_url, dispatch_key, branch, *, expected_sha=None):
+    if not config.get("auto_merge", True):
+        return
+    repository = config["repository"]
+    pull = published_pull(config, token, pull_url, dispatch_key, branch, expected_sha=expected_sha)
+    head = pull["head"]
     if pull.get("merged"):
         return
     if pull.get("state") != "open" or pull.get("draft"):
@@ -414,13 +421,23 @@ def request_auto_merge(config, token, pull_url, dispatch_key, branch, *, expecte
 
 def execute(broker, config, heartbeat, directory):
     issue = config["issue"]
-    branch = f"clusterfork/{issue['identifier'].lower()}-{broker.key[:8]}"
+    repair = config.get("repair")
+    target_key = repair["target_dispatch_key"] if repair else broker.key
+    branch = worker_branch(repair["target_identifier"] if repair else issue["identifier"], target_key)
+    if repair and (repair["target_branch"] != branch or not re.fullmatch(r"[0-9a-f]{64}", target_key)):
+        raise WorkerFailure("Auto-repair branch does not match its parent dispatch")
     token = broker.call("checkout")["token"]
     existing = find_pr(config, token, branch)
-    if existing:
+    if existing and not repair:
         token = broker.call("github")["token"]
         request_auto_merge(config, token, existing, broker.key, branch)
         return "completed", existing
+    if existing and repair:
+        pull = published_pull(config, token, existing, target_key, branch)
+        if pull.get("merged"):
+            return "completed", existing
+        if pull.get("state") != "open":
+            raise WorkerFailure("Auto-repair PR is no longer open")
     with git_auth(token, directory) as env:
         # workflow_dispatch and manual reruns can check out an old SHA. Fetch
         # after repository admission so preceding merged work is always present.
@@ -446,13 +463,15 @@ def execute(broker, config, heartbeat, directory):
         changed = command(["git", "status", "--porcelain"]).strip()
         paths = command(["git", "diff", "--name-only", "HEAD"]).splitlines()
         paths += command(["git", "ls-files", "--others", "--exclude-standard"]).splitlines()
+        changed_files = len(set(paths))
+        paths += command(["git", "diff", "--name-only", f"origin/{config['ref']}...HEAD"]).splitlines()
         if any(path.startswith(".github/workflows/") for path in paths):
             raise WorkerFailure("Workflow file changes require a separate Workflows permission")
         print("Running repository validation", flush=True)
         for index, args in enumerate(config["validation_commands"], 1):
             command(list(args), env=clean_environment(), failure_signals=[heartbeat.failed],
                     diagnostic_operation=f"validation/{index}")
-        broker.call("progress", stage="publishing")
+        broker.call("progress", stage="publishing", **({"repair_validation_passed": True} if repair else {}))
         token = broker.call("github")["token"]
         if changed:
             command(["git", "add", "-A"])
@@ -460,17 +479,28 @@ def execute(broker, config, heartbeat, directory):
                      "user.email=clusterfork[bot]@users.noreply.github.com", "commit", "-m",
                      f"{issue['identifier']}: {issue['title'][:180]}"])
         delta = command(["git", "diff", "--name-only", f"origin/{config['ref']}...HEAD"]).strip()
-        if not delta:
+        if repair:
+            broker.call("progress", stage="publishing", repair_result={
+                "commit_sha": command(["git", "rev-parse", "HEAD"]).strip(), "changed_files": changed_files})
+        if not delta and not existing:
             return "completed", None
+        # Revalidate ownership before updating an existing PR, including when
+        # the project uses manual merging. Never publish to a foreign/fork PR.
+        if existing:
+            published_pull(config, token, existing, target_key, branch)
         with git_auth(token, directory) as env:
             command(["git", "push", "origin", f"HEAD:refs/heads/{branch}"], env=env)
+        if existing:
+            request_auto_merge(config, token, existing, target_key, branch,
+                               expected_sha=command(["git", "rev-parse", "HEAD"]).strip())
+            return "completed", existing
         body = (f"Implements [{issue['identifier']}]({issue['url']}).\n\n{summary[:40_000]}\n\n"
                 f"Validation: all configured repository checks passed.\n\n"
-                f"<!-- clusterfork-dispatch:{broker.key} -->")
+                f"<!-- clusterfork-dispatch:{target_key} -->")
         pull = json_request(f"https://api.github.com/repos/{config['repository']}/pulls", token,
                             {"title": f"{issue['identifier']}: {issue['title']}"[:250],
                              "head": branch, "base": config["ref"], "body": body})
-        request_auto_merge(config, token, pull["html_url"], broker.key, branch,
+        request_auto_merge(config, token, pull["html_url"], target_key, branch,
                            expected_sha=command(["git", "rev-parse", "HEAD"]).strip())
         return "completed", pull["html_url"]
 

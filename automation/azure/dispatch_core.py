@@ -57,6 +57,7 @@ class Registry:
     agent_selection: SelectionPolicy
     routes: dict[str, Route]
     steering_user_ids: tuple[str, ...] = ()
+    notify_user_url: str = ""
 
     @classmethod
     def load(cls, path):
@@ -124,8 +125,12 @@ class Registry:
         users = steering.get("trusted_user_ids", [])
         if not isinstance(users, list):
             raise ValueError("steering.trusted_user_ids must be an array of Linear user UUIDs")
+        notify = data.get("notify_user_url", "")
+        if not isinstance(notify, str) or (notify and not re.fullmatch(
+                r"https://linear\.app/[A-Za-z0-9_-]+/profiles/[A-Za-z0-9_-]+", notify)):
+            raise ValueError("notify_user_url must be a Linear profile HTTPS URL")
         return cls(label, generation, profiles, SelectionPolicy.load(data["agent_selection"]), routes,
-                   tuple(uuid_string(user) for user in users))
+                   tuple(uuid_string(user) for user in users), notify)
 
 
 class WebhookError(ValueError):

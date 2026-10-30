@@ -21,6 +21,18 @@ STAGE_LABELS = {stage: f"clusterfork: {name}" for stage, name in STAGES.items()}
 SELECTION_LABEL = "clusterfork: selected"
 QUEUED_LABEL = "clusterfork: queued"
 SELECTION_PROTOCOL = "repository-selection-v1"
+AUTO_REPAIR_LABEL = "clusterfork: auto-repair"
+
+
+def is_auto_repair(issue, metadata=None):
+    labels = (issue or {}).get("labels") or {}
+    labels = labels.get("nodes", []) if isinstance(labels, dict) else labels
+    return bool((metadata or {}).get("is_auto_repair") or any(
+        (label.get("name") if isinstance(label, dict) else label) == AUTO_REPAIR_LABEL for label in labels))
+
+
+def worker_branch(identifier, key):
+    return f"clusterfork/{identifier.lower()}-{key[:8]}"
 
 
 def usage_report(snapshot):

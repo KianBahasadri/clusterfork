@@ -70,8 +70,9 @@ repository reads, denied writes inside and outside the repository, and blocked n
 fails the runner setup instead of repeatedly spending quota on reviewers that cannot inspect files. The setup follows
 the [Ubuntu sandbox prerequisites](https://learn.chatgpt.com/docs/sandboxing).
 
-Failures, missing outcomes, closed unmerged PRs, and merge/CI blockers pause the repository. Resolve the PR or manually
-rerun the **same** admitted task to repair it. To abandon it, cancel the Linear issue, stop/cancel its GitHub run, and
+Failures, missing outcomes, closed unmerged PRs, and merge/CI blockers pause the repository. The
+[runtime lifecycle](remote-development.md#single-attempt-auto-repair) owns automatic repair and human recovery rules.
+To abandon active work, cancel the Linear issue, stop/cancel its GitHub run, and
 close or merge any remaining PR. Reconciliation verifies those GitHub facts before releasing the slot. Changing Linear
 status to Done, archiving, or removing enrollment alone does not abandon active work. An expired worker/account lease
 never proves that the worker stopped.

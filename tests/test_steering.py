@@ -86,6 +86,7 @@ class SteeringTests(unittest.TestCase):
         self.linear, self.queue = Tracker(self.registry), Mock()
         self.queue.assert_worker = Mock()
         self.queue.readiness.require.return_value = {}
+        self.queue.approval.return_value = {}
         self.service = WorkerService(self.registry, self.receipts, self.runs, Accounts(MemoryTable()),
                                      self.linear, Mock(), self.queue, clock=lambda: self.now)
         self.steering = Steering(self.registry, self.receipts, self.runs, self.table,

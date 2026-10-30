@@ -17,7 +17,7 @@ STAGES = {"initializing", "selecting_account", "coding", "testing", "publishing"
 ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "checkout", "github", "progress", "finish",
            "review", "steering_open", "instructions", "instruction_result", "steering_close"}
 LINEAR_OPERATIONS = {"issue", "project", "comments", "viewer", "comment", "issueUpdate", "issueLabels",
-                     "issueLabelCreate", "issueAddLabel", "issueRemoveLabel", "commentUpdate", "commentCreate"}
+                     "issueCreate", "issueLabelCreate", "issueAddLabel", "issueRemoveLabel", "commentUpdate", "commentCreate"}
 OPERATIONS = {"worker/execution", "worker/heartbeat", "worker/account_release", "worker/final_usage",
               "worker/linear_sync", "worker/steering_sync", "worker/agent", "worker/readiness",
               "http/linear", "http/github", "http/oidc", "http/other", "azure/worker", "azure/health",
