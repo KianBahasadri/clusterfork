@@ -19,7 +19,7 @@ ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "bind_account", "c
 LINEAR_OPERATIONS = {"issue", "project", "comments", "viewer", "comment", "issueUpdate", "issueLabels",
                      "issueCreate", "issueLabelCreate", "issueAddLabel", "issueRemoveLabel", "commentUpdate", "commentCreate"}
 OPERATIONS = {"worker/execution", "worker/heartbeat", "worker/account_release", "worker/final_usage",
-              "worker/linear_sync", "worker/steering_sync", "worker/agent", "worker/readiness",
+              "worker/linear_sync", "worker/steering_sync", "worker/agent", "worker/readiness", "worker/publication_scan",
               "http/linear", "http/github", "http/oidc", "http/other", "azure/worker", "azure/health",
               "azure/route_event", "azure/reconcile", "azure/webhook", "command/git", "command/gh",
               "command/python", "command/codex", "command/other", *("broker/" + name for name in ACTIONS),
@@ -40,6 +40,8 @@ ERROR_TYPES = {"Exception", "TimeoutError", "HTTPError", "URLError", "Connection
                "ResourceModifiedError", "ResourceNotFoundError", "ClientAuthenticationError"}
 FAILURE_REASONS = {
     "workflows_permission_missing": "workflow publication requires the GitHub App installation's approved Workflows write permission",
+    "publication_credentials_detected": "publication blocked because a credential was detected in changes or PR metadata",
+    "publication_scan_failed": "publication blocked because the credential scan could not read an auth cache",
 }
 
 

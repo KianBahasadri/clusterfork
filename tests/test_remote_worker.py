@@ -232,6 +232,7 @@ class AccountLeaseTests(unittest.TestCase):
     def test_revoked_login_releases_lease_without_masking_authentication_failure(self):
         class Broker:
             released = False
+            publication_guard = worker.PublicationGuard({})
             def call(self, action, **data):
                 if action == "claim":
                     return {"auth": auth(), "lease": "test-lease"}
@@ -541,7 +542,7 @@ class GitPublicationTests(unittest.TestCase):
                               "workflow_changes_allowed": allowed,
                               "issue": {"id": ISSUE, "identifier": "KIAN-891", "title": "Update workflow", "url": "https://linear.app/test"},
                               "validation_commands": [[sys.executable, "-c", f"from pathlib import Path; Path({str(validated)!r}).touch()"]]}
-                    broker = Mock(key=KEY)
+                    broker = Mock(key=KEY, publication_guard=worker.PublicationGuard({}))
                     broker.call.return_value = {"token": "test-token"}
                     @contextmanager
                     def implement(*args):
@@ -596,7 +597,7 @@ class GitPublicationTests(unittest.TestCase):
                 git("push", "origin", branch)
                 git("checkout", "main")
                 git("branch", "-D", branch)
-                broker = Mock(key="d" * 64)
+                broker = Mock(key="d" * 64, publication_guard=worker.PublicationGuard({}))
                 broker.call.return_value = {"token": "temporary-token"}
                 heartbeat = SimpleNamespace(failed=threading.Event())
                 url = "https://github.com/owner/repo/pull/1"
@@ -644,7 +645,7 @@ class GitPublicationTests(unittest.TestCase):
                   "issue": {"identifier": "KIAN-1000"},
                   "repair": {"target_dispatch_key": KEY, "target_identifier": "KIAN-891",
                              "target_branch": "clusterfork/kian-891-aaaaaaaa"}}
-        broker = Mock(key="d" * 64)
+        broker = Mock(key="d" * 64, publication_guard=worker.PublicationGuard({}))
         broker.call.return_value = {"token": "temporary-token"}
         with patch.object(worker, "find_pr", return_value="https://github.com/owner/repo/pull/1"), \
              patch.object(worker, "json_request", return_value={"head": {"repo": {"full_name": "attacker/repo"}}}), \
@@ -675,6 +676,7 @@ class GitPublicationTests(unittest.TestCase):
             main_before = subprocess.check_output(["git", "--git-dir", str(remote), "rev-parse", "main"], text=True)
             class Broker:
                 key = KEY
+                publication_guard = worker.PublicationGuard({})
                 def call(self, action, **data):
                     return {"token": "temporary-test-token"}
             class Heartbeat:

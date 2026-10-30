@@ -120,7 +120,7 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertNotIn("SECRET", "\n".join(logged.output))
 
     def test_cleanup_cannot_replace_original_validation_failure(self):
-        broker = Mock()
+        broker = Mock(publication_guard=worker.PublicationGuard({}))
         broker.call.side_effect = lambda action, **kw: {"auth": {}, "lease": "fixture"} if action == "claim" else (_ for _ in ()).throw(TimeoutError("SECRET-cleanup"))
         original = worker.WorkerFailure("original")
         with self.assertLogs(level="ERROR") as logged, self.assertRaises(worker.WorkerFailure) as caught:
