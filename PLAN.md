@@ -1,351 +1,363 @@
-# Durable remote development rebuild
+# Preventing defects in remote development
 
 Date: 2026-10-30.
 
-Status: agreed direction; implementation and live acceptance are outstanding.
+Status: replacement proposal. Supersedes the Temporal-based plan in Git history.
+Implementation remains paused; writing this plan does not authorize production
+resume or assert that a cloud execution halt has been verified.
 
-Repository baseline: `bffbb25`.
+## Goal
 
-## Objective and operating constraint
+Prevent avoidable automation defects by removing their causes: competing state
+owners, runtime changes during execution, invalid configuration, provider-specific
+ownership rules, and releases tested in an environment unlike production.
 
-Replace Clusterfork's custom distributed task orchestration with managed durable
-workflows. Make task ownership, recovery, deployment compatibility, and user-visible
-status explicit while preserving isolated execution and credential safeguards.
+Literal zero crashes or failures cannot be guaranteed for a system that depends
+on Azure, GitHub, Linear, operating systems, networks, and model providers. This
+plan targets specific defect classes we can eliminate or check before production.
+It does not claim that tests prove all software correct, relabel failures as
+successful waits, or count a system that never starts work as reliable.
 
-The owner intends to halt cloud execution until this rebuild is implemented. This
-document does not assert that the halt has already been applied. Verify the actual
-operational state before any live work. Committing this plan, passing CI, deploying
-code, or receiving a healthy response must not resume production execution.
-Acceptance testing uses an explicitly scoped disposable environment. After phases
-0–3 pass, an operator may admit the controlled production pilot in phase 4. Keep
-the general backlog halted until cutover is verified; its resume is a separate
-operator action.
+The main deliverable is a smaller, constrained execution system with evidence for
+its safety properties. A retry engine, managed workflow platform, or large recovery
+framework is not the architectural centerpiece. No Temporal account is required.
+The earlier request for Temporal Cloud configuration is obsolete under this proposal.
 
-This is a plan, not documentation of shipped behavior. Current behavior remains
-documented in [docs/README.md](docs/README.md). Update each owning topic as changes
-ship; do not copy this plan into several documentation files.
+## Design decision
 
-## Why rebuild
+Use **one trusted controller, one transactional task database, and one immutable
+GitHub workflow per normal task attempt**. Keep the isolated GitHub runners and
+existing Azure credential storage. Use GitHub's job graph to order execution;
+keep admission and authorization in one controller.
 
-Task progress is currently inferred and mutated across readiness, repository
-admission, worker records, lifecycle synchronization, repair, deployment control,
-GitHub, and Linear reporting. Each part has useful safeguards, but together they
-implement a distributed workflow engine whose ownership is difficult to follow.
+The controller runs as one supervised Python application on a small Azure VM.
+Its SQLite task database lives on a managed persistent disk attached to that host,
+not temporary storage, a shared filesystem, or a competing replica. The broker is
+a module of the same application. TLS ingress does not make task decisions.
+Only one application process owns task-state mutations; multiple repositories can
+still have independent active tasks. Slow external I/O must not block credential
+heartbeats or hold a database transaction open.
 
-The composite-action cleanup failure demonstrated the consequence: GitHub could
-fail before the reviewer started while the stored attempt and Linear still looked
-like a running reviewer. The cleanup fix (`22e265c`) and subsequent deployment
-cutover fix (`bffbb25`, KIAN-932) address specific defects. They do not establish
-one authority for the whole lifecycle or separate merges from runtime promotion.
+Constrain infrastructure to one authorized controller VM identity and exclusive
+disk attachment. A local database/process lock excludes competing local writers;
+it does not exclude a cloned VM with copied data or credentials. Deployment checks
+must also enforce the authorized host and remove a replaced host's authority.
 
-The Cursor profile-staging regression is also a scope and behavior problem. It
-needs a shared provider contract; a durable workflow engine alone cannot fix it.
+This is a deliberate trade: scheduled maintenance and a single controller host
+in exchange for avoiding distributed lifecycle writers and overlapping runtime
+versions. A VM introduces OS, disk, and backup administration. Validate those
+obligations and cost during the prototype before provisioning production. Do not
+quietly add autoscaling replicas, distributed leader election, or another database
+service if the single-host assumptions do not fit; revisit the design explicitly.
 
-## Architectural decision
+### Alternatives considered
 
-Use **Temporal Cloud** for durable orchestration, with trusted Python workflow and
-activity workers hosted in Azure. Keep fresh GitHub-hosted VMs for account preflight
-and agent execution. Keep the credential broker and useful provider/runtime code;
-replace the competing lifecycle writers rather than wrapping them in another layer.
+1. **Single controller and database:** strongest locality for admission, policy,
+   and atomic ownership. Its interface hides the coordination currently spread
+   across several modules. Host availability remains an explicit limitation.
+2. **GitHub-only orchestration:** a native job graph removes execution handoffs,
+   but Actions alone does not implement Linear priority/manual ordering,
+   dependencies, shared account ownership, or repository ownership through an
+   unresolved PR. Encoding those in labels/artifacts would recreate a scheduler.
+3. **One transition module inside Azure Functions:** improves logical ownership,
+   but scale-out handlers and partitioned Tables still require distributed write
+   fencing and cross-record coordination. This retains complexity we can remove
+   at the current scale.
 
-Temporal Cloud stores and coordinates durable execution. Our hosted workers still
-execute application code. Choose the smallest supported long-running Azure host
-for those trusted workers during the implementation spike. Self-hosted Temporal,
-Kubernetes, and replacing the GitHub coding sandbox are outside this rebuild.
-
-| Alternative | Decision |
-| --- | --- |
-| Consolidate the current Functions/Table orchestration | Insufficient: leaves custom scheduling, recovery, and deployment coordination to maintain. |
-| One controller with PostgreSQL | Simpler transactions, but still requires a custom durable execution engine. |
-| Azure Durable Functions | Credible Azure-native alternative; retain as a fallback if the Temporal spike exposes a concrete blocker. |
-| Temporal Cloud | Selected for durable histories, timers, recovery, and explicit worker-version routing. |
-
-The trade-off is a managed-service bill, hosting trusted workers, and learning
-deterministic replay and versioning. Measure expected usage and record a cost
-budget before production provisioning; do not assume polling or retained history
-is free. Revisit the choice only for a demonstrated technical or operational blocker.
+Choose the first design with the second design's native execution graph. This
+keeps one admission interface and removes the separate review-to-coding dispatch.
+GitHub concurrency is a secondary guard, not the application queue: even its
+larger queue has a finite limit and does not implement our admission policy.
 
 ```mermaid
 flowchart LR
-    L[Linear events and current issue state] --> S[Repository scheduler workflow]
-    S --> T[Task workflow]
-    T --> A[Trusted activity workers]
-    A --> G[Isolated GitHub jobs]
-    G --> B[Credential broker]
-    G --> P[PR and CI]
-    P --> A
-    G --> A
-    A --> T
-    T --> V[Linear status projection]
+    L[Linear issue facts and instructions] --> C[Single trusted controller]
+    C <--> D[(Transactional task database)]
+    C --> G[One pinned GitHub workflow]
+    G --> R[Review preflight and readiness]
+    R --> A[Coding preflight and agent]
+    A --> P[Validation and PR publication]
+    P --> H[GitHub checks and merge]
+    G --> B[Broker module in controller]
+    H --> C
+    C --> S[Current Linear status]
 ```
 
-## Ownership and interface
+## Prevent defects by construction
 
-| Module | Owns | Must not own |
+| Cause in the current design | Structural prevention | Evidence required before release |
 | --- | --- | --- |
-| Repository scheduler | Eligibility, priority/order, the active task grant, and verified slot release | Worker results, account credentials, or independent interpretations of task completion |
-| Task workflow | Durable phase, attempt history, timers, retry decisions, cancellation, and task outcome | Raw credentials or a second account-lease store |
-| Credential broker | Authenticated worker authorization, account leases/fencing, scoped token issuance | Another scheduler or repair policy |
-| Execution adapter | Dispatch/discovery, authenticated observations, isolated execution, publication receipts | Permission to start a replacement task on its own |
-| Linear projection | Converging issue status, owned labels, and one current status comment from task state | Inferring lifecycle independently from GitHub or triggering execution on reporting failure |
+| Queue, readiness, lifecycle sync, and repair independently interpret task state | One mutation interface and one transition implementation; other modules submit facts or render views | Dependency/import checks plus tests that every mutation passes through that interface |
+| State updates span independently committed lifecycle records | One local transaction owns task, repository grant, attempt identity, and action intent | Real SQLite constraint and transaction tests, including competing requests |
+| Readiness completion triggers another distributed dispatch decision | One GitHub run with explicit job dependencies | Hosted test proving coding cannot start without the valid readiness result |
+| Every main push changes the live control plane | Source merge builds a candidate; promotion is separate and explicit | A main-branch test proving no automatic deployment or resume is triggered |
+| Old and new runtime instances overlap | Full-drain runtime upgrades with one stopped old process before replacement | Tests for exclusive local ownership, authorized host identity, and deployment exclusion within the supported topology |
+| Target checkout operations remove or replace runtime files | Immutable runtime directory outside the agent's writable target tree, retained through cleanup | Actual hosted setup, execution, git-clean, and post-job cleanup tests |
+| Prompt edits become wire-protocol incompatibilities | Separate wire schema, policy revision, runtime release, and target commit | Compatibility tests for each declared change category |
+| Cursor develops a second account ownership lifecycle | One provider-neutral reservation/list/reclaim module | The same behavioral contract suite runs against both providers |
+| Mock tests pass while actual Actions setup is broken | Promote the exact artifact exercised on real runners | Release evidence includes the complete hosted run, including cleanup |
+| Status reporting changes execution decisions | Status is derived from committed task state and verified job/PR facts | A reporting outage cannot grant execution, overwrite results, or create another attempt |
 
-Expose a small task interface: `submit(request)`, `observe(evidence)`,
-`command(task_id, command)`, and `inspect(task_id)`. Names are illustrative; the
-contract is required. Callers must not need to coordinate readiness rows, queue
-rows, retry rows, and comments themselves. Tests exercise this same interface.
+## One small decision interface
 
-Ingress authenticates and validates events before submitting evidence. Repeated
-submissions use stable workflow identities. Temporal workflow code is deterministic;
-network calls and other side effects happen in activities behind explicit adapters.
-Use durable timers and signals, plus bounded reconciliation for missed events.
-Avoid introducing a second polling engine that independently advances tasks.
+Expose two entry points for callers:
 
-Define these identities before coding: repository, task generation, attempt,
-external effect, scheduler grant/epoch, runtime release, and policy revision.
-A GitHub attempt is a run ID plus its attempt number. Human resubmission is an
-explicit generation decision; duplicate webhooks do not create new generations.
+```python
+apply(command: Command) -> TaskView
+inspect(task_id: TaskId) -> TaskView
+```
 
-## Required lifecycle guarantees
+`Command` is a validated, authenticated union of issue observations, runner/PR
+observations, permitted worker requests, and operator commands. Callers cannot set
+arbitrary phases or grant themselves a role. Repeated delivery retains the same
+identity; a late observation includes its actual task, run, and attempt identity.
 
-1. **One effective task per repository.** The scheduler retains ownership through
-   review, execution, publication, CI, and merge resolution. A callback, expired
-   lease, or failed orchestration process does not prove that a runner stopped.
-   Release requires verified task-specific stop and publication conditions. Do not
-   release in an unconditional `finally` block.
-2. **One authoritative task history.** Separate task outcome, agent result,
-   GitHub job result, and PR/CI state. A successful publication followed by failed
-   cleanup retains its PR. A failed GitHub job cannot remain an unqualified
-   "running reviewer" after its terminal state is observed.
-3. **Explicit uncertainty.** Persist intent before each external mutation. Record
-   accepted, rejected, or unknown outcomes. An accepted dispatch with a lost
-   response is discovered using its stable identity; it is never blindly resent.
-   Startup fencing prevents duplicate deliveries from becoming duplicate workers.
-4. **Recover publication.** Reuse deterministic branch/PR identities and verify
-   existing results before any retry. Temporal activities may execute more than
-   once; durable execution does not make external effects exactly once.
-5. **Bound retries by cause.** Retry transient observations safely. Retry execution
-   only after previous attempts are proven stopped and the relevant authorization
-   still holds. Use explicit budgets for infrastructure retries, provider waits,
-   and coding repair. Repeated deterministic release failures open a circuit
-   breaker for affected admissions and produce an actionable hold.
-6. **Preserve authorization.** Keep current eligibility, dependency, readiness,
-   issue-change, repository-context, and publication guards. Snapshot policy and
-   runtime versions separately from the target repository commit. Ordinary policy
-   rollout does not silently rewrite an existing task's history or approval.
-7. **Cancellation is a process.** Record cancellation, stop external work, reconcile
-   its final state, and resolve any PR before releasing ownership. A cancellation
-   acknowledgement alone does not prove cleanup or stop completion.
-8. **Pauses have independent owners.** Operator halt, deployment drain, and automatic
-   failure holds are distinct durable controls. Clearing a deployment's own hold
-   cannot clear an operator halt. Holds survive restarts and have visible reasons;
-   elapsed time or a health response never grants resume authority.
+Inside the module, a pure function maps a committed snapshot and typed command to
+an allowed transition and narrowly described effects. It performs no network I/O,
+loads no mutable configuration, and reads no ambient time. Time and external facts
+arrive as validated inputs. External adapters execute effects outside transactions.
 
-Normal task progression is eligibility/queue → readiness → account selection →
-execution → validation/publication → CI/merge resolution → completion. Waiting,
-clarification, cancellation, failure, and uncertain dispatch are explicit states
-with evidence and recovery rules, rather than generic retries of the entire chain.
-Keep durable waits outside GitHub jobs so idle runners do not consume capacity.
+Use immutable typed records, tagged states, exhaustive handling, strict static
+type checks, and versioned validation at transport seams. Unknown fields, values,
+and unsupported combinations produce explicit results at ingress. Avoid loose
+state dictionaries with independently combinable flags.
 
-## Credentials, providers, and execution
+The database enforces foreign keys, valid state values, unique task generations,
+one current repository grant, and unique external-effect identities. Existing
+account leases remain broker-owned resource state; do not create a second copy in
+the task database. Credentials never enter the task history or status projection.
+SQLite does not transact atomically with Azure account leases. Keep that resource
+seam explicit: verify the current task/phase grant before new claims and token
+issuance, preserve fenced credential saves/releases, and never treat a lease as
+task admission. Account storage cannot independently advance the task lifecycle.
 
-- Preserve the separate ephemeral preflight and coding VMs. Pool inspection belongs
-  only to authenticated preflight; coding receives only its assigned account.
-- Preserve fenced credential updates, lease-loss handling, scoped GitHub tokens,
-  sandbox validation, and the publication credential guard. An account lease is
-  not proof of repository admission or proof that another runner has stopped.
-- Keep secrets, OAuth caches, private keys, and raw transcripts out of Temporal
-  history, search attributes, logs, and artifacts. Persist only necessary IDs,
-  hashes, bounded sanitized decisions, and references to protected larger inputs.
-- Bind runner access to authenticated GitHub/OIDC identity, the approved runtime
-  release, target repository, grant, task, and attempt. Request fields cannot
-  grant a role or choose an arbitrary repository. A central runtime workflow must
-  preserve these checks if its repository differs from the target repository.
-- Keep runtime files separate from the target checkout for the complete job,
-  including composite-action post-job cleanup. Repository cleanup must not remove
-  runtime actions or execute a target repository's replacement worker implementation.
-- Use one enrollment/list/reserve/reclaim contract for Codex and Cursor. Reserved
-  profiles remain visible in their normal location. Normal reservation does not
-  require moving credentials, staging, a validation probe, or a new unblock step.
-  Provider adapters contain actual authentication, CLI, quota, and execution differences.
-- Preserve current narrowly authorized account failover semantics. Do not turn
-  generic rate limits, auth failures, or infrastructure retries into permission to
-  change accounts or transfer sessions between providers.
+This is a fixed application lifecycle, not an extensible workflow language.
+Do not introduce arbitrary step graphs, plugin-defined phases, generic retries,
+multiple scheduling loops, or background modules that independently advance work.
 
-Detailed current safeguards are owned by
-[accounts](docs/remote-development-accounts.md),
-[runtime](docs/remote-development.md), and
-[repository queues](docs/remote-development-queue.md). Characterize them before
-replacement so the rebuild does not quietly drop behavior or broaden authority.
+## A task is a validated specification
 
-## Release and deployment model
+Before dispatch, construct a typed task specification containing the issue and
+content revision, target repository/base commit, runtime release, policy revision,
+permitted provider/model configuration, validation commands, publication scope,
+and execution budget. It contains references and hashes rather than credentials.
+Validate project configuration when registering a project and building a release.
 
-Separate source merge, artifact build, verification, promotion, and task admission.
-CI on a merge may build a candidate; it must not automatically replace production
-execution machinery or run infrastructure reconciliation for unrelated changes.
+Readiness produces a validated proof for that specification. Coding and publication
+check that proof and current authorization at their required checkpoints. A job
+output or agent statement alone cannot authorize work. Material issue/context
+changes follow one explicit invalidation rule owned by the transition module.
+Steering stays a separately authorized instruction stream; freezing a specification
+does not silently disable live instructions.
 
-An immutable release manifest identifies the controller implementation, broker
-compatibility, runner bundle and reusable workflow revisions, provider CLI pins,
-wire-protocol/schema version, and policy revision. Bind workflow references to
-verified commits; do not assume the workflow-dispatch API accepts an arbitrary
-SHA as its `ref`. Where dispatch uses a protected tag, verify its resolved commit.
+GitHub owns job execution facts. The controller stores their identities and latest
+verified observations; it does not maintain another independently advancing job
+engine. Distinguish orchestration phase, agent result, job conclusion, and PR state.
+Completion requires the applicable verified merge or validated no-change outcome.
+An agent saying it finished is insufficient. A failed check remains a real failure
+in the record and metrics, even if the controller handles its result correctly.
 
-New task workflows use the promoted compatible release. Existing tasks retain
-their version and supporting workers until finished or explicitly migrated using
-a tested procedure. Retain old broker compatibility while those tasks drain.
-Keep the repository scheduler's long-lived versioning/history rollover deliberate;
-it must not pin all future tasks to its original release accidentally.
+## One native execution graph
 
-Test the exact candidate artifacts before promotion. A health response from one
-new process is not proof that all old instances disappeared. Old/new overlap must
-be safe by construction. Rollback changes new-task admission and release routing;
-it cannot undo PRs, merges, or other effects that already occurred.
+The normal task attempt uses one pinned workflow with explicit dependencies:
 
-## Status and operator recovery
+1. Review account preflight on its own fresh VM.
+2. Read-only readiness on another VM with only its assigned account.
+3. Coding account preflight on its own fresh VM after a passing review.
+4. Coding, configured validation, and guarded publication on another VM with only
+   its assigned account.
 
-Maintain one stable current-status comment per issue. Derive its phase, latest
-meaningful progress, run/PR links, hold reason, and next action from authoritative
-task state. Preserve separate substantive review feedback and human replies;
-supersede obsolete waiting notices instead of generating another one every retry.
-Projection failure is reporting debt, not execution failure or permission to rerun.
+GitHub orders these jobs. The broker independently verifies the readiness proof,
+current repository grant, signed workflow role, run/attempt, and runtime identity.
+Manual reruns cannot inherit the wrong attempt's account assignment or skip a
+required authorization check.
 
-Provide an authenticated local/operator interface for `inspect`, `pause`,
-`reconcile`, `retry`, and `resume`, independent of an agent processing a Linear
-issue. Include bounded diagnostics, evidence freshness, and an audit of mutations.
-Do not require table edits, fabricated callbacks, or manual approval-bit changes.
-Retry still requires verified stop/publication state and valid authorization.
-If the durable engine is unavailable, retain safe holds and report stale evidence;
-do not invent a bypass scheduler.
+Account bindings are scoped by task, run, attempt, and review/coding phase. The
+current whole-run binding cannot be reused unchanged for both phases. Give review
+and coding preflight/agent roles distinct signed reusable-workflow identities;
+a client-supplied phase field cannot authorize a role. Test wrong-phase requests,
+independent same-run bindings, and partial/manual reruns explicitly.
 
-Set explicit observation deadlines and freshness rules. Initial acceptance target:
-with healthy integrations, a terminal GitHub result appears in task state and the
-current Linear status within two minutes. Outages must show unavailable/stale
-evidence; they must not be presented as confirmed ongoing work. Measure API calls,
-Temporal actions, and idle behavior before choosing final reconciliation intervals.
+The repository grant remains owned by the controller through PR/CI/merge resolution
+after runners stop. No GitHub runner waits idle for human review or quota. Existing
+bounded repair and provider-capacity policies, if retained by the behavior contract,
+are explicit actions of this same task module; they do not create another owner.
 
-## Verification and release gates
+Keep provider CLIs and native sandbox setup in the tested release contract. Pin
+package dependencies and action commits. Avoid downloading a floating latest
+runtime during a task. A changed hosted-runner environment must pass local
+capability checks before account access; a successful canary is evidence for its
+tested environment, not a guarantee that GitHub's future environment cannot change.
 
-Keep useful security and provider tests. Replace duplicated lifecycle mocks with
-tests through the task interface and real Temporal workflow/replay tests. Use
-deterministic fake adapters for faults, then contract tests for real integrations.
-A passing mock suite is insufficient for promotion.
+## Preserve the intended product
 
-| Injected event or failure | Required result |
-| --- | --- |
-| Controller/activity process dies before or after an effect | Durable recovery preserves intent and reconciles the effect without duplicate work. |
-| GitHub accepts dispatch but its response is lost | Discover the existing run; keep the repository held while evidence is incomplete. |
-| Duplicate webhook, callback, or manual job rerun | Stable identities and grants admit at most one effective worker. |
-| Old attempt reports after a newer attempt exists | Preserve current ownership; stale evidence cannot authorize or overwrite current work. |
-| Preflight succeeds but coding never starts | Observe the terminal job, explain the actual failure, and apply only the bounded startup policy. |
-| Runner dies without its finish callback | Recover from GitHub and publication evidence; do not leave an unqualified running state. |
-| PR is published, then cleanup or outcome persistence fails | Recover that PR; do not publish another or discard the successful effect. |
-| Deployment overlaps a task or an old broker remains alive | Compatible version routing preserves task execution and prevents unauthorized starts. |
-| Issue, dependency, or target context changes | Apply the documented authorization/invalidation rules at the required checkpoints. |
-| Account lease is lost, quota exhausted, or credentials invalid | Stop or wait according to the explicit cause; preserve fencing and provider isolation. |
-| Linear reporting is unavailable or a stale write lands late | Retain authoritative task state and converge the same projection after recovery. |
-| Operator halts, then code is deployed or a resume event repeats | Operator halt remains effective until the corresponding operator resume. |
-| Operator cancels during dispatch, coding, or publication | Verify all external attempts and PR disposition before releasing repository ownership. |
-| Identical runtime defect repeats | Open the release circuit breaker and report the recovery action instead of looping forever. |
-| Cursor or Codex is reserved and reclaimed | The same local visibility and ownership contract holds for both providers. |
+Before coding, inventory current user-visible behavior and classify every item as
+preserved, consolidated, or an explicitly proposed behavior change. Removing a
+feature is not evidence that its implementation became more reliable. The minimum
+contract includes:
 
-A disposable live task must exercise actual webhook ingestion, scheduling,
-readiness, separate account preflight, agent execution, validation, PR creation,
-required CI/merge behavior, credential release, and GitHub post-job cleanup. Run
-representative failure cases on the same candidate release. Use ordinary guarded
-execution paths; do not create a privileged canary-only path. Bound provider use
-and keep test repositories, issues, accounts, and artifacts explicitly scoped.
+- Automatic Linear admission, project enrollment, priority/manual-order/FIFO queue
+  policy, dependencies, and one active task per repository through PR resolution.
+- Readiness and clarification, issue/image/context binding, validation commands,
+  publication checks, configured merge behavior, and accurate Linear progression.
+- Authorized steering, cancellation, and independent operator/deployment holds.
+- Current provider-selection, quota, account-refresh, and narrowly permitted
+  failover semantics; shared profiles remain visible and reclaimable as intended.
+- Separate preflight and agent VMs, signed roles, assigned-account-only coding,
+  scoped GitHub permissions, secret protection, fenced account updates, sandbox
+  checks, and publication credential scanning.
 
-## Implementation sequence
+Provider adapters contain authentication, CLI, quota, and execution differences.
+They cannot invent profile relocation, staging, a new approval flow, or a separate
+unblock operation. A feature needing a different lifecycle must be proposed as a
+product change before it is implemented. Changes to workflow/credential behavior
+are highlighted in review rather than hidden inside a general refactor.
 
-### 0. Establish the halt and baseline
+## Runtime releases cannot change themselves
 
-- [ ] Verify the owner's operational halt and identify any running/queued jobs,
-  unresolved dispatches, open PRs, and occupied accounts without changing credentials.
-- [ ] Ensure routine pushes/deployments cannot clear that halt. Record how current
-  tasks will finish or be safely canceled before cutover.
-- [ ] Inventory current lifecycle writers, safeguards, policies, and external-effect
-  identities; capture redacted incident fixtures and retained data references.
+Separate ordinary repository work from the deployed automation release. An agent
+may propose runtime changes in a PR, but neither merging that PR nor processing
+another issue promotes it. Keep runtime policy/schema changes separate from wire
+compatibility. All jobs in an attempt use the same verified release.
 
-Exit: production admission is verifiably held, existing work is accounted for, and
-the behavior to preserve is explicit. This planning commit alone does not pass this gate.
+Build once, test that artifact, and promote that artifact. The release manifest
+binds controller/broker code, runner bundle, workflow/action commits, provider CLI
+pins, schema, and policy. It includes checksums and test evidence. Dispatch refs
+must resolve to the verified workflow commit; a floating target branch cannot
+select the runtime implementation.
 
-### 1. Prove the durable workflow design
+Use this maintenance procedure instead of rolling version coexistence:
 
-- [ ] Pin the Python SDK and supported worker-versioning configuration; choose the
-  trusted worker host and record permissions, deployment configuration, and budget.
-- [ ] Implement the repository scheduler/task workflow interface in a local or
-  isolated development environment with real Temporal execution.
-- [ ] Prove restart/replay, durable waits, duplicate submissions, grant handoff,
-  cancellation, version coexistence, and bounded history rollover.
-- [ ] Define typed observations, effect identities, retry classes, and release/policy
-  schemas. Keep external I/O out of workflow code.
+1. Preserve the operator halt and stop admitting new work.
+2. Finish or explicitly stop existing attempts and resolve their PR ownership;
+   verify all recorded/discoverable attempts and account users are stopped.
+3. Stop the old controller; assert exclusive ownership of its local database.
+4. Install the exact tested release and apply its validated database migration.
+5. Start one controller with the operator halt intact. Resume only by an explicit
+   operator action after verification.
 
-Exit: the core lifecycle survives injected process failures without relying on
-the old lifecycle writers or multiple independent interpretations of task state.
+No source push, health response, deployment completion, or delayed event clears
+an operator halt. Infrastructure maintenance follows its own reviewed path.
+Planned runtime downtime is intentional; ordinary task work does not deploy the
+runtime. Keeping multiple live runtime versions is outside this design's operating
+model and would require a new architecture decision.
 
-### 2. Integrate execution and preserve safeguards
+## Prove the important properties before live use
 
-- [ ] Adapt GitHub dispatch/discovery, the broker, provider selection, readiness,
-  execution, publication, and steering to the new task interface.
-- [ ] Implement stable dispatch/publication recovery and enforce grants at worker
-  startup, account access, and publication.
-- [ ] Preserve existing provider/security behavior with characterization and
-  contract tests, including Codex/Cursor reservation parity.
-- [ ] Implement the single Linear projection and operator commands.
+Use several kinds of evidence, each for the claim it can actually support:
 
-Exit: one isolated task completes through real adapters and every authority has
-one owner. No legacy scheduler or reconciler concurrently controls that task.
+1. **Transition coverage and bounded model checking.** Enumerate supported phases,
+   typed inputs, duplicate/stale observations, and resource combinations through
+   the real pure decision function. Check independent invariants, not assertions
+   copied from implementation branches. Record model bounds and assumptions.
+2. **Property-based sequences.** Generate event orderings and malformed inputs.
+   Verify uniqueness, authorization, task identity, state progression, and stable
+   projection. Known bad mutations must produce a counterexample. A clean bounded
+   model proves only its modeled cases, not all Python code or external behavior.
+3. **Real persistence tests.** Use actual SQLite files, transactions, constraints,
+   migrations, and process ownership. Dictionary mocks do not establish atomicity.
+4. **Integration contracts.** Exercise production parsing, schemas, permission
+   checks, workflow generation, and provider adapters against representative inputs
+   and scoped real integrations. Share tests across Codex and Cursor.
+5. **Hosted release acceptance.** Use the candidate's actual artifacts and ordinary
+   guarded execution path in disposable repositories/issues. Complete readiness,
+   both preflights, coding, validation, PR/check/merge behavior, account release,
+   status projection, and post-job cleanup. Test both providers independently.
 
-### 3. Build release promotion and prove recovery
+Required invariants include one current task per repository, no coding/publication
+without its evidence and grant, no cross-account credential access, no stale
+attempt overwriting current ownership, no source merge changing the executing
+runtime, no deployment clearing an operator halt, and no successful completion
+inferred from a missing or incomplete external observation.
 
-- [ ] Separate merge/build from production promotion and infrastructure changes.
-- [ ] Implement immutable release manifests, compatible worker/broker routing,
-  independent hold ownership, release circuit breaking, and rollback controls.
-- [ ] Run the failure matrix, replay compatibility tests, and complete live canary
-  on exact candidate artifacts, including post-job cleanup and terminal status repair.
-- [ ] Record sanitized evidence: release IDs, test results, run/PR links, recovery
-  times, API/action usage, and remaining limitations.
+For each incident class, include a test that fails against the defective behavior:
+Cursor reservation changes, removed composite-action manifests, mixed release
+startup, stale running-review status, and reporting errors affecting admission.
+Test successful progression as well as prohibitions; blocking every task is not
+an acceptable way to satisfy safety invariants.
 
-Exit: the release gate demonstrates a complete hosted lifecycle and recovery from
-representative faults; an operator can diagnose and recover it without an agent issue.
+## Scope of interruption handling
 
-### 4. Cut over Clusterfork and retire the old engine
+External outages and hardware/process termination remain possible. Keep the
+minimum necessary discipline: persist action identity before effects, do not
+redispatch an uncertain mutation, preserve published results, and show accurate
+unavailable/failed evidence. Do not add an automatic repair platform or use
+successful retries as the primary evidence for this design. Database backup and
+host administration are ordinary operating requirements, not a zero-failure proof.
 
-- [ ] Drain or safely cancel old work; verify all recorded and discoverable attempts
-  stopped and resolve PR ownership before transferring a repository.
-- [ ] Import only necessary pending intent and durable references. Preserve queue
-  order, completed generations, credentials, and unresolved publication identity.
-  Do not reinterpret an unknown old dispatch as permission to start new work.
-- [ ] Disable old admission/reconciliation writers before enabling the new owner.
-  Never run both engines as active writers for the same repository.
-- [ ] After phases 0–3 pass, explicitly admit one controlled Clusterfork pilot
-  while keeping its general backlog halted. Verify the result and retain an
-  audited route to halt and reconcile during rollback.
-- [ ] Remove superseded timers, tables/writers, workflows, and retry/reporting paths
-  after verifying no active references remain. Retain necessary audit history;
-  account/credential storage is not obsolete orchestration data.
-- [ ] Update each owning documentation topic and operating instructions to match
-  shipped behavior, then mark this plan complete with verification evidence.
+## Implementation sequence and gates
 
-After the cutover gate passes, the operator can explicitly resume the backlog.
-Routine deployments cannot perform this action on the operator's behalf.
+### 0. Agree the contract and remove unnecessary states
 
-Exit: one production lifecycle authority, a tested release process, working
-operator recovery, and no legacy orchestration running beside the replacement.
+- [ ] Verify the cloud halt and account for existing runs, dispatches, and PRs.
+- [ ] Inventory current behavior, state owners, special cases, and actual incidents.
+- [ ] Write the ownership table, task/attempt identities, typed transition graph,
+  invariant list, and provider contract before choosing implementation shortcuts.
+- [ ] Record the single-host/maintenance trade-off and estimate Azure operating cost.
 
-## Completion criteria
+Gate: the replacement preserves the intended workflow and identifies which
+coordination paths it will delete. Any product behavior changes are explicit.
 
-The rebuild is complete only when all phase gates pass, every failure-matrix row
-has recorded test evidence, the candidate completes a real disposable task, and
-the controlled production pilot passes. Production resume must preserve any other
-active operator holds. Do not declare success from unit-test counts, a deployment
-success, one health response, or a worker's finish callback alone.
+### 1. Implement and check the decision module
 
-## Design references
+- [ ] Build the pure transition function and `apply`/`inspect` interface.
+- [ ] Implement schema constraints and one local mutation owner using real SQLite.
+- [ ] Add static checks, bounded model enumeration, independent invariant tests,
+  negative cases, and known-defect mutations that the tests must reject.
+- [ ] Compile project/task/release configuration into validated typed specifications.
 
-- [Temporal worker hosting and deployment](https://docs.temporal.io/production-deployment/worker-deployments)
-- [Temporal worker versioning](https://docs.temporal.io/production-deployment/worker-deployments/worker-versioning)
-- [Temporal activity retry and idempotency semantics](https://github.com/temporalio/documentation/blob/main/docs/encyclopedia/activities/activity-definition.mdx)
-- [Azure Durable Functions overview](https://learn.microsoft.com/en-us/azure/durable-task/durable-functions/durable-functions-overview)
+Gate: no ambiguous ownership or unsupported state combination in the declared
+model; valid tasks also progress. Record the limits of the evidence.
 
-Verify current SDK/platform support during the implementation spike. These links
-support the design direction; they are not evidence that this rebuild is deployed.
+### 2. Assemble one execution path
+
+- [ ] Build the pinned GitHub job graph with separate trust roles and VMs.
+- [ ] Integrate the broker, provider adapters, publication, steering, and one Linear
+  projection through the task interface. Preserve the behavior contract.
+- [ ] Test the exact runtime/target layout and actual post-job cleanup.
+- [ ] Remove independent lifecycle decisions from old adapters; do not leave them
+  alive underneath a new controller facade.
+
+Gate: a disposable task completes through the new implementation, with all
+capabilities and permissions attributable to the declared owners.
+
+### 3. Build the prevention gate for releases
+
+- [ ] Separate merge/build, promotion, infrastructure changes, and operator resume.
+- [ ] Bind exact artifacts, workflow commits, schemas, policies, and CLI versions.
+- [ ] Test exclusive database ownership, one authorized host identity, replacement
+  authority removal, and prevention of overlapping releases in the supported topology.
+- [ ] Run the complete local, contract, provider, and hosted acceptance checks;
+  record links, hashes, model bounds, test results, and remaining limitations.
+
+Gate: the release is validated before activation, and every identified incident
+class has a demonstrated prevention check. A test count or health response is insufficient.
+
+### 4. Replace the old implementation at an idle boundary
+
+- [ ] Resolve old external work, preserve pending order and completed identities,
+  and transfer only the necessary task references. Preserve credential storage.
+- [ ] Disable old writers before activating the single controller. Never let both
+  implementations own a repository, account authorization, or task progression.
+- [ ] Run one controlled production pilot while the general backlog remains held.
+- [ ] Remove obsolete Functions/timers/queues/lifecycle writers and task-state
+  resources only after verifying their references are gone. Keep required account
+  storage and audit history; do not delete runtime data as an incidental cleanup.
+- [ ] Update each owning documentation topic to the shipped behavior and record
+  acceptance evidence. Explicitly resume the backlog after the cutover gate passes.
+
+Gate: one task authority, one tested runtime release, one execution path, accurate
+status, preserved product behavior, and no legacy engine operating beside it.
+
+## References and evidence limits
+
+- [SQLite deployment suitability](https://www.sqlite.org/whentouse.html) and
+  [transactional constraints](https://www.sqlite.org/partialindex.html).
+- [GitHub workflow concurrency semantics](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+- [Azure persistent versus ephemeral storage](https://learn.microsoft.com/en-us/azure/virtual-machines/ephemeral-os-disks).
+- [Finite-state model checking scope](https://docs.tlapl.us/using%3Atlc%3Astart).
+- [End-to-end simplicity as a reliability principle](https://sre.google/workbook/simplicity/).
+
+These sources inform the design; they do not establish that this proposal has
+been implemented or that any cloud system can provide an unconditional absence
+of failures. Current shipped behavior remains owned by [docs/README.md](docs/README.md).
