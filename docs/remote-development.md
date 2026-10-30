@@ -141,7 +141,7 @@ issue to Todo to request its new review; the rerun cannot grant itself a pass.
 `automation/worker.py` and shared policy code on every mapped repository's
 workflow branch. The broker and runner require the
 `readiness-v1:<contract hash>` start protocol (including the prompt, schema,
-budget, `repository-selection-v1`, `linear-steering-v1`, and `auto-repair-v1` contracts) and an explicit
+budget, repository selection, steering, auto-repair, and worker recovery contracts) and an explicit
 broker-selected phase. An old runner is denied start; a new runner receiving an
 old broker response stops before execution. Selection reporting versions this
 hash too: Azure and every workflow branch need matching shared policy/reporting
@@ -298,7 +298,7 @@ label on the issue:
 Stage changes replace only these owned labels; other issue labels are preserved.
 Completion and blockers clear the stage label. PR/CI reconciliation can restore
 the review label when a blocker clears. This does not create a separate review
-agent; checks inside the coding session are part of the coding stage.
+agent; validation and any correction turns use the same conversation and workspace.
 
 After selection and the final quota recheck, a separate start comment records
 the account email (when available), stable account identity, plan, agent, model,
@@ -384,12 +384,20 @@ Changing generation permits **all** eligible issues to dispatch again.
 Each project can set `agent_timeout_minutes` in `automation/azure/projects.json`.
 The default is **300 minutes (five hours)**; allowed values are integers from 1
 through 330. The hosted job allows **360 minutes (six hours)**, leaving time for
-setup, validation, and publication. GitHub-hosted jobs have a
+setup and publication. Coding, account failover, validation, and correction turns
+share the agent deadline. GitHub-hosted jobs have a
 [six-hour execution ceiling](https://docs.github.com/en/actions/reference/limits).
 Settings are read when a worker starts; changing them does not extend an already
 running attempt. Automatic checkpoint/continuation across jobs is not implemented.
 
-Configured validation commands run after the agent finishes. Publication rechecks
+After each coding turn, the live agent session checks Git history/branch integrity,
+workflow permissions, all configured validation commands, and staged publication
+credentials. A failed check returns its identity, exit code when available, and
+[scrubbed failure evidence](remote-development-observability.md#failure-explanations)
+to the same conversation. At most **two correction turns** may fix the existing
+workspace under the original deadline and active account/worker heartbeats. Every
+gate runs again after each correction; account failover retains this shared budget.
+Publication rechecks
 current project enrollment and status, pushes a separate branch, opens a PR, and requests the
 configured merge policy. GitHub waits for required checks before automatic merging.
 Both readiness and coding prompts receive the broker's current workflow-publication
@@ -402,6 +410,17 @@ owns publication token scope.
 Coding quota failures resume the persistent conversation on another account;
 [accounts](remote-development-accounts.md#coding-account-failover) owns that boundary.
 Linear credentials stay in Azure, outside the agent.
+
+If execution fails after coding starts, the worker attempts to preserve uncommitted
+or unpushed work before runner exit. It verifies the expected worker branch and
+HEAD, enforces workflow permissions, and scans both staged and committed changes
+with the publication guard. Clean changes are committed as `clusterfork[bot]` and
+pushed to the task branch when no open PR exists. An open PR instead receives a
+separate `clusterfork-wip/<identifier-lowercase>-<target_key[:8]>` branch, preserving
+its existing head. Failed finish callbacks retain `wip_branch` and `wip_commit_sha`
+only after a successful push. A denied scan, lost publication permission, or push
+failure leaves the original execution failure intact. Preserved WIP does not establish
+successful validation or publication and never opens a PR or requests a merge.
 
 Azure Table `ClusterforkDispatches` records `dispatching`, `dispatched`, `rejected`, or
 `uncertain`. `dispatched` means GitHub accepted the request; verify actual runner

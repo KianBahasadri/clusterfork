@@ -162,7 +162,94 @@ class DiagnosticsTests(unittest.TestCase):
                            diagnostic_operation="validation/1")
         self.assertEqual(caught.exception.clusterfork_failure["exit_code"], 7)
         self.assertIn("elapsed_ms", caught.exception.clusterfork_failure)
+        self.assertIn("SECRET-output", caught.exception.clusterfork_failure["failure_output"])
         self.assertNotIn("SECRET", "\n".join(logged.output))
+
+    def test_private_command_tails_refresh_and_scrub_runtime_and_static_credentials(self):
+        for name in ("validation/1", "command/git", "command/gh", "command/codex", "http/oidc"):
+            with self.subTest(operation=name), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "auth.json"
+                path.write_text(json.dumps({"access_token": "opaque-old-login"}))
+                guard = worker.PublicationGuard({"GH_TOKEN": "opaque-job-login"})
+                guard.capture_auth(path)
+                script = (f"from pathlib import Path; Path({str(path)!r}).write_text("
+                          "'{\"access_token\": \"opaque-refreshed-login\"}'); "
+                          "print('Traceback-marker opaque-old-login opaque-refreshed-login opaque-job-login "
+                          "ghp_synthetic lin_api_synthetic sk-synthetic Bearer opaque-header "
+                          "Basic opaque-basic api_key=opaque-key password=opaque-password'); raise SystemExit(7)")
+                stdout, stderr = io.StringIO(), io.StringIO()
+                with guard.watch_auth(path), patch("sys.stdout", stdout), patch("sys.stderr", stderr), \
+                     self.assertLogs(level="ERROR") as logs, self.assertRaises(worker.WorkerFailure) as caught:
+                    worker.command([sys.executable, "-c", script], diagnostic_operation=name, publication_guard=guard)
+                data = caught.exception.clusterfork_failure
+                if name in ("command/codex", "http/oidc"):
+                    self.assertNotIn("failure_output", data)
+                else:
+                    tail = data["failure_output"]
+                    self.assertIn("Traceback-marker", tail)
+                    self.assertIn("[REDACTED]", tail)
+                    for value in ("opaque-", "ghp_synthetic", "lin_api_synthetic", "sk-synthetic"):
+                        self.assertNotIn(value, tail)
+                self.assertNotIn("Traceback-marker", "\n".join(logs.output) + stdout.getvalue() + stderr.getvalue())
+
+    def test_command_failure_tails_are_byte_bounded_nul_free_and_kept_on_timeout(self):
+        for timeout in (False, True):
+            with self.subTest(timeout=timeout), self.assertLogs(level="ERROR"), self.assertRaises(worker.WorkerFailure) as caught:
+                script = ("import sys, time; sys.stdout.buffer.write(b'earlier-output' + 'é'.encode() * 16000 "
+                          "+ b'\\x00Traceback-tail\\n'); sys.stdout.flush(); "
+                          + ("time.sleep(10)" if timeout else "raise SystemExit(3)"))
+                worker.command([sys.executable, "-c", script], timeout=0.2 if timeout else 5,
+                               diagnostic_operation="validation/1")
+            data = caught.exception.clusterfork_failure
+            self.assertEqual(data["kind"], "timeout" if timeout else "command_failed")
+            self.assertLessEqual(len(data["failure_output"].encode()), 16_000)
+            self.assertNotIn("\x00", data["failure_output"])
+            self.assertNotIn("earlier-output", data["failure_output"])
+            self.assertIn("Traceback-tail", data["failure_output"])
+
+    def test_unreadable_auth_cache_withholds_output_and_keeps_original_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            guard = worker.PublicationGuard({})
+            path = Path(directory) / "auth.json"
+            path.write_text("not valid auth")
+            with guard.watch_auth(path), self.assertLogs(level="ERROR"), self.assertRaises(worker.WorkerFailure) as caught:
+                worker.command([sys.executable, "-c", "print('private'); raise SystemExit(4)"],
+                               diagnostic_operation="validation/1", publication_guard=guard)
+            self.assertEqual(caught.exception.clusterfork_failure["exit_code"], 4)
+            self.assertNotIn("failure_output", caught.exception.clusterfork_failure)
+
+    def test_nul_removal_cannot_reconstruct_a_credential_after_scrubbing(self):
+        guard = worker.PublicationGuard({"GH_TOKEN": "opaque-job-login"})
+        self.assertEqual(guard.scrub("opaque-\x00job-login ghp_\x00synthetic"), "[REDACTED] [REDACTED]")
+
+    def test_main_applies_the_broker_credential_guard_to_readiness_git_failures_too(self):
+        broker = self.broker()
+        config = {"serial_admission": True, "protocol": worker.PROTOCOL, "phase": "readiness",
+                  "account_selection": False, "account_id": "a" * 64}
+        def review(*args):
+            broker.publication_guard.remember("opaque-checkout-login")
+            worker.command([sys.executable, "-c", "print('private-tail opaque-checkout-login'); raise SystemExit(2)"],
+                           diagnostic_operation="command/git")
+        with patch.dict(os.environ, {"CLUSTERFORK_BROKER_URL": broker.url, "DISPATCH_KEY": KEY}), \
+             patch.object(worker, "Broker", return_value=broker), \
+             patch.object(worker, "json_request", side_effect=[config, {"status": "failed"}]) as request, \
+             patch.object(worker, "review_readiness", side_effect=review), patch("sys.stderr", io.StringIO()), \
+             self.assertLogs(level="ERROR") as logs:
+            self.assertEqual(worker.main(), 1)
+        sent = request.call_args.args[2]["failure"]
+        self.assertEqual(sent["failure_output"], "private-tail [REDACTED]\n")
+        self.assertNotIn("private-tail", "\n".join(logs.output))
+
+    def test_failure_output_boundary_rejects_invalid_shapes_and_scrubs_again(self):
+        safe = {"operation": "validation/1", "kind": "command_failed"}
+        accepted = diagnostics.validate_failure({**safe, "failure_output": "Traceback ghp_synthetic api_key=example"})
+        self.assertEqual(accepted["failure_output"], "Traceback [REDACTED] api_key=[REDACTED]")
+        for extra in ({"failure_output": "x" * 16001}, {"failure_output": "é" * 8001},
+                      {"failure_output": "null\x00"}, {"failure_output": 12},
+                      {"operation": "command/codex", "failure_output": "private"},
+                      {"operation": "http/oidc", "failure_output": "private"}):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                diagnostics.validate_failure({**safe, **extra})
 
     def test_cleanup_cannot_replace_original_validation_failure(self):
         broker = Mock(publication_guard=worker.PublicationGuard({}))
@@ -180,21 +267,27 @@ class DiagnosticsTests(unittest.TestCase):
         broker.call.return_value = {"serial_admission": True, "protocol": worker.PROTOCOL, "phase": "development",
                                    "account_selection": False, "account_id": "a" * 64}
         error = TimeoutError("SECRET")
-        error.clusterfork_failure = {"operation": "broker/github", "kind": "timeout", "stage": "publishing",
-                                     "elapsed_ms": 20001, "timeout_seconds": 20}
+        error.clusterfork_failure = {"operation": "validation/1", "kind": "timeout", "stage": "publishing",
+                                     "elapsed_ms": 20001, "timeout_seconds": 20, "failure_output": "Private-traceback"}
+        error.clusterfork_wip = {"wip_branch": "clusterfork/kian-891-aaaaaaaa", "wip_commit_sha": "b" * 40}
         with tempfile.TemporaryDirectory() as directory:
             summary = Path(directory) / "summary.md"
             with patch.dict(os.environ, {"CLUSTERFORK_BROKER_URL": "unused", "DISPATCH_KEY": KEY,
                                          "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_STEP_SUMMARY": str(summary)}), \
                  patch.object(worker, "Broker", return_value=broker), patch.object(worker, "execute", side_effect=error), \
-                 patch("sys.stderr", io.StringIO()) as stderr, self.assertLogs(level="ERROR"):
+                 patch("sys.stdout", io.StringIO()) as stdout, patch("sys.stderr", io.StringIO()) as stderr, \
+                 self.assertLogs(level="ERROR") as logs:
                 self.assertEqual(worker.main(), 1)
             sent = broker.call.call_args.kwargs
             self.assertEqual(sent["status"], "failed")
-            self.assertEqual(sent["failure"]["operation"], "broker/github")
+            self.assertEqual(sent["failure"]["operation"], "validation/1")
+            self.assertEqual(sent["failure"]["failure_output"], "Private-traceback")
+            self.assertEqual(sent["wip_branch"], error.clusterfork_wip["wip_branch"])
+            self.assertEqual(sent["wip_commit_sha"], "b" * 40)
             self.assertIn("publication", summary.read_text())
             self.assertIn("20.001s", summary.read_text())
             self.assertNotIn("SECRET", summary.read_text() + stderr.getvalue())
+            self.assertNotIn("Private-traceback", summary.read_text() + stderr.getvalue() + stdout.getvalue() + "\n".join(logs.output))
 
     def test_context_does_not_leak_between_azure_invocations(self):
         with diagnostics.context(run_id="123", request_id="a" * 36):
@@ -230,20 +323,22 @@ class DurableFailureTests(unittest.TestCase):
         self.github.worker_pull.side_effect = None
         self.select()
         self.call("progress", stage="publishing")
-        diagnostic = {"operation": "broker/github", "kind": "timeout", "stage": "publishing",
-                      "timeout_seconds": 20, "elapsed_ms": 20000, "message": "SECRET"}
+        diagnostic = {"operation": "command/gh", "kind": "timeout", "stage": "publishing",
+                      "timeout_seconds": 20, "elapsed_ms": 20000, "message": "SECRET",
+                      "failure_output": "Private-traceback ghp_synthetic"}
         self.linear.status_comment.side_effect = RequestError()
         with self.assertLogs(level="ERROR"):
             self.call("finish", status="failed", failure=diagnostic)
         saved = json.loads(self.runs.get(KEY)[0]["failure"])
         self.assertNotIn("message", saved)
+        self.assertEqual(saved["failure_output"], "Private-traceback [REDACTED]")
         self.assertEqual(saved["run_id"], "123")
         self.linear.status_comment.reset_mock()
         self.linear.status_comment.side_effect = None
         self.sync.sync(KEY)
         comments = [call.args[2] for call in self.linear.status_comment.call_args_list]
-        self.assertTrue(any("publication" in body and "broker/github" in body and "20s" in body for body in comments))
-        self.assertFalse(any("SECRET" in body for body in comments))
+        self.assertTrue(any("publication" in body and "command/gh" in body and "20s" in body for body in comments))
+        self.assertFalse(any("SECRET" in body or "Private-traceback" in body for body in comments))
         self.assertEqual(self.issue["state"]["id"], self.states.blocked)
 
 

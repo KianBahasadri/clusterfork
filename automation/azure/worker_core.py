@@ -10,7 +10,7 @@ import time
 from uuid import uuid4
 
 from dispatch_core import eligibility
-from worker_reporting import STAGES, is_auto_repair, validate_usage, validate_quota_wait
+from worker_reporting import STAGES, is_auto_repair, validate_usage, validate_quota_wait, worker_branch
 from readiness_policy import PROTOCOL
 from diagnostics import failure, operation, record, validate_failure
 
@@ -336,7 +336,8 @@ class WorkerService:
         if action in {"steering_open", "instructions", "instruction_result", "steering_close"}:
             if not self.steering:
                 raise WorkerError("Instruction steering is unavailable", 503)
-            if row.get("stage") != "coding" or row.get("steering_closed"):
+            if (row.get("stage") not in ({"coding", "testing"} if action == "steering_close" else {"coding"})
+                    or row.get("steering_closed")):
                 raise WorkerError("The agent is no longer accepting instructions")
             for field in ("thread_id", "turn_id"):
                 value = data.get(field)
@@ -368,7 +369,8 @@ class WorkerService:
             if stage not in STAGES or stage in {"review", "waiting_for_quota"}:
                 raise WorkerError("Invalid worker stage", 400)
             row, etag = self.runs.get(key)
-            if list(STAGES).index(stage) < list(STAGES).index(row.get("stage", "initializing")):
+            correction = row.get("stage") == "testing" and stage == "coding" and not row.get("steering_closed")
+            if list(STAGES).index(stage) < list(STAGES).index(row.get("stage", "initializing")) and not correction:
                 raise WorkerError("Worker stage cannot move backwards", 400)
             if "account_id" in data:
                 identity = data["account_id"]
@@ -427,7 +429,7 @@ class WorkerService:
                         or set(result) != {"commit_sha", "changed_files"}):
                     raise WorkerError("Invalid structured repair result", 400)
                 row["repair_result"] = json.dumps(result)
-            if stage in {"testing", "publishing"}:
+            if stage == "publishing":
                 row["steering_closed"] = True
             if data.get("stage") == "coding":
                 try:
@@ -481,6 +483,18 @@ class WorkerService:
             if status not in {"completed", "failed", "waiting_for_quota"}:
                 raise WorkerError("Invalid worker outcome", 400)
             diagnostic = validate_failure(data["failure"]) if status == "failed" and "failure" in data else None
+            wip = {}
+            if "wip_branch" in data or "wip_commit_sha" in data:
+                identifier = receipt.get("target_identifier", receipt["identifier"])
+                target_key = receipt.get("target_dispatch_key", key)
+                branch = worker_branch(identifier, target_key)
+                allowed_branches = {branch, branch.replace("clusterfork/", "clusterfork-wip/", 1)}
+                if (status != "failed" or not isinstance(data.get("wip_branch"), str)
+                        or data["wip_branch"] not in allowed_branches
+                        or not isinstance(data.get("wip_commit_sha"), str)
+                        or not re.fullmatch(r"[0-9a-f]{40}", data["wip_commit_sha"])):
+                    raise WorkerError("Invalid preserved worker change", 400)
+                wip = {field: data[field] for field in ("wip_branch", "wip_commit_sha")}
             if row.get("dependency_wait"):
                 # The runner reports a denied pre-coding request as failure.
                 # Keep that outcome retryable without treating it as coding failure.
@@ -489,6 +503,7 @@ class WorkerService:
             row.update(status=status, lease_until=0, finished_at=int(self.clock()),
                        steering_closed=True,
                        report_version=row.get("report_version", 0) + 1)
+            row.update(wip)
             if status == "waiting_for_quota" and data.get("quota_wait") is not None:
                 row["quota_wait"] = json.dumps(validate_quota_wait(data["quota_wait"]))
             url = data.get("pull_request", "")
@@ -498,7 +513,7 @@ class WorkerService:
             if diagnostic:
                 # Run identity is authoritative; a callback cannot attribute a failure to another run.
                 diagnostic.update(dispatch_key=key, run_id=claims["run_id"], run_attempt=claims["run_attempt"])
-                row["failure"] = json.dumps(diagnostic)
+                row["failure"] = json.dumps(diagnostic, ensure_ascii=False)
             row["auto_merge_requested"] = route.auto_merge and status == "completed" and bool(url)
             self.runs.replace(row, etag)
             if status == "waiting_for_quota":

@@ -182,8 +182,10 @@ class PublicationIntegrationTests(unittest.TestCase):
                     "head": {"repo": {"full_name": "owner/repo"}, "ref": BRANCH,
                              "sha": before.split()[0] if before else main}}
             @contextmanager
-            def implement(*args):
+            def implement(*args, validate):
                 write(files)
+                from test_remote_worker import validate_fake_turns
+                validate_fake_turns(validate, summary)
                 yield summary
             previous = Path.cwd()
             try:

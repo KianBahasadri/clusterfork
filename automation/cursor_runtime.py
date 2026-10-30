@@ -179,7 +179,7 @@ def quota_snapshot(identity, model, data, *, allow_exhausted=False):
 
 def run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), *,
               timeout=18_000, deadline=None, image_paths=(), read_only=False,
-              steering=True, server_factory=CursorServer, observe_tool=None):
+              steering=True, server_factory=CursorServer, observe_tool=None, validate=None):
     from agent_session import WORKER_RULES
     server = server_factory(home, env=env, cwd=workspace, read_only=read_only)
     deadline = deadline if deadline is not None else time.monotonic() + timeout
@@ -252,7 +252,20 @@ def run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), 
                         acknowledge()
                     except Exception:
                         pass
-                return "".join(summary)
+                result = "".join(summary)
+                follow_up = validate(result, deadline=deadline, failure_signals=failure_signals) if validate else None
+                if time.monotonic() >= deadline or any(event.is_set() for event in failure_signals):
+                    raise CursorError("cursor_turn_stopped")
+                if follow_up is None:
+                    return result
+                pending, pending_reported = None, False
+                session["turn_id"] = str(uuid4())
+                if steering and broker.call("steering_open", **session).get("accepting") is not True:
+                    raise CursorError()
+                if time.monotonic() >= deadline or any(event.is_set() for event in failure_signals):
+                    raise CursorError("cursor_turn_stopped")
+                send_prompt(follow_up)
+                next_poll = 0
             if steering and time.monotonic() >= next_poll:
                 next_poll = time.monotonic() + 10
                 try:

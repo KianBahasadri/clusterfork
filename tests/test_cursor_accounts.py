@@ -168,6 +168,26 @@ class CursorRuntimeTests(unittest.TestCase):
                 self.assertTrue(server.closed)
                 self.assertFalse(any(value.get("method") == "session/prompt" for value in server.sent))
 
+    def test_validation_correction_keeps_cursor_session_and_original_deadline(self):
+        server, broker = FakeServer(), Mock()
+        broker.call.return_value = {"accepting": True, "instruction": None}
+        validations = []
+        def validate(summary, *, deadline, failure_signals):
+            self.assertFalse(server.closed)
+            validations.append(deadline)
+            return "Fix validation/1 without committing." if len(validations) == 1 else None
+        with tempfile.TemporaryDirectory() as directory:
+            cursor.run_agent(broker, {"model": cursor.MODEL, "effort": "high"}, Path(directory), ROOT,
+                             "Implement issue", {}, validate=validate, server_factory=lambda *a, **k: server)
+        prompts = [value for value in server.sent if value.get("method") == "session/prompt"]
+        self.assertEqual(len(prompts), 2)
+        self.assertEqual({value["params"]["sessionId"] for value in prompts}, {"cursor-thread"})
+        self.assertEqual(validations[0], validations[1])
+        sessions = [call.kwargs for call in broker.call.call_args_list if call.args == ("steering_open",)]
+        self.assertEqual(sessions[0]["thread_id"], sessions[1]["thread_id"])
+        self.assertNotEqual(sessions[0]["turn_id"], sessions[1]["turn_id"])
+        self.assertTrue(server.closed)
+
     def test_readiness_launch_has_ask_mode_and_read_only_filesystem(self):
         process = Mock(stdout=io.StringIO(""), stdin=io.StringIO(), pid=999999)
         with tempfile.TemporaryDirectory() as directory, \

@@ -51,6 +51,7 @@ class AccountFailoverTests(unittest.TestCase):
         self.probe_delay = 0
         self.turn_hook = lambda: None
         self.keep_history = True
+        self.limit_on_correction = False
         self.broker = SimpleNamespace(key=fixtures.KEY, call=self.broker_call,
                                       publication_guard=worker.PublicationGuard({}))
         self.heartbeat = SimpleNamespace(failed=threading.Event())
@@ -92,6 +93,7 @@ class AccountFailoverTests(unittest.TestCase):
 
             def __init__(inner):
                 inner.events, inner.methods = deque(), []
+                inner.turn_count = 0
 
             def call(inner, method, params):
                 inner.methods.append((method, params))
@@ -110,14 +112,15 @@ class AccountFailoverTests(unittest.TestCase):
                     test.assertNotEqual(json.loads((home / "auth.json").read_text())["tokens"]["account_id"], "account-a")
                     return {"thread": {"id": "thread-one"}}
                 if method == "turn/start":
+                    inner.turn_count += 1
                     test.assertEqual(params["threadId"], "thread-one")
                     (home / "sessions").mkdir(exist_ok=True)
                     if test.keep_history:
                         (home / "sessions/rollout-thread-one.jsonl").write_text('{"task":"original task"}\n')
                     (home / "sessions/auth.json").write_text('"must not transfer"')
                     (home / "credential-cache").write_text("must not transfer")
-                    turn = f"turn-{number}"
-                    fail = number == 1 or test.all_exhausted
+                    turn = f"turn-{number}" + (f"-correction-{inner.turn_count}" if inner.turn_count > 1 else "")
+                    fail = (number == 1 and (not test.limit_on_correction or inner.turn_count > 1)) or test.all_exhausted
                     (cwd / "work.txt").write_text("existing edits\n" if fail else "existing edits\nfinished\n")
                     if fail and not test.error_in_turn:
                         inner.events.append({"method": "error", "params": {
@@ -220,7 +223,8 @@ class AccountFailoverTests(unittest.TestCase):
         def command(args, **kwargs):
             if args == ["verify-edits"]:
                 self.assertEqual(len(self.servers), 2)
-                self.assertTrue(all(server.closed for server in self.servers))
+                self.assertTrue(self.servers[0].closed)
+                self.assertFalse(self.servers[1].closed)
                 self.assertEqual(Path("work.txt").read_text(), "existing edits\nfinished\n")
                 events.append("validation")
             elif args[:2] == ["git", "rev-parse"]:
@@ -251,6 +255,32 @@ class AccountFailoverTests(unittest.TestCase):
         self.assertEqual(events, ["validation", "push", "PR"])
         stages = [data["stage"] for action, data in self.calls if action == "progress" and "stage" in data]
         self.assertEqual(stages, ["selecting_account", "coding", "coding", "testing", "publishing"])
+
+    def test_usage_limit_during_correction_keeps_thread_deadline_and_validation_callback(self):
+        self.limit_on_correction = True
+        validated = []
+        def validate(summary, *, deadline, failure_signals):
+            self.assertFalse(self.servers[-1].closed)
+            self.assertEqual(deadline, 18000)
+            self.assertFalse(any(event.is_set() for event in failure_signals))
+            validated.append(summary)
+            self.broker_call("progress", stage="testing")
+            if len(validated) == 1:
+                self.broker_call("progress", stage="coding")
+                return "Fix validation/1 in the existing workspace without committing or changing authentication."
+            return None
+        with self.execution() as (root, _):
+            with worker.run_codex(self.broker, self.config, self.heartbeat, root, validate=validate):
+                self.call("progress", stage="publishing")
+        self.assertEqual(len(validated), 2)
+        self.assertEqual(len(self.servers), 2)
+        self.assertEqual(self.deadlines, [18000, 18000])
+        turns = [params for method, params in self.servers[0].methods if method == "turn/start"]
+        self.assertEqual(len(turns), 2)
+        self.assertIn("Fix validation/1", turns[1]["input"][0]["text"])
+        resumed = [params for method, params in self.servers[1].methods if method == "thread/resume"]
+        self.assertEqual(resumed[0]["threadId"], "thread-one")
+        self.assertEqual(json.loads(self.service.runs.get(fixtures.KEY)[0]["exhausted_account_ids"]), [self.identities[0]])
 
     def test_initial_preflight_uses_the_weekly_preference(self):
         # A new attempt still delegates initial pool selection to preflight.

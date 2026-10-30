@@ -157,9 +157,10 @@ turn ID only within that same thread. The runner, checkout, and existing edits
 stay in place; the original coding deadline also covers replacement selection
 and resumed turns. Exhausted identities cannot be selected again in that attempt.
 If no replacement qualifies, it finishes with explicit quota unavailability and
-the normal capacity retry; it does not wait or rotate indefinitely. Sessions and
-unpublished edits are not checkpointed across runner/job removal. Validation and
-publication proceed after successful agent completion.
+the normal capacity retry; it does not wait or rotate indefinitely. Conversation
+rollouts remain local to the runner. Guarded
+[WIP preservation](remote-development.md#retries-and-troubleshooting) can retain
+unfinished repository changes on failure.
 
 Publication tokens are scoped to one repository with Contents and Pull requests
 write permission, plus Workflows write when the installation currently grants it.
