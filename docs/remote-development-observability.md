@@ -38,6 +38,8 @@ the explanation after a temporary tracker failure. A typical explanation is:
 > Failed during publication: request timed out (broker/github); after 20s, timeout 20s.
 
 GitHub's failure summary remains available if Azure cannot receive the callback.
+Known workflow-permission failures retain an allowlisted reason code and explain
+the missing grant in Actions and Linear instead of reporting only `WorkerFailure`.
 An older runner, cancellation, or abrupt runner loss without a diagnostic retains
 the existing generic explanation. These changes cannot recover details already
 discarded by older runs. No extra Linear discussion messages are created for each

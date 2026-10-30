@@ -344,7 +344,8 @@ dependency, worker identity, account leases, and publication gates remain enforc
 The worker checks out the **parent's** `clusterfork/<identifier-lowercase>-<key[:8]>`
 branch, investigates, runs configured validation, and pushes to the existing PR or
 creates its missing PR with the parent's dispatch marker. Required checks and native
-merge requirements still apply; workflow edits and `--admin` bypasses remain refused.
+merge requirements and the normal publication permission checks still apply;
+`--admin` bypasses remain refused.
 
 The label **or** persisted `is_auto_repair` metadata forbids another generation; failed
 repair workers cannot be rerun automatically or through broker admission.
@@ -380,7 +381,13 @@ running attempt. Automatic checkpoint/continuation across jobs is not implemente
 Configured validation commands run after the agent finishes. Publication rechecks
 current project enrollment and status, pushes a separate branch, opens a PR, and requests the
 configured merge policy. GitHub waits for required checks before automatic merging.
-Workflow-file edits are refused because the App has no Workflows permission.
+Both readiness and coding prompts receive the broker's current workflow-publication
+capability. Readiness identifies required edits without that capability as a
+permission blocker; the worker also refuses unauthorized workflow changes, including
+changes recovered from an earlier attempt's branch. Authorized edits follow the same
+validation and PR process. [Setup](remote-development-setup.md#github-app-and-repository)
+owns the installation grant; [accounts](remote-development-accounts.md#worker-credential-boundary)
+owns publication token scope.
 Durable agent-session resume is not implemented. A mid-task usage failure can use
 the same single repair budget. Linear credentials stay in Azure, outside the agent.
 

@@ -165,6 +165,13 @@ class DiagnosticsTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 diagnostics.validate_failure(value)
 
+    def test_workflow_permission_failure_reports_its_safe_reason_without_exception_text(self):
+        error = worker.WorkerFailure("SECRET-private-path")
+        data = diagnostics.failure(error, stage="testing", reason_code="workflows_permission_missing")
+        self.assertIn("approved Workflows write permission", diagnostics.failure_summary(data))
+        self.assertNotIn("SECRET", diagnostics.failure_summary(data) + json.dumps(data))
+        self.assertNotIn("reason_code", diagnostics.validate_failure({**data, "reason_code": "SECRET"}))
+
 
 class DurableFailureTests(unittest.TestCase):
     setUp = reporting.ProgressTests.setUp

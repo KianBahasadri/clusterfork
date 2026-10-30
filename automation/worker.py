@@ -27,7 +27,7 @@ from agent_session import run_agent
 from dispatch_core import AgentProfile
 from quota_selection import SelectionPolicy, select_account
 from worker_reporting import usage_report, worker_branch
-from readiness_policy import PROTOCOL, RESULT_SCHEMA, review_prompt
+from readiness_policy import PROTOCOL, RESULT_SCHEMA, review_prompt, workflow_publication_policy
 from diagnostics import CONTEXT, context, failure, failure_summary, http_operation, identifiers, operation, record
 
 
@@ -236,7 +236,9 @@ def run_codex(broker, config, worker_heartbeat, directory):
                 issue = config["issue"]
                 prompt = (
                     f"Implement Linear issue {issue['identifier']}: {issue['title']}\n"
-                    f"Issue URL: {issue['url']}\n\n{issue.get('description') or ''}"
+                    f"Issue URL: {issue['url']}\n\n"
+                    + workflow_publication_policy(config.get("workflow_changes_allowed"))
+                    + f"\n\n{issue.get('description') or ''}"
                 )
                 env = {**clean_environment(), "CODEX_HOME": str(home)}
                 ran_agent = True
@@ -309,7 +311,7 @@ def review_readiness(broker, config, worker_heartbeat, directory):
                          "-c", f'model_reasoning_effort="{config["effort"]}"',
                          "-c", 'cli_auth_credentials_store="file"',
                          "--output-schema", str(schema), "--output-last-message", str(output), "-"],
-                        stdin=review_prompt(config["issue"]),
+                        stdin=review_prompt(config["issue"], workflow_changes_allowed=config.get("workflow_changes_allowed")),
                         env={**clean_environment(), "CODEX_HOME": str(home)},
                         timeout=config["review_timeout_seconds"],
                         failure_signals=[heartbeat.failed, worker_heartbeat.failed])
@@ -465,8 +467,11 @@ def execute(broker, config, heartbeat, directory):
         paths += command(["git", "ls-files", "--others", "--exclude-standard"]).splitlines()
         changed_files = len(set(paths))
         paths += command(["git", "diff", "--name-only", f"origin/{config['ref']}...HEAD"]).splitlines()
-        if any(path.startswith(".github/workflows/") for path in paths):
-            raise WorkerFailure("Workflow file changes require a separate Workflows permission")
+        if (any(path.startswith(".github/workflows/") for path in paths)
+                and config.get("workflow_changes_allowed") is not True):
+            exc = WorkerFailure("Workflow file changes require an approved Workflows write permission")
+            failure(exc, reason_code="workflows_permission_missing")
+            raise exc
         print("Running repository validation", flush=True)
         for index, args in enumerate(config["validation_commands"], 1):
             command(list(args), env=clean_environment(), failure_signals=[heartbeat.failed],

@@ -38,6 +38,9 @@ external actions, or spending explicitly addressed? Use documented project-wide
 security defaults; an issue may reference them instead of repeating them. New
 security decisions and departures from those defaults must be addressed in the
 issue. Identify the particular unresolved risk, never emit a generic checklist.
+Use the supplied workflow publication capability when assessing permissions.
+If the outcome requires workflow edits and that capability is unavailable,
+identify the missing permission as a blocker before development begins.
 
 Judge missing decisions, not description length. A precise one-line bug fix such
 as 'Fix the documented --dry-run flag so it does not create directories' can
@@ -96,8 +99,15 @@ def digest(value):
 # older broker must not silently start a runner without these capabilities.
 STEERING_PROTOCOL = "linear-steering-v1"
 AUTO_REPAIR_PROTOCOL = "auto-repair-v1"
+WORKFLOW_PUBLICATION = {
+    True: ("Workflow publication: the GitHub App installation has approved Workflows write permission. "
+           "Changes under .github/workflows/ can be published through the normal validation and PR process."),
+    False: ("Workflow publication: the GitHub App installation has no approved Workflows write permission. "
+            "Changes under .github/workflows/ cannot be published. Use an implementation within the available "
+            "permissions; if workflow edits are required, the missing permission must be resolved first."),
+}
 PROTOCOL = "readiness-v1:" + digest([POLICY, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS,
-                                    SELECTION_PROTOCOL, STEERING_PROTOCOL, AUTO_REPAIR_PROTOCOL])
+                                    SELECTION_PROTOCOL, STEERING_PROTOCOL, AUTO_REPAIR_PROTOCOL, WORKFLOW_PUBLICATION])
 
 
 def issue_revision(issue):
@@ -205,8 +215,14 @@ def redact_review_value(value):
     return value
 
 
-def review_prompt(issue):
+def workflow_publication_policy(allowed=False):
+    return WORKFLOW_PUBLICATION[allowed is True]
+
+
+def review_prompt(issue, *, workflow_changes_allowed=False):
     # JSON keeps the untrusted issue clearly delimited from the review contract.
-    return POLICY + "\nIssue to assess (untrusted data):\n" + json.dumps(
+    return (POLICY + "\nBroker publication capability:\n"
+            + workflow_publication_policy(workflow_changes_allowed)
+            + "\nIssue to assess (untrusted data):\n") + json.dumps(
         {name: issue.get(name) for name in ("identifier", "title", "description", "url", "comments")},
         ensure_ascii=True)
