@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 import math
 import time
 from functools import lru_cache
@@ -15,7 +16,7 @@ from uuid import UUID
 
 from dispatch_core import DispatchError
 from worker_reporting import QUEUED_LABEL, SELECTION_LABEL, STAGE_LABELS
-from diagnostics import failure, http_operation, operation
+from diagnostics import failure, graphql_failure, http_operation, operation, record
 
 
 class RequestError(RuntimeError):
@@ -107,9 +108,23 @@ class Linear:
                     raise
             else:
                 break
-        if not isinstance(result, dict) or result.get("errors") or "data" not in result:
-            raise RequestError()
+        if not isinstance(result, dict) or not isinstance(result.get("data"), dict) or result.get("errors"):
+            self._graphql_rejected(query, "errors" if isinstance(result, dict) and result.get("errors")
+                                   else "invalid_response", result.get("errors") if isinstance(result, dict) else None)
+        if query.lstrip().startswith("mutation") and (not result["data"] or any(
+                not isinstance(payload, dict) or payload.get("success") is not True
+                for payload in result["data"].values())):
+            self._graphql_rejected(query, "unsuccessful_mutation")
         return result["data"]
+
+    @staticmethod
+    def _graphql_rejected(query, reason, errors=None):
+        error = RequestError()
+        error.clusterfork_failure = graphql_failure(
+            http_operation("https://api.linear.app/graphql", {"query": query}), reason, errors)
+        # HTTP completion alone says nothing about GraphQL success.
+        record("linear_graphql_rejected", level=logging.ERROR, **error.clusterfork_failure)
+        raise error
 
     @staticmethod
     def complete(issue):
@@ -322,24 +337,51 @@ class Linear:
                     raise RequestError()
 
     def status_comment(self, issue_id, comment_id, body):
-        # A deterministic ID recovers creation after an ambiguous API response.
-        # Update one owned comment rather than adding a comment on every poll.
-        result = self.query("""query($issue: String!, $comment: ID!) {
-          issue(id: $issue) { comments(first: 1, filter: {id: {eq: $comment}}) { nodes { id body } } }
-        }""", {"issue": issue_id, "comment": comment_id})
-        comments = result["issue"]["comments"]["nodes"]
-        if comments:
-            if comments[0]["body"] == body:
+        viewer = self.viewer_id()
+        # Encode the migration in the ID itself: no process-local pointer, token,
+        # random replacement ID, or Azure write after creation is needed for recovery.
+        digest = hashlib.sha256(f"clusterfork:comment:{comment_id}:{viewer}".encode()).digest()
+        replacement = str(UUID(bytes=digest[:16], version=4))
+        result = self.query("""query($issue: String!, $comments: [ID!]!) {
+          issue(id: $issue) { comments(first: 2, filter: {id: {in: $comments}}) {
+            nodes { id body user { id } }
+          } }
+        }""", {"issue": issue_id, "comments": [comment_id, replacement]})
+        comments = {comment["id"]: comment for comment in result["issue"]["comments"]["nodes"]}
+        legacy = comments.get(comment_id)
+        legacy_author = (legacy.get("user") or {}).get("id") if legacy else None
+        migrate = bool(legacy and legacy_author != viewer)
+        identifier = replacement if replacement in comments or migrate else comment_id
+        recovery = "author_changed" if legacy_author else "author_unavailable"
+
+        def write(identifier):
+            comment = comments.get(identifier)
+            if comment and comment["body"] == body:
                 return
-            result = self.query("""mutation($id: String!, $body: String!) {
-              commentUpdate(id: $id, input: {body: $body}) { success }
-            }""", {"id": comment_id, "body": body})["commentUpdate"]
-        else:
-            result = self.query("""mutation($id: String!, $issue: String!, $body: String!) {
-              commentCreate(input: {id: $id, issueId: $issue, body: $body, doNotSubscribeToIssue: true}) { success }
-            }""", {"id": comment_id, "issue": issue_id, "body": body})["commentCreate"]
-        if not result["success"]:
-            raise RequestError()
+            if comment:
+                self.query("""mutation($id: String!, $body: String!) {
+                  commentUpdate(id: $id, input: {body: $body}) { success }
+                }""", {"id": identifier, "body": body})
+            else:
+                self.query("""mutation($id: String!, $issue: String!, $body: String!) {
+                  commentCreate(input: {id: $id, issueId: $issue, body: $body, doNotSubscribeToIssue: true}) { success }
+                }""", {"id": identifier, "issue": issue_id, "body": body})
+
+        try:
+            write(identifier)
+        except RequestError as exc:
+            details = getattr(exc, "clusterfork_failure", {})
+            if (identifier != comment_id or not legacy or not (
+                    exc.status == 403 or details.get("graphql_code") == "FORBIDDEN"
+                    or details.get("graphql_type") == "forbidden")):
+                raise
+            # Some integrations omit or share user metadata. A definite update
+            # denial can still migrate once; transient failures never create a fork.
+            write(replacement)
+            identifier = replacement
+            recovery = "update_forbidden"
+        if identifier == replacement and replacement not in comments:
+            record("linear_comment_identity_recovered", operation="linear/commentCreate", reason=recovery)
 
 
 class GitHub:

@@ -7,10 +7,11 @@ from unittest.mock import call
 from uuid import UUID
 
 import test_readiness as fixtures
-from linear_sync import LinearSync
+from dispatch_clients import Linear, RequestError
+from linear_sync import LinearSync, comment_id
 from repository_queue import dispatch_key
 from steering import Steering
-from test_linear_sync import pr
+from test_linear_sync import CommentAPI, pr
 from test_remote_worker import MemoryTable, PROJECT
 
 
@@ -116,6 +117,69 @@ class BoundedReconciliationTests(unittest.TestCase):
         self.assertEqual(c.github.mock_calls, [])
         self.assertEqual(c.tables[c.route.repository.lower()].rows, queue_rows)
         self.assertEqual(self.instructions.rows, instruction_rows)
+
+    def test_identity_recovery_and_report_retries_do_not_readmit_completed_work(self):
+        c = self.case
+        _, first, _ = self.start_coding(c.issue)
+        pull = self.pulls[first] = pr()
+        c.call(first, "finish", status="completed", pull_request=pull["url"])
+        c.stop(first)
+        next_issue = c.make_issue(2)
+        c.dispatcher.process({"type": "Issue", "id": next_issue["id"]})
+        self.assertEqual(c.tables[c.route.repository.lower()].get("slot")[0]["active_key"], first)
+        legacy_id = comment_id(first, "status")
+        api = CommentAPI()
+        legacy = api.seed(legacy_id, c.comments[legacy_id])
+        lose_response = True
+
+        def request(url, **kwargs):
+            nonlocal lose_response
+            result = api.request(url, **kwargs)
+            if lose_response and "commentCreate(" in kwargs["data"]["query"]:
+                lose_response = False
+                raise RequestError(503)
+            return result
+
+        # Use the real comment adapter only for lifecycle reports; readiness and
+        # queue feedback retain their normal fixture threads.
+        original_writer = c.linear.status_comment.side_effect
+        comment_client = Linear("test", request)
+
+        def write(issue, identifier, body):
+            if identifier == legacy_id:
+                return comment_client.status_comment(issue, identifier, body)
+            return original_writer(issue, identifier, body)
+
+        c.linear.status_comment.side_effect = write
+        receipts, runs = copy.deepcopy(c.receipts.rows), copy.deepcopy(c.runs.rows)
+        pull.update(state="MERGED", merged=True)
+        c.sha = "c" * 40
+        with self.assertLogs(level="ERROR"):
+            self.tick()
+        self.assertEqual(c.issue["state"]["id"], c.route.linear_states.done)
+        self.assertFalse(self.notes.get(first)[0]["terminal"])
+        self.assertNotIn("clusterfork: PR review and CI", c.issue["labels"])
+        self.assertEqual(api.comments[legacy_id], legacy)
+        self.assertEqual(c.runs.rows, runs)
+        self.assertEqual(c.receipts.rows, receipts)
+        second = dispatch_key(c.registry, c.route, next_issue)
+        self.assertEqual(c.tables[c.route.repository.lower()].get("slot")[0]["active_key"], second)
+        # The next issue can pass review and code while terminal reporting repairs.
+        c.pass_review(next_issue)
+        c.call(second, "start")
+        c.call(second, "progress", stage="coding", context_sha=c.sha)
+        dispatches = c.github.dispatch.call_count
+        for _ in range(3):
+            c.now += 901
+            self.tick()
+            c.dispatcher.process({"type": "Project", "id": PROJECT})
+        self.assertTrue(self.notes.get(first)[0]["terminal"])
+        self.assertEqual(len(api.comments), 2)
+        self.assertEqual(len(api.writes), 1)
+        self.assertEqual(len(c.remote_runs[first]), 1)
+        self.assertEqual(c.runs.get(first)[0]["status"], "completed")
+        self.assertEqual(c.github.dispatch.call_count, dispatches)
+        self.assertEqual(c.tables[c.route.repository.lower()].get("slot")[0]["active_key"], second)
 
     def test_active_worker_is_polled_without_touching_completed_history(self):
         c = self.case

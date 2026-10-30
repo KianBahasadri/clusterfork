@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "automation/azure"))
 from dispatch_clients import GitHub, Linear, RequestError
 from dispatch_core import Registry, eligibility
-from linear_sync import LinearSync, pull_outcome
+from linear_sync import LinearSync, comment_id, pull_outcome
 from readiness_policy import PROTOCOL
 from worker_core import Accounts, WorkerError, WorkerService
 from test_remote_worker import KEY, NOW, PROJECT, ISSUE, MemoryTable, claims, receipt, repository_queue
@@ -35,6 +35,49 @@ def pr():
 
 def checks(pull):
     return pull["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"]
+
+
+class CommentAPI:
+    """Stateful Linear fixture: identities can only edit their own comments."""
+    old_actor = str(UUID(int=90))
+    app_actor = str(UUID(int=91))
+
+    def __init__(self):
+        self.actor = self.app_actor
+        self.comments, self.writes = {}, []
+        self.owners = {}
+        self.denied = set()
+
+    def seed(self, identifier, body="Waiting for required CI checks.", actor=None):
+        comment = {"id": identifier, "body": body, "user": {"id": actor or self.old_actor},
+                   "replies": ["Preserve this discussion."]}
+        self.comments[identifier] = comment
+        self.owners[identifier] = actor or self.old_actor
+        return copy.deepcopy(comment)
+
+    def request(self, url, **kwargs):
+        query, values = kwargs["data"]["query"], kwargs["data"]["variables"]
+        if "viewer {" in query:
+            return {"data": {"viewer": {"id": self.actor}}}
+        if "comments(" in query:
+            return {"data": {"issue": {"comments": {"nodes": [copy.deepcopy(comment)
+                    for identifier, comment in self.comments.items() if identifier in values["comments"]]}}}}
+        identifier = values["id"]
+        if "commentUpdate(" in query:
+            if identifier in self.denied or self.owners[identifier] != self.actor:
+                return {"data": None, "errors": [{"message": "Only the comment author may edit. PRIVATE",
+                        "path": ["commentUpdate"], "extensions": {"type": "forbidden", "code": "FORBIDDEN"}}]}
+            self.comments[identifier]["body"] = values["body"]
+            self.writes.append(("update", identifier))
+            return {"data": {"commentUpdate": {"success": True}}}
+        if "commentCreate(" in query:
+            if identifier in self.comments:
+                return {"errors": [{"extensions": {"type": "invalid input", "code": "BAD_USER_INPUT"}}]}
+            self.comments[identifier] = {"id": identifier, "body": values["body"], "user": {"id": self.actor}}
+            self.owners[identifier] = self.actor
+            self.writes.append(("create", identifier))
+            return {"data": {"commentCreate": {"success": True}}}
+        raise AssertionError("Unexpected comment API operation")
 
 
 class LifecycleTests(unittest.TestCase):
@@ -189,6 +232,108 @@ class LifecycleTests(unittest.TestCase):
         self.linear.set_state.assert_not_called()
         self.assertEqual(self.sync_state(), self.states.in_progress)
 
+    def test_merged_legacy_comment_recovers_and_repeated_reconciliation_stays_quiet(self):
+        api = CommentAPI()
+        legacy = comment_id(KEY, "status")
+        original = api.seed(legacy)
+        self.linear.status_comment.side_effect = Linear("test", api.request).status_comment
+        self.issue["state"]["id"] = self.states.in_progress
+        self.pull.update(state="MERGED", merged=True)
+        receipts, runs = copy.deepcopy(self.receipts.rows), copy.deepcopy(self.runs.rows)
+        self.sync.reconcile()
+        self.assertEqual(self.issue["state"]["id"], self.states.done)
+        self.linear.set_stage.assert_called_once_with(ISSUE, None)
+        self.assertEqual(api.comments[legacy], original)
+        self.assertEqual(len(api.writes), 1)
+        self.assertIn("Pull request merged", api.comments[api.writes[0][1]]["body"])
+        self.assertTrue(self.notes.get(KEY)[0]["terminal"])
+        self.github.reset_mock()
+        self.linear.reset_mock()
+        for _ in range(3):
+            LinearSync(self.registry, self.receipts, self.runs, self.notes,
+                       self.linear, self.github, clock=lambda: NOW).reconcile()
+        self.assertEqual(self.linear.mock_calls, [])
+        self.assertEqual(self.github.mock_calls, [])
+        self.assertEqual((self.receipts.rows, self.runs.rows), (receipts, runs))
+
+    def test_merged_issue_finishes_despite_comment_failure_and_repairs_after_restart(self):
+        self.pull.update(state="MERGED", merged=True)
+        self.linear.status_comment.side_effect = RequestError(403)
+        with self.assertLogs(level="ERROR"):
+            self.sync.reconcile()
+        self.assertEqual(self.issue["state"]["id"], self.states.done)
+        self.linear.set_stage.assert_called_with(ISSUE, None)
+        note = self.notes.get(KEY)[0]
+        self.assertFalse(note["terminal"])
+        self.assertEqual(note["completion_owner"], self.run["owner"])
+        self.assertNotIn("signature", note)
+        self.linear.status_comment.side_effect = None
+        recovered = LinearSync(self.registry, self.receipts, self.runs, self.notes,
+                               self.linear, self.github, clock=lambda: NOW)
+        recovered.reconcile()
+        self.assertTrue(self.notes.get(KEY)[0]["terminal"])
+        self.assertEqual(self.linear.set_state.call_count, 1)
+        self.assertEqual(self.linear.status_comment.call_count, 2)
+        self.github.dispatch.assert_not_called()
+
+    def test_terminal_label_failure_cannot_hide_done_and_remains_retryable(self):
+        self.pull.update(state="MERGED", merged=True)
+        self.linear.set_stage.side_effect = [RequestError(503), None]
+        with self.assertLogs(level="ERROR"):
+            self.sync.reconcile()
+        self.assertEqual(self.issue["state"]["id"], self.states.done)
+        self.assertFalse(self.notes.get(KEY)[0]["terminal"])
+        self.sync.reconcile()
+        self.assertTrue(self.notes.get(KEY)[0]["terminal"])
+        self.assertEqual(self.linear.status_comment.call_count, 1)
+        self.assertEqual(self.linear.set_stage.call_count, 2)
+
+    def test_ambiguous_done_response_keeps_completion_report_retryable(self):
+        self.pull.update(state="MERGED", merged=True)
+
+        def state_written_then_response_lost(issue, state):
+            self.issue["state"]["id"] = state
+            raise RequestError(503)
+
+        self.linear.set_state.side_effect = state_written_then_response_lost
+        with self.assertRaises(RequestError):
+            self.sync.sync(KEY)
+        self.assertEqual(self.issue["state"]["id"], self.states.done)
+        self.assertFalse(self.notes.get(KEY)[0]["terminal"])
+        self.sync.sync(KEY)
+        self.assertTrue(self.notes.get(KEY)[0]["terminal"])
+        self.assertEqual(self.linear.set_state.call_count, 1)
+
+    def test_deferred_timer_log_retains_graphql_reason_and_dispatch_identity(self):
+        client = Linear("PRIVATE", lambda *a, **kw: {"errors": [{"message": "PRIVATE",
+                        "path": ["commentUpdate"], "extensions": {"type": "forbidden", "code": "FORBIDDEN"}}]})
+        self.linear.status_comment.side_effect = lambda *a: client.query(
+            "mutation { commentUpdate { success } }", {})
+        with self.assertLogs(level="ERROR") as logs:
+            self.sync.reconcile()
+        records = [json.loads(line.split("Clusterfork: ", 1)[1]) for line in logs.output]
+        deferred = next(row for row in records if row["event"] == "linear_sync_deferred")
+        self.assertEqual(deferred["graphql_code"], "FORBIDDEN")
+        self.assertEqual(deferred["graphql_type"], "forbidden")
+        self.assertEqual(deferred["operation"], "linear/commentUpdate")
+        self.assertEqual((deferred["dispatch_key"], deferred["run_id"], deferred["run_attempt"]), (KEY, "123", "1"))
+        self.assertNotIn("PRIVATE", "\n".join(logs.output))
+
+    def test_crash_after_done_write_repairs_with_durable_completion_intent(self):
+        self.pull.update(state="MERGED", merged=True)
+
+        def interrupted(issue, state):
+            self.issue["state"]["id"] = state
+            raise SystemExit()
+
+        self.linear.set_state.side_effect = interrupted
+        with self.assertRaises(SystemExit):
+            self.sync.sync(KEY)
+        self.assertEqual(self.issue["state"]["id"], self.states.done)
+        self.assertEqual(self.notes.get(KEY)[0]["completion_owner"], self.run["owner"])
+        self.sync.sync(KEY)
+        self.assertTrue(self.notes.get(KEY)[0]["terminal"])
+
     def test_project_changes_and_manual_terminal_states_are_respected(self):
         changes = [lambda i: i.update(archivedAt="now"),
                    lambda i: i["project"].update(id="another-project"),
@@ -255,17 +400,119 @@ class LifecycleTests(unittest.TestCase):
 
 class LifecycleAdapterTests(unittest.TestCase):
     def test_comment_creation_and_updates_use_the_same_id_and_skip_identical_text(self):
-        request = Mock(side_effect=[{"data": {"issue": {"comments": {"nodes": []}}}},
-                                   {"data": {"commentCreate": {"success": True}}},
-                                   {"data": {"issue": {"comments": {"nodes": [{"id": ISSUE, "body": "old"}]}}}},
-                                   {"data": {"commentUpdate": {"success": True}}},
-                                   {"data": {"issue": {"comments": {"nodes": [{"id": ISSUE, "body": "new"}]}}}}])
+        api = CommentAPI()
+        request = Mock(side_effect=api.request)
         client = Linear("private-test-token", request)
         for body in ("old", "new", "new"):
             client.status_comment(ISSUE, ISSUE, body)
-        self.assertEqual(request.call_count, 5)
-        self.assertEqual(request.call_args_list[1].kwargs["data"]["variables"]["id"], ISSUE)
-        self.assertEqual(request.call_args_list[3].kwargs["data"]["variables"]["id"], ISSUE)
+        self.assertEqual(request.call_count, 6)  # One cached viewer lookup.
+        self.assertEqual(api.writes, [("create", ISSUE), ("update", ISSUE)])
+
+    def test_old_identity_update_is_rejected_but_recovery_preserves_thread_and_reuses_replacement(self):
+        api = CommentAPI()
+        original = api.seed(ISSUE)
+        client = Linear("test", api.request)
+        # Reproduce a successful HTTP response carrying a rejected mutation.
+        with self.assertLogs(level="ERROR") as logs, self.assertRaises(RequestError) as caught:
+            client.query("""mutation($id: String!, $body: String!) {
+              commentUpdate(id: $id, input: {body: $body}) { success }
+            }""", {"id": ISSUE, "body": "new"})
+        self.assertEqual(caught.exception.clusterfork_failure["graphql_type"], "forbidden")
+        self.assertNotIn("PRIVATE", "\n".join(logs.output))
+        for body in ("new", "new", "merged", "merged"):
+            # A new client models process restarts and token renewal.
+            Linear("test", api.request).status_comment(ISSUE, ISSUE, body)
+        self.assertEqual(api.comments[ISSUE], original)
+        self.assertEqual(len(api.comments), 2)
+        replacement = next(identifier for identifier in api.comments if identifier != ISSUE)
+        self.assertEqual(UUID(replacement).version, 4)
+        self.assertEqual(api.comments[replacement]["body"], "merged")
+        self.assertEqual(api.writes, [("create", replacement), ("update", replacement)])
+
+    def test_ambiguous_replacement_creation_never_creates_another_comment(self):
+        for response in ("transport", "graphql", "unsuccessful"):
+            with self.subTest(response=response):
+                api = CommentAPI()
+                original = api.seed(ISSUE)
+
+                def request(url, **kwargs):
+                    result = api.request(url, **kwargs)
+                    if "commentCreate(" in kwargs["data"]["query"]:
+                        if response == "transport":
+                            raise RequestError(503)
+                        if response == "graphql":
+                            return {"data": None, "errors": [{"extensions": {"type": "internal error"}}]}
+                        return {"data": {"commentCreate": {"success": False}}}
+                    return result
+
+                with self.assertRaises(RequestError):
+                    Linear("test", request).status_comment(ISSUE, ISSUE, "merged")
+                for _ in range(3):
+                    Linear("test", api.request).status_comment(ISSUE, ISSUE, "merged")
+                self.assertEqual(api.comments[ISSUE], original)
+                self.assertEqual(len(api.comments), 2)
+                self.assertEqual(len(api.writes), 1)
+
+    def test_explicit_update_denial_with_matching_author_migrates_once(self):
+        api = CommentAPI()
+        original = api.seed(ISSUE, actor=api.app_actor)
+        api.denied.add(ISSUE)
+        with self.assertLogs(level="ERROR"):
+            Linear("test", api.request).status_comment(ISSUE, ISSUE, "merged")
+        for _ in range(3):
+            Linear("test", api.request).status_comment(ISSUE, ISSUE, "merged")
+        self.assertEqual(api.comments[ISSUE], original)
+        self.assertEqual(len(api.comments), 2)
+        self.assertEqual(len(api.writes), 1)
+
+    def test_unavailable_author_metadata_keeps_one_replacement_even_for_bot_comments(self):
+        api = CommentAPI()
+        api.seed(ISSUE)
+        api.comments[ISSUE]["user"] = None
+        original = copy.deepcopy(api.comments[ISSUE])
+        Linear("test", api.request).status_comment(ISSUE, ISSUE, "new")
+        replacement = api.writes[0][1]
+        api.comments[replacement]["user"] = None
+        for body in ("new", "merged", "merged"):
+            Linear("test", api.request).status_comment(ISSUE, ISSUE, body)
+        self.assertEqual(api.comments[ISSUE], original)
+        self.assertEqual(len(api.comments), 2)
+        self.assertEqual(api.writes, [("create", replacement), ("update", replacement)])
+
+    def test_ambiguous_replacement_update_reuses_the_committed_body(self):
+        api = CommentAPI()
+        original = api.seed(ISSUE)
+        Linear("test", api.request).status_comment(ISSUE, ISSUE, "new")
+        replacement = api.writes[0][1]
+
+        def response_lost(url, **kwargs):
+            result = api.request(url, **kwargs)
+            if "commentUpdate(" in kwargs["data"]["query"]:
+                raise RequestError(503)
+            return result
+
+        with self.assertRaises(RequestError):
+            Linear("test", response_lost).status_comment(ISSUE, ISSUE, "merged")
+        for _ in range(3):
+            Linear("test", api.request).status_comment(ISSUE, ISSUE, "merged")
+        self.assertEqual(api.comments[ISSUE], original)
+        self.assertEqual(len(api.comments), 2)
+        self.assertEqual(api.writes, [("create", replacement), ("update", replacement)])
+
+    def test_transient_update_failure_does_not_create_a_replacement(self):
+        api = CommentAPI()
+        original = api.seed(ISSUE, actor=api.app_actor)
+
+        def unavailable(url, **kwargs):
+            if "commentUpdate(" in kwargs["data"]["query"]:
+                raise RequestError(503)
+            return api.request(url, **kwargs)
+
+        with self.assertRaises(RequestError):
+            Linear("test", unavailable).status_comment(ISSUE, ISSUE, "merged")
+        self.assertEqual(api.comments, {ISSUE: original})
+        Linear("test", api.request).status_comment(ISSUE, ISSUE, "merged")
+        self.assertEqual(api.writes, [("update", ISSUE)])
 
     def test_pr_lookup_requires_the_exact_dispatch_branch_author_and_marker(self):
         route = Registry.load(ROOT / "automation/azure/projects.json").routes[PROJECT]

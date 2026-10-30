@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 from uuid import UUID, uuid4
 
 from worker_core import WorkerError
 from worker_reporting import STAGES, attempt_comment
-from diagnostics import failure_summary
+from diagnostics import context, failure, failure_summary, record
 
 
 def comment_id(key, kind):
@@ -81,13 +82,13 @@ class LinearSync:
 
     def reconcile(self):
         # Isolate failures so one revoked repository grant cannot stall others.
-        import logging
-
         for row in self.runs.list():
-            try:
-                self.sync(row["RowKey"])
-            except Exception:
-                logging.error("Linear lifecycle synchronization deferred for %s", row["RowKey"])
+            run_id, _, attempt = row.get("owner", "").partition(":")
+            with context(dispatch_key=row["RowKey"], run_id=run_id, run_attempt=attempt):
+                try:
+                    self.sync(row["RowKey"])
+                except Exception as exc:
+                    record("linear_sync_deferred", level=logging.ERROR, **failure(exc, "worker/linear_sync"))
 
     def sync(self, key):
         receipt, _ = self.receipts.get(key)
@@ -117,8 +118,9 @@ class LinearSync:
             managed = (*route.ready_state_ids, states.in_progress, states.blocked, states.done)
             if issue["state"]["id"] not in managed or issue["state"].get("type") == "canceled":
                 return
-            # Preserve completion, including a manually completed issue.
-            if issue["state"]["id"] == states.done:
+            # Preserve manual completion, but repair our own unfinished terminal
+            # report even if a previous state write succeeded before its response.
+            if issue["state"]["id"] == states.done and note.get("completion_owner") != owner:
                 return
             status = run["status"]
             if run.get("dependency_wait") and run.get("stage", "initializing") in {"initializing", "selecting_account"}:
@@ -152,6 +154,8 @@ class LinearSync:
                 state, reason = "done", "Worker completed successfully; no repository changes were needed."
             else:
                 raise ValueError("Unknown worker outcome")
+            if issue["state"]["id"] == states.done and state != "done":
+                return
             stage = None
             if state == "in_progress":
                 stage = "review" if pull else run.get("stage", "initializing")
@@ -168,14 +172,35 @@ class LinearSync:
             if any(current.get(field) != run.get(field) for field in
                    ("owner", "status", "pull_request", "stage", "report_version")):
                 return  # A newer attempt/outcome supersedes this observation.
-            updated, _ = self.notes.get(key)
+            updated, version = self.notes.get(key)
             if updated.get("fence") != fence or updated["lease_until"] <= self.clock():
                 raise WorkerError("Linear synchronization lease was lost")
             latest = self.linear.issue(issue["id"])
             if (not latest or latest["state"]["id"] != issue["state"]["id"]
                     or latest.get("project") != project or latest.get("archivedAt")):
                 return
+            if state == "done":
+                # Persist before any external write. A crash, ambiguous state
+                # response or failed comment must leave terminal reporting retryable.
+                updated["completion_owner"] = owner
+                self.notes.replace(updated, version)
+            errors = []
+
+            def write(action, *args):
+                try:
+                    action(*args)
+                except Exception as exc:
+                    if state != "done":
+                        raise
+                    # Confirmed completion is independent of comment permissions
+                    # and label failures. Keep retrying every unfinished projection.
+                    errors.append(exc)
+                    return False
+                return True
+
             if run.get("usage_before"):
+                previous_attempt = note.get("attempt_owner") == owner
+                updated["attempt_owner"] = owner
                 for kind in ("start", "finish"):
                     if kind == "finish" and status == "running":
                         continue
@@ -183,25 +208,29 @@ class LinearSync:
                                                    finished=kind == "finish")
                     attempt_signature = hashlib.sha256(attempt_body.encode()).hexdigest()
                     field = f"{kind}_signature"
-                    if note.get("attempt_owner") != owner or note.get(field) != attempt_signature:
-                        self.linear.status_comment(issue["id"], comment_id(key, f"{owner}:{kind}"), attempt_body)
-                    updated[field] = attempt_signature
-                updated["attempt_owner"] = owner
+                    if not previous_attempt or note.get(field) != attempt_signature:
+                        # An older attempt's signature cannot acknowledge this one.
+                        updated.pop(field, None)
+                        if write(self.linear.status_comment, issue["id"], comment_id(key, f"{owner}:{kind}"), attempt_body):
+                            updated[field] = attempt_signature
             if note.get("signature") != signature:
-                self.linear.status_comment(issue["id"], comment_id(key, "status"), body)
+                if write(self.linear.status_comment, issue["id"], comment_id(key, "status"), body):
+                    updated["signature"] = signature
             # Dedicated add/remove mutations preserve unrelated labels, including
             # labels a person adds while synchronization is in flight.
-            self.linear.set_stage(issue["id"], stage)
-            # Save the explanation before the transition, including when the
-            # state write fails and must be retried after a successful comment.
+            write(self.linear.set_stage, issue["id"], stage)
+            # Nonterminal transitions still require their explanation first.
+            # Terminal writes proceed even when a preceding projection failed.
             if issue["state"]["id"] != target:
-                self.linear.set_state(issue["id"], target)
+                write(self.linear.set_state, issue["id"], target)
             saved, etag = self.notes.get(key)
             if saved.get("fence") != fence or saved["lease_until"] <= self.clock():
                 raise WorkerError("Linear synchronization lease was lost")
-            updated.update(signature=signature, owner=owner, terminal=state == "done",
+            updated.update(owner=owner, terminal=state == "done" and not errors,
                            pull_request=pull["url"] if pull else "")
             self.notes.replace(updated, etag)
+            if errors:
+                raise errors[0]
         finally:
             updated, etag = self.notes.get(key)
             if updated.get("fence") == fence:
