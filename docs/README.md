@@ -52,6 +52,7 @@ compatibility claims. Recheck upstream behavior before adopting an old workaroun
 - [Command Code resume](archive/cmd-resume-bug.md) — empty-directory failure and reverted fallback
 - [Retired integrations](archive/retired-integrations.md) — removed Aerolink and Pioneer gateways
 - [Remote live validation](archive/remote-development-validation.md) — 2026-10-28 routing, coding, merge, and lifecycle receipts
+- [Controller acceptance, 2026-10-30](archive/controller-acceptance-20261030.md) — sequential checkout fixture
 
 _Generated from commit `ebc53a9` on 2026-10-28._
 
