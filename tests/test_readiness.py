@@ -30,6 +30,8 @@ from worker_reporting import QUEUED_LABEL, SELECTION_LABEL, STAGE_LABELS
 from test_remote_worker import MemoryTable, NOW, PROJECT, auth, claims, selector_claims
 from test_linear_sync import pr
 from call_budget import CallBudget
+from test_issue_images import DESCRIPTION, FIXTURES, screenshots
+from issue_images import image_digest
 
 DEFAULT_RESULT = object()
 
@@ -282,6 +284,110 @@ class ReadinessTests(unittest.TestCase):
         self.call(coding, "github")
         self.assertEqual(self.github.installation_token.call_args.kwargs["permissions"],
                          {"contents": "write", "pull_requests": "write"})
+        self.linear.download_image.assert_not_called()
+
+    def test_description_images_reach_both_phases_with_identical_reviewed_context(self):
+        self.issue["description"] = DESCRIPTION
+        self.linear.download_image.side_effect = screenshots().download_image.side_effect
+        review, reviewed = self.begin()
+        self.assertEqual(reviewed["issue"]["description"], DESCRIPTION)
+        self.assertEqual(len(reviewed["images"]), 2)
+        self.assertEqual(reviewed["binding"]["images_sha"], image_digest(reviewed["images"]))
+        self.assertNotIn("Launch preview", review_prompt(reviewed["issue"], images=reviewed["images"]))
+        self.submit(review)
+        self.stop(review)
+        coding = dispatch_key(self.registry, self.route, self.issue)
+        implementation = self.call(coding, "start")
+        self.assertEqual(implementation["issue"]["description"], DESCRIPTION)
+        self.assertEqual(implementation["images"], reviewed["images"])
+        self.assertEqual(implementation["readiness"]["images_sha"], reviewed["binding"]["images_sha"])
+        self.assertNotIn("data", json.loads(self.table.get(review)[0]["binding"]))
+
+    def test_image_failure_is_visible_and_holds_dispatch_until_context_is_available(self):
+        self.issue["description"] = DESCRIPTION
+        self.linear.download_image.side_effect = OSError("lin_api_private https://private/?token=secret")
+        self.dispatcher.process({"type": "Issue", "id": self.issue["id"]})
+        self.github.dispatch.assert_not_called()
+        self.assertFalse(self.receipts.list())
+        body = "\n".join(self.comments.values())
+        self.assertIn("Description image 1", body)
+        self.assertIn("Description image 2", body)
+        self.assertIn("Coding and publication are held", body)
+        self.assertIn("no visual review is claimed", body)
+        self.assertNotIn("lin_api_private", body)
+        self.assertNotIn("token=secret", body)
+        self.linear.download_image.side_effect = screenshots().download_image.side_effect
+        review, config = self.begin()
+        self.assertEqual(len(config["images"]), 2)
+        self.assertEqual(self.table.get(review)[0]["status"], "running")
+
+    def test_unsupported_and_oversized_images_have_specific_linear_feedback(self):
+        from issue_images import MAX_IMAGE_BYTES
+
+        for raw, mime, explanation in ((b"<svg/>", "image/svg+xml", "unsupported media type"),
+                                       (b"x" * (MAX_IMAGE_BYTES + 1), "image/png", "5 MiB")):
+            self.issue["description"] = "![Screenshot](https://uploads.linear.app/current)"
+            self.linear.download_image.side_effect = None
+            self.linear.download_image.return_value = raw, mime
+            with self.subTest(explanation=explanation), self.budget(exact={
+                    "linear.download_image": 1, "linear.status_comment": 1}), self.assertRaises(WorkerError):
+                self.gate.images(self.issue)
+            self.assertIn(explanation, self.comments[comment_id(self.issue["id"], "readiness")])
+        self.github.dispatch.assert_not_called()
+
+    def test_changed_image_bytes_at_same_url_cannot_accept_a_review(self):
+        self.issue["description"] = "![Screenshot](https://uploads.linear.app/current)"
+        self.linear.download_image.return_value = (FIXTURES / "current.png").read_bytes(), "image/png"
+        review, _ = self.begin()
+        self.linear.download_image.return_value = (FIXTURES / "target.png").read_bytes(), "image/png"
+        with self.assertRaisesRegex(WorkerError, "superseded"):
+            self.submit(review)
+        self.assertEqual(self.table.get(review)[0]["status"], "running")
+        self.assertFalse(self.receipts.list())
+
+    def test_changed_image_bytes_require_new_approval_before_coding_start(self):
+        self.issue["description"] = "![Screenshot](https://uploads.linear.app/current)"
+        self.linear.download_image.return_value = (FIXTURES / "current.png").read_bytes(), "image/png"
+        old, config = self.pass_review()
+        coding = dispatch_key(self.registry, self.route, self.issue)
+        self.linear.download_image.return_value = (FIXTURES / "target.png").read_bytes(), "image/png"
+        with self.assertRaisesRegex(WorkerError, "readiness review"):
+            self.call(coding, "start")
+        self.assertFalse(self.runs.list())
+        newer = self.key()
+        self.assertNotEqual(newer, old)
+        self.stop(coding, "failure")
+        reviewed = self.call(newer, "start")
+        self.assertNotEqual(reviewed["binding"]["images_sha"], config["binding"]["images_sha"])
+        self.submit(newer)
+        self.stop(newer)
+        self.stop(coding, "failure")
+        self.now += 901
+        self.queue.reconcile()
+        self.assertEqual(self.call(coding, "start")["images"], reviewed["images"])
+
+    def test_changed_images_during_account_selection_block_coding_and_publication(self):
+        self.issue["description"] = "![Screenshot](https://uploads.linear.app/current)"
+        self.linear.download_image.return_value = (FIXTURES / "current.png").read_bytes(), "image/png"
+        self.pass_review()
+        coding = dispatch_key(self.registry, self.route, self.issue)
+        config = self.call(coding, "start")
+        self.service.handle("bind_account", selector_claims(self.identity_for(coding)),
+                            {"dispatch_key": coding, "account_id": self.identity})
+        claimed = self.call(coding, "claim", account_id=self.identity)
+        self.linear.download_image.return_value = (FIXTURES / "target.png").read_bytes(), "image/png"
+        for action, data in (("github", {}), ("claim", {"account_id": self.identity}),
+                             ("progress", {"stage": "coding", "context_sha": config["readiness"]["context_sha"]}),
+                             ("progress", {"stage": "publishing"})):
+            with self.subTest(action=action, data=data), self.assertRaises(WorkerError):
+                self.call(coding, action, **data)
+        self.call(coding, "save", account_id=self.identity, lease=claimed["lease"], release=True, auth=auth())
+        self.assertEqual(self.receipts.get(coding)[0]["readiness_wait_owner"], config["owner"])
+        self.call(coding, "finish", status="failed")
+        self.stop(coding, "failure")
+        self.queue.reconcile()
+        self.assertFalse(self.receipts.get(coding)[0].get("repair_attempted"))
+        self.assertEqual(len(self.issues), 1)
 
     def test_workflow_capability_reaches_both_phases_without_giving_reviewers_write_tokens(self):
         self.github.workflow_changes_allowed.return_value = True
@@ -1113,13 +1219,16 @@ class ReviewerContractTests(unittest.TestCase):
             row["status"] = "blocked"
         self.assertEqual(validate_result(result)["verdict"], "needs_clarification")
 
-    def run_review_output(self, output, status="passed"):
+    def run_review_output(self, output, status="passed", images=None):
         selection = SimpleNamespace(account_id="a" * 64, model="gpt-6.1-sol", effort="max")
         heartbeat = SimpleNamespace(failed=threading.Event())
         config = {"model": selection.model, "effort": selection.effort, "ref": "main",
                   "binding": {"context_sha": "b" * 40}, "review_timeout_seconds": 600,
                   "issue": {"title": "Fix the documented --dry-run flag",
                             "comments": [{"id": "reply", "body": "that's fine, proceed anyways"}]}}
+        if images is not None:
+            config.update(images=images, binding={**config["binding"], "images_sha": image_digest(images)})
+            config["issue"]["description"] = DESCRIPTION
         broker = Mock()
         broker.call.side_effect = lambda action, **kw: {"token": "read-token"} if action == "checkout" else {"status": status}
         with tempfile.TemporaryDirectory() as directory:
@@ -1128,6 +1237,11 @@ class ReviewerContractTests(unittest.TestCase):
             lease.__enter__.return_value = (path, heartbeat)
             def command(args, **kwargs):
                 if args[0] == "codex":
+                    attached = [args[i + 1] for i, arg in enumerate(args) if arg == "--image"]
+                    self.assertEqual(len(attached), len(images or []))
+                    if images:
+                        self.assertEqual([Path(image).read_bytes() for image in attached],
+                                         [(FIXTURES / name).read_bytes() for name in ("current.png", "target.png")])
                     if output is not None:
                         (path / "readiness-result.json").write_bytes(output.encode() if isinstance(output, str) else output)
                     self.assertEqual(json.loads((path / "readiness-schema.json").read_text()), RESULT_SCHEMA)
@@ -1140,6 +1254,18 @@ class ReviewerContractTests(unittest.TestCase):
                  patch.dict(os.environ, {"ACTIONS_ID_TOKEN_REQUEST_TOKEN": "private-oidc", "GH_TOKEN": "private-write"}):
                 self.assertEqual(worker.review_readiness(broker, config, heartbeat, path), status)
         return broker, calls
+
+    def test_readiness_runner_attaches_all_images_with_captions_and_read_only_sandbox(self):
+        from issue_images import capture_images
+
+        images = capture_images(DESCRIPTION, screenshots().download_image)
+        _, calls = self.run_review_output(json.dumps(ready()), images=images)
+        call = next(call for call in calls.call_args_list if call.args[0][0] == "codex")
+        self.assertEqual(call.args[0][call.args[0].index("--sandbox") + 1], "read-only")
+        self.assertIn(DESCRIPTION.replace('"', '\\"').replace('\n', '\\n'), call.kwargs["stdin"])
+        self.assertIn("Description image 1", call.kwargs["stdin"])
+        self.assertIn("Description image 2", call.kwargs["stdin"])
+        self.assertNotIn("Launch preview", call.kwargs["stdin"])
 
     def test_runner_uses_read_only_sandbox_schema_bounded_timeout_and_clean_environment(self):
         broker, calls = self.run_review_output(json.dumps(ready()))

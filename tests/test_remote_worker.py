@@ -94,6 +94,9 @@ class ApprovedReadiness:
     def require(self, issue, route):
         return {}
 
+    def images(self, issue):
+        return []
+
     def prework_stopped(self, issue_id, route):
         return True
 

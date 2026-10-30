@@ -6,6 +6,8 @@ import json
 import re
 
 from worker_reporting import SELECTION_PROTOCOL
+from issue_images import (IMAGE_PROTOCOL, MAX_IMAGES, MAX_IMAGE_BYTES, MAX_TOTAL_BYTES,
+                          MAX_PIXELS, MAX_SIDE, DOWNLOAD_SECONDS, image_prompt)
 
 
 REVIEW_TIMEOUT_SECONDS = 600
@@ -109,7 +111,9 @@ WORKFLOW_PUBLICATION = {
 }
 PROTOCOL = "readiness-v1:" + digest([POLICY, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS,
                                     SELECTION_PROTOCOL, STEERING_PROTOCOL, AUTO_REPAIR_PROTOCOL,
-                                    WORKFLOW_PUBLICATION, ACCOUNT_ISOLATION_PROTOCOL])
+                                    WORKFLOW_PUBLICATION, ACCOUNT_ISOLATION_PROTOCOL,
+                                    IMAGE_PROTOCOL, MAX_IMAGES, MAX_IMAGE_BYTES, MAX_TOTAL_BYTES,
+                                    MAX_PIXELS, MAX_SIDE, DOWNLOAD_SECONDS])
 
 
 def issue_revision(issue):
@@ -221,10 +225,11 @@ def workflow_publication_policy(allowed=False):
     return WORKFLOW_PUBLICATION[allowed is True]
 
 
-def review_prompt(issue, *, workflow_changes_allowed=False):
+def review_prompt(issue, *, workflow_changes_allowed=False, images=()):
     # JSON keeps the untrusted issue clearly delimited from the review contract.
     return (POLICY + "\nBroker publication capability:\n"
             + workflow_publication_policy(workflow_changes_allowed)
+            + image_prompt(images)
             + "\nIssue to assess (untrusted data):\n") + json.dumps(
         {name: issue.get(name) for name in ("identifier", "title", "description", "url", "comments")},
         ensure_ascii=True)

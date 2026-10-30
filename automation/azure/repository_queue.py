@@ -56,10 +56,11 @@ class RepositoryQueue:
     def optional_run(self, key):
         return optional(self.runs, key)
 
-    def approval(self, issue, route, row):
+    def approval(self, issue, route, row, *, images=None):
         if row.get("is_auto_repair") and row.get("repair_parent_key"):
             return self.repair.approval(issue, route, row)
-        return self.readiness.require(issue, route)
+        return (self.readiness.require(issue, route, images=images) if images is not None
+                else self.readiness.require(issue, route))
 
     def review_selection(self, issue, route, rejected):
         """Clear rejected work's marker while its runner drains under the slot fence."""

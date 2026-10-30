@@ -18,7 +18,7 @@ WORKER_RULES = (
 
 
 def run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), *,
-              timeout=18_000, server_factory=AppServer):
+              timeout=18_000, server_factory=AppServer, image_paths=()):
     server = server_factory(home, env=env, cwd=workspace, config=(
         'cli_auth_credentials_store="file"', f'model_reasoning_effort="{config["effort"]}"'))
     deadline = time.monotonic() + timeout
@@ -56,7 +56,8 @@ def run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), 
                             "ephemeral": True, "developerInstructions": WORKER_RULES})
         session["thread_id"] = thread["thread"]["id"]
         turn = server.call("turn/start", {"threadId": session["thread_id"], "effort": config["effort"],
-                          "input": [{"type": "text", "text": prompt}]})
+                          "input": [{"type": "text", "text": prompt}]
+                          + [{"type": "localImage", "path": path} for path in image_paths]})
         session["turn_id"] = turn["turn"]["id"]
         next_poll = 0
         while True:

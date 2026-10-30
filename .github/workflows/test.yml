@@ -39,7 +39,9 @@ jobs:
       - name: Compile codeview python
         run: python3 -m py_compile bin/codeview scripts/codeview/*.py
       - name: Run tests
-        run: python3 -m unittest discover -s tests -v
+        run: |
+          python3 -m pip install -r automation/azure/requirements.txt
+          python3 -m unittest discover -s tests -v
 
   routing-runtime:
     runs-on: ubuntu-24.04
