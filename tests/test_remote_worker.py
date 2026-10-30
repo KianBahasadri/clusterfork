@@ -117,6 +117,13 @@ def claims():
             "workflow_ref": "KianBahasadri/clusterfork/.github/workflows/clusterfork-worker.yml@refs/heads/main"}
 
 
+def selector_claims(identity=None):
+    identity = identity or claims()
+    return {**identity,
+            "job_workflow_ref": f"{identity['repository']}/.github/workflows/clusterfork-select-account.yml@{identity['ref']}",
+            "job_workflow_sha": identity["sha"]}
+
+
 def receipt():
     return {"RowKey": KEY, "project_id": PROJECT, "repository": "KianBahasadri/clusterfork",
             "issue_id": ISSUE, "identifier": "KIAN-891", "status": "dispatched"}
@@ -148,7 +155,8 @@ class WorkerAdmissionTests(unittest.TestCase):
 
     def test_confirmed_serial_admission_allows_normal_execution(self):
         result, broker, execute = self.run_worker({"serial_admission": True,
-                                                "protocol": worker.PROTOCOL, "phase": "development"})
+                                                "protocol": worker.PROTOCOL, "phase": "development",
+                                                "account_selection": False, "account_id": "a" * 64})
         self.assertEqual(result, 0)
         execute.assert_called_once()
         broker.call.assert_called_with("finish", status="completed", pull_request="")
@@ -160,6 +168,15 @@ class WorkerAdmissionTests(unittest.TestCase):
         self.assertEqual(result, 1)
         execute.assert_not_called()
         broker.call.assert_called_with("finish", status="failed", failure=ANY)
+
+    def test_unbound_accounts_and_wrong_job_roles_cannot_start_agent_execution(self):
+        for extra in ({}, {"account_selection": True, "account_id": "a" * 64},
+                      {"account_selection": False}, {"account_selection": False, "account_id": "invalid"}):
+            with self.subTest(extra=extra):
+                result, _, execute = self.run_worker({"serial_admission": True, "protocol": worker.PROTOCOL,
+                                                      "phase": "development", **extra})
+                self.assertEqual(result, 1)
+                execute.assert_not_called()
 
 
 class AccountLeaseTests(unittest.TestCase):
@@ -423,7 +440,7 @@ class LiveQuotaShapeTests(unittest.TestCase):
             with self.subTest(status=status), \
                  patch.object(worker, "account_lease", side_effect=HTTPError("https://broker", status, "failure", {}, None)), \
                  self.assertRaises(HTTPError):
-                worker.choose_account(Broker(), config, Heartbeat())
+                worker.choose_account(Broker(), config, Heartbeat(), preflight=True)
 
     def test_short_and_weekly_limits_both_constrain_headroom(self):
         config = Registry.load(ROOT / "automation/azure/projects.json")

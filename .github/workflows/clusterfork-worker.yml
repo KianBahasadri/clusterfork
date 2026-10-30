@@ -30,7 +30,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  select-account:
+    uses: ./.github/workflows/clusterfork-select-account.yml
+    with:
+      dispatch_key: ${{ inputs.dispatch_key }}
+
   develop:
+    needs: select-account
+    if: needs.select-account.outputs.selected == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     steps:

@@ -99,6 +99,7 @@ def digest(value):
 # older broker must not silently start a runner without these capabilities.
 STEERING_PROTOCOL = "linear-steering-v1"
 AUTO_REPAIR_PROTOCOL = "auto-repair-v1"
+ACCOUNT_ISOLATION_PROTOCOL = "single-account-preflight-v1"
 WORKFLOW_PUBLICATION = {
     True: ("Workflow publication: the GitHub App installation has approved Workflows write permission. "
            "Changes under .github/workflows/ can be published through the normal validation and PR process."),
@@ -107,7 +108,8 @@ WORKFLOW_PUBLICATION = {
             "permissions; if workflow edits are required, the missing permission must be resolved first."),
 }
 PROTOCOL = "readiness-v1:" + digest([POLICY, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS,
-                                    SELECTION_PROTOCOL, STEERING_PROTOCOL, AUTO_REPAIR_PROTOCOL, WORKFLOW_PUBLICATION])
+                                    SELECTION_PROTOCOL, STEERING_PROTOCOL, AUTO_REPAIR_PROTOCOL,
+                                    WORKFLOW_PUBLICATION, ACCOUNT_ISOLATION_PROTOCOL])
 
 
 def issue_revision(issue):

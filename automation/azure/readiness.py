@@ -2,7 +2,6 @@
 
 import json
 import logging
-import re
 import time
 from uuid import uuid4
 
@@ -11,7 +10,8 @@ from linear_sync import comment_id
 from readiness_policy import (PROTOCOL, RETRY_SECONDS, REVIEW_TIMEOUT_SECONDS, digest,
                               issue_revision, policy_version, redact_review_text, redact_review_value,
                               result_snapshot, validate_result)
-from worker_core import LEASE_SECONDS, WorkerError, authorize_claims
+from worker_core import (ACCOUNT_HANDOFF_SECONDS, LEASE_SECONDS, SELECTOR_ACTIONS, WorkerError,
+                         account_request, authorize_claims, is_account_selector)
 
 REJECTIONS = {"needs_clarification", "rejected"}
 DECISIONS = {"passed", *REJECTIONS}
@@ -286,16 +286,18 @@ class ReadinessGate:
 
     def handle(self, action, claims, data, row):
         route = authorize_claims(claims, self.registry, row)
+        selector = is_account_selector(claims)
+        if selector and action not in SELECTOR_ACTIONS:
+            raise WorkerError("Account preflight cannot execute or publish agent work", 403)
         owner = f"{claims['run_id']}:{claims['run_attempt']}"
         issue = self.linear.issue(row["issue_id"])
         # Always permit fenced account cleanup, even after edits/cancellation.
         if action == "save":
-            self.accounts.save(data.get("account_id", ""), self.account_owner(row, owner),
-                               data.get("lease"), data.get("auth"), release=data.get("release") is True)
-            return {"saved": True}
+            return account_request(self.accounts, action, data, row, self.account_owner(row, owner),
+                                   selector=selector, run_owner=owner)
         if not issue or eligibility(issue, self.registry)[0] != route or not self.current(row, issue, route):
             raise WorkerError("Readiness request was superseded or canceled", 403)
-        if action in {"start", "checkout", "accounts", "claim"} and not self.admitted(issue, route):
+        if action in {"start", "checkout", "accounts", "claim", "bind_account"} and not self.admitted(issue, route):
             raise WorkerError("Readiness start held for unresolved or unverifiable issue prerequisites", 403)
         if action == "start":
             if data.get("protocol") != PROTOCOL:
@@ -317,10 +319,19 @@ class ReadinessGate:
                 raise WorkerError("Readiness worker changed concurrently")
             if row.get("owner") != owner or row["status"] != "running":
                 row["deadline"] = int(self.clock()) + REVIEW_TIMEOUT_SECONDS + 120
-            row.update(status="running", owner=owner, lease_until=int(self.clock()) + LEASE_SECONDS)
+            if row.get("owner") != owner:
+                row.pop("assigned_account_id", None)
+                row.pop("execution_started", None)
+            if not selector and row.get("assigned_account_id") and not row.get("execution_started"):
+                row.update(execution_started=True, deadline=int(self.clock()) + REVIEW_TIMEOUT_SECONDS + 120)
+            lease_until = int(self.clock()) + LEASE_SECONDS
+            if selector and row.get("assigned_account_id"):
+                lease_until = max(row["lease_until"], lease_until)
+            row.update(status="running", owner=owner, lease_until=lease_until)
             self.table.replace(row, version)
             profile = self.registry.agent_profiles["codex"]
             return {"protocol": PROTOCOL, "phase": "readiness", "model": profile.model,
+                    "account_selection": selector, "account_id": row.get("assigned_account_id"),
                     "effort": profile.effort, "repository": route.repository, "ref": route.ref,
                     "binding": json.loads(row["binding"]), "review_timeout_seconds": REVIEW_TIMEOUT_SECONDS,
                     "selection": {"min_remaining_percent": self.registry.agent_selection.min_remaining_percent,
@@ -349,18 +360,24 @@ class ReadinessGate:
             raise WorkerError("Readiness reviewers cannot obtain publication credentials", 403)
         if action == "checkout":
             return {"token": self.github.installation_token(route.repository, permissions={"contents": "read"})}
-        if action == "accounts":
-            return {"accounts": self.accounts.list()}
-        if action == "claim":
-            identity = data.get("account_id", "")
-            if not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{64}", identity):
-                raise WorkerError("Invalid account identity", 400)
-            return self.accounts.claim(identity, self.account_owner(row, owner))
+        if action in {"accounts", "claim", "bind_account"}:
+            current, version = self.table.get(row["RowKey"])
+            if current != row:
+                raise WorkerError("Readiness account selection was superseded")
+            was_assigned = bool(row.get("assigned_account_id"))
+            result = account_request(self.accounts, action, data, row, self.account_owner(row, owner),
+                                     selector=selector, run_owner=owner)
+            if action == "bind_account":
+                if not was_assigned:
+                    row["lease_until"] = int(self.clock()) + ACCOUNT_HANDOFF_SECONDS
+                    row["deadline"] = row["lease_until"] + REVIEW_TIMEOUT_SECONDS + 120
+                self.table.replace(row, version)
+            return result
         if action == "heartbeat":
             current, version = self.table.get(row["RowKey"])
             if current != row:
                 raise WorkerError("Readiness worker changed concurrently")
-            row["lease_until"] = int(self.clock()) + LEASE_SECONDS
+            row["lease_until"] = max(row["lease_until"], int(self.clock()) + LEASE_SECONDS)
             self.table.replace(row, version)
             return {"running": True}
         if action == "review":

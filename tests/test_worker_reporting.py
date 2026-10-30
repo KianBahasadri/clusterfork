@@ -21,7 +21,7 @@ from readiness_policy import PROTOCOL
 from worker_core import Accounts, WorkerError, WorkerService
 from worker_reporting import QUEUED_LABEL, SELECTION_LABEL, STAGE_LABELS, attempt_comment, usage_report, validate_usage
 import test_linear_sync as lifecycle
-from test_remote_worker import KEY, NOW, ISSUE, MemoryTable, auth, claims
+from test_remote_worker import KEY, NOW, ISSUE, MemoryTable, auth, claims, selector_claims
 
 
 def limits(short=10, weekly=20):
@@ -51,6 +51,8 @@ class ProgressTests(unittest.TestCase):
         return self.service.handle(action, claims(), {"dispatch_key": KEY, "protocol": PROTOCOL, **data})
 
     def select(self):
+        self.service.handle("bind_account", selector_claims(),
+                            {"dispatch_key": KEY, "account_id": self.identity})
         self.call("claim", account_id=self.identity)
         self.call("progress", stage="selecting_account")
         self.call("progress", stage="coding", account_id=self.identity,
@@ -160,6 +162,8 @@ class ProgressTests(unittest.TestCase):
         other = {**claims(), "run_attempt": "2"}
         self.service.handle("start", other, {"dispatch_key": KEY, "protocol": PROTOCOL})
         self.accounts.save(self.identity, "123:1", self.accounts.table.get(self.identity)[0]["fence"], release=True)
+        self.service.handle("bind_account", selector_claims(other),
+                            {"dispatch_key": KEY, "account_id": self.identity})
         self.service.handle("claim", other, {"dispatch_key": KEY, "account_id": self.identity})
         self.service.handle("progress", other, {"dispatch_key": KEY, "stage": "coding",
                                                 "account_id": self.identity, "usage_before": usage(12, 21)})

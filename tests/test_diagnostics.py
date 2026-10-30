@@ -132,7 +132,8 @@ class DiagnosticsTests(unittest.TestCase):
 
     def test_main_saves_readable_failure_in_callback_and_actions_summary(self):
         broker = Mock(stage="publishing")
-        broker.call.return_value = {"serial_admission": True, "protocol": worker.PROTOCOL, "phase": "development"}
+        broker.call.return_value = {"serial_admission": True, "protocol": worker.PROTOCOL, "phase": "development",
+                                   "account_selection": False, "account_id": "a" * 64}
         error = TimeoutError("SECRET")
         error.clusterfork_failure = {"operation": "broker/github", "kind": "timeout", "stage": "publishing",
                                      "elapsed_ms": 20001, "timeout_seconds": 20}

@@ -1,0 +1,35 @@
+name: Clusterfork Codex account preflight
+
+on:
+  workflow_call:
+    inputs:
+      dispatch_key:
+        description: Durable dispatcher receipt key
+        required: true
+        type: string
+    outputs:
+      selected:
+        description: Whether the broker has bound one account to this run
+        value: ${{ jobs.select-account.outputs.selected }}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  select-account:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    outputs:
+      selected: ${{ steps.select.outputs.selected }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-codex
+      - name: Inspect quota and bind one account without agent execution
+        id: select
+        env:
+          CLUSTERFORK_BROKER_URL: https://clusterfork-dispatch-7604cac329.azurewebsites.net/api/worker
+          DISPATCH_KEY: ${{ inputs.dispatch_key }}
+        run: python3 automation/worker.py --select-account
