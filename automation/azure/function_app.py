@@ -190,11 +190,11 @@ def deployment_recovery(event):
     service.queue.reconcile()
     if pending or service.queue.deployment_pending():
         # Run discovery can lag, or a prior attempt can still be stopping. Keep
-        # that wait off GitHub runners and independent of the 15-minute timer.
+        # that wait off GitHub runners and independent of the shared timer.
         enqueue(event, visibility_timeout=15)
 
 
-@app.timer_trigger(arg_name="timer", schedule="0 */15 * * * *", run_on_startup=False,
+@app.timer_trigger(arg_name="timer", schedule="0 */2 * * * *", run_on_startup=False,
                    use_monitor=True)
 @observed("azure/reconcile")
 def reconcile(timer: func.TimerRequest):

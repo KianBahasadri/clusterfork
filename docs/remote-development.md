@@ -19,7 +19,7 @@ live routing and merge evidence without treating it as current health.
 
 | Source | Responsibility |
 | --- | --- |
-| `automation/azure/function_app.py` | Signed webhook, queue trigger, health, worker broker, and shared 15-minute timer |
+| `automation/azure/function_app.py` | Signed webhook, queue trigger, health, worker broker, and shared 2-minute timer |
 | `dispatch_core.py`, `dispatch_clients.py` in that directory | Current Linear eligibility, GitHub App dispatch, and durable receipts |
 | `worker_core.py`, `worker_store.py`, `quota_selection.py` | Workflow authorization, account leases, fenced credentials, and quota selection |
 | `linear_sync.py` | Linear lifecycle and PR/CI reconciliation |
@@ -43,8 +43,9 @@ does not cancel submitted jobs. See
 [setup](remote-development-setup.md#linear-webhook-and-first-run) for the enrollment label.
 
 The shared timer reconciles worker/PR status and scans mapped projects every
-15 minutes. Project labels are fetched once per issue page to stay within
-Linear's query-complexity limit.
+2 minutes (`0 */2 * * * *`). Quota and readiness retry backoffs remain 15 minutes.
+Project labels are fetched once per issue page to stay within Linear's
+query-complexity limit.
 
 Per-issue Linear and GitHub reconciliation calls are limited to active work and
 pending reports. Readiness checks local review state before fetching an issue:
@@ -224,7 +225,7 @@ and Done. Only ready states such as Todo dispatch new issues.
 | PR merges, or validated work needs no repository changes | Done |
 | No account has enough quota | Todo; retries after 15 minutes |
 
-Start and finish attempt immediate updates. The existing shared 15-minute timer
+Start and finish attempt immediate updates. The shared 2-minute timer
 checks later PR/CI changes and retries failed Linear writes; no GitHub webhook or
 continuously running worker is needed. It updates one owned comment with the
 current reason, PR link, and worker-run link. Durable synchronization leases and

@@ -48,7 +48,7 @@ A failed notification leaves dispatch paused. The consumer checks the current
 deployment record, ignores superseded events, and holds work until explicit resume.
 It reconciles deferred readiness and repository admission immediately, with delayed
 15-second queue events while prior attempts remain active or undiscovered. No GitHub
-runner waits for deployment, and recovery does not depend on the 15-minute timer.
+runner waits for deployment, and recovery does not depend on the shared timer.
 
 Every matching GitHub run's latest attempt and any recorded owner must be stopped
 before a replacement. Missing/incomplete observations hold work for discovery.

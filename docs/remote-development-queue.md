@@ -50,7 +50,8 @@ define recovery after a reporting process stops. Dispatch receipts keep reposito
 after a mapping is removed.
 
 The repository slot has **no expiry**. It spans readiness review, dispatch, coding, validation, publication, pending CI,
-review, and merging. A finish callback or auto-merge request does not release it. The shared 15-minute timer advances
+review, and merging. A finish callback or auto-merge request does not release it. The
+[shared timer](remote-development.md#components-and-dispatch) advances
 automatically after GitHub confirms all matching runs' latest attempts have stopped and the PR has merged, or a
 successful worker validated that no changes were needed. The recorded worker identity is checked directly as well,
 because run listings can lag. Open PRs hold the slot even with manual merging enabled. Worker starts and completion
@@ -118,7 +119,7 @@ dispatched runs stopped and no PR exists, the issue returns to its original queu
 pre-coding attempt stays retryable in Todo. Durable dependency epochs fence coding against concurrent holds and preserve
 retry intent across restarts, without resetting completed coding receipts. Dependencies added after coding starts do not
 interrupt that task. Blocker Issue notifications (including unmapped/deleted sources), dependent Issue notifications, and
-available IssueRelation notifications refresh affected repository queues from current Linear data. The shared 15-minute
+available IssueRelation notifications refresh affected repository queues from current Linear data. The shared
 timer also refreshes dependencies, recovering missed notifications and automatically admitting newly runnable issues.
 
 ## Selection feedback latency
@@ -131,7 +132,7 @@ backlog, and a free repository, expect feedback in seconds: polling plus current
 and the label API calls. Label lookup/creation can add calls. Each HTTP request has a 20-second timeout. Linear webhook
 delivery, Azure cold starts/scaling, backlog, rate limits, and Linear client refresh can add delay; one second is a
 polling cap, not an end-to-end SLA. A busy repository stays queued until authoritative completion checks allow
-admission, normally on the 15-minute timer. Failed label writes retry on events and that timer; lowering polling does
+admission, normally on the shared timer. Failed label writes retry on events and that timer; lowering polling does
 not shorten the timer or failed-message retry backoff.
 
 `Clusterfork timing` information logs record `webhook_received`, `event_enqueued`, `event_processing`,

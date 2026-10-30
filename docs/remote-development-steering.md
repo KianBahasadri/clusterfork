@@ -21,7 +21,7 @@ comment authors and text itself. While coding, the authenticated runner polls
 Azure every **10 seconds**, delivering at most one instruction per poll. Normal
 latency is one poll plus service and agent safe-point latency, even without
 Comment webhooks. Initialization/account selection can queue instructions until
-coding starts. The shared **15-minute**
+coding starts. The shared **2-minute**
 timer follows the [runtime reconciliation rules](remote-development.md#components-and-dispatch).
 
 Azure Table `ClusterforkInstructions` (partition `instructions`) freezes the first
