@@ -11,3 +11,7 @@ The prerequisite was read from the task checkout.
 runtime-change: observed after automatic deployment
 
 The installer fix was read from this task's checkout.
+
+deployment-completion: observed before admission
+
+The deployment gate and signed webhook relay were read from this checkout.
