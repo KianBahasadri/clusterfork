@@ -106,6 +106,33 @@ class ProgressTests(unittest.TestCase):
             self.assertEqual(after[field], before[field])
         self.assertEqual(len(self.comments("start")), 1)
 
+    def test_account_switch_keeps_start_snapshot_and_reports_separate_usage_deltas(self):
+        self.select()
+        initial_start = self.comments("start")[0]
+        self.service.steering = Mock()
+        self.call("steering_open", thread_id="thread-one", turn_id="turn-one")
+        self.call("progress", usage_account_id=self.identity, usage_after=usage(100, 27))
+        lease = self.accounts.table.get(self.identity)[0]["fence"]
+        self.call("save", account_id=self.identity, lease=lease, release=True)
+        self.call("exhaust_account", account_id=self.identity, thread_id="thread-one")
+        other = self.accounts.enroll(auth("account-b", "access-b"))
+        self.call("bind_account", account_id=other)
+        self.call("claim", account_id=other)
+        self.call("progress", stage="coding", account_id=other, account_email="replacement@example.com",
+                  usage_before=usage(20, 30))
+        self.call("steering_open", thread_id="thread-one", turn_id="turn-two")
+        self.assertEqual(self.comments("start"), [initial_start])
+        self.call("progress", usage_account_id=other, usage_after=usage(25, 32))
+        self.call("finish", status="completed")
+        finish = self.comments("finish")
+        self.assertEqual(len(finish), 1)
+        for text in ("Account changes: 1", "worker@example.com", "replacement@example.com",
+                     "usage change +7 percentage points", "usage change +2 percentage points"):
+            self.assertIn(text, finish[0])
+        self.sync.sync(KEY)
+        self.assertEqual(self.comments("start"), [initial_start])
+        self.assertEqual(self.comments("finish"), finish)
+
     def test_tracker_failure_replays_both_attempt_comments_with_stable_distinct_uuid4_ids(self):
         self.linear.status_comment.side_effect = RequestError()
         with self.assertLogs(level="ERROR"):

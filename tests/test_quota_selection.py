@@ -40,6 +40,38 @@ class QuotaSelectionTests(unittest.TestCase):
         self.assertEqual(result.remaining_percent, 55)
         self.assertEqual(result.effort, "max")
 
+    def timed(self, identity, short, weekly):
+        return replace(self.account(identity), windows=(
+            QuotaWindow(short, NOW + 1000, "codex/primary", 300),
+            QuotaWindow(weekly, NOW + 10000, "codex/secondary", 10080)))
+
+    def test_below_seventy_percent_short_usage_ranks_by_weekly_usage(self):
+        selected = self.choose([self.timed("a", 65, 10), self.timed("b", 20, 30)])
+        self.assertEqual(selected.account_id, "a")
+        # Ranking must not overstate the actual minimum headroom.
+        self.assertEqual(selected.remaining_percent, 35)
+
+    def test_exactly_seventy_percent_includes_the_short_window(self):
+        for short, expected in ((69.999, "a"), (70, "b"), (70.001, "b")):
+            with self.subTest(short=short):
+                self.assertEqual(self.choose([self.timed("a", short, 10),
+                                              self.timed("b", 20, 30)]).account_id, expected)
+
+    def test_weekly_preference_preserves_all_eligibility_guards(self):
+        base = self.timed("a", 65, 10)
+        other = self.timed("b", 20, 30)
+        for account in (replace(base, in_use=True), replace(base, observed_at=NOW - 61),
+                        replace(base, blocked_until=NOW + 10), self.timed("a", 65, None),
+                        self.timed("a", 65, 90), self.timed("a", 81, 10)):
+            with self.subTest(account=account):
+                self.assertEqual(self.choose([account, other]).account_id, "b")
+        policy = replace(self.policy, min_remaining_percent=40)
+        self.assertEqual(select_account([base, other], self.profiles, policy, now=NOW).account_id, "b")
+
+    def test_missing_weekly_window_keeps_the_existing_conservative_ranking(self):
+        account = replace(self.timed("a", 65, 10), windows=(QuotaWindow(65, NOW + 1000, "codex/primary", 300),))
+        self.assertEqual(self.choose([account, self.timed("b", 20, 30)]).account_id, "b")
+
     def test_busy_and_rate_limited_accounts_are_excluded(self):
         result = self.choose([self.account("busy", used=(0,), in_use=True),
                               self.account("blocked", used=(0,), blocked_until=NOW + 10),

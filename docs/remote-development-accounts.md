@@ -73,9 +73,10 @@ and quota-probe files never cross the job boundary.
 The agent job requires that binding before execution and rechecks only its
 assigned account's live quota. For either job, `accounts` returns only the assigned
 identity after binding, and `claim`/`save` requests for other identities fail with
-403. An unbound agent job cannot list or claim accounts. Only preflight can bind,
-and it cannot replace an existing assignment. Releasing an account lease, losing
-the lease, or repeating `start` preserves the binding; a finished development
+403. An unbound agent job cannot list or claim accounts before coding. Preflight
+alone binds the initial account and cannot replace an existing assignment.
+Releasing an account lease, losing the lease, or repeating `start` preserves
+the binding unless coding enters the controlled failover below. A finished development
 attempt cannot restart itself to clear it. A new run/attempt selects independently.
 When rerunning a failed GitHub attempt, rerun **all jobs** so preflight executes
 for the new attempt. Rerunning only the agent job cannot inherit the previous
@@ -85,13 +86,48 @@ Binding gives the worker a 15-minute lease for the job handoff.
 Accounts retain their normal 120-second leases and are not reserved while the
 next VM is queued. If the assigned account becomes busy, depleted, or unavailable,
 the agent job waits for quota and the existing 15-minute reconciliation retry;
-it never tries another identity. Readiness starts its bounded review deadline on
+it does not fail over before coding. Readiness starts its bounded review deadline on
 the agent job's first start, without letting repeated starts extend that budget.
 
 Deploy matching broker/worker sources and both workflow files to each mapped
-repository. The start protocol includes `single-account-preflight-v1`; incompatible
+repository. The start protocol includes `single-account-preflight-coding-failover-v2`; incompatible
 workers/brokers stop before agent execution. The automatic deployment drain still
 applies, and no new credentials, storage tables, or App grants are required.
+
+### Coding account failover
+
+Development uses persistent app-server threads, without `ephemeral: true`.
+Only a failed coding turn explicitly classified as `usageLimitExceeded` permits
+account rotation. Generic HTTP 429s, transient rate limits, authentication errors,
+transport errors, interruptions, timeouts, and lease loss stop normally.
+
+The worker stops the old app-server, retains its thread ID, and copies only
+`sessions/**/rollout-*.jsonl` into a private task session directory outside every
+temporary `CODEX_HOME`. It saves refreshed credentials with `release=True` and
+deletes the old home, including `auth.json`, before requesting `exhaust_account`.
+The broker requires that successful fenced release, the active coding stage,
+and the original thread ID. It records `exhausted_account_ids` on the
+`ClusterforkWorkers` row and unlocks replacement access for that develop attempt.
+Neither a repeated start nor preflight can clear or use this failover authority.
+
+Replacement probes are fenced one identity at a time, including an ambiguous
+claim response. Each probe releases its lease and deletes its auth home before
+the next; binding waits until the probe is released. Initial and replacement
+selection share the [runtime quota policy](remote-development.md#agent-profiles).
+The selected replacement is leased and rechecked before restoring the retained
+rollout files into its fresh `CODEX_HOME/sessions/`. No account caches or
+credentials accompany session transfer, and session symlinks are rejected.
+The publication guard retains tokens from every probed or leased account.
+
+The worker calls `thread/resume` with the same thread ID, then `turn/start` to
+continue the original task with a new turn ID. The broker updates steering's
+turn ID only within that same thread. The runner, checkout, and existing edits
+stay in place; the original coding deadline also covers replacement selection
+and resumed turns. Exhausted identities cannot be selected again in that attempt.
+If no replacement qualifies, it finishes with explicit quota unavailability and
+the normal capacity retry; it does not wait or rotate indefinitely. Sessions and
+unpublished edits are not checkpointed across runner/job removal. Validation and
+publication proceed after successful agent completion.
 
 Publication tokens are scoped to one repository with Contents and Pull requests
 write permission, plus Workflows write when the installation currently grants it.

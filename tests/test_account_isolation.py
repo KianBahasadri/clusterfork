@@ -1,4 +1,4 @@
-"""Pool credentials stay on preflight's VM; agents keep one immutable account."""
+"""Preflight owns initial pool access; ordinary releases retain the assignment."""
 
 from contextlib import contextmanager, redirect_stdout
 import io

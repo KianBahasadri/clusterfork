@@ -61,7 +61,7 @@ def finite_number(value):
 
 
 def select_account(accounts, profiles, policy, *, now):
-    """Return the account with the most headroom, or None to wait for capacity.
+    """Return the eligible account with the lowest usage score, or None.
 
     All windows supplied must apply to this model. Unknown, stale, reset, busy,
     blocked, and nearly exhausted accounts are ineligible. The caller must obtain
@@ -91,14 +91,21 @@ def select_account(accounts, profiles, policy, *, now):
         )
         if not usable:
             continue
-        # The most depleted applicable window constrains the task. A nearly
-        # empty weekly quota must not be hidden by a healthy five-hour quota.
+        # Eligibility always uses every window, independently of ranking.
         remaining = 100 - max(window.used_percent for window in account.windows)
         if remaining < policy.min_remaining_percent:
             continue
         selection = AccountSelection(account.account_id, account.agent, profile.model,
                                      profile.effort, remaining)
-        candidates.append(selection)
+        ranked = account.windows
+        if any(window.duration_minutes == 10080 for window in ranked):
+            # Only ignore identified short windows when weekly usage is known.
+            # Unknown durations and other model limits still constrain ranking.
+            ranked = tuple(window for window in ranked if not (
+                finite_number(window.duration_minutes) and 0 < window.duration_minutes < 10080
+                and window.used_percent < 70))
+        score = max(window.used_percent for window in ranked)
+        candidates.append((score, selection))
     if not candidates:
         return None
-    return min(candidates, key=lambda row: (-row.remaining_percent, row.agent, row.account_id))
+    return min(candidates, key=lambda row: (row[0], row[1].agent, row[1].account_id))[1]

@@ -75,7 +75,7 @@ def is_account_selector(claims):
 
 
 def account_request(accounts, action, data, row, owner, *, selector, run_owner=None):
-    """Pool access is exclusive to preflight; bindings survive account release."""
+    """Initial pool access belongs to preflight; ordinary release keeps the binding."""
     if row.get("owner") != (run_owner or owner):
         raise WorkerError("Account assignment belongs to another worker attempt", 403)
     assigned = row.get("assigned_account_id")
@@ -262,12 +262,12 @@ class WorkerService:
                 value = data.get(field)
                 if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", value):
                     raise WorkerError("Invalid agent session identity", 400)
-                if row.get(field, value) != value:
+                if row.get(field, value) != value and not (action == "steering_open" and field == "turn_id"):
                     raise WorkerError("Agent session cannot be replaced within an attempt", 403)
             if action == "steering_open":
                 row, etag = self.runs.get(key)
                 if (row.get("owner") != owner or row.get("status") != "running" or row.get("steering_closed")
-                        or any(row.get(field, data[field]) != data[field] for field in ("thread_id", "turn_id"))):
+                        or row.get("thread_id", data["thread_id"]) != data["thread_id"]):
                     raise WorkerError("Agent session was superseded", 403)
                 row.update(thread_id=data["thread_id"], turn_id=data["turn_id"])
                 self.runs.replace(row, etag)
@@ -297,23 +297,41 @@ class WorkerService:
                 account, _ = self.accounts.table.get(identity)
                 if account.get("owner") != owner or account.get("lease_until", 0) <= self.clock():
                     raise WorkerError("Selected account lease was lost")
-                if (stage != "coding" or row.get("assigned_account_id") != identity
-                        or row.get("account_id", identity) != identity):
+                if stage != "coding" or row.get("assigned_account_id") != identity:
                     raise WorkerError("Invalid account selection", 400)
-                if not row.get("usage_before"):
-                    row["usage_before"] = json.dumps(validate_usage(data.get("usage_before")))
-                    row["account_id"] = identity
+                segments = json.loads(row.get("usage_segments", "[]"))
+                current = segments[-1]["account_id"] if segments else row.get("account_id")
+                if current and current != identity and not row.get("account_failover"):
+                    raise WorkerError("Account replacement requires a released, exhausted coding account", 403)
+                if not current or current != identity:
+                    segment = {"account_id": identity, "usage_before": validate_usage(data.get("usage_before"))}
                     for field in ("account_email", "account_plan"):
                         value = data.get(field)
                         if value is not None and (not isinstance(value, str) or len(value) > 200):
                             raise WorkerError("Invalid account description", 400)
-                        row[field] = value or ""
+                        segment[field] = value or ""
+                    if not row.get("usage_before"):
+                        # Keep the start comment immutable across account switches.
+                        row.update({field: segment[field] for field in ("account_id", "account_email", "account_plan")})
+                        row["usage_before"] = json.dumps(segment["usage_before"])
+                    segments.append(segment)
+                    row["usage_segments"] = json.dumps(segments)
+                    row["account_failover"] = False
                     profile = self.registry.agent_profiles["codex"]
                     row.update(model=profile.model, effort=profile.effort)
             if "usage_after" in data:
                 if not row.get("usage_before"):
                     raise WorkerError("Account selection was not recorded", 400)
-                row["usage_after"] = json.dumps(validate_usage(data["usage_after"]))
+                segments = json.loads(row.get("usage_segments", "[]"))
+                current = segments[-1]["account_id"] if segments else row["account_id"]
+                if data.get("usage_account_id", current) != current:
+                    raise WorkerError("Usage reading belongs to another account", 403)
+                after = validate_usage(data["usage_after"])
+                if segments:
+                    segments[-1]["usage_after"] = after
+                    row["usage_segments"] = json.dumps(segments)
+                if current == row["account_id"]:
+                    row["usage_after"] = json.dumps(after)
             row.update(stage=stage, report_version=row.get("report_version", 0) + 1)
             if receipt.get("is_auto_repair") and data.get("repair_validation_passed") is True:
                 if stage != "publishing":
@@ -342,13 +360,25 @@ class WorkerService:
             self.sync_linear(key)
             self.sync_steering(receipt["issue_id"])
             return {"stage": stage}
-        if action in {"accounts", "claim", "save", "bind_account"}:
+        if action in {"accounts", "claim", "save", "bind_account", "exhaust_account"}:
             row, etag = self.runs.get(key)
+            if row.get("owner") != owner or row.get("status") != "running":
+                raise WorkerError("Account assignment belongs to another worker attempt", 403)
+            if action == "exhaust_account" or row.get("account_failover"):
+                return self.failover_account(action, data, row, etag, owner, selector=selector)
+            if selector and row.get("exhausted_account_ids"):
+                raise WorkerError("Preflight cannot access a coding attempt's replacement accounts", 403)
             was_assigned = bool(row.get("assigned_account_id"))
+            if action == "claim" and row.pop("released_account_id", None):
+                self.runs.replace(row, etag)
             result = account_request(self.accounts, action, data, row, owner, selector=selector)
             if action == "bind_account":
                 if not was_assigned:
                     row["lease_until"] = int(self.clock()) + ACCOUNT_HANDOFF_SECONDS
+                self.runs.replace(row, etag)
+            if action == "save" and data.get("release") is True and row.get("stage") == "coding":
+                row, etag = self.runs.get(key)
+                row["released_account_id"] = data["account_id"]
                 self.runs.replace(row, etag)
             return result
         if action == "checkout":
@@ -419,6 +449,76 @@ class WorkerService:
                 if exc.status != 409:
                     raise
         raise WorkerError("Dispatch receipt changed concurrently; retry readiness scheduling")
+
+    def failover_account(self, action, data, row, etag, owner, *, selector):
+        """Release the active identity before granting one-at-a-time replacement access."""
+        if selector or row.get("stage") != "coding" or row.get("steering_closed"):
+            raise WorkerError("Account failover is restricted to the active coding job", 403)
+        exhausted = json.loads(row.get("exhausted_account_ids", "[]"))
+        assigned = row.get("assigned_account_id")
+        if action == "accounts":
+            return {"accounts": [assigned] if assigned else [
+                identity for identity in self.accounts.list() if identity not in exhausted]}
+        identity = data.get("account_id")
+        if not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{64}", identity):
+            raise WorkerError("Invalid account identity", 400)
+        account, _ = self.accounts.table.get(identity)
+        leased = account.get("owner") == owner and account.get("lease_until", 0) > self.clock()
+        if action == "exhaust_account":
+            segments = json.loads(row.get("usage_segments", "[]"))
+            current = segments[-1]["account_id"] if segments else row.get("account_id")
+            if (identity != assigned or identity != current or leased
+                    or row.get("released_account_id") != identity
+                    or not row.get("thread_id") or data.get("thread_id") != row["thread_id"]):
+                raise WorkerError("Release the exhausted coding account before requesting failover", 403)
+            if identity not in exhausted:
+                exhausted.append(identity)
+            row.update(exhausted_account_ids=json.dumps(exhausted), account_failover=True)
+            row.pop("assigned_account_id", None)
+            row.pop("released_account_id", None)
+            self.runs.replace(row, etag)
+            return {"exhausted_account_ids": exhausted}
+        if identity in exhausted:
+            raise WorkerError("This account was exhausted during this attempt", 403)
+        if action == "bind_account":
+            if row.get("probe_account_id"):
+                raise WorkerError("Release the quota probe before binding an account", 403)
+            if assigned:
+                previous, _ = self.accounts.table.get(assigned)
+                if previous.get("owner") == owner and previous.get("lease_until", 0) > self.clock():
+                    raise WorkerError("Release the previous account before binding another", 403)
+            row["assigned_account_id"] = identity
+            row.pop("released_account_id", None)
+            self.runs.replace(row, etag)
+            return {"account_id": identity}
+        if action == "claim":
+            if (assigned and identity != assigned) or row.get("probe_account_id"):
+                raise WorkerError("Only one replacement account may be leased at a time", 403)
+            row.pop("released_account_id", None)
+            if not assigned:
+                # Fence the probe before exposing auth, including an interrupted
+                # claim response. A lost response cannot unlock a second identity.
+                row["probe_account_id"] = identity
+            self.runs.replace(row, etag)
+            try:
+                return self.accounts.claim(identity, owner)
+            except WorkerError:
+                if not assigned:
+                    current, _ = self.accounts.table.get(identity)
+                    if current.get("owner") != owner or current.get("lease_until", 0) <= self.clock():
+                        row, etag = self.runs.get(row["RowKey"])
+                        row.pop("probe_account_id", None)
+                        self.runs.replace(row, etag)
+                raise
+        if action == "save" and identity == (assigned or row.get("probe_account_id")):
+            self.accounts.save(identity, owner, data.get("lease"), data.get("auth"),
+                               release=data.get("release") is True)
+            if data.get("release") is True:
+                row.pop("probe_account_id", None)
+                row["released_account_id"] = identity
+                self.runs.replace(row, etag)
+            return {"saved": True}
+        raise WorkerError("This run cannot access another Codex account", 403)
 
     def hold_for_deployment(self, key, owner):
         for _ in range(32):
