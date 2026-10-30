@@ -85,7 +85,9 @@ host resources described in [Azure infrastructure](azure-infrastructure.md).
 
 The installer verifies VM identity, uses the dedicated persistent disk, installs
 the exact committed runtime and dependencies into a separate release directory,
-and stops the old service before switching its current release. HTTPS and private
+and reloads the written unit before stopping the service, including on first
+installation. The stop must succeed and its state must be verified as `inactive`
+before switching the current release. HTTPS and private
 operator verification must pass before clearing the deployment's own hold. The
 running application creates/verifies its exact runtime tag before dispatch can
 resume. Operator holds remain intact. The deployment workflow is still disabled
