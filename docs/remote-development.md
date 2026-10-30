@@ -114,6 +114,10 @@ and explains one to four missing decisions, consequences, and answerable questio
 Invalid results retain a bounded, credential-redacted output snapshot and a specific
 field, consistency, parsing, or binding error. Each attempt keeps a stable review
 comment with its feedback and run link, so later reviews see rejections and replies.
+Clarification and rejection comments include the top-level `notify_user_url` from
+`automation/azure/projects.json` (currently Kian's Linear profile URL), which Linear
+turns into an `@kian` mention for Inbox and email alerts. Passed reviews and temporary
+hold/retry comments omit the notification mention.
 Address feedback in the description or comments, then manually move Needs attention to Todo
 for another review. Resubmission clears the owned clarification label after a pass;
 it needs no generation change and never consumes or resets a completed coding receipt.
