@@ -493,6 +493,54 @@ class GitHub:
                 or run.get("actor", {}).get("login") != "clusterfork[bot]"):
             raise WorkerError("GitHub run does not match the dispatch", 403)
 
+    def active_worker_runs(self, route):
+        """Deployment draining uses App access to each actual caller repository."""
+        token = self.installation_token(route.repository, permissions={"actions": "read"})
+        active, page, seen = [], 1, 0
+        while True:
+            result = self.request(
+                f"https://api.github.com/repos/{route.repository}/actions/workflows/"
+                f"{quote(route.workflow, safe='')}/runs?per_page=100&page={page}", token=f"Bearer {token}")
+            runs = result["workflow_runs"]
+            for run in runs:
+                if run["status"] != "completed":
+                    active.append(f"{route.repository}:{run['id']}")
+            seen += len(runs)
+            if len(runs) < 100:
+                if seen < result["total_count"]:
+                    raise RequestError()  # A truncated listing cannot establish a safe drain.
+                return active
+            page += 1
+
+    def repository_setup(self, route):
+        """Return setup evidence without taking the App key out of the broker."""
+        import base64
+        import hashlib
+
+        result = {"project_id": route.project_id, "repository": route.repository, "ref": route.ref, "app_access": False}
+        try:
+            _, installation = self._installation(route.repository)
+        except DispatchError:
+            return result
+        result.update(app_access=True, permissions={key: installation.get("permissions", {}).get(key) for key in
+                                                  ("actions", "contents", "pull_requests", "workflows")})
+        if any(result["permissions"].get(key) != "write" for key in result["permissions"]):
+            return result
+        try:
+            token = self.installation_token(route.repository, permissions={"contents": "read", "actions": "read"})
+            branch = self.request(
+                f"https://api.github.com/repos/{route.repository}/commits/{quote(route.ref, safe='')}", token=f"Bearer {token}")
+            content = self.request(
+                f"https://api.github.com/repos/{route.repository}/contents/.github/workflows/"
+                f"{route.workflow}?ref={branch['sha']}", token=f"Bearer {token}")
+            workflow = self.request(
+                f"https://api.github.com/repos/{route.repository}/actions/workflows/{route.workflow}", token=f"Bearer {token}")
+        except (RequestError, DispatchError):
+            return result
+        result.update(branch_sha=branch["sha"], workflow_digest=hashlib.sha256(base64.b64decode(content["content"])).hexdigest(),
+                      workflow_active=workflow.get("state") == "active")
+        return result
+
     def worker_result(self, repository, owner, *, latest=False):
         run_id, attempt = owner.split(":")
         if not run_id.isdigit() or not attempt.isdigit():

@@ -640,7 +640,7 @@ def request_auto_merge(config, token, pull_url, dispatch_key, branch, *, expecte
             isinstance(check, dict) and isinstance(check.get("name"), str) and check["name"]
             and check.get("bucket") in {"pass", "pending", "fail", "cancel", "skipping"}
             for check in checks
-        ):
+        ) and set(config.get("required_checks", ())).issubset({check["name"] for check in checks}):
             break
         if attempt < 29:
             time.sleep(2)

@@ -19,6 +19,8 @@ ISSUER = "https://token.actions.githubusercontent.com"
 LEASE_SECONDS = 120
 ACCOUNT_HANDOFF_SECONDS = 900
 SELECTOR_WORKFLOW = "clusterfork-select-account.yml"
+WORKER_REPOSITORY = "KianBahasadri/clusterfork"
+DEVELOP_WORKFLOW = "clusterfork-develop.yml"
 SELECTOR_ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "bind_account", "finish"}
 
 
@@ -68,7 +70,9 @@ def account_identity(auth, provider="codex"):
 def authorize_claims(claims, registry, receipt):
     """Only call after cryptographic verification; bind claims to a durable dispatch."""
     route = registry.routes.get(receipt.get("project_id"))
-    if not route or receipt.get("repository") != route.repository:
+    if (not route or receipt.get("repository") != route.repository
+            or receipt.get("workflow", route.workflow) != route.workflow
+            or receipt.get("ref", route.ref) != route.ref):
         raise WorkerError("Dispatch is not mapped to this repository", 403)
     expected = {
         "repository": route.repository, "ref": f"refs/heads/{route.ref}",
@@ -77,11 +81,20 @@ def authorize_claims(claims, registry, receipt):
     }
     if route.workflow != "clusterfork-worker.yml" or any(claims.get(k) != v for k, v in expected.items()):
         raise WorkerError("Workflow identity is not authorized", 403)
-    if claims.get("job_workflow_ref") and claims["job_workflow_ref"] not in {
-            expected["workflow_ref"], selector_workflow_ref(claims)}:
-        raise WorkerError("Reusable workflow identity is not authorized", 403)
-    if is_account_selector(claims) and claims.get("job_workflow_sha") != claims.get("sha"):
-        raise WorkerError("Account selector revision does not match the dispatched workflow", 403)
+    if route.worker_revision:
+        allowed = {f"{WORKER_REPOSITORY}/.github/workflows/{name}@{route.worker_revision}"
+                   for name in (SELECTOR_WORKFLOW, DEVELOP_WORKFLOW)}
+        if (claims.get("job_workflow_ref") not in allowed
+                or claims.get("job_workflow_sha") != route.worker_revision):
+            raise WorkerError("Pinned shared workflow identity is not authorized", 403)
+    else:
+        allowed = {expected["workflow_ref"], selector_workflow_ref(claims),
+                   f"{route.repository}/.github/workflows/{DEVELOP_WORKFLOW}@{claims.get('ref')}"}
+        if claims.get("job_workflow_ref") and claims["job_workflow_ref"] not in allowed:
+            raise WorkerError("Reusable workflow identity is not authorized", 403)
+        if (claims.get("job_workflow_ref") not in (None, expected["workflow_ref"])
+                and claims.get("job_workflow_sha") != claims.get("sha")):
+            raise WorkerError("Reusable workflow revision does not match the dispatched workflow", 403)
     for key in ("run_id", "run_attempt", "repository_id"):
         if not re.fullmatch(r"[1-9][0-9]*", str(claims.get(key, ""))):
             raise WorkerError("Invalid workflow identity", 403)
@@ -96,7 +109,9 @@ def selector_workflow_ref(claims):
 
 def is_account_selector(claims):
     # This role comes only from the verified JWT, never from request data.
-    return claims.get("job_workflow_ref") == selector_workflow_ref(claims)
+    identity = claims.get("job_workflow_ref", "")
+    return identity == selector_workflow_ref(claims) or bool(re.fullmatch(
+        re.escape(f"{WORKER_REPOSITORY}/.github/workflows/{SELECTOR_WORKFLOW}@") + r"[0-9a-f]{40}", identity or ""))
 
 
 def account_request(accounts, action, data, row, owner, *, selector, run_owner=None):
@@ -727,6 +742,7 @@ class WorkerService:
                               "max_snapshot_age_seconds": self.registry.agent_selection.max_snapshot_age_seconds},
                 "repository": route.repository, "ref": route.ref,
                 "auto_merge": route.auto_merge,
+                "required_checks": route.required_checks,
                 "repair": repair,
                 "agent_timeout_minutes": route.agent_timeout_minutes,
                 "validation_commands": route.validation_commands,

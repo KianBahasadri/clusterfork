@@ -2,6 +2,8 @@
 """Coordinate CI, worker draining, and verification for GitHub Azure deployments."""
 
 import argparse
+import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,6 +14,9 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import pilot
+from dispatch_core import uuid_string
+from readiness_policy import PROTOCOL
+from worker_version import protocol_at_revision
 
 HEALTH = "https://clusterfork-dispatch-7604cac329.azurewebsites.net/api/health"
 REPOSITORY = "KianBahasadri/clusterfork"
@@ -26,9 +31,10 @@ def github(path):
         return json.load(response)
 
 
-def health():
+def health(setup_project_id=None):
     try:
-        with urlopen(HEALTH, timeout=15) as response:
+        url = HEALTH + (f"?setup_project_id={uuid_string(setup_project_id)}" if setup_project_id else "")
+        with urlopen(url, timeout=15) as response:
             return json.load(response)
     except HTTPError as exc:
         try:
@@ -73,6 +79,12 @@ def active_workers():
             if len(runs) < 100:
                 break
             page += 1
+    # GITHUB_TOKEN cannot inspect other repositories. The paused broker checks
+    # its deployed mappings with the existing App; no App keys enter this job.
+    if any(route.repository != REPOSITORY for route in pilot.Registry.load(pilot.SOURCE / "projects.json").routes.values()):
+        state = health()
+        if state.get("deployment_paused") is not True or state.get("workers_drained") is not True:
+            active.append("shared-repository-workers-unverified")
     return active
 
 
@@ -106,6 +118,36 @@ def ci_state(revision):
     return latest.get("conclusion") if latest["status"] == "completed" else "pending"
 
 
+def verify_worker_versions():
+    """Protocol changes cannot resume old enrolled pins against a new broker."""
+    revisions = {route.worker_revision for route in pilot.Registry.load(pilot.SOURCE / "projects.json").routes.values()
+                 if route.worker_revision}
+    for revision in revisions:
+        protocol = protocol_at_revision(revision, lambda sha, name: base64.b64decode(
+            github(f"contents/automation/azure/{name}?ref={sha}")["content"]).decode())
+        if protocol != PROTOCOL:
+            raise RuntimeError("Update all enrolled worker pins to the broker protocol; worker dispatch remains paused")
+
+
+def shared_workers_ready():
+    from onboard import worker_workflow
+
+    for route in pilot.Registry.load(pilot.SOURCE / "projects.json").routes.values():
+        if not route.worker_revision:
+            continue
+        result = health(route.project_id)
+        evidence = result.get("repository_setup", {})
+        if (result.get("protocol") != PROTOCOL or result.get("shared_worker_version") != 1
+                or any(evidence.get(key) != value for key, value in
+                       (("project_id", route.project_id), ("repository", route.repository), ("ref", route.ref)))
+                or evidence.get("app_access") is not True or evidence.get("workflow_active") is not True
+                or evidence.get("workflow_digest") != hashlib.sha256(worker_workflow(route.worker_revision).encode()).hexdigest()
+                or any(evidence.get("permissions", {}).get(key) != "write" for key in
+                       ("actions", "contents", "pull_requests", "workflows"))):
+            return False
+    return True
+
+
 def prepare(revision, owner):
     state = control()
     if github("commits/main")["sha"] != revision:
@@ -123,6 +165,7 @@ def prepare(revision, owner):
             raise RuntimeError("Main CI did not pass; worker dispatch remains paused")
         active = active_workers()
         if ci == "success" and not active:
+            verify_worker_versions()
             pilot.package(Path("/tmp/clusterfork-function.zip"), revision=revision)
             output("proceed", True)
             return
@@ -139,7 +182,7 @@ def verify(revision, owner):
         if result.get("runtime_error"):
             print(f"Waiting for healthy Azure startup ({result['runtime_error']}).", flush=True)
         if (result.get("deployment") == expected and result.get("serial_admission") is True
-                and result.get("missing") == []):
+                and result.get("missing") == [] and shared_workers_ready()):
             if github("commits/main")["sha"] == revision:
                 notify_resume(owner, revision)
                 control().resume(owner, revision)

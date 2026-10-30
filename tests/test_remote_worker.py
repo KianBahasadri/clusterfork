@@ -1417,6 +1417,18 @@ class AutoMergeTests(unittest.TestCase):
         request.assert_not_called()
         command.assert_not_called()
 
+    def test_configured_required_checks_cannot_be_replaced_by_an_unrelated_gate(self):
+        self.config["required_checks"] = ["Repository tests"]
+        with patch.object(worker, "json_request", side_effect=[self.pull, self.policy]), \
+             patch.object(worker, "command", return_value='[{"name":"Other check","bucket":"pass"}]') as command, \
+             patch.object(worker.time, "sleep"), self.assertRaises(worker.WorkerFailure):
+            self.request()
+        self.assertTrue(all(call.args[0][2] == "checks" for call in command.call_args_list))
+        with patch.object(worker, "json_request", side_effect=[self.pull, self.policy]), \
+             patch.object(worker, "command", side_effect=['[{"name":"Repository tests","bucket":"pending"}]', '']) as command:
+            self.request()
+        self.assertEqual(command.call_args.args[0][2], "merge")
+
     def test_missing_ci_or_repository_auto_merge_prevents_merge(self):
         with patch.object(worker, "json_request", side_effect=[self.pull, {"data": {"repository": {"autoMergeAllowed": False}}}]), \
              patch.object(worker, "command") as command, self.assertRaises(worker.WorkerFailure):
@@ -1490,7 +1502,7 @@ class AutoMergeTests(unittest.TestCase):
                     Registry.load(path)
 
     def test_hosted_job_budget_covers_the_longest_allowed_agent_attempt(self):
-        workflow = (ROOT / ".github/workflows/clusterfork-worker.yml").read_text()
+        workflow = (ROOT / ".github/workflows/clusterfork-develop.yml").read_text()
         timeout = int(re.search(r"timeout-minutes:\s*(\d+)", workflow)[1])
         self.assertLessEqual(timeout, 360)
         self.assertGreaterEqual(timeout - 330, 30)

@@ -11,7 +11,7 @@ from pathlib import Path
 import azure.functions as func
 
 from dispatch_clients import GitHub, Linear
-from dispatch_core import Dispatcher, Registry, WebhookError, webhook_event
+from dispatch_core import Dispatcher, Registry, WebhookError, webhook_event, uuid_string
 from worker_core import Accounts, ProviderAccounts, WorkerError, WorkerService
 from worker_store import AzureTable, verify_oidc
 from linear_sync import LinearSync
@@ -19,6 +19,7 @@ from repository_queue import RepositoryQueue
 from readiness import ReadinessGate
 from deployment_control import DeploymentControl, build_metadata
 from cursor_validation import CursorValidation
+from readiness_policy import PROTOCOL, digest
 from steering import Steering
 from routing_timing import record, timestamps
 from diagnostics import ACTIONS, context, failure, observed, operation, record as diagnostic_record
@@ -132,11 +133,22 @@ def health(req: func.HttpRequest) -> func.HttpResponse:
     missing = missing_config()
     mode = "codex-worker" if any(route.workflow == "clusterfork-worker.yml" for route in registry().routes.values()) else "routing-pilot"
     result = {"mode": mode, "missing": missing, "serial_admission": True,
+              "protocol": PROTOCOL,
+              "shared_worker_version": 1,
+              "registry_digest": digest(json.loads(Path(__file__).with_name("projects.json").read_text())),
               "projects": len(registry().routes), "diagnostics_version": 1,
               "monitoring_enabled": bool(os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING"))}
     try:
         result.update(deployment=build_metadata(),
                       deployment_paused=worker_service().queue.control.is_paused() if not missing else None)
+        if result["deployment_paused"] is True:
+            service = worker_service()
+            routes = {(route.repository, route.workflow): route for route in registry().routes.values()}
+            result["workers_drained"] = not any(service.github.active_worker_runs(route) for route in routes.values())
+        setup_project = req.params.get("setup_project_id")
+        if setup_project and not missing:
+            route = registry().routes[uuid_string(setup_project)]
+            result["repository_setup"] = worker_service().github.repository_setup(route)
     except Exception as exc:
         # Public health diagnostics reveal the error class, never credentials or response bodies.
         result["runtime_error"] = type(exc).__name__

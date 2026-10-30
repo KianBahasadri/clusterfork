@@ -41,6 +41,8 @@ class Route:
     auto_merge: bool = True
     linear_states: LinearStates | None = None
     agent_timeout_minutes: int = 300
+    worker_revision: str = ""
+    required_checks: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -119,9 +121,18 @@ class Registry:
                 for command in commands
             ):
                 raise ValueError("validation_commands must be arrays of command arguments")
+            worker_revision = row.get("worker_revision", "")
+            if not isinstance(worker_revision, str) or (worker_revision and not re.fullmatch(r"[0-9a-f]{40}", worker_revision)):
+                raise ValueError("worker_revision must be a full commit SHA")
+            checks = row.get("required_checks", [])
+            if (not isinstance(checks, list) or any(not isinstance(c, str) or not c.strip() or "\n" in c for c in checks)
+                    or len(set(checks)) != len(checks)):
+                raise ValueError("required_checks must be distinct nonempty check names")
+            if worker_revision and (not commands or not checks or not linear_states):
+                raise ValueError("shared workers require validation commands, required checks, and lifecycle states")
             routes[project_id] = Route(project_id, row["repository"], row["workflow"],
                                        row["ref"], states, tuple(tuple(c) for c in commands), auto_merge,
-                                       linear_states, agent_timeout)
+                                       linear_states, agent_timeout, worker_revision, tuple(checks))
         steering = data.get("steering", {})
         if not isinstance(steering, dict) or set(steering) - {"trusted_user_ids"}:
             raise ValueError("steering supports only trusted_user_ids")
