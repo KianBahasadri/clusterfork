@@ -1,6 +1,6 @@
 # Remote development
 
-Eligible Linear issues route through one shared Azure Function App to a Codex
+Eligible Linear issues route through one shared Azure Function App to an agent
 worker on a standard GitHub-hosted runner. The repository queue admits one task
 for a read-only readiness review. After a pass, the development worker leases an account using
 live quota, implements the issue, runs configured validation, and publishes a
@@ -88,10 +88,10 @@ defaults must be addressed in the issue; discoverable implementation details do
 not require user clarification. This gate enables the existing development,
 validation, publication, and merge process; a pass is not a security certification.
 
-Reviews use the same pinned Sol 6.1/max profile, live quota selection, and fenced
-Codex account pool as development. They run in the pinned CLI's `read-only`
-sandbox with approvals disabled, isolated auth, no inherited job credentials,
-and a JSON output schema. They do not execute configured validation or receive
+Reviews use development's pinned profiles, provider precedence, live quota selection,
+and fenced account pool. Both adapters enforce read-only access, isolated auth,
+no inherited job credentials, and the same JSON result schema (see agent profiles).
+They do not execute configured validation or receive
 publication tokens. Checkout credentials have only Contents read access. Each
 model review has a **600-second** timeout; the broker allows another 120 seconds
 for account selection and setup after start. Heartbeats cannot extend that
@@ -164,36 +164,48 @@ deployment, worker draining, startup deferral, and prompt reconciliation after r
 
 ## Agent profiles
 
-`automation/azure/projects.json` enables only Codex:
+`automation/azure/projects.json` pins these profiles:
 
 | Agent | Model ID | Reasoning effort |
 | --- | --- | --- |
 | Codex | `gpt-6.1-sol` | `max` |
+| Cursor | `grok-4.7-high` | `high` (encoded in the model variant) |
 
-The registry requires an explicit Codex profile and supported effort value. Each
-phase starts with an account selected by available quota. There is no complexity
-classifier or model fallback. Antigravity is deferred. The runner verifies that
-the pinned model and effort are in each account's live model catalog before use.
+Each new selection considers all eligible Codex accounts before Cursor, regardless of list order or
+Cursor quota. Busy, exhausted, stale, unknown or otherwise ineligible Codex accounts allow Cursor
+fallback. Existing Cursor sessions retain their assignment when Codex capacity returns; a new attempt
+prefers Codex again. There is no complexity classifier or model substitution. Antigravity is deferred.
+Both adapters verify the pinned profile against the account's live model catalog. Cursor requires the
+exact variant and its acknowledged selection; an unavailable Grok 4.7 / High profile is an explicit wait
+reason.
 
-`quota_selection.py` implements the decision over provider-normalized snapshots:
-choose the eligible account with the lowest usage score. An identified short
-window (currently five hours) **strictly below 70% used** is ignored for ranking
-when weekly usage is known; score by weekly usage and any other applicable limits.
-At exactly 70% or above, include it in the most-depleted-window score. Missing
-weekly metadata keeps conservative scoring; unknown usage never counts as zero.
-Eligibility still checks **every** window: skip busy, blocked, unknown, stale,
-and nearly exhausted accounts. Configuration requires at least 20% remaining,
-a snapshot at most 60 seconds old, and one active task per account. These guards
-also apply to replacement accounts. If none qualifies, return no selection and wait.
+`quota_selection.py` implements the decision over provider-normalized snapshots: choose the eligible
+account with the lowest usage score **within the first eligible provider pool**. For Codex, an identified
+short window (currently five hours) **strictly below 70% used** is ignored for ranking when weekly usage
+is known; score by weekly usage and any other applicable limits. At exactly 70% or above, include it in
+the most-depleted-window score. Missing weekly metadata keeps conservative scoring; unknown usage never
+counts as zero. Eligibility still checks **every** window: skip busy, blocked, unknown, stale, and nearly
+exhausted accounts. Configuration requires at least 20% remaining, a snapshot at most 60 seconds old, and
+one active task per account. These guards also apply to replacement accounts. If none qualifies, return
+no selection and wait.
 
-The runner calls Codex app-server `account/read`, `model/list`, and
-`account/rateLimits/read` in isolated temporary Codex homes. It probes available
-accounts under leases, applies that ranking policy, then
-reserves and rechecks the chosen account before starting the development app-server
-thread (readiness still uses `codex exec`).
-Unknown or denied usage never counts as unused quota. A lack of capacity records
-`waiting_for_quota` and allows reconciliation to retry after 15 minutes.
-The registry owns these pins and selection thresholds.
+The runner calls Codex app-server `account/read`, `model/list`, and `account/rateLimits/read` in isolated
+temporary Codex homes. It probes available accounts under leases, applies that ranking policy, then
+reserves and rechecks the chosen account before starting the development app-server thread (readiness
+still uses `codex exec`). Cursor uses the pinned `2026.10.22-27dcf5f` CLI's [ACP
+interface](https://cursor.com/docs/cli/acp) for account model discovery and execution, with `--trust` and
+the exact `grok-4.7-high` variant. Live `GetMe` must match its saved identity; `GetCurrentPeriodUsage`
+must report known included API usage. Auto-only quota and paid/on-demand capacity do not establish Grok
+headroom; missing measurements never become zero or an invented weekly allowance. Cursor keeps
+conservative ranking across its applicable included/API limits. Its readiness review uses ask mode inside
+an enforced read-only Linux filesystem, masks executable repository configuration, and denies shell, web
+and MCP approvals; development keeps the same admission, deadlines, steering, validation and publication
+gates. ACP follow-ups retain the session and workspace; an ambiguous prompt handoff is reported as
+uncertain and never resent. Unknown or denied usage never counts as unused quota. A lack of capacity
+records `waiting_for_quota` and allows reconciliation to retry after 15 minutes. The registry owns these
+pins and selection thresholds. Durable quota waits include bounded provider-specific reasons. The
+isolated, once-only post-deployment probe and staged-account activation are owned by [remote
+accounts](remote-development-accounts.md#kian-922-post-deployment-validation).
 
 ## Automatic merges
 
@@ -277,7 +289,7 @@ label on the issue:
 | --- | --- |
 | `clusterfork: runner initialization` | Worker starts and prepares its checkout |
 | `clusterfork: account selection` | Worker inspects and reserves account quota |
-| `clusterfork: coding` | Selected Codex account begins implementation |
+| `clusterfork: coding` | Selected agent account begins implementation |
 | `clusterfork: final testing and review` | Worker checks the resulting changes and runs configured validation |
 | `clusterfork: publication` | Worker prepares and publishes the result |
 | `clusterfork: PR review and CI` | Open PR awaits checks, review, or merging |

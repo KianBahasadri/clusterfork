@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enroll saved Codex accounts, including the active one, or reclaim them."""
+"""Enroll, list or reclaim saved Codex and Cursor CLI accounts."""
 
 from __future__ import annotations
 
@@ -18,14 +18,14 @@ from worker_store import AzureTable
 MANIFEST = "remote-profiles.json"
 
 
-def connect():
+def connect(provider="codex"):
     result = subprocess.run(
         ["az", "storage", "account", "show-connection-string", "--name", "cfdispatch7604cac329",
          "--resource-group", "rg-clusterfork-automation", "--query", "connectionString",
          "-o", "tsv", "--only-show-errors"], capture_output=True, text=True)
     if result.returncode:
         raise WorkerError("Unable to read cloud account storage configuration")
-    return AzureTable(result.stdout.strip(), "ClusterforkAccounts", "codex")
+    return AzureTable(result.stdout.strip(), "ClusterforkAccounts", provider)
 
 
 def digest(path):
@@ -36,22 +36,34 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["enroll", "reclaim", "list"])
     parser.add_argument("--profile", action="append", default=[])
-    parser.add_argument("--store", type=Path,
-                        default=Path.home() / ".local/share/clusterfork-auth/codex")
+    parser.add_argument("--provider", choices=["codex", "cursor"], default="codex")
+    parser.add_argument("--store", type=Path)
     args = parser.parse_args()
+    args.store = args.store or Path.home() / f".local/share/clusterfork-auth/{args.provider}"
     manifest_path = args.store / MANIFEST
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
     if args.action == "list":
-        print(f"Cloud-reserved Codex profiles: {len(manifest)}")
+        print(f"Cloud-reserved {args.provider} profiles: {len(manifest)}")
+        for name, record in sorted(manifest.items()):
+            print(f"{name}: {record['account_id']}")
         return
-    table = connect()
-    accounts = Accounts(table)
+    table = connect(args.provider)
+    accounts = Accounts(table, provider=args.provider)
     profiles = {p.name[len("auth.json."):]: p for p in args.store.glob("auth.json.*")
                 if p.is_file() and p.name != "auth.json.lock"}
+    # The operator can move a cloud-reserved profile out of local rotation.
+    # Reclaim reads that preserved backup but restores the latest cloud login.
+    for name, record in manifest.items():
+        if name not in profiles and record.get("backup_path"):
+            backup = Path(record["backup_path"]).expanduser()
+            if not backup.is_absolute():
+                backup = args.store / backup
+            if backup.is_file() and backup.resolve().is_relative_to(args.store.resolve()):
+                profiles[name] = backup
     names = args.profile or sorted(profiles if args.action == "enroll" else manifest)
     if any(name not in profiles or Path(name).name != name for name in names):
         raise WorkerError("Unknown saved profile")
-    identities = {name: account_identity(json.loads(path.read_text())) for name, path in profiles.items()}
+    identities = {name: account_identity(json.loads(path.read_text()), args.provider) for name, path in profiles.items()}
     changed = 0
     for name in names:
         path = profiles[name]
@@ -59,9 +71,17 @@ def main():
             if name in manifest:
                 continue
             auth = json.loads(path.read_text())
-            identity = accounts.enroll(auth)
+            try:
+                identity = accounts.enroll(auth)
+            except WorkerError:
+                # An existing/staged cloud record owns the latest refresh token.
+                # Validate identity without ever copying the stale local login.
+                identity = account_identity(auth, args.provider)
+                existing, _ = table.get(identity)
+                if account_identity(json.loads(existing["auth"]), args.provider) != identity:
+                    raise WorkerError("Cloud credentials do not match this account") from None
             for alias, alias_path in profiles.items():
-                if identities[alias] == identity:
+                if identities[alias] == identity and alias not in manifest:
                     manifest[alias] = {"account_id": identity, "source_sha256": digest(alias_path)}
             write_private(manifest_path, manifest)
         else:
@@ -69,12 +89,21 @@ def main():
                 continue
             record = manifest[name]
             aliases = [alias for alias, value in manifest.items() if value["account_id"] == record["account_id"]]
-            if any(digest(profiles[alias]) != manifest[alias]["source_sha256"] for alias in aliases):
+            if any(Path(alias).name != alias or alias not in profiles for alias in aliases):
+                raise WorkerError("Unknown saved profile alias")
+            if any((manifest[alias].get("source_sha256") is not None
+                    and digest(profiles[alias]) != manifest[alias]["source_sha256"])
+                   or (manifest[alias].get("source_sha256") is None
+                       and profiles[alias] == args.store / f"auth.json.{alias}")
+                   or identities[alias] != record["account_id"] for alias in aliases):
                 raise WorkerError("Local credentials changed; refusing to overwrite them with cloud state")
-            leased = accounts.claim(record["account_id"], "local-reclaim")
+            destinations = {alias: args.store / f"auth.json.{alias}" for alias in aliases}
+            if any((path.exists() or path.is_symlink()) and path != profiles[alias] for alias, path in destinations.items()):
+                raise WorkerError("Local profile was replaced; refusing to overwrite it")
+            leased = accounts.claim(record["account_id"], "local-reclaim", allow_staged=True)
             try:
                 for alias in aliases:
-                    write_private(profiles[alias], leased["auth"])
+                    write_private(destinations[alias], leased["auth"])
                 row, etag = table.get(record["account_id"])
                 if row["fence"] != leased["lease"]:
                     raise WorkerError("Reclaim lease was lost")
@@ -82,7 +111,9 @@ def main():
             except Exception:
                 # Keep the local profile reserved until ownership transfer finishes.
                 for alias in aliases:
-                    manifest[alias]["source_sha256"] = digest(profiles[alias])
+                    if destinations[alias].exists():
+                        manifest[alias]["source_sha256"] = digest(destinations[alias])
+                        manifest[alias].pop("backup_path", None)
                 write_private(manifest_path, manifest)
                 raise
             for alias in aliases:

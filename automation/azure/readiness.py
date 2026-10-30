@@ -12,7 +12,7 @@ from readiness_policy import (PROTOCOL, RETRY_SECONDS, REVIEW_TIMEOUT_SECONDS, d
                               issue_revision, policy_version, redact_review_text, redact_review_value,
                               result_snapshot, validate_result)
 from worker_core import (ACCOUNT_HANDOFF_SECONDS, LEASE_SECONDS, SELECTOR_ACTIONS, WorkerError,
-                         account_request, authorize_claims, is_account_selector)
+                         account_request, authorize_claims, is_account_selector, execution_profiles)
 from diagnostics import failure, record
 
 REJECTIONS = {"needs_clarification", "rejected"}
@@ -446,11 +446,11 @@ class ReadinessGate:
                 lease_until = max(row["lease_until"], lease_until)
             row.update(status="running", owner=owner, lease_until=lease_until)
             self.table.replace(row, version)
-            profile = self.registry.agent_profiles["codex"]
-            return {"protocol": PROTOCOL, "phase": "readiness", "model": profile.model,
+            profiles = execution_profiles(self.registry, row)
+            return {"protocol": PROTOCOL, "phase": "readiness", **profiles,
                     "images": images,
                     "account_selection": selector, "account_id": row.get("assigned_account_id"),
-                    "effort": profile.effort, "repository": route.repository, "ref": route.ref,
+                    "repository": route.repository, "ref": route.ref,
                     "binding": json.loads(row["binding"]), "review_timeout_seconds": REVIEW_TIMEOUT_SECONDS,
                     "selection": {"min_remaining_percent": self.registry.agent_selection.min_remaining_percent,
                                   "max_snapshot_age_seconds": self.registry.agent_selection.max_snapshot_age_seconds},
@@ -461,6 +461,9 @@ class ReadinessGate:
         if (action == "finish" and data.get("status") in {"failed", "waiting_for_quota"}
                 and row.get("owner") == owner and row["status"] == "running"):
             reason = "Reviewer failed or account capacity was unavailable; awaiting retry."
+            if data.get("status") == "waiting_for_quota" and data.get("quota_wait"):
+                from worker_reporting import quota_wait_text
+                reason += " " + quota_wait_text(data["quota_wait"])
             if data.get("status") == "failed" and "failure" in data:
                 from diagnostics import failure_summary, validate_failure
 

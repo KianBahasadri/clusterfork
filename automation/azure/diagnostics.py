@@ -15,7 +15,8 @@ from urllib.parse import urlparse
 CONTEXT = ContextVar("clusterfork_diagnostics", default={})
 STAGES = {"initializing", "selecting_account", "coding", "testing", "publishing", "review", "waiting_for_quota"}
 ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "bind_account", "exhaust_account", "checkout", "github", "progress", "finish",
-           "review", "steering_open", "instructions", "instruction_result", "steering_close"}
+           "review", "steering_open", "instructions", "instruction_result", "steering_close",
+           "validation_start", "validation_heartbeat", "validation_claim", "validation_save", "validation_begin", "validation_finish"}
 LINEAR_OPERATIONS = {"issue", "project", "comments", "viewer", "comment", "issueUpdate", "issueLabels",
                      "issueCreate", "issueLabelCreate", "issueAddLabel", "issueRemoveLabel", "commentUpdate", "commentCreate"}
 OPERATIONS = {"worker/execution", "worker/heartbeat", "worker/account_release", "worker/final_usage",
@@ -39,6 +40,13 @@ ERROR_TYPES = {"Exception", "TimeoutError", "HTTPError", "URLError", "Connection
                "JSONDecodeError", "ServiceRequestError", "ServiceResponseError", "HttpResponseError",
                "ResourceModifiedError", "ResourceNotFoundError", "ClientAuthenticationError"}
 FAILURE_REASONS = {
+    "cursor_profile_unavailable": "Cursor profile grok-4.7-high / high is unavailable; no model was substituted",
+    "cursor_authentication_unavailable": "Cursor saved login is invalid, expired, or belongs to another account; unattended CLI login refresh is unavailable",
+    "cursor_usage_unknown": "Cursor included API usage is unavailable or unknown; paid spending is not assumed",
+    "cursor_execution_failed": "Cursor ACP execution failed; no transcript was logged",
+    "cursor_turn_stopped": "Cursor stopped after the task deadline or loss of its credential lease",
+    "cursor_readiness_tool_denied": "Cursor readiness requested a tool outside its read-only admission permissions",
+    "file_check_failed": "Cursor cloud probe did not verify the requested harmless file creation and read",
     "deployment_paused": "Azure deployment paused new work; waiting for explicit resume and stopped GitHub attempts",
     "repository_admission_lost": "the issue no longer owns the repository slot",
     "prerequisites_unresolved": "issue prerequisites are unresolved or unverifiable",

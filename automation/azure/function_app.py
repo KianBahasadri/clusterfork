@@ -12,12 +12,13 @@ import azure.functions as func
 
 from dispatch_clients import GitHub, Linear
 from dispatch_core import Dispatcher, Registry, WebhookError, webhook_event
-from worker_core import Accounts, WorkerError, WorkerService
+from worker_core import Accounts, ProviderAccounts, WorkerError, WorkerService
 from worker_store import AzureTable, verify_oidc
 from linear_sync import LinearSync
 from repository_queue import RepositoryQueue
 from readiness import ReadinessGate
 from deployment_control import DeploymentControl, build_metadata
+from cursor_validation import CursorValidation
 from steering import Steering
 from routing_timing import record, timestamps
 from diagnostics import ACTIONS, context, failure, observed, operation, record as diagnostic_record
@@ -66,7 +67,9 @@ def worker_service():
                     client_id=os.environ.get("LINEAR_OAUTH_CLIENT_ID"),
                     client_secret=os.environ.get("LINEAR_OAUTH_CLIENT_SECRET"))
     github = GitHub(os.environ["GITHUB_APP_ID"], os.environ["GITHUB_APP_PRIVATE_KEY"])
-    accounts = Accounts(AzureTable(connection, "ClusterforkAccounts", "codex"))
+    accounts = ProviderAccounts({provider: Accounts(
+        AzureTable(connection, "ClusterforkAccounts", provider), provider=provider)
+        for provider in ("codex", "cursor")})
     readiness = ReadinessGate(registry(), AzureTable(connection, "ClusterforkReadiness", "readiness"),
                               accounts, linear, github)
     sync = LinearSync(registry(), receipts, runs,
@@ -79,10 +82,12 @@ def worker_service():
     steering = Steering(registry(), receipts, runs,
                         AzureTable(connection, "ClusterforkInstructions", "instructions"),
                         linear, queue)
+    validation = CursorValidation(registry(), AzureTable(connection, "ClusterforkOperations", "validation"),
+                                  accounts.pools["cursor"], linear, github, queue.control)
     return WorkerService(
         registry(), receipts, runs,
         accounts,
-        linear, github, queue, sync=sync, steering=steering)
+        linear, github, queue, sync=sync, steering=steering, validation=validation)
 
 
 @app.route(route="worker/{action}", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
@@ -186,9 +191,16 @@ def deployment_recovery(event):
         # The notification is durable before explicit resume. Azure retries this
         # small race using the existing queue policy; it never admits work.
         raise WorkerError("Deployment has not explicitly resumed", 503, reason_code="deployment_paused")
+    validation_pending = False
+    if getattr(service, "validation", None):
+        try:
+            service.validation.ensure(state)
+        except Exception as exc:
+            diagnostic_record("cursor_validation_deferred", level=logging.ERROR, **failure(exc))
+            validation_pending = True
     pending = service.queue.readiness.reconcile(deployment_only=True)
     service.queue.reconcile()
-    if pending or service.queue.deployment_pending():
+    if pending or service.queue.deployment_pending() or validation_pending:
         # Run discovery can lag, or a prior attempt can still be stopping. Keep
         # that wait off GitHub runners and independent of the shared timer.
         enqueue(event, visibility_timeout=15)
@@ -206,5 +218,11 @@ def reconcile(timer: func.TimerRequest):
     worker_service().sync.reconcile()
     worker_service().queue.reconcile()
     worker_service().steering.reconcile()
+    service = worker_service()
+    if service.validation:
+        try:
+            service.validation.ensure(service.queue.control.state()[0])
+        except Exception as exc:
+            diagnostic_record("cursor_validation_deferred", level=logging.ERROR, **failure(exc))
     for project_id in registry().routes:
         enqueue({"type": "Project", "id": project_id})

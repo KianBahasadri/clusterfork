@@ -1,4 +1,4 @@
-name: Clusterfork Codex worker
+name: Clusterfork agent worker
 run-name: "Clusterfork worker · ${{ inputs.linear_identifier }} · ${{ inputs.dispatch_key }}"
 
 on:
@@ -46,6 +46,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-codex
+      - uses: ./.github/actions/setup-cursor
       - name: Implement issue and open a pull request
         env:
           CLUSTERFORK_BROKER_URL: https://clusterfork-dispatch-7604cac329.azurewebsites.net/api/worker

@@ -101,7 +101,7 @@ def digest(value):
 # older broker must not silently start a runner without these capabilities.
 STEERING_PROTOCOL = "linear-steering-v1"
 AUTO_REPAIR_PROTOCOL = "auto-repair-v1"
-ACCOUNT_ISOLATION_PROTOCOL = "single-account-preflight-coding-failover-v2"
+ACCOUNT_ISOLATION_PROTOCOL = "codex-first-cursor-grok-high-single-account-v3"
 WORKFLOW_PUBLICATION = {
     True: ("Workflow publication: the GitHub App installation has approved Workflows write permission. "
            "Changes under .github/workflows/ can be published through the normal validation and PR process."),

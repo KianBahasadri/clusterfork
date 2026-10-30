@@ -98,7 +98,7 @@ def select_account(accounts, profiles, policy, *, now):
         selection = AccountSelection(account.account_id, account.agent, profile.model,
                                      profile.effort, remaining)
         ranked = account.windows
-        if any(window.duration_minutes == 10080 for window in ranked):
+        if account.agent == "codex" and any(window.duration_minutes == 10080 for window in ranked):
             # Only ignore identified short windows when weekly usage is known.
             # Unknown durations and other model limits still constrain ranking.
             ranked = tuple(window for window in ranked if not (
@@ -108,4 +108,5 @@ def select_account(accounts, profiles, policy, *, now):
         candidates.append((score, selection))
     if not candidates:
         return None
-    return min(candidates, key=lambda row: (row[0], row[1].agent, row[1].account_id))[1]
+    return min(candidates, key=lambda row: (
+        {"codex": 0, "cursor": 1}.get(row[1].agent, 2), row[0], row[1].agent, row[1].account_id))[1]

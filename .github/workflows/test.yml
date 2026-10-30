@@ -63,3 +63,6 @@ jobs:
           print("All dispatcher and worker functions index on Python 3.12")
           PY
       - uses: ./.github/actions/setup-codex
+      - uses: ./.github/actions/setup-cursor
+      - name: Verify Cursor read-only filesystem boundary without credentials
+        run: python3 automation/check_cursor_sandbox.py

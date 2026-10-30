@@ -132,8 +132,14 @@ class DeploymentTests(unittest.TestCase):
     def test_drain_finds_active_runs_after_the_first_page(self):
         first = [{"id": n, "status": "completed"} for n in range(100)]
         with patch.object(deploy, "github", side_effect=[{"workflow_runs": first},
-                      {"workflow_runs": [{"id": 101, "status": "queued"}]}]):
-            self.assertEqual(deploy.active_workers(), [101])
+                      {"workflow_runs": [{"id": 101, "status": "queued"}]},
+                      {"workflow_runs": [{"id": 102, "status": "in_progress"}]}]):
+            self.assertEqual(deploy.active_workers(), [101, 102])
+
+    def test_new_smoke_workflow_not_yet_indexed_does_not_block_its_initial_deployment(self):
+        with patch.object(deploy, "github", side_effect=[{"workflow_runs": []},
+                    HTTPError("https://github.example", 404, "not indexed", {}, None)]):
+            self.assertEqual(deploy.active_workers(), [])
 
     def test_unhealthy_response_exposes_only_safe_error_class(self):
         error = HTTPError(deploy.HEALTH, 503, "unavailable", {},
