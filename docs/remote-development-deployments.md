@@ -1,7 +1,8 @@
 # Deployment pauses and recovery
 
 The [runtime overview](remote-development.md) covers readiness and worker execution.
-This topic owns deployment draining, startup deferral, resume, and the KIAN-923 investigation.
+This topic owns deployment draining, startup deferral, resume, KIAN-932 cutover fencing,
+and the KIAN-923 investigation.
 
 ## Verified deployments
 
@@ -11,6 +12,17 @@ recovery with `workflow_dispatch`. Every run reconciles the
 Deployment runs are serialized, with later pushes retaining the newest pending
 run. [Setup](remote-development-setup.md#automatic-deployment-identity) owns the
 GitHub environment and Azure identity configuration.
+
+Before `automation/deploy.py prepare` reaches its durable pause, a packaged
+broker compares the observed `KianBahasadri/clusterfork` `main` SHA with its own
+`deployment.json` revision. An advanced main immediately holds readiness as
+`deployment_deferred` / `deployment_paused`, without creating a review bound to
+the old policy or dispatching a reviewer. Existing pre-execution reviews are
+deferred. Development dispatch, including retries and auto-repairs that reuse an
+earlier approval, also checks the branch revision before writing a dispatch
+receipt. Held issues retain their repository slots until the matching deployment
+recovers them. Other repositories/branches and unpackaged local processes do not
+use this branch fence.
 
 Before deployment, `automation/deploy.py` writes a durable pause to
 `ClusterforkOperations` (partition `control`). New readiness/development
@@ -22,7 +34,11 @@ older manual reruns, to stop. Draining allows 330 minutes within a six-hour job.
 Only the allowlisted Function App ZIP is published using Flex Consumption's remote
 build. `deployment.json` stamps its Git revision and broker source digest.
 The health endpoint returns this metadata, the serial-admission capability, and
-the deployment pause state. Startup failures return 503 with a `runtime_error`
+the explicit durable deployment pause flag. Packaged processes whose revision
+differs from the durable deployment revision also treat dispatch as paused, even
+after explicit resume; this fences draining Flex Consumption instances. Health
+keeps reporting the explicit flag so deployment check/verify behavior is unchanged.
+Startup failures return 503 with a `runtime_error`
 class, without credentials or raw exception messages. Dispatch resumes only after
 the live revision/digest match the package, configuration is complete, and main
 still points to that revision. If main advances, the newer deployment inherits
@@ -33,6 +49,10 @@ main push or manual deployment workflow run performs recovery. The pause never e
 
 A readiness start or account preflight/handoff overlapping the pause records
 `deployment_deferred`, `reason_code=deployment_paused`, and no retry deadline.
+On `broker/start`, verified OIDC/run claims and pre-coding deployment deferral
+take precedence over protocol compatibility and readiness-binding rejection.
+Even a newer worker protocol receives `serial_admission: true` with that deferral
+and exits 0; incompatible starts outside the pause still fail with 403.
 Its stable review comment explains the deployment wait. The runner exits
 successfully without starting assessment/coding or reporting a failed reviewer,
 allowing deployment to drain. Account cleanup remains available. Coding startup
@@ -46,9 +66,23 @@ queue before explicitly resuming its matching owner/revision. It reuses the app'
 existing storage connection; no authentication or permission changes are required.
 A failed notification leaves dispatch paused. The consumer checks the current
 deployment record, ignores superseded events, and holds work until explicit resume.
+Only a packaged instance matching the event revision performs recovery. An old
+instance re-enqueues `DeploymentResume` with a five-second visibility delay.
+Stale instances also re-enqueue ordinary routing events with that delay and skip
+timer reconciliation, preventing old in-memory policy code from creating bindings
+or dispatching work during rolling cutover.
 It reconciles deferred readiness and repository admission immediately, with delayed
-15-second queue events while prior attempts remain active or undiscovered. No GitHub
-runner waits for deployment, and recovery does not depend on the shared timer.
+15-second queue events while prior attempts remain active or undiscovered. Durable
+deployment waits stay in Azure, and recovery does not depend on the shared timer.
+
+After explicit resume, worker requests reaching a stale instance receive HTTP 503
+with diagnostic reason `deployment_cutover` before protocol or binding checks.
+`Broker.call("start", ...)` retries 503 and URL/timeout transport failures up to
+six attempts, with 2, 4, 5, 5, and 5 seconds of backoff (21 seconds total, excluding
+HTTP request time). A retry can reach the current instance or receive a clean
+deployment deferral. Other HTTP errors and non-start broker requests propagate
+without this retry. Workers never sleep indefinitely inside the workflow, so
+`prepare` can still drain active runs to zero.
 
 Every matching GitHub run's latest attempt and any recorded owner must be stopped
 before a replacement. Missing/incomplete observations hold work for discovery.

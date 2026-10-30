@@ -6,13 +6,14 @@ import time
 from uuid import uuid4
 
 from dispatch_core import DispatchError, eligibility
+from deployment_control import build_metadata
 from linear_sync import comment_id
 from issue_images import ImageContextError, capture_images, image_digest
 from readiness_policy import (PROTOCOL, RETRY_SECONDS, REVIEW_TIMEOUT_SECONDS, digest,
                               issue_revision, policy_version, redact_review_text, redact_review_value,
                               result_snapshot, validate_result)
 from worker_core import (ACCOUNT_HANDOFF_SECONDS, LEASE_SECONDS, SELECTOR_ACTIONS, WorkerError,
-                         account_request, authorize_claims, is_account_selector, execution_profiles)
+                         WORKER_REPOSITORY, account_request, authorize_claims, is_account_selector, execution_profiles)
 from diagnostics import failure, record
 
 REJECTIONS = {"needs_clarification", "rejected"}
@@ -292,6 +293,12 @@ class ReadinessGate:
         if eligibility(issue, self.registry)[0] != route:
             return {"status": "not_ready"}
         admission = self.admission_reason(issue, route)
+        if not admission:
+            binding = self.binding(issue, route)
+            revision = build_metadata().get("revision")
+            if (revision and route.repository.lower() == WORKER_REPOSITORY.lower() and route.ref == "main"
+                    and binding["context_sha"] != revision):
+                admission = "deployment_paused"
         if admission == "deployment_paused":
             pointer, _ = optional(self.table, self.pointer(issue))
             row, _ = optional(self.table, pointer["review_key"]) if pointer else (None, None)
@@ -301,7 +308,6 @@ class ReadinessGate:
             return self.deployment_result()
         if admission:
             return {"status": "queued"}
-        binding = self.binding(issue, route)
         pointer, etag = optional(self.table, self.pointer(issue))
         row, _ = optional(self.table, pointer["review_key"]) if pointer else (None, None)
         if row and row["status"] == "deployment_deferred":
@@ -415,8 +421,6 @@ class ReadinessGate:
         if row["status"] == "deployment_deferred":
             return self.deployment_result()
         if action == "start":
-            if data.get("protocol") != PROTOCOL:
-                raise WorkerError("Deploy a compatible readiness worker and broker", 403)
             self.github.verify_worker_run(route.repository, claims, row["RowKey"])
             if row.get("owner") and row["owner"] != owner:
                 if self.github.worker_result(route.repository, row["owner"])["status"] != "completed":
@@ -428,6 +432,8 @@ class ReadinessGate:
             if self.deployment_paused() and not row.get("execution_started"):
                 self.report_hold(issue, self.defer_deployment(row, owner=owner))
                 return self.deployment_result()
+            if data.get("protocol") != PROTOCOL:
+                raise WorkerError("Deploy a compatible readiness worker and broker", 403)
             current, version = self.table.get(row["RowKey"])
             if current != row:
                 raise WorkerError("Readiness worker changed concurrently")

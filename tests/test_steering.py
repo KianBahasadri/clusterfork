@@ -86,6 +86,7 @@ class SteeringTests(unittest.TestCase):
                     "stage": "coding", "thread_id": "thread-one", "turn_id": "turn-one"}
         self.runs.create(self.run)
         self.linear, self.queue = Tracker(self.registry), Mock()
+        self.queue.control = None
         self.queue.assert_worker = Mock()
         self.queue.deployment_paused.return_value = False
         self.queue.readiness.require.return_value = {}

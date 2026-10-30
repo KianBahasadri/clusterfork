@@ -17,7 +17,7 @@ import threading
 import time
 import unittest
 from types import SimpleNamespace
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,12 +28,13 @@ import accounts as account_cli
 from codex_runtime import CodexError, quota_snapshot
 from dispatch_clients import GitHub as GitHubClient
 from dispatch_core import Registry
+from deployment_control import DeploymentControl
 from quota_selection import select_account
 from worker_core import Accounts, WorkerError, WorkerService, authorize_claims
 from repository_queue import RepositoryQueue
 from readiness_policy import POLICY, PROTOCOL, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS, digest
 from auto_repair import repair_instructions
-from call_budget import record_api_calls
+from call_budget import CallBudget, record_api_calls
 
 PROJECT = "374f597c-89f5-4e40-9798-07533f57bfba"
 ISSUE = "66547614-8ed4-4928-834e-aac76f01afd2"
@@ -191,6 +192,71 @@ class WorkerAdmissionTests(unittest.TestCase):
                 execute.assert_not_called()
 
 
+class BrokerCutoverTests(unittest.TestCase):
+    def setUp(self):
+        self.sleep = Mock()
+        self.broker = worker.Broker("https://clusterfork-dispatch-7604cac329.azurewebsites.net/api/worker",
+                                    KEY, sleep=self.sleep)
+        self.broker.token, self.broker.expires = "test-oidc-token", time.time() + 3600
+
+    def test_start_retries_draining_instances_with_the_same_request_until_current_broker_responds(self):
+        response = {"protocol": PROTOCOL, "phase": "development", "serial_admission": True}
+        error = HTTPError(self.broker.url, 503, "draining", {}, None)
+        with patch.object(worker, "json_request", side_effect=[error, error, response]) as request:
+            self.assertEqual(self.broker.call("start", protocol=PROTOCOL), response)
+        self.assertEqual(request.call_count, 3)
+        self.assertEqual(request.call_args_list, [request.call_args] * 3)
+        self.assertEqual([call.args[0] for call in self.sleep.call_args_list], [2, 4])
+
+    def test_start_retries_url_and_timeout_transport_failures(self):
+        for error in (URLError("connection reset"), TimeoutError("timed out")):
+            with self.subTest(error=type(error).__name__):
+                self.sleep.reset_mock()
+                with patch.object(worker, "json_request", side_effect=[error, {"serial_admission": True}]) as request:
+                    self.assertEqual(self.broker.call("start", protocol=PROTOCOL), {"serial_admission": True})
+                self.assertEqual(request.call_count, 2)
+                self.sleep.assert_called_once_with(2)
+
+    def test_start_cutover_retries_are_bounded_and_preserve_final_failure(self):
+        error = HTTPError(self.broker.url, 503, "draining", {}, None)
+        with patch.object(worker, "json_request", side_effect=error) as request, \
+             self.assertRaises(HTTPError) as caught:
+            self.broker.call("start", protocol=PROTOCOL)
+        self.assertIs(caught.exception, error)
+        self.assertEqual(caught.exception.clusterfork_action, "start")
+        self.assertEqual(request.call_count, 6)
+        self.assertEqual([call.args[0] for call in self.sleep.call_args_list], [2, 4, 5, 5, 5])
+
+    def test_authorization_conflicts_and_non_start_requests_are_not_retried(self):
+        requests = [("start", HTTPError(self.broker.url, status, "rejected", {}, None))
+                    for status in (400, 401, 403, 409, 500)]
+        requests += [(action, error) for action in ("review", "finish", "claim")
+                     for error in (HTTPError(self.broker.url, 503, "draining", {}, None), URLError("reset"))]
+        for action, error in requests:
+            with self.subTest(action=action, error=error), \
+                 patch.object(worker, "json_request", side_effect=error) as request, \
+                 self.assertRaises(type(error)):
+                self.broker.call(action)
+            request.assert_called_once()
+        self.sleep.assert_not_called()
+
+    def test_deferred_start_after_cutover_retry_exits_successfully_without_execution(self):
+        deferred = {"status": "deployment_deferred", "reason_code": "deployment_paused", "serial_admission": True}
+        error = HTTPError(self.broker.url, 503, "draining", {}, None)
+        with patch.dict(os.environ, {"CLUSTERFORK_BROKER_URL": self.broker.url, "DISPATCH_KEY": KEY}, clear=True), \
+             patch.object(worker, "Broker", return_value=self.broker), \
+             patch.object(worker, "json_request", side_effect=[error, deferred]) as request, \
+             patch.object(worker, "execute") as execute, \
+             patch.object(worker, "select_account_for_run") as select, \
+             redirect_stdout(io.StringIO()):
+            self.assertEqual(worker.main(), 0)
+        self.assertTrue(self.broker.deployment_deferred)
+        self.assertEqual(request.call_count, 2)
+        self.sleep.assert_called_once_with(2)
+        execute.assert_not_called()
+        select.assert_not_called()
+
+
 class AccountLeaseTests(unittest.TestCase):
     def setUp(self):
         self.now = NOW
@@ -318,6 +384,22 @@ class WorkerAuthorizationTests(unittest.TestCase):
     def test_unmapped_receipt_cannot_authorize_a_job(self):
         with self.assertRaises(WorkerError):
             authorize_claims(claims(), self.registry, {**receipt(), "repository": "other/repo"})
+
+    def test_resumed_stale_broker_returns_cutover_503_before_protocol_or_worker_side_effects(self):
+        service, github, _ = self.service()
+        service.queue.control = DeploymentControl(MemoryTable())
+        service.queue.control.pause("new-deployment", "c" * 40)
+        service.queue.control.resume("new-deployment", "c" * 40)
+        for action in ("start", "accounts", "heartbeat", "finish", "save", "validation_start"):
+            for protocol in (PROTOCOL, "readiness-v1:" + "f" * 64):
+                with self.subTest(action=action, protocol=protocol), \
+                     patch("deployment_control.build_metadata", return_value={"revision": "b" * 40}), \
+                     CallBudget(self, linear=service.linear, github=github, receipts=service.receipts, runs=service.runs), \
+                     self.assertRaises(WorkerError) as caught:
+                    service.handle(action, claims(), {"dispatch_key": KEY, "protocol": protocol})
+                self.assertEqual(caught.exception.status, 503)
+                self.assertEqual(caught.exception.reason_code, "deployment_cutover")
+        self.assertEqual(service.runs.list(), [])
 
     def service(self):
         receipts, runs = MemoryTable(), MemoryTable()

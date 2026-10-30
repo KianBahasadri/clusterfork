@@ -39,6 +39,25 @@ class DeploymentTests(unittest.TestCase):
         self.control.resume("github:124:1", "b" * 40)
         self.assertFalse(self.control.is_paused())
 
+    def test_instance_revision_mismatch_holds_dispatch_independently_of_explicit_pause(self):
+        for metadata in ({}, {"revision": ""}, {"revision": REVISION}, {"revision": "b" * 40}):
+            for revision in (None, "", REVISION):
+                for paused in (False, True):
+                    with self.subTest(metadata=metadata, revision=revision, paused=paused):
+                        control = DeploymentControl(MemoryTable())
+                        row = {"RowKey": "deployment", "paused": paused}
+                        if revision is not None:
+                            row["revision"] = revision
+                        control.table.create(row)
+                        stale = bool(metadata.get("revision") and revision and metadata["revision"] != revision)
+                        with patch("deployment_control.build_metadata", return_value=metadata):
+                            self.assertEqual(control.instance_mismatch(), stale)
+                            self.assertEqual(control.is_paused(), paused or stale)
+                        self.assertEqual(control.state()[0]["paused"], paused)
+        with patch("deployment_control.build_metadata", return_value={"revision": REVISION}):
+            self.assertFalse(self.control.instance_mismatch())  # Missing durable deployment row.
+            self.assertFalse(self.control.is_paused())
+
     def test_package_stamps_only_source_digest_and_public_revision(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "deployment.zip"
@@ -189,7 +208,7 @@ class FunctionAppConfigurationTests(unittest.TestCase):
                          patch.dict(os.environ, values, clear=True), \
                          patch.object(self.app, "worker_service") as service, \
                          patch.object(self.app, "build_metadata", return_value={"revision": REVISION}):
-                        service.return_value.queue.control.is_paused.return_value = False
+                        service.return_value.queue.control.state.return_value = ({"paused": False}, None)
                         response = self.app.health(self.app.func.HttpRequest("GET", "https://example.test/api/health", body=b""))
                         result = json.loads(response.get_body())
                         self.assertEqual(response.status_code, 200 if complete else 503)

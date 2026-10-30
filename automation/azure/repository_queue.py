@@ -15,11 +15,12 @@ from functools import lru_cache
 from uuid import uuid4
 
 from dispatch_core import DispatchError, Route, dependency_status, eligibility
+from deployment_control import build_metadata
 from linear_sync import comment_id, failed_required_checks, pull_outcome
 from auto_repair import AutoRepair, RECEIPT_FIELDS
 from selection_reporting import SelectionReporter, selection_changed
 from routing_timing import record, timestamps
-from worker_core import WorkerError
+from worker_core import WORKER_REPOSITORY, WorkerError
 from worker_reporting import is_auto_repair
 
 
@@ -527,6 +528,10 @@ class RepositoryQueue:
             if table.get(key)[0].get("dependency_reason"):
                 return {"status": "dependency_waiting", "dispatch_key": key}
             return {**review, "dispatch_key": key}
+        revision = build_metadata().get("revision")
+        if (revision and route.repository.lower() == WORKER_REPOSITORY.lower() and route.ref == "main"
+                and self.github.branch_sha(route) != revision):
+            return {"status": "deployment_paused", "dispatch_key": key}
         approval = self.approval(issue, route, row)
         if not self.dependencies_ready(issue, route, key=key):
             return {"status": "dependency_waiting", "dispatch_key": key}

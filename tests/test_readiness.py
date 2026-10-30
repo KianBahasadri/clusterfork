@@ -192,6 +192,94 @@ class ReadinessTests(unittest.TestCase):
     def resume_deployment(self):
         self.queue.control.resume("github:900:1", "c" * 40)
 
+    def test_main_advance_holds_readiness_before_durable_pause_without_creating_an_old_binding(self):
+        self.queue.control = DeploymentControl(MemoryTable())
+        self.queue.control.pause("previous-deployment", "a" * 40)
+        self.queue.control.resume("previous-deployment", "a" * 40)
+        key = self.queue.enqueue(self.issue, self.route)
+        self.queue.reserve(self.queue.table(self.route.repository))
+        with patch("readiness.build_metadata", return_value={"revision": "a" * 40}), \
+             self.budget(exact={"linear.issue_dependencies": 1, "github.branch_sha": 1}):
+            self.assertEqual(self.gate.ensure(self.issue, self.route), self.gate.deployment_result())
+        self.assertFalse(self.queue.control.state()[0]["paused"])
+        self.assertEqual(self.table.list(), [])
+        self.assertEqual(self.receipts.list(), [])
+        self.github.dispatch.assert_not_called()
+        self.assertEqual(self.queue.table(self.route.repository).get("slot")[0]["active_key"], key)
+        with patch("readiness.build_metadata", return_value={"revision": self.sha}):
+            self.assertEqual(self.dispatcher.route(self.issue)["status"], "readiness_pending")
+        self.assertEqual(json.loads(self.table.get(self.key())[0]["binding"])["context_sha"], self.sha)
+        self.github.dispatch.assert_called_once()
+
+    def test_main_advance_defers_existing_pre_execution_reviews_without_rebinding_old_policy(self):
+        for status, executing in (("dispatching", False), ("dispatched", False), ("uncertain", False),
+                                  ("deployment_deferred", False), ("running", False), ("running", True)):
+            with self.subTest(status=status, executing=executing):
+                self.setUp()
+                self.dispatcher.route(self.issue)
+                key = self.key()
+                row, etag = self.table.get(key)
+                row.update(status=status, execution_started=executing)
+                self.table.replace(row, etag)
+                previous_sha, self.sha = self.sha, "c" * 40
+                with patch("readiness.build_metadata", return_value={"revision": previous_sha}):
+                    self.assertEqual(self.gate.ensure(self.issue, self.route), self.gate.deployment_result())
+                current = self.table.get(key)[0]
+                self.assertEqual(current["status"], "running" if executing else "deployment_deferred")
+                self.assertEqual(current["binding"], row["binding"])
+                self.assertEqual(self.key(), key)
+                self.assertEqual(len(self.table.list()), 2)
+                self.assertEqual(self.github.dispatch.call_count, 1)
+                if not executing:
+                    self.assertEqual(current["retry_after"], 0)
+                    self.assertEqual(current["reason_code"], "deployment_paused")
+                    self.assertIn("explicit resume", self.review_comment(key))
+
+    def test_revision_hold_only_applies_to_packaged_dispatcher_repository_main(self):
+        for repository, ref, metadata, held in (
+                (self.route.repository.lower(), "main", {"revision": "a" * 40}, True),
+                (self.route.repository, "main", {}, False),
+                (self.route.repository, "main", {"revision": self.sha}, False),
+                (self.route.repository, "release", {"revision": "a" * 40}, False),
+                ("example/other", "main", {"revision": "a" * 40}, False)):
+            with self.subTest(repository=repository, ref=ref, metadata=metadata):
+                self.setUp()
+                self.route = replace(self.route, repository=repository, ref=ref)
+                self.registry.routes[PROJECT] = self.route
+                with patch("readiness.build_metadata", return_value=metadata):
+                    result = self.dispatcher.route(self.issue)
+                self.assertEqual(result["status"], "deployment_deferred" if held else "readiness_pending")
+                self.assertEqual(len(self.table.list()), 0 if held else 2)
+                self.assertEqual(self.github.dispatch.call_count, 0 if held else 1)
+
+    def test_newer_start_protocol_during_pause_defers_both_phases_before_binding_validation(self):
+        for phase in ("readiness", "development"):
+            with self.subTest(phase=phase):
+                self.setUp()
+                if phase == "readiness":
+                    self.dispatcher.route(self.issue)
+                    key = self.key()
+                    row, etag = self.table.get(key)
+                    binding = json.loads(row["binding"])
+                    row["binding"] = json.dumps({**binding, "policy_version": "older-policy"})
+                    self.table.replace(row, etag)
+                else:
+                    self.pass_review()
+                    key = dispatch_key(self.registry, self.route, self.issue)
+                self.pause_deployment()
+                with patch("deployment_control.build_metadata", return_value={"revision": self.sha}):
+                    result = self.call(key, "start", protocol="readiness-v1:" + "f" * 64)
+                self.assertEqual(result, {"status": "deployment_deferred", "reason_code": "deployment_paused",
+                                          "serial_admission": True})
+                self.github.verify_worker_run.assert_called_with(self.route.repository, self.identity_for(key), key)
+                self.assertFalse(self.runs.list())
+                self.assertFalse(self.accounts.table.get(self.identity)[0]["owner"])
+                if phase == "readiness":
+                    self.assertEqual(self.table.get(key)[0]["status"], "deployment_deferred")
+                else:
+                    self.assertEqual(self.receipts.get(key)[0]["deployment_wait_owner"],
+                                     f"{self.identity_for(key)['run_id']}:1")
+
     def test_dispatch_before_pause_defers_start_and_recovers_only_after_confirmed_stop(self):
         self.dispatcher.route(self.issue)
         key = self.key()
@@ -462,7 +550,9 @@ class ReadinessTests(unittest.TestCase):
             self.pause_deployment()
             return copy.deepcopy(self.threads[issue])
         self.linear.issue_comments.side_effect = pause_in_context
-        self.assertEqual(self.call(key, "start")["status"], "deployment_deferred")
+        result = self.call(key, "start", protocol="readiness-v1:" + "f" * 64)
+        self.assertEqual(result, {"status": "deployment_deferred", "reason_code": "deployment_paused",
+                                  "serial_admission": True})
         self.assertFalse(self.table.get(key)[0].get("execution_started"))
         self.assertEqual(self.table.get(key)[0]["retry_after"], 0)
 
