@@ -189,12 +189,17 @@ def validate_result(result):
     return result
 
 
+PRIVATE_KEY_PATTERN = re.compile(
+    r"-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----", re.DOTALL)
+TOKEN_PATTERN = re.compile(
+    r"\b(?:github_pat_[\w]+|gh[pousr]_[\w]+|sk-[\w-]+|lin_api_[\w]+|"
+    r"eyJ[\w-]+\.[\w-]+\.[\w-]+)\b")
+
+
 def redact_review_text(text):
     """Keep useful model evidence without copying common credential formats."""
-    text = re.sub(r"-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----",
-                  "[REDACTED PRIVATE KEY]", text, flags=re.DOTALL)
-    text = re.sub(r"\b(?:github_pat_[\w]+|gh[pousr]_[\w]+|sk-[\w-]+|lin_api_[\w]+|"
-                  r"eyJ[\w-]+\.[\w-]+\.[\w-]+)\b", "[REDACTED]", text)
+    text = PRIVATE_KEY_PATTERN.sub("[REDACTED PRIVATE KEY]", text)
+    text = TOKEN_PATTERN.sub("[REDACTED]", text)
     text = re.sub(r"(?i)\b(Bearer|Basic)\s+[\w.+/=-]+", r"\1 [REDACTED]", text)
     text = re.sub(r"(?i)(\b(?:[\w-]*(?:token|secret|password)|api[_-]?key|authorization)"
                   r"[\"']?\s*[:=]\s*[\"']?)[^\s\"',;}]+", r"\1[REDACTED]", text)

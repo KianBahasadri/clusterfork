@@ -100,6 +100,33 @@ credentials; checkout tokens stay read-only. Tokens are issued again before
 publication and never passed in workflow inputs. Account caches and agent
 transcripts are not uploaded as artifacts.
 
+### Publication credential checks
+
+Before committing staged work and immediately before pushing, the worker scans
+the staged diff and the full committed `origin/<base>...HEAD` diff, respectively.
+Recovered branches and existing PRs pass the same checks before publication or
+an auto-merge request. Binary changes are read as text for matching; external
+diff helpers and text conversions cannot hide changed content.
+
+An in-memory guard retains every non-empty string `access_token`, `refresh_token`,
+`account_id`, and `id_token` seen in leased auth caches, including quota probes,
+lease saves, and refreshes. It rereads live caches before each scan and retains
+values after probe homes are deleted. The guard also retains job GitHub/OIDC
+credentials and every checkout, publication, and refreshed broker OIDC token.
+Credentials stay within their job; preflight still never transfers pool auth to
+the agent VM. Exact runtime values block in every file, including `tests/**`,
+and in PR metadata.
+
+Static checks share only the PEM private-key and concrete token-prefix/JWT
+patterns from `readiness_policy.py`. They inspect added lines outside `tests/`
+and PR metadata. Synthetic fixtures under `tests/**` are exempt from static
+patterns; generic assignments, authorization headers, and URL user/password
+forms do not independently block publication. Checks include the PR title,
+generated body, full untruncated agent summary and issue title, and the current
+title/body of any existing PR. A match or unreadable auth cache aborts before
+push or PR creation with a bounded diagnostic reason, without matched values,
+file contents, or credential-bearing paths.
+
 The storage resource is currently named in `automation/accounts.py`; see
 [remote setup](remote-development-setup.md#azure-deployment) before relocating it.
 Local rotation commands and container mounts are covered by

@@ -165,7 +165,8 @@ class AccountIsolationTests(unittest.TestCase):
         self.assertTrue(all(not row["owner"] for row in self.service.accounts.table.list()))
 
     def run_preflight(self, used):
-        broker = SimpleNamespace(call=lambda action, **data: self.call(action, identity=self.selector, **data))
+        broker = SimpleNamespace(call=lambda action, **data: self.call(action, identity=self.selector, **data),
+                                 publication_guard=worker.PublicationGuard({}))
         homes = []
 
         def inspect(home, model, effort):
@@ -188,6 +189,9 @@ class AccountIsolationTests(unittest.TestCase):
             agent.assert_not_called()
             self.assertEqual(len(homes), 2)
             self.assertTrue(all(not home.exists() for home in homes))
+            for credential in ("account-a", "access-a", "account-b", "access-b"):
+                with self.assertRaises(worker.PublicationBlocked):
+                    broker.publication_guard.check(credential, static=False)
             return output.read_text()
 
     def test_preflight_inspects_and_cleans_credentials_and_exports_only_a_boolean(self):

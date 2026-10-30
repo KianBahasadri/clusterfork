@@ -28,6 +28,7 @@ from dispatch_core import AgentProfile
 from quota_selection import SelectionPolicy, select_account
 from worker_reporting import usage_report, worker_branch
 from readiness_policy import PROTOCOL, RESULT_SCHEMA, review_prompt, workflow_publication_policy
+from publication_guard import PublicationBlocked, PublicationGuard, PublicationScanError, changed_lines
 from issue_images import image_prompt, materialize_images
 from diagnostics import CONTEXT, context, failure, failure_summary, http_operation, identifiers, operation, record
 
@@ -55,6 +56,7 @@ class Broker:
         self.lock = threading.RLock()
         self.token, self.expires = "", 0
         self.stage = "initializing"
+        self.publication_guard = PublicationGuard()
 
     def call(self, action, **data):
         if action == "progress" and data.get("stage"):
@@ -69,12 +71,16 @@ class Broker:
                 with operation("http/oidc", timeout_seconds=20):
                     response = json_request(oidc_url, os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"], operation_name="http/oidc")
                 self.token = response["value"]
+                self.publication_guard.remember(self.token)
                 payload = self.token.split(".")[1]
                 self.expires = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["exp"]
             with operation(f"broker/{action}", quiet=action in {"heartbeat", "save", "instructions"}, timeout_seconds=20):
                 try:
-                    return json_request(f"{self.url}/{action}", self.token,
-                                        {"dispatch_key": self.key, **data, "request_id": CONTEXT.get()["request_id"]})
+                    result = json_request(f"{self.url}/{action}", self.token,
+                                          {"dispatch_key": self.key, **data, "request_id": CONTEXT.get()["request_id"]})
+                    if action in {"checkout", "github"}:
+                        self.publication_guard.remember(result["token"])
+                    return result
                 except Exception as exc:
                     exc.clusterfork_action = action
                     # The broker action is more useful than the generic HTTP transport name.
@@ -112,6 +118,7 @@ class Heartbeat:
 @contextmanager
 def account_lease(broker, identity):
     claimed = broker.call("claim", account_id=identity)
+    broker.publication_guard.remember_auth(claimed["auth"])
     with tempfile.TemporaryDirectory(prefix="clusterfork-codex-") as directory:
         home = Path(directory)
         write_private(home / "auth.json", claimed["auth"])
@@ -123,10 +130,11 @@ def account_lease(broker, identity):
                 # A rejected login may remove the cache. Still release the lease,
                 # preserving the original auth error rather than masking it.
                 auth = None
+            broker.publication_guard.remember_auth(auth)
             broker.call("save", account_id=identity, lease=claimed["lease"],
                         auth=auth, release=release)
 
-        with Heartbeat(save) as heartbeat:
+        with broker.publication_guard.watch_auth(home / "auth.json"), Heartbeat(save) as heartbeat:
             try:
                 yield home, heartbeat
             except BaseException:
@@ -149,7 +157,7 @@ def command(args, *, env=None, timeout=1200, failure_signals=(), stdin=None, all
 
 
 def _command(args, *, env, timeout, failure_signals, stdin, allowed_returncodes, diagnostic_operation):
-    with tempfile.TemporaryFile(mode="w+") as log:
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="surrogateescape", newline="") as log:
         process = subprocess.Popen(args, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
                                    stdout=log, stderr=log, env=env, text=True, start_new_session=True)
         if stdin is not None:
@@ -239,6 +247,7 @@ def run_codex(broker, config, worker_heartbeat, directory):
         try:
             with account_lease(broker, selected.account_id) as (home, heartbeat):
                 details, limits = inspect_account(home, config["model"], config["effort"])
+                broker.publication_guard.capture_auth(home / "auth.json")
                 fresh = quota_snapshot(selected.account_id, config["model"], limits)
                 selection = select_account([fresh], profiles, policy, now=time.time())
                 if not selection:
@@ -265,6 +274,7 @@ def run_codex(broker, config, worker_heartbeat, directory):
                                             timeout=config.get("agent_timeout_minutes", 300) * 60,
                                             image_paths=image_paths,
                                             failure_signals=[heartbeat.failed, worker_heartbeat.failed])
+                    broker.publication_guard.capture_auth(home / "auth.json")
                     yield summary
                     return
                 finally:
@@ -442,6 +452,35 @@ def request_auto_merge(config, token, pull_url, dispatch_key, branch, *, expecte
     print(f"Automatic squash merge requested: {pull_url}", flush=True)
 
 
+def scan_publication(broker, base, metadata, *, staged=False):
+    """Check exact values everywhere; static patterns only on non-test additions."""
+    with operation("worker/publication_scan"):
+        try:
+            guard = broker.publication_guard
+            guard.refresh_auth()
+            args = ["git", "diff", "--no-ext-diff", "--no-textconv", "--no-color",
+                    "--no-renames", "--text", "--cached" if staged else f"origin/{base}...HEAD"]
+            diff = command(args)
+            paths = command([*args, "--name-only", "-z"]).split("\0")
+            for path in paths:
+                if path:
+                    guard.check(path, static=False)
+                    patch = command([*args, "--unified=0", "--", path])
+                    guard.check(changed_lines(patch), static=not path.startswith("tests/"))
+                    guard.check(changed_lines(patch, "-"), static=False)
+            # Keep the full diff (including removals, context and filenames) for
+            # exact-value checks, even for test fixtures and binary files.
+            guard.check(diff, static=False)
+            for value in metadata:
+                guard.check(value)
+        except (PublicationBlocked, PublicationScanError) as blocked:
+            exc = WorkerFailure(str(blocked))
+            failure(exc, "worker/publication_scan",
+                    reason_code=("publication_credentials_detected" if isinstance(blocked, PublicationBlocked)
+                                 else "publication_scan_failed"))
+            raise exc from None
+
+
 def execute(broker, config, heartbeat, directory):
     issue = config["issue"]
     repair = config.get("repair")
@@ -450,17 +489,14 @@ def execute(broker, config, heartbeat, directory):
     if repair and (repair["target_branch"] != branch or not re.fullmatch(r"[0-9a-f]{64}", target_key)):
         raise WorkerFailure("Auto-repair branch does not match its parent dispatch")
     token = broker.call("checkout")["token"]
+    broker.publication_guard.remember(token)
     existing = find_pr(config, token, branch)
-    if existing and not repair:
-        token = broker.call("github")["token"]
-        request_auto_merge(config, token, existing, broker.key, branch)
-        return "completed", existing
-    if existing and repair:
+    if existing:
         pull = published_pull(config, token, existing, target_key, branch)
         if pull.get("merged"):
             return "completed", existing
         if pull.get("state") != "open":
-            raise WorkerFailure("Auto-repair PR is no longer open")
+            raise WorkerFailure("Worker pull request is no longer open")
     with git_auth(token, directory) as env:
         # workflow_dispatch and manual reruns can check out an old SHA. Fetch
         # after repository admission so preceding merged work is always present.
@@ -473,6 +509,13 @@ def execute(broker, config, heartbeat, directory):
         else:
             command(["git", "checkout", "-b", branch, f"origin/{config['ref']}"])
     original = command(["git", "rev-parse", "HEAD"]).strip()
+    if existing and not repair:
+        token = broker.call("github")["token"]
+        broker.publication_guard.remember(token)
+        pull = published_pull(config, token, existing, target_key, branch, expected_sha=original)
+        scan_publication(broker, config["ref"], (pull.get("title") or "", pull.get("body") or ""))
+        request_auto_merge(config, token, existing, target_key, branch, expected_sha=original)
+        return "completed", existing
     config = {**config, "checkout_sha": command(["git", "rev-parse", f"origin/{config['ref']}"]).strip()}
     if config.get("readiness", {}).get("context_sha", config["checkout_sha"]) != config["checkout_sha"]:
         raise WorkerFailure("Coding checkout changed after readiness approval; request another review")
@@ -499,8 +542,15 @@ def execute(broker, config, heartbeat, directory):
                     diagnostic_operation=f"validation/{index}")
         broker.call("progress", stage="publishing", **({"repair_validation_passed": True} if repair else {}))
         token = broker.call("github")["token"]
+        broker.publication_guard.remember(token)
+        title = f"{issue['identifier']}: {issue['title']}"[:250]
+        body = (f"Implements [{issue['identifier']}]({issue['url']}).\n\n{summary[:40_000]}\n\n"
+                f"Validation: all configured repository checks passed.\n\n"
+                f"<!-- clusterfork-dispatch:{target_key} -->")
+        metadata = [title, body, summary, issue["title"]]
         if changed:
             command(["git", "add", "-A"])
+            scan_publication(broker, config["ref"], metadata, staged=True)
             command(["git", "-c", "user.name=clusterfork[bot]", "-c",
                      "user.email=clusterfork[bot]@users.noreply.github.com", "commit", "-m",
                      f"{issue['identifier']}: {issue['title'][:180]}"])
@@ -513,19 +563,17 @@ def execute(broker, config, heartbeat, directory):
         # Revalidate ownership before updating an existing PR, including when
         # the project uses manual merging. Never publish to a foreign/fork PR.
         if existing:
-            published_pull(config, token, existing, target_key, branch)
+            pull = published_pull(config, token, existing, target_key, branch)
+            metadata += [pull.get("title") or "", pull.get("body") or ""]
+        scan_publication(broker, config["ref"], metadata)
         with git_auth(token, directory) as env:
             command(["git", "push", "origin", f"HEAD:refs/heads/{branch}"], env=env)
         if existing:
             request_auto_merge(config, token, existing, target_key, branch,
                                expected_sha=command(["git", "rev-parse", "HEAD"]).strip())
             return "completed", existing
-        body = (f"Implements [{issue['identifier']}]({issue['url']}).\n\n{summary[:40_000]}\n\n"
-                f"Validation: all configured repository checks passed.\n\n"
-                f"<!-- clusterfork-dispatch:{target_key} -->")
         pull = json_request(f"https://api.github.com/repos/{config['repository']}/pulls", token,
-                            {"title": f"{issue['identifier']}: {issue['title']}"[:250],
-                             "head": branch, "base": config["ref"], "body": body})
+                            {"title": title, "head": branch, "base": config["ref"], "body": body})
         request_auto_merge(config, token, pull["html_url"], target_key, branch,
                            expected_sha=command(["git", "rev-parse", "HEAD"]).strip())
         return "completed", pull["html_url"]
