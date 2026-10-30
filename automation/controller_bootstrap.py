@@ -30,6 +30,11 @@ def main():
     config = broker.call("start", protocol=PROTOCOL)
     if config.get("serial_admission") is not True:
         raise ValueError("Controller did not grant repository admission")
+    preflight = os.environ.get("PREFLIGHT_ONLY") == "true"
+    if config.get("account_selection") is not preflight:
+        raise ValueError("Signed job role does not match the bootstrap mode")
+    if preflight:
+        return  # Pool inspection has no target checkout or publication permission.
     token = broker.call("checkout")["token"]
     print("::add-mask::" + token)
     repository, context_sha = config["repository"], config["binding"]["context_sha"]

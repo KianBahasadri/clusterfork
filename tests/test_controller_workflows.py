@@ -38,19 +38,24 @@ class ControllerWorkflowTests(unittest.TestCase):
 
     def test_four_trust_roles_have_distinct_workflow_identities_and_fresh_vms(self):
         self.assertEqual(len(set(ROLE_FILES.values())), 4)
-        for name in ROLE_FILES.values():
+        for role, name in ROLE_FILES.items():
             data = workflow(name)
             self.assertEqual(data["permissions"], {"contents": "read", "id-token": "write"})
             job, = data["jobs"].values()
             self.assertEqual(job["runs-on"], "ubuntu-24.04")
             steps = job["steps"]
             boot = next(i for i,s in enumerate(steps) if s.get("id") == "target")
-            checkout = next(i for i,s in enumerate(steps) if s.get("with",{}).get("path") == ".clusterfork-target")
-            self.assertLess(boot, checkout)
             self.assertIn("controller_bootstrap.py", steps[boot]["run"])
-            self.assertEqual(steps[checkout]["with"]["token"], "${{ steps.target.outputs.token }}")
-            self.assertEqual(steps[checkout]["with"]["ref"], "${{ steps.target.outputs.context_sha }}")
-            self.assertIs(steps[checkout]["with"]["persist-credentials"], False)
+            checkouts = [(i,s) for i,s in enumerate(steps) if s.get("with",{}).get("path") == ".clusterfork-target"]
+            if role.endswith("-select"):
+                self.assertEqual(checkouts, [])
+                self.assertEqual(steps[boot]["env"]["PREFLIGHT_ONLY"], "true")
+            else:
+                (checkout, step), = checkouts
+                self.assertLess(boot, checkout)
+                self.assertEqual(step["with"]["token"], "${{ steps.target.outputs.token }}")
+                self.assertEqual(step["with"]["ref"], "${{ steps.target.outputs.context_sha }}")
+                self.assertIs(step["with"]["persist-credentials"], False)
             execute = next(s for s in steps if s.get("id") == "execute")
             self.assertEqual(execute["working-directory"], ".clusterfork-target")
             self.assertIn(".clusterfork-runtime/automation/worker.py", execute["run"])

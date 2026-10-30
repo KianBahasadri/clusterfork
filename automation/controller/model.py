@@ -56,6 +56,7 @@ class IssueObserved:
     sort_order: float = 0
     content_revision: str = ""
     reason: str = ""
+    canceled: bool = False
 
     @property
     def task_id(self):
@@ -198,8 +199,27 @@ class ExhaustAccount:
     thread_id: str
 
 
+@dataclass(frozen=True)
+class ContextObserved:
+    task_id: str
+    attempt_id: str
+    binding: TaskSpec
+
+
+@dataclass(frozen=True)
+class InboxQueued:
+    event_id: str
+    event: dict
+
+
+@dataclass(frozen=True)
+class InboxDone:
+    event_id: str
+
+
 Command = (IssueObserved | Admit | DispatchObserved | Start | Assign | Review | Progress |
-           Finish | ExternalObserved | Retry | Hold | SessionUpdated | EffectUpdated | Authorize | ExhaustAccount)
+           Finish | ExternalObserved | Retry | Hold | SessionUpdated | EffectUpdated | Authorize |
+           ExhaustAccount | ContextObserved | InboxQueued | InboxDone)
 
 
 @dataclass(frozen=True)
@@ -218,6 +238,7 @@ class TaskView:
     spec: TaskSpec | None
     attempt: dict = field(default_factory=dict)
     sessions: tuple[dict, ...] = ()
+    canceled: bool = False
 
     def session(self, phase):
         return next((dict(s) for s in self.sessions if s["phase"] == phase), None)

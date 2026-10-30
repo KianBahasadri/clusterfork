@@ -5,7 +5,7 @@ import re
 from .model import Rejected, Role
 from .workflows import ENGINE, ROLE_FILES, WORKFLOW
 
-SELECTOR_ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "bind_account", "finish", "checkout"}
+SELECTOR_ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "bind_account", "finish"}
 REVIEW_ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "checkout", "review", "finish"}
 CODING_ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "bind_account", "exhaust_account",
                   "checkout", "github", "progress", "finish", "steering_open", "instructions",

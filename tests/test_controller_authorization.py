@@ -38,6 +38,7 @@ class JobAuthorizationTests(unittest.TestCase):
     def test_reviewer_cannot_publish_and_preflight_cannot_execute(self):
         for role, action in ((Role.REVIEW, "github"), (Role.REVIEW, "progress"),
                              (Role.REVIEW_SELECT, "review"), (Role.CODING_SELECT, "progress"),
+                             (Role.REVIEW_SELECT, "checkout"), (Role.CODING_SELECT, "checkout"),
                              (Role.CODING_SELECT, "github"), (Role.CODING, "review")):
             with self.subTest(role=role, action=action), self.assertRaises(Rejected):
                 authorize_job(claims(role), self.view, self.route, action)

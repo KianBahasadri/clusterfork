@@ -83,6 +83,35 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(persisted, view)
             self.assertTrue(persisted.active)
 
+    def test_version_one_database_migration_preserves_task_and_attempt_ownership(self):
+        view=self.admit()
+        self.database.close()
+        with sqlite3.connect(self.path) as legacy:
+            legacy.execute("ALTER TABLE attempts DROP COLUMN attempt_kind")
+            legacy.execute("ALTER TABLE tasks DROP COLUMN canceled")
+            legacy.execute("PRAGMA user_version=1")
+        legacy.close()
+        with Database(self.path) as upgraded:
+            restored=Controller(upgraded).inspect(view.task_id)
+            self.assertTrue(restored.active)
+            self.assertEqual(restored.attempt["attempt_id"],view.attempt["attempt_id"])
+            self.assertEqual(restored.attempt["attempt_kind"],"normal")
+            self.assertEqual(upgraded.connection.execute("PRAGMA user_version").fetchone()[0],3)
+
+    def test_ineligibility_is_not_cancellation_and_canceled_work_requires_stop_and_pr_resolution(self):
+        issue=self.issue()
+        view=self.apply(Admit(issue.task_id,SPEC))
+        self.start(view,Role.REVIEW_SELECT)
+        self.apply(replace(issue,eligible=False))
+        held=self.external(view)
+        self.assertTrue(held.active)
+        self.apply(replace(issue,eligible=False,canceled=True))
+        still_open=self.external(view,pull_state="open",pull_request="https://github.com/Owner/Repo/pull/1")
+        self.assertTrue(still_open.active)
+        canceled=self.external(view,pull_state="closed",pull_request="https://github.com/Owner/Repo/pull/1")
+        self.assertFalse(canceled.active)
+        self.assertEqual(canceled.phase,Phase.CANCELED)
+
     def test_priority_manual_order_dependencies_and_repository_independence(self):
         ordinary = self.issue(1, priority=3)
         urgent_blocked = self.issue(2, priority=1, dependencies_ready=False)
@@ -146,6 +175,20 @@ class ControllerTests(unittest.TestCase):
                              Role.CODING_SELECT, review_job_succeeded=True))
         self.assertEqual(self.controller.inspect(view.task_id).attempt["run_attempt"], 1)
 
+    def test_account_handoff_and_review_deadlines_cannot_be_extended_by_repeated_start(self):
+        view=self.admit()
+        self.start(view,Role.REVIEW_SELECT)
+        self.apply(Assign(view.task_id,view.attempt["attempt_id"],Role.REVIEW_SELECT,ACCOUNT_A))
+        self.now+=899
+        self.start(view,Role.REVIEW)
+        deadline=self.controller.inspect(view.task_id).session("review")["deadline"]
+        self.now+=10
+        self.start(view,Role.REVIEW)
+        self.assertEqual(self.controller.inspect(view.task_id).session("review")["deadline"],deadline)
+        self.now=deadline
+        with self.assertRaisesRegex(Rejected,"expired"):
+            self.start(view,Role.REVIEW)
+
     def test_invalid_or_changed_readiness_proof_cannot_allow_coding(self):
         view = self.admit()
         self.start(view, Role.REVIEW_SELECT)
@@ -196,7 +239,8 @@ class ControllerTests(unittest.TestCase):
 
     def test_startup_retry_cooldown_is_stable_and_old_attempt_is_fenced(self):
         view = self.admit()
-        self.start(view, Role.REVIEW_SELECT)
+        self.review(view)
+        self.start(view, Role.CODING_SELECT, review_job_succeeded=True)
         view = self.external(view, conclusion="failure")
         retry_at = view.attempt["retry_at"]
         self.now += 10
@@ -208,6 +252,13 @@ class ControllerTests(unittest.TestCase):
         self.assertNotEqual(retried.attempt["attempt_id"], view.attempt["attempt_id"])
         with self.assertRaisesRegex(Rejected, "superseded"):
             self.start(view, Role.REVIEW_SELECT)
+
+    def test_readiness_infrastructure_failure_retains_fifteen_minute_backoff(self):
+        view=self.admit()
+        self.start(view,Role.REVIEW_SELECT)
+        failed=self.external(view,conclusion="failure")
+        self.assertEqual(failed.attempt["retry_kind"],"review")
+        self.assertEqual(failed.attempt["retry_at"],self.now+900)
 
     def test_content_edits_hold_account_and_publication_authority(self):
         issue = self.issue()

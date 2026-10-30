@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS tasks (
  dependencies_ready INTEGER NOT NULL CHECK(dependencies_ready IN (0,1)),
  priority INTEGER NOT NULL CHECK(priority BETWEEN 0 AND 4), sort_order REAL NOT NULL,
  content_revision TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+ canceled INTEGER NOT NULL DEFAULT 0 CHECK(canceled IN (0,1)),
  revision INTEGER NOT NULL DEFAULT 1, spec TEXT,
  current_attempt TEXT, repair_used INTEGER NOT NULL DEFAULT 0 CHECK(repair_used IN (0,1)),
  UNIQUE(generation, project_id, issue_id)
@@ -41,6 +42,7 @@ CREATE TABLE IF NOT EXISTS attempts (
  pull_request TEXT NOT NULL DEFAULT '', pull_state TEXT NOT NULL DEFAULT '',
  retry_kind TEXT NOT NULL DEFAULT '', retry_at REAL NOT NULL DEFAULT 0,
  started_at REAL NOT NULL DEFAULT 0,
+ attempt_kind TEXT NOT NULL DEFAULT 'normal' CHECK(attempt_kind IN ('normal','startup','capacity','context','review','repair')),
  UNIQUE(task_id,ordinal), UNIQUE(run_id,run_attempt,attempt_id)
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -59,7 +61,10 @@ CREATE TABLE IF NOT EXISTS effects (
  state TEXT NOT NULL CHECK(state IN ('pending','claimed','done')) DEFAULT 'pending'
 );
 CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-PRAGMA user_version=1;
+CREATE TABLE IF NOT EXISTS inbox (
+ event_id TEXT PRIMARY KEY, payload TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0 CHECK(done IN (0,1))
+);
+PRAGMA user_version=3;
 """
 
 
@@ -82,9 +87,19 @@ class Database:
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA synchronous=FULL")
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1):
+        if version not in (0, 1, 2, 3):
             self.close()
             raise Rejected("Unsupported task database version")
+        if version == 1:
+            with self.transaction() as db:
+                db.execute("ALTER TABLE attempts ADD COLUMN attempt_kind TEXT NOT NULL DEFAULT 'normal' "
+                           "CHECK(attempt_kind IN ('normal','startup','capacity','context','review','repair'))")
+                db.execute("PRAGMA user_version=2")
+            version=2
+        if version == 2:
+            with self.transaction() as db:
+                db.execute("ALTER TABLE tasks ADD COLUMN canceled INTEGER NOT NULL DEFAULT 0 CHECK(canceled IN (0,1))")
+                db.execute("PRAGMA user_version=3")
         self.connection.executescript(SCHEMA)
 
     @contextmanager

@@ -32,7 +32,24 @@ existing fenced account resources. Probe identities are recorded before returnin
 credentials, then cleared only after verified release. Review/coding assignments
 are independent. Codex replacement access requires release of the exhausted
 account and the same registered coding thread; it cannot switch providers.
-The HTTP transport and production instruction adapter still need wiring.
+`instructions.py` reuses the existing instruction resource protocol with read-only
+task/attempt views. Instruction writes cannot advance task lifecycle. The broker
+retains thread/turn registration, phase guards, and instruction acknowledgements.
+
+## Observation and transports
+
+`driver.py` reads current Linear/GitHub facts and submits typed commands. It claims
+dispatch intent before the external call and discovers an uncertain result instead
+of resending. It resolves the latest target context at admission and checks a
+required-runtime predicate before admitting or retrying work. A deployment-owned
+hold cannot clear an operator hold. Rendering Linear status is derived from task
+views and does not make execution decisions.
+
+`server.py` exposes authenticated webhook intake, OIDC worker requests, and public
+bounded health metadata. Verified webhook IDs are committed in the local inbox
+before acknowledgement. Operator commands use a local mode-0600 Unix socket;
+they are not public HTTP routes. The service entrypoint, Azure identity/host setup,
+and deployment integration remain outstanding.
 
 ## Native execution graph
 
@@ -49,8 +66,10 @@ reusable workflow files with distinct authenticated roles:
 Native `needs` edges sequence these jobs in one run. Only selected preflights and
 a passing review enable their downstream jobs. Each job gets a fresh VM. Runtime
 and target checkouts are siblings, preserving local-action manifests through
-post-job cleanup. `controller_bootstrap.py` verifies the runtime/job revision,
-obtains broker authorization, and requests a scoped target checkout token.
+post-job cleanup. `controller_bootstrap.py` verifies the runtime/job revision and
+obtains broker authorization. Only agent jobs request scoped target checkout
+tokens. Quota preflights operate in empty workspaces and cannot request repository
+tokens or execute repository code.
 
 `authorization.py` binds verified GitHub OIDC claims to the mapped task, immutable
 runtime tag/revision, exact caller workflow, and one reusable job role. The HTTP
@@ -73,6 +92,11 @@ account implementation to verify probes, cleanup, separate assignments, live
 leases, context checks, and restricted failover. `test_controller_workflows.py`
 parses the shipped YAML and checks job
 dependencies, role separation, checkout order, and inter-job outputs.
+Driver tests exercise sequential target-code freshness, the runtime admission
+barrier, reporting independence, uncertain dispatch discovery, and the one-repair
+budget. HTTP tests use real local sockets to verify authentication and durable
+intake. Instruction tests exercise the existing delivery/acknowledgement protocol
+through controller views. Database upgrades preserve task and attempt ownership.
 
 The replacement still needs its broker/transport integration, Azure host and
 deployment path, migration, and live acceptance. Unit tests are not cutover evidence.

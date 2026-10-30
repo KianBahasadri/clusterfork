@@ -14,6 +14,8 @@ from issue_images import capture_images, image_digest
 from readiness_policy import PROTOCOL, REVIEW_TIMEOUT_SECONDS, issue_revision, policy_version
 from worker_core import account_provider, execution_profiles, valid_account_id
 from worker_reporting import validate_quota_wait, validate_usage
+from worker_reporting import worker_branch
+from auto_repair import repair_instructions
 
 
 class Broker:
@@ -88,7 +90,10 @@ class Broker:
         if action == "start":
             passed = verify_review_job(self.github, run_id, run_attempt) if phase == "coding" else False
             view = self.apply(Start(view.task_id, key, run_id, run_attempt, role, passed))
-            self.metadata(view, phase, heartbeat_until=self.clock() + 120)
+            fields = {"heartbeat_until": self.clock()+120}
+            if phase=="coding" and not view.session(phase)["data"].get("steering_started_at"):
+                fields["steering_started_at"] = self.clock()
+            self.metadata(view, phase, **fields)
             return self.config(view, route, role, issue, images)
 
         view = self.apply(Authorize(view.task_id, key, role))
@@ -99,7 +104,12 @@ class Broker:
         if action in {"accounts", "claim", "bind_account", "exhaust_account"}:
             return self.account(view, role, owner, action, data)
         if action == "checkout":
-            return {"token": self.github.installation_token(route.repository, permissions={"contents": "read", "pull_requests": "read"})}
+            permissions={"contents":"read"}
+            if phase=="coding":
+                permissions["pull_requests"]="read"
+                if view.attempt["attempt_kind"]=="repair":
+                    permissions["actions"]="read"
+            return {"token": self.github.installation_token(route.repository, permissions=permissions)}
         if action == "github":
             if view.phase not in {"executing", "published"}:
                 raise Rejected("Publication is not authorized in this task phase")
@@ -125,6 +135,12 @@ class Broker:
                 fields["failure"] = validate_failure(data["failure"])
             if status == "waiting_for_quota" and "quota_wait" in data:
                 fields["quota_wait"] = validate_quota_wait(data["quota_wait"])
+            if "wip_branch" in data or "wip_commit_sha" in data:
+                branch=worker_branch(view.identifier,view.task_id)
+                if (status!="failed" or phase!="coding" or data.get("wip_branch") not in {branch,branch.replace("clusterfork/","clusterfork-wip/",1)}
+                        or not isinstance(data.get("wip_commit_sha"),str) or not re.fullmatch(r"[0-9a-f]{40}",data["wip_commit_sha"])):
+                    raise Rejected("Invalid preserved worker change")
+                fields.update(wip_branch=data["wip_branch"],wip_commit_sha=data["wip_commit_sha"])
             if fields:
                 self.metadata(view, phase, **fields)
             self.apply(Finish(view.task_id, key, phase, status, data.get("pull_request", "")))
@@ -154,6 +170,15 @@ class Broker:
                   "issue": {k: issue.get(k) for k in ("id", "identifier", "title", "description", "url")}}
         if role.phase == "review":
             result["issue"]["comments"] = sorted(self.linear.issue_comments(view.issue_id), key=lambda c:(c["createdAt"],c["id"]))
+        elif view.attempt["attempt_kind"]=="repair":
+            previous=self.controller.previous_attempt(view.task_id)
+            if previous is None:
+                raise Rejected("Repair parent evidence is unavailable")
+            result["repair"]={"target_branch":worker_branch(view.identifier,view.task_id),
+                              "target_dispatch_key":view.task_id,"target_identifier":view.identifier,
+                              "target_pull_request":previous["pull_request"],"instructions":repair_instructions(route.ref),
+                              "failure_output":previous["data"].get("failure",{}).get("failure_output","")}
+            result["repair"].update({k:previous["data"][k] for k in ("wip_branch","wip_commit_sha") if k in previous["data"]})
         return result
 
     def account(self, view, role, owner, action, data):
@@ -190,6 +215,7 @@ class Broker:
             if account.get("owner") == owner and account.get("lease_until", 0) > self.clock():
                 raise Rejected("Release the quota probe before binding")
             self.apply(Assign(view.task_id, view.attempt["attempt_id"], role, identity))
+            self.metadata(view,role.phase,heartbeat_until=self.clock()+(900 if role.selector else 120))
             return {"account_id": identity}
         if action == "claim":
             if metadata.get("probe_account_id"):
@@ -244,6 +270,15 @@ class Broker:
             fields["usage_after"] = validate_usage(data["usage_after"])
         if stage == "publishing":
             fields["steering_closed"] = True
+            if data.get("repair_validation_passed") is True:
+                fields["repair_validation_passed"]=True
+            if "repair_result" in data:
+                result=data["repair_result"]
+                if (not isinstance(result,dict) or set(result)!={"commit_sha","changed_files"}
+                        or not isinstance(result.get("commit_sha"),str) or not re.fullmatch(r"[0-9a-f]{40}",result["commit_sha"])
+                        or type(result.get("changed_files")) is not int or not 0<=result["changed_files"]<=100000):
+                    raise Rejected("Invalid repair validation result")
+                fields["repair_result"]=result
         updated = self.apply(Progress(view.task_id, view.attempt["attempt_id"], stage,
                                       data.get("context_sha", view.spec.context_sha if view.attempt["coding_started"] else ""), fields))
         return {"stage": updated.attempt["stage"]}

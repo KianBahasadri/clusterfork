@@ -76,6 +76,18 @@ def role_workflow(role):
     output = "selected" if selector else "ready" if review else ""
     outputs = ("    outputs:\n      " + output + ":\n        value: ${{ jobs.run.outputs." + output + " }}\n") if output else ""
     job_output = ("    outputs:\n      " + output + ": ${{ steps.execute.outputs." + output + " }}\n") if output else ""
+    target = """      - name: Prepare isolated quota workspace
+        run: mkdir -p "$GITHUB_WORKSPACE/.clusterfork-target"
+""" if selector else """      - name: Check out the authorized target context
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.target.outputs.repository }}
+          ref: ${{ steps.target.outputs.context_sha }}
+          token: ${{ steps.target.outputs.token }}
+          fetch-depth: 0
+          path: .clusterfork-target
+          persist-credentials: false
+"""
     return """name: Clusterfork ROLE
 
 on:
@@ -106,30 +118,22 @@ JOB_OUTPUTS    steps:
           persist-credentials: false
       - uses: ./.clusterfork-runtime/.github/actions/setup-codex
       - uses: ./.clusterfork-runtime/.github/actions/setup-cursor
-      - name: Authenticate this role and obtain scoped target checkout access
+      - name: Authenticate this signed job role
         id: target
         env:
           CLUSTERFORK_BROKER_URL: ${{ vars.CLUSTERFORK_BROKER_URL }}
           DISPATCH_KEY: ${{ inputs.dispatch_key }}
           WORKER_REVISION: ${{ inputs.worker_revision }}
+          PREFLIGHT_ONLY: 'PREFLIGHT'
         run: python3 "$GITHUB_WORKSPACE/.clusterfork-runtime/automation/controller_bootstrap.py"
-      - name: Check out the authorized target context
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ steps.target.outputs.repository }}
-          ref: ${{ steps.target.outputs.context_sha }}
-          token: ${{ steps.target.outputs.token }}
-          fetch-depth: 0
-          path: .clusterfork-target
-          persist-credentials: false
-      - name: Execute the authorized phase
+TARGET      - name: Execute the authorized phase
         id: execute
         working-directory: .clusterfork-target
         env:
           CLUSTERFORK_BROKER_URL: ${{ vars.CLUSTERFORK_BROKER_URL }}
           DISPATCH_KEY: ${{ inputs.dispatch_key }}
         run: python3 "$GITHUB_WORKSPACE/.clusterfork-runtime/automation/worker.py"SELECT
-""".replace("ROLE", role).replace("OUTPUTS\n", outputs).replace("JOB_OUTPUTS", job_output).replace("TIMEOUT", "12" if selector or review else "360").replace("SELECT", " --select-account" if selector else "")
+""".replace("ROLE", role).replace("OUTPUTS\n", outputs).replace("JOB_OUTPUTS", job_output).replace("TIMEOUT", "12" if selector or review else "360").replace("SELECT", " --select-account" if selector else "").replace("TARGET", target).replace("'PREFLIGHT'", "'true'" if selector else "'false'")
 
 
 def render():
