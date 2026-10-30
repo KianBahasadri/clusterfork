@@ -326,6 +326,7 @@ class WorkerService:
                     self.hold_for_readiness(key, owner)
                 raise
             if (action == "progress" and data.get("stage") == "coding" and approval.get("context_sha")
+                    and not (receipt.get("is_auto_repair") and receipt.get("repair_parent_key"))
                     and data.get("context_sha") != approval["context_sha"]):
                 raise WorkerError("Coding checkout does not match the reviewed repository context", 403)
             if not self.queue.dependencies_ready(
@@ -465,8 +466,11 @@ class WorkerService:
                 self.runs.replace(row, etag)
             return result
         if action == "checkout":
+            permissions = {"contents": "read", "pull_requests": "read"}
+            if receipt.get("is_auto_repair") and receipt.get("repair_parent_key"):
+                permissions["actions"] = "read"
             return {"token": self.github.installation_token(
-                route.repository, permissions={"contents": "read", "pull_requests": "read"})}
+                route.repository, permissions=permissions)}
         if action == "github":
             issue = self.linear.issue(receipt["issue_id"])
             extra = (route.linear_states.in_progress,) if route.linear_states else ()
@@ -657,10 +661,14 @@ class WorkerService:
                 raise WorkerError("Issue already completed")
             if previous.get("owner") == owner and previous.get("status") != "running":
                 raise WorkerError("This worker attempt already finished")
-            if is_auto_repair(issue, receipt) and not (
-                    previous.get("status") == "waiting_for_quota"
-                    or (previous.get("status") == "running" and previous.get("owner") == owner)):
-                raise WorkerError("The single auto-repair worker cannot be retried", 403)
+            if is_auto_repair(issue, receipt):
+                entry, _ = self.queue.table(route.repository).get(key)
+                startup_retry = (previous.get("status") == "failed" and not self.queue.started_coding(entry)
+                                 and receipt.get("startup_failure_owner") == previous.get("owner")
+                                 and receipt.get("retry_after", 0) <= self.clock())
+                if not (startup_retry or previous.get("status") == "waiting_for_quota"
+                        or (previous.get("status") == "running" and previous.get("owner") == owner)):
+                    raise WorkerError("The single auto-repair worker cannot be retried", 403)
         if receipt.get("deployment_wait_owner") == owner:
             return {"status": "deployment_deferred", "reason_code": "deployment_paused"}
         if self.queue.deployment_paused():
@@ -705,8 +713,7 @@ class WorkerService:
         self.sync_linear(key)
         self.sync_steering(receipt["issue_id"])
         profiles = execution_profiles(self.registry, row)
-        repair = ({name: receipt[name] for name in
-                   ("target_branch", "target_dispatch_key", "target_identifier", "target_pull_request")}
+        repair = (self.queue.repair.worker_config(receipt)
                   if receipt.get("is_auto_repair") and receipt.get("repair_parent_key") else None)
         return {"protocol": PROTOCOL, "phase": "development", "readiness": approval,
                 "images": images,

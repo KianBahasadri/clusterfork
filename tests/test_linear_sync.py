@@ -233,6 +233,18 @@ class LifecycleTests(unittest.TestCase):
         self.github.worker_result.return_value = {"status": "in_progress"}
         self.assertEqual(self.sync_state(), self.states.in_progress)
 
+    def test_confirmed_pre_coding_failure_returns_to_todo_but_cancellation_stays_blocked(self):
+        for stage in ("initializing", "selecting_account"):
+            with self.subTest(stage=stage):
+                self.setUp()
+                self.github.worker_pull.side_effect = lambda *args: None
+                self.update_run(status="failed", stage=stage, pull_request="")
+                self.assertEqual(self.sync_state(), self.route.ready_state_ids[0])
+                self.assertIn("retry after 60 seconds", self.linear.status_comment.call_args.args[2])
+                self.update_run(status="running", stage=stage, lease_until=NOW-1)
+                self.github.worker_result.return_value = {"status": "completed", "conclusion": "cancelled"}
+                self.assertEqual(self.sync_state(), self.states.blocked)
+
     def test_no_change_completion_is_done_and_quota_wait_is_ready(self):
         self.update_run(pull_request="")
         self.assertEqual(self.sync_state(), self.states.done)

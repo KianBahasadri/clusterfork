@@ -409,9 +409,10 @@ class RepositoryQueue:
                       and not row.get("repair_issue_id") and not receipt.get("repair_issue_id"))
         latest = max(runs, key=lambda r: (r["id"], r["run_attempt"])) if runs else known_result
         latest_owner = f"{latest['id']}:{latest['run_attempt']}" if runs else known_owner
-        if (receipt.get("readiness_wait_owner") == latest_owner
-                or receipt.get("deployment_wait_owner") == latest_owner
-                or (run and (run.get("dependency_wait") or run.get("status") == "waiting_for_dependencies"))):
+        admission_hold = (receipt.get("readiness_wait_owner") == latest_owner
+                          or receipt.get("deployment_wait_owner") == latest_owner
+                          or (run and (run.get("dependency_wait") or run.get("status") == "waiting_for_dependencies")))
+        if admission_hold:
             repairable = False  # Admission holds have not attempted coding/validation.
         failed_run = bool((run and run.get("status") == "failed" and run.get("owner") == latest_owner)
                           or (latest and latest.get("conclusion") == "failure"))
@@ -420,7 +421,9 @@ class RepositoryQueue:
             if pull.get("merged"):
                 return "completed", reason
             if pull.get("state") == "OPEN":
-                if repairable and (failed_run or failed_required_checks(pull)):
+                recoverable_base = (not pull.get("isDraft") and (pull.get("mergeable") == "CONFLICTING"
+                                    or pull.get("mergeStateStatus") in {"DIRTY", "BEHIND"}))
+                if repairable and (failed_run or failed_required_checks(pull) or recoverable_base):
                     return "repair", reason if not failed_run else "Worker execution or validation failed; its PR remains open."
                 if not run or run["status"] != "completed":
                     return "blocked", "Worker did not complete successfully; its pull request remains open. " + reason
@@ -439,6 +442,18 @@ class RepositoryQueue:
             if current != route:
                 return "skipped", f"Deployment-deferred issue is no longer eligible ({reason})."
             return "retry", "Deployment resumed; rechecking current readiness before retrying startup."
+        if failed_run and not admission_hold and not self.started_coding(row):
+            # Retry confirmed setup failures under this same slot and budget.
+            # Remember the attempt so repeated observations cannot extend the
+            # cooldown or redispatch while GitHub's listing lags the retry.
+            current, version = self.receipts.get(key)
+            if current.get("startup_failure_owner") != latest_owner:
+                current.update(status="rejected", startup_failure_owner=latest_owner,
+                               retry_after=int(self.clock()) + 60)
+                self.receipts.replace(current, version)
+            if current["status"] == "rejected" and current.get("retry_after", 0) <= self.clock():
+                return "retry", "Retrying a worker failure before coding started."
+            return "waiting", "Worker failed before coding started; waiting to retry startup."
         if repairable and failed_run and (runs or known_result):
             return "repair", "Worker execution or validation failed."
         if receipt["status"] == "rejected":

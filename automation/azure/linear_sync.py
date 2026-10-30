@@ -165,6 +165,7 @@ class LinearSync:
             if issue["state"]["id"] == states.done and note.get("completion_owner") != owner:
                 return
             status = run["status"]
+            confirmed_failure = status == "failed"
             if receipt.get("deployment_wait_owner") == owner:
                 status = "waiting_for_deployment"
             if run.get("dependency_wait") and run.get("stage", "initializing") in {"initializing", "selecting_account"}:
@@ -173,6 +174,7 @@ class LinearSync:
                 result = self.github.worker_result(route.repository, owner)
                 if result["status"] == "completed":
                     status = "failed"  # Includes cancellation and missing finish callbacks.
+                    confirmed_failure = result.get("conclusion") == "failure"
             pull = None
             if status in {"completed", "failed"}:
                 url = run.get("pull_request") or (note.get("pull_request", "") if note.get("owner") == owner else "")
@@ -195,9 +197,12 @@ class LinearSync:
             elif status == "waiting_for_deployment":
                 state, reason = "ready", "Azure deployment paused startup; waiting for explicit resume and confirmation that the GitHub attempt stopped."
             elif status == "failed":
-                state = "blocked"
+                before_coding = confirmed_failure and run.get("stage") in {"initializing", "selecting_account"}
+                state = "ready" if before_coding else "blocked"
                 reason = (failure_summary(json.loads(run["failure"])) if run.get("failure") else
                           "Worker failed, was canceled, or ended without recording a result. See the worker run.")
+                if before_coding:
+                    reason += " Coding has not started; confirmed startup failures retry after 60 seconds."
             elif status == "completed":
                 state, reason = "done", "Worker completed successfully; no repository changes were needed."
             else:

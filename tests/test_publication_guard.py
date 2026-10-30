@@ -192,6 +192,7 @@ class PublicationIntegrationTests(unittest.TestCase):
                 os.chdir(checkout)
                 with patch.object(worker, "run_codex", side_effect=implement) as agent, \
                      patch.object(worker, "find_pr", return_value=URL if existing else None), \
+                     patch.object(worker, "repair_check_output", return_value=""), \
                      patch.object(worker, "json_request", return_value=pull) as request, \
                      patch.object(worker, "request_auto_merge") as merge, \
                      patch.object(worker, "command", wraps=worker.command) as command:

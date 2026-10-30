@@ -88,6 +88,20 @@ A temporary eligibility-read failure retains its durable position for retry. Bef
 worker fetches the latest target branch and creates its branch from that revision, including the preceding task's merged
 changes.
 
+A confirmed worker failure before coding starts (`initializing` or `selecting_account`,
+with no open PR and no durable `coding_started` flag) is a retryable dispatch failure.
+After GitHub confirms all matching/recorded attempts stopped, the queue retains the
+same slot and dispatch key, records `retry_after = now + 60`, and leaves
+`repair_attempted` unspent. Lifecycle reporting returns known startup failures to
+Todo. Repeated observations and restarts retain the original cooldown; a lagging run
+listing cannot redispatch an already submitted retry. The same startup recovery can
+retry a repair child before it starts coding, without creating another repair issue.
+Readiness/dependency/deployment holds retain their own retry rules. Cancellation,
+unconfirmed dispatches, and missing outcomes without confirmed failure do not gain a
+startup retry. An open PR continues through the
+[single repair policy](remote-development.md#single-attempt-auto-repair), including CI,
+merge-conflict, and outdated-base recovery, rather than the startup path.
+
 Dispatch receipts retain their original workflow and target branch so active work can still be checked after its project
 mapping changes or is removed. Undispatched entries with removed/remapped destinations are skipped. Legacy receipts
 without those fields require restoring their mapping for verification.
