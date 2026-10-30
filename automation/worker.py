@@ -182,12 +182,13 @@ def clean_environment():
             if key in {"PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "SYSTEMROOT"}}
 
 
-def choose_account(broker, config, worker_heartbeat):
+def choose_account(broker, config, worker_heartbeat, *, preflight=False):
     profiles = {"codex": AgentProfile(config["model"], config["effort"])}
     policy = SelectionPolicy(**config["selection"])
     snapshots = []
-    identities = broker.call("accounts")["accounts"]
-    print(f"Inspecting quota for {len(identities)} enrolled Codex accounts", flush=True)
+    # Pool credentials only ever reach the separate, non-agent preflight VM.
+    identities = broker.call("accounts")["accounts"] if preflight else [config["account_id"]]
+    print(f"Inspecting quota for {len(identities)} Codex accounts", flush=True)
     for identity in identities:
         try:
             with account_lease(broker, identity) as (home, heartbeat):
@@ -205,6 +206,19 @@ def choose_account(broker, config, worker_heartbeat):
             print(f"Account {identity[:8]} unavailable for quota inspection ({type(exc).__name__})", flush=True)
             continue
     return snapshots, profiles, policy
+
+
+def select_account_for_run(broker, config, heartbeat):
+    if config.get("account_id"):
+        # Retrying the selector must preserve an existing run binding.
+        return True
+    snapshots, profiles, policy = choose_account(broker, config, heartbeat, preflight=True)
+    selected = select_account(snapshots, profiles, policy, now=time.time())
+    if selected is None:
+        broker.call("finish", status="waiting_for_quota")
+        return False
+    broker.call("bind_account", account_id=selected.account_id)
+    return True
 
 
 @contextmanager
@@ -510,7 +524,7 @@ def execute(broker, config, heartbeat, directory):
         return "completed", pull["html_url"]
 
 
-def main():
+def main(*, select_only=False):
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     CONTEXT.set(identifiers({"dispatch_key": os.environ.get("DISPATCH_KEY", ""),
                              "run_id": os.environ.get("GITHUB_RUN_ID", ""),
@@ -525,9 +539,18 @@ def main():
                                 "deploy the matching broker before starting workers")
         if config.get("protocol") != PROTOCOL or config.get("phase") not in {"readiness", "development"}:
             raise WorkerFailure("Deploy a compatible readiness worker and broker")
+        if config.get("account_selection") is not select_only:
+            raise WorkerFailure("Broker did not authorize this job's account access role")
+        if not select_only and not re.fullmatch(r"[0-9a-f]{64}", config.get("account_id") or ""):
+            raise WorkerFailure("Account preflight must assign one Codex account before agent execution")
         CONTEXT.set({**CONTEXT.get(), "phase": config["phase"]})
         with Heartbeat(lambda: broker.call("heartbeat")) as heartbeat, \
              tempfile.TemporaryDirectory(prefix="clusterfork-worker-") as directory:
+            if select_only:
+                selected = select_account_for_run(broker, config, heartbeat)
+                with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                    output.write(f"selected={str(selected).lower()}\n")
+                return 0
             if config["phase"] == "readiness":
                 status, pull = review_readiness(broker, config, heartbeat, Path(directory)), None
             else:
@@ -565,4 +588,8 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--select-account", action="store_true", help="Run quota preflight without an agent")
+    raise SystemExit(main(select_only=parser.parse_args().select_account))

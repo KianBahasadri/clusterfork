@@ -16,6 +16,9 @@ from diagnostics import failure, operation, record, validate_failure
 AUDIENCE = "clusterfork-worker"
 ISSUER = "https://token.actions.githubusercontent.com"
 LEASE_SECONDS = 120
+ACCOUNT_HANDOFF_SECONDS = 900
+SELECTOR_WORKFLOW = "clusterfork-select-account.yml"
+SELECTOR_ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "bind_account", "finish"}
 
 
 class WorkerError(RuntimeError):
@@ -48,14 +51,55 @@ def authorize_claims(claims, registry, receipt):
     }
     if route.workflow != "clusterfork-worker.yml" or any(claims.get(k) != v for k, v in expected.items()):
         raise WorkerError("Workflow identity is not authorized", 403)
-    if claims.get("job_workflow_ref") and claims["job_workflow_ref"] != expected["workflow_ref"]:
+    if claims.get("job_workflow_ref") and claims["job_workflow_ref"] not in {
+            expected["workflow_ref"], selector_workflow_ref(claims)}:
         raise WorkerError("Reusable workflow identity is not authorized", 403)
+    if is_account_selector(claims) and claims.get("job_workflow_sha") != claims.get("sha"):
+        raise WorkerError("Account selector revision does not match the dispatched workflow", 403)
     for key in ("run_id", "run_attempt", "repository_id"):
         if not re.fullmatch(r"[1-9][0-9]*", str(claims.get(key, ""))):
             raise WorkerError("Invalid workflow identity", 403)
     if not re.fullmatch(r"[0-9a-f]{40}", claims.get("sha", "")):
         raise WorkerError("Invalid workflow revision", 403)
     return route
+
+
+def selector_workflow_ref(claims):
+    return f"{claims.get('repository')}/.github/workflows/{SELECTOR_WORKFLOW}@{claims.get('ref')}"
+
+
+def is_account_selector(claims):
+    # This role comes only from the verified JWT, never from request data.
+    return claims.get("job_workflow_ref") == selector_workflow_ref(claims)
+
+
+def account_request(accounts, action, data, row, owner, *, selector, run_owner=None):
+    """Pool access is exclusive to preflight; bindings survive account release."""
+    if row.get("owner") != (run_owner or owner):
+        raise WorkerError("Account assignment belongs to another worker attempt", 403)
+    assigned = row.get("assigned_account_id")
+    if action == "accounts":
+        if assigned:
+            return {"accounts": [assigned]}
+        if selector:
+            return {"accounts": accounts.list()}
+        raise WorkerError("This run has no assigned Codex account", 403)
+    identity = data.get("account_id", "")
+    if not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{64}", identity):
+        raise WorkerError("Invalid account identity", 400)
+    if (assigned or not selector) and identity != assigned:
+        raise WorkerError("This run cannot access another Codex account", 403)
+    if action == "claim":
+        return accounts.claim(identity, owner)
+    if action == "save":
+        accounts.save(identity, owner, data.get("lease"), data.get("auth"),
+                      release=data.get("release") is True)
+        return {"saved": True}
+    if not selector:
+        raise WorkerError("Only account preflight can bind a Codex account", 403)
+    accounts.table.get(identity)  # Do not bind an unknown/reclaimed profile.
+    row["assigned_account_id"] = identity
+    return {"account_id": identity}
 
 
 class Accounts:
@@ -139,6 +183,8 @@ class WorkerService:
                 raise
             review, _ = self.queue.readiness.table.get(key)
             route = authorize_claims(claims, self.registry, review)
+            if is_account_selector(claims) and action not in SELECTOR_ACTIONS:
+                raise WorkerError("Account preflight cannot execute or publish agent work", 403)
             owner = f"{claims['run_id']}:{claims['run_attempt']}"
             parent = hashlib.sha256(
                 f"{self.registry.generation}:{route.project_id}:{review['issue_id']}".encode()
@@ -161,6 +207,9 @@ class WorkerService:
                     self.queue.advance(current.repository)
             return result
         route = authorize_claims(claims, self.registry, receipt)
+        selector = is_account_selector(claims)
+        if selector and action not in SELECTOR_ACTIONS:
+            raise WorkerError("Account preflight cannot execute or publish agent work", 403)
         owner = f"{claims['run_id']}:{claims['run_attempt']}"
         if action == "start":
             return self.start(key, owner, claims, receipt, route)
@@ -169,10 +218,10 @@ class WorkerService:
         if (row.get("owner") != owner or row.get("status") != "running"
                 or row.get("lease_until", 0) <= self.clock()):
             raise WorkerError("Worker lease was lost")
-        row["lease_until"] = int(self.clock()) + LEASE_SECONDS
+        row["lease_until"] = max(row["lease_until"], int(self.clock()) + LEASE_SECONDS)
         # The runner serializes broker requests; the ETag fences duplicate jobs.
         self.runs.replace(row, etag)
-        if action in {"accounts", "claim", "github", "checkout"} or (
+        if action in {"accounts", "claim", "bind_account", "github", "checkout"} or (
                 action == "progress" and data.get("stage") in {"coding", "publishing"}):
             issue = self.linear.issue(receipt["issue_id"])
             extra = (route.linear_states.in_progress, route.linear_states.blocked) if route.linear_states else ()
@@ -234,7 +283,8 @@ class WorkerService:
                 account, _ = self.accounts.table.get(identity)
                 if account.get("owner") != owner or account.get("lease_until", 0) <= self.clock():
                     raise WorkerError("Selected account lease was lost")
-                if stage != "coding" or row.get("account_id", identity) != identity:
+                if (stage != "coding" or row.get("assigned_account_id") != identity
+                        or row.get("account_id", identity) != identity):
                     raise WorkerError("Invalid account selection", 400)
                 if not row.get("usage_before"):
                     row["usage_before"] = json.dumps(validate_usage(data.get("usage_before")))
@@ -273,17 +323,15 @@ class WorkerService:
             self.sync_linear(key)
             self.sync_steering(receipt["issue_id"])
             return {"stage": stage}
-        if action == "accounts":
-            return {"accounts": self.accounts.list()}
-        if action in {"claim", "save"}:
-            identity = data.get("account_id", "")
-            if not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{64}", identity):
-                raise WorkerError("Invalid account identity", 400)
-            if action == "claim":
-                return self.accounts.claim(identity, owner)
-            self.accounts.save(identity, owner, data.get("lease"), data.get("auth"),
-                               release=data.get("release") is True)
-            return {"saved": True}
+        if action in {"accounts", "claim", "save", "bind_account"}:
+            row, etag = self.runs.get(key)
+            was_assigned = bool(row.get("assigned_account_id"))
+            result = account_request(self.accounts, action, data, row, owner, selector=selector)
+            if action == "bind_account":
+                if not was_assigned:
+                    row["lease_until"] = int(self.clock()) + ACCOUNT_HANDOFF_SECONDS
+                self.runs.replace(row, etag)
+            return result
         if action == "checkout":
             return {"token": self.github.installation_token(
                 route.repository, permissions={"contents": "read", "pull_requests": "read"})}
@@ -362,6 +410,8 @@ class WorkerService:
         else:
             if previous.get("status") == "completed":
                 raise WorkerError("Issue already completed")
+            if previous.get("owner") == owner and previous.get("status") != "running":
+                raise WorkerError("This worker attempt already finished")
             if is_auto_repair(issue, receipt) and not (
                     previous.get("status") == "waiting_for_quota"
                     or (previous.get("status") == "running" and previous.get("owner") == owner)):
@@ -398,8 +448,12 @@ class WorkerService:
                 raise WorkerError("Issue already completed")
             # Repository admission checked the previous GitHub attempt, even
             # when its heartbeat expired or its finish callback already ran.
-            if existing.get("owner") == owner and existing.get("status") == "running":
-                row = {**existing, "lease_until": row["lease_until"]}
+            if existing.get("owner") == owner:
+                if existing.get("status") != "running":
+                    raise WorkerError("This worker attempt already finished")
+                row = {**existing, "lease_until": max(existing["lease_until"], row["lease_until"])}
+            if not is_account_selector(claims) and row.get("assigned_account_id"):
+                row.update(execution_started=True, lease_until=int(self.clock()) + LEASE_SECONDS)
             self.runs.replace(row, etag)
         self.sync_linear(key)
         self.sync_steering(receipt["issue_id"])
@@ -408,6 +462,8 @@ class WorkerService:
                    ("target_branch", "target_dispatch_key", "target_identifier", "target_pull_request")}
                   if receipt.get("is_auto_repair") and receipt.get("repair_parent_key") else None)
         return {"protocol": PROTOCOL, "phase": "development", "readiness": approval,
+                "account_selection": is_account_selector(claims),
+                "account_id": row.get("assigned_account_id"),
                 "model": profile.model, "effort": profile.effort,
                 "serial_admission": True,
                 "workflow_changes_allowed": workflow_changes_allowed,

@@ -53,6 +53,46 @@ main-branch workflow path, hosted-runner type,
 run ID/attempt, and a durable dispatch receipt. It also checks the run through
 GitHub's API and requires dispatch by `clusterfork[bot]`. PR workflows, forks,
 other workflows, and unmapped repositories cannot obtain account credentials.
+
+Both readiness and development run quota selection in
+`.github/workflows/clusterfork-select-account.yml`, a reusable preflight job on a
+separate ephemeral VM from the agent job. Only this job can inspect the enrolled
+pool before assignment. Its role comes from GitHub's signed `job_workflow_ref`
+claim, with `job_workflow_sha` matching the dispatched revision; a request field
+or a changed script on the agent VM cannot grant that role. The broker still
+requires the mapped main-branch caller workflow and bot-dispatched run.
+See [GitHub's reusable-workflow OIDC claims](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-with-reusable-workflows).
+
+Preflight runs account/model/quota RPCs without starting an agent turn, executing
+repository validation, or obtaining checkout/publication tokens from the broker.
+It persists refreshed credentials and releases each probe lease, then binds one
+account to the dispatch's run ID/attempt with an ETag update. Temporary auth homes
+are removed on exit. The only workflow output is a `selected` boolean; credentials
+and quota-probe files never cross the job boundary.
+
+The agent job requires that binding before execution and rechecks only its
+assigned account's live quota. For either job, `accounts` returns only the assigned
+identity after binding, and `claim`/`save` requests for other identities fail with
+403. An unbound agent job cannot list or claim accounts. Only preflight can bind,
+and it cannot replace an existing assignment. Releasing an account lease, losing
+the lease, or repeating `start` preserves the binding; a finished development
+attempt cannot restart itself to clear it. A new run/attempt selects independently.
+When rerunning a failed GitHub attempt, rerun **all jobs** so preflight executes
+for the new attempt. Rerunning only the agent job cannot inherit the previous
+attempt's assignment and stops before execution.
+
+Binding gives the worker a 15-minute lease for the job handoff.
+Accounts retain their normal 120-second leases and are not reserved while the
+next VM is queued. If the assigned account becomes busy, depleted, or unavailable,
+the agent job waits for quota and the existing 15-minute reconciliation retry;
+it never tries another identity. Readiness starts its bounded review deadline on
+the agent job's first start, without letting repeated starts extend that budget.
+
+Deploy matching broker/worker sources and both workflow files to each mapped
+repository. The start protocol includes `single-account-preflight-v1`; incompatible
+workers/brokers stop before agent execution. The automatic deployment drain still
+applies, and no new credentials, storage tables, or App grants are required.
+
 Publication tokens are scoped to one repository with Contents and Pull requests
 write permission, plus Workflows write when the installation currently grants it.
 The broker checks that grant at worker start and again before issuing publication

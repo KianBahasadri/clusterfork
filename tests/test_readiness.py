@@ -27,7 +27,7 @@ from readiness_policy import (CLARIFICATION_LABEL, CRITERIA, POLICY, PROTOCOL, R
 from repository_queue import RepositoryQueue, dispatch_key
 from worker_core import Accounts, WorkerError, WorkerService
 from worker_reporting import QUEUED_LABEL, SELECTION_LABEL, STAGE_LABELS
-from test_remote_worker import MemoryTable, NOW, PROJECT, auth, claims
+from test_remote_worker import MemoryTable, NOW, PROJECT, auth, claims, selector_claims
 from test_linear_sync import pr
 from call_budget import CallBudget
 
@@ -721,6 +721,8 @@ class ReadinessTests(unittest.TestCase):
         self.pass_review()
         coding = dispatch_key(self.registry, self.route, self.issue)
         config = self.call(coding, "start")
+        self.service.handle("bind_account", selector_claims(self.identity_for(coding)),
+                            {"dispatch_key": coding, "account_id": self.identity})
         lease = self.call(coding, "claim", account_id=self.identity)
         self.issue["description"] = "Change the permissions too."
         for action, data in (("github", {}), ("checkout", {}), ("accounts", {}),
@@ -888,12 +890,59 @@ class ReadinessTests(unittest.TestCase):
 
     def test_account_claims_use_the_existing_fenced_pool(self):
         key, _ = self.begin()
+        self.service.handle("bind_account", selector_claims(self.identity_for(key)),
+                            {"dispatch_key": key, "account_id": self.identity})
         lease = self.call(key, "claim", account_id=self.identity)
         with self.assertRaises(WorkerError):
             self.accounts.claim(self.identity, "another-worker")
         self.issue["state"] = {"id": "canceled", "type": "canceled"}
         self.call(key, "save", account_id=self.identity, lease=lease["lease"], auth=auth(token="refreshed"), release=True)
         self.assertEqual(self.accounts.claim(self.identity, "another-worker")["auth"]["tokens"]["access_token"], "refreshed")
+
+    def test_readiness_agent_cannot_access_the_pool_or_replace_its_assigned_account(self):
+        key, _ = self.begin()
+        other = self.accounts.enroll(auth("account-b", "access-b"))
+        selector = selector_claims(self.identity_for(key))
+
+        def preflight(action, **data):
+            return self.service.handle(action, selector, {"dispatch_key": key, "protocol": PROTOCOL, **data})
+
+        for action, data in (("accounts", {}), ("claim", {"account_id": self.identity}),
+                             ("bind_account", {"account_id": self.identity})):
+            with self.subTest(action=action), self.assertRaises(WorkerError) as caught:
+                self.call(key, action, **data)
+            self.assertEqual(caught.exception.status, 403)
+        self.assertEqual(preflight("accounts")["accounts"], [self.identity, other])
+        lease = preflight("claim", account_id=self.identity)
+        preflight("save", account_id=self.identity, lease=lease["lease"], release=True)
+        preflight("bind_account", account_id=self.identity)
+        self.assertEqual(self.call(key, "start")["account_id"], self.identity)
+        for call in (preflight, lambda action, **data: self.call(key, action, **data)):
+            self.assertEqual(call("accounts"), {"accounts": [self.identity]})
+            for action in ("claim", "save", "bind_account"):
+                with self.subTest(action=action), self.assertRaises(WorkerError) as caught:
+                    call(action, account_id=other)
+                self.assertEqual(caught.exception.status, 403)
+        for action in ("checkout", "github", "review"):
+            with self.subTest(action=action), self.assertRaises(WorkerError):
+                preflight(action)
+        lease = self.call(key, "claim", account_id=self.identity)
+        self.call(key, "save", account_id=self.identity, lease=lease["lease"], release=True)
+        self.assertEqual(self.call(key, "start")["account_id"], self.identity)
+        with self.assertRaises(WorkerError):
+            self.call(key, "claim", account_id=other)
+
+    def test_readiness_handoff_wait_does_not_consume_or_extend_the_review_budget(self):
+        key, _ = self.begin()
+        self.service.handle("bind_account", selector_claims(self.identity_for(key)),
+                            {"dispatch_key": key, "account_id": self.identity})
+        self.now += 180
+        self.call(key, "start")
+        row = self.table.get(key)[0]
+        self.assertEqual(row["deadline"], self.now + REVIEW_TIMEOUT_SECONDS + 120)
+        self.now += 30
+        self.call(key, "start")
+        self.assertEqual(self.table.get(key)[0]["deadline"], row["deadline"])
 
     def test_dispatch_failure_and_uncertainty_do_not_approve_or_duplicate(self):
         for uncertain in (False, True):
