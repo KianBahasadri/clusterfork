@@ -217,9 +217,14 @@ class InboxDone:
     event_id: str
 
 
+@dataclass(frozen=True)
+class Initialize:
+    pass
+
+
 Command = (IssueObserved | Admit | DispatchObserved | Start | Assign | Review | Progress |
            Finish | ExternalObserved | Retry | Hold | SessionUpdated | EffectUpdated | Authorize |
-           ExhaustAccount | ContextObserved | InboxQueued | InboxDone)
+           ExhaustAccount | ContextObserved | InboxQueued | InboxDone | Initialize)
 
 
 @dataclass(frozen=True)

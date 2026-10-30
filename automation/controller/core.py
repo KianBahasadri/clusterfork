@@ -10,7 +10,7 @@ import re
 from .model import (Admit, Assign, DispatchObserved, ExternalObserved, Finish, Hold,
                     IssueObserved, Phase, Progress, Rejected, Retry, Review, Role,
                     Start, TaskSpec, TaskView, identity, SessionUpdated, EffectUpdated, Authorize, ExhaustAccount,
-                    ContextObserved, InboxQueued, InboxDone)
+                    ContextObserved, InboxQueued, InboxDone, Initialize)
 
 
 class Controller:
@@ -35,6 +35,15 @@ class Controller:
                 return None
             previous=dict(attempts[1])
             session=db.execute("SELECT data FROM sessions WHERE attempt_id=? AND phase='coding'", (previous["attempt_id"],)).fetchone()
+            return {**previous,"data":json.loads(session[0]) if session else {}}
+
+    def repair_parent(self, task_id):
+        with self.database.transaction() as db:
+            row=db.execute("SELECT * FROM attempts WHERE task_id=? AND coding_started=1 AND attempt_kind!='repair' ORDER BY ordinal DESC LIMIT 1",(task_id,)).fetchone()
+            if row is None:
+                return None
+            previous=dict(row)
+            session=db.execute("SELECT data FROM sessions WHERE attempt_id=? AND phase='coding'",(previous["attempt_id"],)).fetchone()
             return {**previous,"data":json.loads(session[0]) if session else {}}
 
     def waiting(self, repository=None):
@@ -75,6 +84,10 @@ class Controller:
         if not isinstance(now, (float, int)) or isinstance(now, bool) or not math.isfinite(now):
             raise ValueError("A finite observation timestamp is required")
         with self.database.transaction() as db:
+            if isinstance(command, Initialize):
+                if db.execute("INSERT OR IGNORE INTO metadata VALUES ('initialized','1')").rowcount:
+                    db.execute("INSERT OR IGNORE INTO holds VALUES ('operator:rebuild','Production admission is held for rebuild acceptance.')")
+                return None
             if isinstance(command, InboxQueued):
                 if not re.fullmatch(r"[0-9a-f]{64}", command.event_id) or len(json.dumps(command.event)) > 3000:
                     raise Rejected("Invalid event receipt")
@@ -453,7 +466,11 @@ class Controller:
             if retry and not attempt["retry_at"]:
                 delay=60 if retry=="startup" else 900 if retry in {"review","capacity"} else 0
                 db.execute("UPDATE attempts SET retry_kind=?,retry_at=? WHERE attempt_id=?", (retry, now+delay, command.attempt_id))
-            self._update(db, task, phase="held", reason=command.reason or "GitHub task failed; execution is held.")
+            reason = task["reason"] if retry in {"capacity","context"} or retry=="review" and result else (
+                "Readiness job failed; retry scheduled after 15 minutes." if retry=="review" else
+                "Worker startup failed; retry scheduled after 60 seconds." if retry=="startup" else
+                "GitHub task failed; execution is held.")
+            self._update(db, task, phase="held", reason=command.reason or reason)
 
     def _retry(self, db, task, command, now):
         attempt = self._attempt(db, task, task["current_attempt"])
@@ -466,7 +483,8 @@ class Controller:
             if task["repair_used"]:
                 raise Rejected("The repair budget is exhausted")
             self._update(db, task, repair_used=1)
-        self._new_attempt(db, task, command.spec, now, kind=command.kind)
+        kind="repair" if attempt["attempt_kind"]=="repair" else command.kind
+        self._new_attempt(db, task, command.spec, now, kind=kind)
 
     @staticmethod
     def _report(db, task_id):

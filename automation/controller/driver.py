@@ -238,7 +238,7 @@ class Driver:
                         if route.linear_states and issue.get("state",{}).get("id") in {*route.ready_state_ids,route.linear_states.in_progress,route.linear_states.blocked}:
                             desired = (route.linear_states.done if view.phase=="completed" else
                                        route.linear_states.blocked if view.phase=="held" and not view.attempt.get("retry_kind") else
-                                       route.linear_states.in_progress if view.phase in {"executing","published"} else
+                                       route.linear_states.in_progress if view.phase in {"executing","published"} or view.attempt.get("attempt_kind")=="repair" else
                                        route.ready_state_ids[0])
                             if issue["state"]["id"] != desired and view.phase != "canceled":
                                 self.linear.set_state(view.issue_id,desired)

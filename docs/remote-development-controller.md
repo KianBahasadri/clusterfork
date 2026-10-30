@@ -48,8 +48,16 @@ views and does not make execution decisions.
 `server.py` exposes authenticated webhook intake, OIDC worker requests, and public
 bounded health metadata. Verified webhook IDs are committed in the local inbox
 before acknowledgement. Operator commands use a local mode-0600 Unix socket;
-they are not public HTTP routes. The service entrypoint, Azure identity/host setup,
-and deployment integration remain outstanding.
+they are not public HTTP routes. `controller_main.py` assembles these adapters,
+reads existing secrets through managed identity, and verifies the expected VM
+resource identity before opening the service. A newly initialized database starts
+with an operator hold; restarting an existing database preserves its current
+holds. The Azure host and deployment integration remain outstanding.
+
+`release.py` packages the exact committed runtime inputs and records their Git
+tree digest. Required runtime changes prevent new admission until deployment;
+target-only changes still reach the next task through its fresh checkout. Local
+worktree files, including untracked credentials, are not packaged.
 
 ## Native execution graph
 
@@ -97,9 +105,12 @@ barrier, reporting independence, uncertain dispatch discovery, and the one-repai
 budget. HTTP tests use real local sockets to verify authentication and durable
 intake. Instruction tests exercise the existing delivery/acknowledgement protocol
 through controller views. Database upgrades preserve task and attempt ownership.
+Runtime tests check host identity, authentication selection, and hold persistence.
+Release tests use real Git repositories to check runtime identity, target-only
+changes, and exclusion of uncommitted files.
 
-The replacement still needs its broker/transport integration, Azure host and
-deployment path, migration, and live acceptance. Unit tests are not cutover evidence.
+The replacement still needs its Azure host and deployment path, migration, and
+live acceptance. Unit tests are not cutover evidence.
 
 ## Rebuild baseline
 

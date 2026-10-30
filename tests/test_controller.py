@@ -260,6 +260,19 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(failed.attempt["retry_kind"],"review")
         self.assertEqual(failed.attempt["retry_at"],self.now+900)
 
+    def test_retry_before_repair_coding_preserves_repair_mode_parent_and_budget(self):
+        view=self.coding(self.admit())
+        self.apply(Finish(view.task_id,view.attempt["attempt_id"],"coding","failed"))
+        failed=self.external(view,conclusion="failure",repairable=True)
+        repair=self.apply(Retry(view.task_id,SPEC,"coding failed","repair"))
+        self.apply(Start(repair.task_id,repair.attempt["attempt_id"],"124",1,Role.REVIEW_SELECT))
+        failed_review=self.apply(ExternalObserved(repair.task_id,repair.attempt["attempt_id"],"124",1,
+                                                 True,"failure",True,True,pull_state="absent"))
+        self.now=failed_review.attempt["retry_at"]
+        retried=self.apply(Retry(view.task_id,SPEC,"review infrastructure failed","review"))
+        self.assertEqual(retried.attempt["attempt_kind"],"repair")
+        self.assertEqual(self.controller.repair_parent(view.task_id)["attempt_id"],view.attempt["attempt_id"])
+
     def test_content_edits_hold_account_and_publication_authority(self):
         issue = self.issue()
         view = self.apply(Admit(issue.task_id, SPEC))

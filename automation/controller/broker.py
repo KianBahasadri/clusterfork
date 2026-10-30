@@ -13,7 +13,7 @@ from diagnostics import validate_failure
 from issue_images import capture_images, image_digest
 from readiness_policy import PROTOCOL, REVIEW_TIMEOUT_SECONDS, issue_revision, policy_version
 from worker_core import account_provider, execution_profiles, valid_account_id
-from worker_reporting import validate_quota_wait, validate_usage
+from worker_reporting import validate_quota_wait, validate_usage, quota_wait_text
 from worker_reporting import worker_branch
 from auto_repair import repair_instructions
 
@@ -143,7 +143,8 @@ class Broker:
                 fields.update(wip_branch=data["wip_branch"],wip_commit_sha=data["wip_commit_sha"])
             if fields:
                 self.metadata(view, phase, **fields)
-            self.apply(Finish(view.task_id, key, phase, status, data.get("pull_request", "")))
+            reason="Waiting for account capacity. "+quota_wait_text(fields.get("quota_wait",{})) if status=="waiting_for_quota" else ""
+            self.apply(Finish(view.task_id, key, phase, status, data.get("pull_request", ""), reason))
             return {"status": status}
         if action in {"steering_open", "steering_close", "instructions", "instruction_result"}:
             return self.instruction(view, action, data)
@@ -171,7 +172,7 @@ class Broker:
         if role.phase == "review":
             result["issue"]["comments"] = sorted(self.linear.issue_comments(view.issue_id), key=lambda c:(c["createdAt"],c["id"]))
         elif view.attempt["attempt_kind"]=="repair":
-            previous=self.controller.previous_attempt(view.task_id)
+            previous=self.controller.repair_parent(view.task_id)
             if previous is None:
                 raise Rejected("Repair parent evidence is unavailable")
             result["repair"]={"target_branch":worker_branch(view.identifier,view.task_id),

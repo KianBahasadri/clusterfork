@@ -1,0 +1,2 @@
+-r ../azure/requirements.txt
+azure-identity==1.27.0
