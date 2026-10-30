@@ -129,9 +129,11 @@ does not change the generation, issue states, receipts, or cloud resources.
 New repositories carry only `clusterfork-worker.yml`, which calls the central
 `clusterfork-select-account.yml` and `clusterfork-develop.yml` at a full commit
 SHA. Each called workflow checks that its OIDC `job_workflow_sha` equals the
-engine revision before checking out central code. The engine and pinned CLI
-setup run outside the target's git checkout; validation, agent edits, and
-publication operate in the actual caller checkout. No implementation files are
+engine revision before checking out central code. The engine stays at
+`.clusterfork-runtime` beside the caller's `.clusterfork-target` checkout for the
+whole job, so GitHub's post-job cleanup can still load its local setup actions.
+The worker runs from the caller checkout; validation, agent edits, and
+publication operate there. No implementation files are
 copied into enrolled repositories. Clusterfork's own caller uses its current
 commit with local reusable workflow references.
 

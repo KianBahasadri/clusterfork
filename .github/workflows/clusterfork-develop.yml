@@ -49,15 +49,15 @@ jobs:
           persist-credentials: false
       - uses: ./.clusterfork-runtime/.github/actions/setup-codex
       - uses: ./.clusterfork-runtime/.github/actions/setup-cursor
-      - name: Keep the engine outside the target checkout
-        run: mv "$GITHUB_WORKSPACE/.clusterfork-runtime" "$RUNNER_TEMP/clusterfork-runtime"
       - name: Check out the caller repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          path: .clusterfork-target
           persist-credentials: false
       - name: Implement issue and open a pull request
+        working-directory: .clusterfork-target
         env:
           CLUSTERFORK_BROKER_URL: https://clusterfork-dispatch-7604cac329.azurewebsites.net/api/worker
           DISPATCH_KEY: ${{ inputs.dispatch_key }}
-        run: python3 "$RUNNER_TEMP/clusterfork-runtime/automation/worker.py"
+        run: python3 "$GITHUB_WORKSPACE/.clusterfork-runtime/automation/worker.py"
