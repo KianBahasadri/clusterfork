@@ -44,6 +44,13 @@ def github_url(repository, url):
                               + r"(?:pull/[1-9][0-9]*|actions/runs/[1-9][0-9]*(?:/(?:job|attempts)/[1-9][0-9]*)?)", url) else ""
 
 
+def trigger_markdown(repository, text):
+    # Linear brackets external Markdown destinations on save. Author the same
+    # form so exact content binding survives the write; leave task text intact.
+    return re.sub(r"\]\((https://github\.com/[^\s<>()]+)\)",
+                  lambda match: f"](<{match[1]}>)" if github_url(repository, match[1]) else match[0], text)
+
+
 class AutoRepair:
     def __init__(self, queue):
         self.queue = queue
@@ -161,7 +168,7 @@ class AutoRepair:
         description = (
             f"Repair [{context['parent_identifier']}]({context['parent_url']}) using its existing worker branch "
             f"`{context['target_branch']}` in `{route.repository}` (base `{route.ref}`).\n\n"
-            f"Triggered by: {context['trigger']}.\n\nSanitized failure summary: {context['summary']}\n\n"
+            f"Triggered by: {trigger_markdown(route.repository, context['trigger'])}.\n\nSanitized failure summary: {context['summary']}\n\n"
             + (f"Existing PR: {context['target_pull_request']}\n\n" if context['target_pull_request'] else "")
             + f"### Original task\n\n{issue['title']}\n\n{issue.get('description') or ''}\n\n"
             + "### Repair instructions\n\n"
