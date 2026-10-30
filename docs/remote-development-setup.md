@@ -35,6 +35,17 @@ workspace-admin operation. Store the PEM outside the checkout with mode 0600.
 The helper reports only set/blank credential status and config metadata; secrets,
 access tokens, and remote response bodies are excluded from errors and logs.
 
+Before enrolling a team with the app actor, create its team-scoped issue labels
+using a user account that can manage labels. The app can apply existing labels,
+but label creation can be rejected with `FORBIDDEN`; that rejection also prevents
+automatic repair from creating its sub-issue. Provision all of these names:
+`clusterfork: queued`, `clusterfork: selected`, `clusterfork: needs clarification`,
+`clusterfork: auto-repair`, and the seven stage names in
+`automation/azure/worker_reporting.py`'s `STAGE_LABELS`, including
+`clusterfork: waiting for quota`. Keep each label independently selectable.
+If repair already has a durable intent, create the missing label and reconcile;
+retain its original issue UUID, dispatch receipt, queue position, and repair budget.
+
 ```bash
 python3 automation/pilot.py check
 ```
@@ -146,8 +157,10 @@ python3 automation/pilot.py package --output /tmp/clusterfork-function.zip
 ```
 
 Runtime dependencies are pinned in `automation/azure/requirements.txt`.
-CI installs them in Python 3.12 and imports the Function App to index all five
-handlers. Reproduce in an isolated environment:
+The shared `setup-codex` action installs Python 3.12 and these dependencies before
+account selection or agent execution, so configured worker validation uses the
+same packages as CI. Installation failures stop setup before leasing an account.
+CI also imports the Function App to index all five handlers. Reproduce in an isolated environment:
 
 ```bash
 python3.12 -m venv /tmp/clusterfork-routing-venv

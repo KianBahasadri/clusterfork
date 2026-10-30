@@ -1920,6 +1920,35 @@ class RepositoryQueueTests(unittest.TestCase):
                 self.linear.create_issue.assert_called_once()
                 self.assertEqual(self.github.dispatch.call_count, 2)
 
+    def test_missing_repair_label_resumes_same_intent_with_unpublished_task_requirements(self):
+        parent, following = self.prepare_repair()
+        task = self.issues[str(UUID(int=1))]
+        task.update(title="Add publication secret checks", description="Reject leased credentials before Git push.")
+        self.linear.stage_label.side_effect = RequestError()
+        with self.assertRaises(RequestError):
+            self.queue.advance(self.repository)
+        intent = self.queue.table(self.repository).get(parent)[0]
+        self.assertTrue(intent["repair_attempted"])
+        self.assertEqual(self.slot()["active_key"], parent)
+        self.linear.create_issue.assert_not_called()
+        self.assertNotIn(parent, self.pulls)
+
+        self.linear.stage_label.side_effect = None
+        self.queue = self.restart()
+        result = self.queue.advance(self.repository)
+        child = self.repair_row(parent)
+        fields = self.linear.create_issue.call_args.args[0]
+        self.assertEqual(fields["id"], intent["repair_issue_id"])
+        self.assertEqual(child["RowKey"], intent["repair_key"])
+        self.assertEqual(self.slot()["active_key"], intent["repair_key"])
+        self.assertEqual(result[following]["status"], "queued")
+        self.assertIn(task["title"], fields["description"])
+        self.assertIn(task["description"], fields["description"])
+        self.assertIn("If its branch is absent", fields["description"])
+        self.assertIn("passing validation alone does not establish", fields["description"])
+        self.linear.create_issue.assert_called_once()
+        self.assertEqual(self.github.dispatch.call_count, 2)
+
     def test_repair_bypasses_clarification_but_retains_broker_boundaries(self):
         parent, _ = self.prepare_repair()
         self.queue.readiness.ensure = Mock(return_value={"status": "needs_clarification"})
