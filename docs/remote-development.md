@@ -246,6 +246,38 @@ continuously running worker is needed. It updates one owned comment with the
 current reason, PR link, and worker-run link. Durable synchronization leases and
 a stable UUIDv4 comment ID prevent duplicate comments after retries.
 
+The shared comment adapter reads the authenticated viewer and the legacy
+comment's author. When they differ (or author metadata is unavailable), it
+preserves that comment and its replies and creates one replacement under the
+current actor. The replacement UUIDv4 derives from the original logical comment
+ID and viewer ID, so reconciliation and process restarts find and update the
+same replacement, including after a lost creation response. A definite forbidden
+update can also trigger this migration when author metadata appeared to match;
+timeouts and other transient update failures retry the existing comment. This
+applies to lifecycle, attempt, readiness, queue, and steering reports.
+
+Confirmed completion records `completion_owner` in `ClusterforkLinearSync`
+before external writes. It attempts the explanation, stage removal, and Done
+transition independently. Failed writes remain pending even when the issue is
+already Done; successful comment signatures are retained, and `terminal=true`
+is saved only after all reports settle. Nonterminal transitions still require
+their explanation first. A manually completed issue without this durable
+completion intent is preserved. Reporting repair never resets dispatch receipts
+or admits another coding worker for completed work.
+
+The KIAN-921 investigation confirmed a failure path: a rejected `commentUpdate`
+aborted synchronization before stage removal and the state transition, while
+the GraphQL rejection details were discarded. Regression coverage reproduces
+this with a comment owned by the previous identity and verifies recovery. The
+2026-10-29 KIAN-915 HTTP/deferred logs did not retain the rejection payload;
+ownership denial remains an incident hypothesis, not a confirmed API response.
+`linear_graphql_rejected` now records allowlisted error code/type, the root
+field, a capped error count, and rejection category (`errors`,
+`invalid_response`, or `unsuccessful_mutation`). `linear_sync_deferred` retains
+that classification with dispatch/run identity. Raw messages, response bodies,
+variables, headers, and credentials are excluded. HTTP `operation_completed`
+still describes transport completion; it does not establish GraphQL success.
+
 The authenticated worker also reports its current stage through the broker.
 Linear creates team-scoped issue labels as needed and keeps one current stage
 label on the issue:

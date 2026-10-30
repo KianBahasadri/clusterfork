@@ -25,7 +25,14 @@ OPERATIONS = {"worker/execution", "worker/heartbeat", "worker/account_release", 
               "command/python", "command/codex", "command/other", *("broker/" + name for name in ACTIONS),
               *("linear/" + name for name in LINEAR_OPERATIONS), "github/installation", "github/access_token",
               "github/branch", "github/pulls", "github/pull", "github/dispatch", "github/runs", "github/graphql"}
-KINDS = {"timeout", "http_error", "transport_error", "command_failed", "lease_lost", "worker_error"}
+KINDS = {"timeout", "http_error", "transport_error", "command_failed", "lease_lost", "worker_error", "graphql_error"}
+GRAPHQL_CODES = {"FORBIDDEN", "UNAUTHENTICATED", "BAD_USER_INPUT", "GRAPHQL_VALIDATION_FAILED",
+                 "INTERNAL_SERVER_ERROR", "RATELIMITED", "RATE_LIMITED"}
+# Linear's SDK classifies errors by extensions.type. Never retain free-form messages.
+GRAPHQL_TYPES = {"forbidden", "authentication error", "invalid input", "ratelimited", "internal error",
+                 "feature not accessible", "network error", "bootstrap error", "unknown", "other",
+                 "user error", "graphql error", "lock timeout", "usage limit exceeded"}
+GRAPHQL_REASONS = {"errors", "invalid_response", "unsuccessful_mutation"}
 ERROR_TYPES = {"Exception", "TimeoutError", "HTTPError", "URLError", "ConnectionError", "OSError",
                "WorkerFailure", "WorkerError", "CodexError", "CodexRejected", "RequestError", "DispatchError",
                "PermissionError", "FileNotFoundError", "KeyError", "TypeError", "ValueError", "RuntimeError",
@@ -75,13 +82,17 @@ def validate_failure(value):
     if isinstance(value.get("error_type"), str) and value["error_type"] in ERROR_TYPES:
         result["error_type"] = value["error_type"]
     for name, maximum in {"elapsed_ms": 86_400_000, "timeout_seconds": 86_400,
-                          "http_status": 599, "exit_code": 255}.items():
+                          "http_status": 599, "exit_code": 255, "graphql_error_count": 1000}.items():
         number = value.get(name)
         if number is not None:
             minimum = -255 if name == "exit_code" else 0
             if type(number) not in (int, float) or not math.isfinite(number) or not minimum <= number <= maximum:
                 raise ValueError("Invalid failure measurement")
             result[name] = number
+    for name, allowed in {"graphql_code": GRAPHQL_CODES, "graphql_type": GRAPHQL_TYPES,
+                          "graphql_field": LINEAR_OPERATIONS, "graphql_reason": GRAPHQL_REASONS}.items():
+        if isinstance(value.get(name), str) and value[name] in allowed:
+            result[name] = value[name]
     # Stack locations contain only repository filenames and line numbers, no source or locals.
     locations = value.get("locations", [])
     if not isinstance(locations, list) or len(locations) > 8 or any(
@@ -91,6 +102,22 @@ def validate_failure(value):
     if locations:
         result["locations"] = locations
     return result
+
+
+def graphql_failure(name, reason, errors=None):
+    """Bound GraphQL diagnostics to known classifications and root field names."""
+    data = {"operation": name, "kind": "graphql_error", "error_type": "RequestError",
+            "graphql_reason": reason}
+    if isinstance(errors, list):
+        data["graphql_error_count"] = min(len(errors), 1000)
+        first = errors[0] if errors and isinstance(errors[0], dict) else {}
+        extensions = first.get("extensions")
+        if isinstance(extensions, dict):
+            data.update(graphql_code=extensions.get("code"), graphql_type=extensions.get("type"))
+        path = first.get("path")
+        if isinstance(path, list) and path:
+            data["graphql_field"] = path[0]
+    return validate_failure(data)
 
 
 def failure(exc, operation="worker/execution", **fields):
@@ -175,7 +202,8 @@ def failure_summary(value):
         stage = "readiness review"
     descriptions = {"timeout": "request timed out", "http_error": "request was rejected",
                     "transport_error": "connection failed", "command_failed": "command failed",
-                    "lease_lost": "credential or worker lease was lost", "worker_error": "worker operation failed"}
+                    "lease_lost": "credential or worker lease was lost", "worker_error": "worker operation failed",
+                    "graphql_error": "GraphQL operation was rejected"}
     text = f"Failed during {stage}: {descriptions[data['kind']]} ({data['operation']})"
     details = []
     if "elapsed_ms" in data:
@@ -186,6 +214,8 @@ def failure_summary(value):
         details.append(f"HTTP {data['http_status']}")
     if "exit_code" in data:
         details.append(f"exit {data['exit_code']}")
+    if data.get("graphql_code") or data.get("graphql_type"):
+        details.append(data.get("graphql_code") or data["graphql_type"])
     if data["kind"] == "worker_error" and data.get("error_type"):
         details.append(data["error_type"])
     if details:

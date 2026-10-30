@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
 import diagnostics
 import worker
-from dispatch_clients import RequestError, request_json
+from dispatch_clients import Linear, RequestError, request_json
 import test_worker_reporting as reporting
 
 KEY = "a" * 64
@@ -72,6 +72,44 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(caught.exception.clusterfork_failure["operation"], "linear/issueAddLabel")
         self.assertEqual(caught.exception.clusterfork_failure["kind"], "timeout")
         self.assertNotIn("SECRET", "\n".join(logged.output))
+
+    def test_graphql_rejection_retains_bounded_classification_after_http_completion(self):
+        private = "SECRET-auth-token-body-and-variables"
+        query = "mutation($id: String!) { commentUpdate(id: $id) { success } }"
+        response = {"data": {"commentUpdate": {"success": False}}, "errors": [{
+            "message": private, "path": ["commentUpdate", private],
+            "extensions": {"code": "FORBIDDEN", "type": "forbidden", "userPresentableMessage": private,
+                           "credentials": private}}] * 1001}
+        with patch("dispatch_clients.urlopen", return_value=io.BytesIO(json.dumps(response).encode())), \
+             self.assertLogs(level="INFO") as logs, self.assertRaises(RequestError) as caught:
+            Linear(private).query(query, {"id": private})
+        data = diagnostics.failure(caught.exception, "worker/linear_sync")
+        self.assertEqual(data["kind"], "graphql_error")
+        self.assertEqual(data["operation"], "linear/commentUpdate")
+        self.assertEqual(data["graphql_code"], "FORBIDDEN")
+        self.assertEqual(data["graphql_type"], "forbidden")
+        self.assertEqual(data["graphql_field"], "commentUpdate")
+        self.assertEqual(data["graphql_error_count"], 1000)
+        rendered = "\n".join(logs.output) + json.dumps(data) + str(caught.exception)
+        self.assertNotIn(private, rendered)
+        events = [json.loads(line.split("Clusterfork: ", 1)[1])["event"] for line in logs.output]
+        self.assertEqual(events[-2:], ["operation_completed", "linear_graphql_rejected"])
+        self.assertIn("FORBIDDEN", diagnostics.failure_summary(data))
+
+    def test_unknown_graphql_metadata_and_mutation_false_are_safe_and_retryable(self):
+        for response, reason in (({"errors": [{"message": "SECRET", "path": ["SECRET"],
+                                               "extensions": {"code": "SECRET", "type": "SECRET"}}]}, "errors"),
+                                 ({"data": None}, "invalid_response"),
+                                 ({"data": {"commentUpdate": {"success": False}}}, "unsuccessful_mutation")):
+            with self.subTest(reason=reason), self.assertLogs(level="ERROR") as logs, self.assertRaises(RequestError) as caught:
+                Linear("SECRET", lambda *a, **kw: response).query(
+                    "mutation { commentUpdate { success } }", {"id": "SECRET"})
+            data = caught.exception.clusterfork_failure
+            self.assertEqual(data["graphql_reason"], reason)
+            self.assertNotIn("graphql_code", data)
+            self.assertNotIn("graphql_type", data)
+            self.assertNotIn("graphql_field", data)
+            self.assertNotIn("SECRET", "\n".join(logs.output) + json.dumps(data))
 
     def test_command_failure_keeps_exit_and_timing_without_stdout_or_argv(self):
         with self.assertLogs(level="INFO") as logged, self.assertRaises(worker.WorkerFailure) as caught:

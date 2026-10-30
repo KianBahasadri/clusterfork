@@ -119,6 +119,38 @@ class ProgressTests(unittest.TestCase):
         self.assertIn("usage change +1 percentage points", self.comments("finish")[-1])
         self.linear.set_stage.assert_called_with(ISSUE, None)
 
+    def test_failed_terminal_attempt_report_does_not_block_done_or_repeat_successful_reports(self):
+        self.select()
+        self.call("progress", usage_after=usage(12, 21))
+        # A merge can precede the worker finish callback. Only the finish report
+        # fails; the lifecycle report and label/state projection can still settle.
+        self.pull.update(state="MERGED", merged=True)
+        finish_id = comment_id(KEY, "123:1:finish")
+
+        def write(issue, identifier, body):
+            if identifier == finish_id:
+                raise RequestError(403)
+
+        self.linear.status_comment.reset_mock()
+        self.linear.status_comment.side_effect = write
+        with self.assertLogs(level="ERROR"):
+            self.call("finish", status="completed", pull_request=self.pull["url"])
+        self.assertEqual(self.issue["state"]["id"], self.states.done)
+        self.linear.set_stage.assert_called_with(ISSUE, None)
+        note = self.notes.get(KEY)[0]
+        self.assertFalse(note["terminal"])
+        self.assertNotIn("finish_signature", note)
+        self.assertIn("signature", note)
+        lifecycle_reports = [call for call in self.linear.status_comment.call_args_list
+                             if call.args[1] == comment_id(KEY, "status")]
+        self.linear.status_comment.side_effect = None
+        self.sync.sync(KEY)
+        self.sync.sync(KEY)
+        self.assertTrue(self.notes.get(KEY)[0]["terminal"])
+        self.assertEqual(len(self.comments("finish")), 2)
+        self.assertEqual([call for call in self.linear.status_comment.call_args_list
+                          if call.args[1] == comment_id(KEY, "status")], lifecycle_reports)
+
     def test_missing_final_usage_is_explicit_and_rerun_gets_fresh_comments(self):
         self.select()
         self.now += 40
