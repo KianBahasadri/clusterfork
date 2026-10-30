@@ -3,3 +3,7 @@
 This is a dated live acceptance fixture, not a current runtime specification.
 
 sequence-one: established
+
+sequence-two: observed preceding merge
+
+The prerequisite was read from the task checkout.
