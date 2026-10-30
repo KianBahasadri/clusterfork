@@ -20,6 +20,7 @@ sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
 import worker
 from dispatch_clients import GitHub, Linear, RequestError
 from dispatch_core import Dispatcher, DispatchError, Registry
+from deployment_control import DeploymentControl
 from linear_sync import comment_id
 from readiness import ReadinessGate
 from readiness_policy import (CLARIFICATION_LABEL, CRITERIA, POLICY, PROTOCOL, RESULT_SCHEMA,
@@ -28,7 +29,7 @@ from repository_queue import RepositoryQueue, dispatch_key
 from worker_core import Accounts, WorkerError, WorkerService
 from worker_reporting import QUEUED_LABEL, SELECTION_LABEL, STAGE_LABELS
 from test_remote_worker import MemoryTable, NOW, PROJECT, auth, claims, selector_claims
-from test_linear_sync import pr
+from test_linear_sync import CommentAPI, pr
 from call_budget import CallBudget
 from test_issue_images import DESCRIPTION, FIXTURES, screenshots
 from issue_images import image_digest
@@ -81,7 +82,7 @@ class ReadinessTests(unittest.TestCase):
         self.github.branch_sha.side_effect = lambda route: self.sha
         self.github.dispatch.side_effect = self.dispatch
         self.github.dispatch_runs.side_effect = lambda route, key: copy.deepcopy(self.remote_runs.get(key, []))
-        self.github.worker_result.side_effect = lambda repo, owner: copy.deepcopy(self.attempts[owner])
+        self.github.worker_result.side_effect = self.worker_result
         self.github.worker_pull.return_value = None
         self.gate = ReadinessGate(self.registry, self.table, self.accounts, self.linear, self.github,
                                   clock=lambda: self.now)
@@ -142,6 +143,11 @@ class ReadinessTests(unittest.TestCase):
         self.remote_runs.setdefault(inputs["dispatch_key"], []).append(run)
         self.attempts[f"{run['id']}:1"] = run
 
+    def worker_result(self, repo, owner, *, latest=False):
+        run_id = int(owner.split(":")[0])
+        return copy.deepcopy(max((run for run in self.attempts.values() if run["id"] == run_id),
+                                 key=lambda run: run["run_attempt"]) if latest else self.attempts[owner])
+
     def key(self, issue=None):
         pointer, _ = self.table.get(self.gate.pointer(issue or self.issue))
         return pointer["review_key"]
@@ -178,6 +184,348 @@ class ReadinessTests(unittest.TestCase):
     def dependency(self, prerequisite):
         return {"id": str(UUID(int=500)), "type": "blocks",
                 "issue": {**prerequisite, "trashed": False}}
+
+    def pause_deployment(self):
+        self.queue.control = DeploymentControl(MemoryTable())
+        self.queue.control.pause("github:900:1", "c" * 40)
+
+    def resume_deployment(self):
+        self.queue.control.resume("github:900:1", "c" * 40)
+
+    def test_dispatch_before_pause_defers_start_and_recovers_only_after_confirmed_stop(self):
+        self.dispatcher.route(self.issue)
+        key = self.key()
+        self.pause_deployment()
+        with self.budget(exact={"github.verify_worker_run": 1, "linear.issue": 1, "linear.status_comment": 1,
+                                "readiness.replace": 1, "queue_0.replace": 1}):
+            self.assertEqual(self.call(key, "start")["status"], "deployment_deferred")
+        row = self.table.get(key)[0]
+        self.assertEqual(row["retry_after"], 0)
+        self.assertEqual(row["reason_code"], "deployment_paused")
+        self.assertIn("explicit resume", self.review_comment(key))
+        self.assertNotIn("15 minutes", self.review_comment(key))
+        self.assertNotIn("prerequisites", self.review_comment(key))
+        self.assertFalse(self.runs.list())
+        self.assertFalse(self.receipts.list())
+        self.assertFalse(self.accounts.table.get(self.identity)[0]["owner"])
+        self.assertIn(SELECTION_LABEL, self.issue["labels"])
+        self.assertEqual(self.call(key, "finish", status="failed")["status"], "deployment_deferred")
+        self.resume_deployment()
+        with self.budget(exact={"linear.issue": 1, "linear.issue_dependencies": 1,
+                                "github.branch_sha": 1, "github.dispatch_runs": 1, "linear.status_comment": 1}):
+            self.assertTrue(self.gate.reconcile(deployment_only=True))
+        self.assertEqual(self.key(), key)  # The queued GitHub attempt is still alive.
+        self.stop(key, "failure")
+        with self.budget(exact={"linear.issue": 1, "linear.issue_dependencies": 2, "linear.status_comment": 1,
+                                "github.branch_sha": 1, "github.dispatch_runs": 1, "github.worker_result": 1,
+                                "github.dispatch": 1, "readiness.transaction": 1, "readiness.replace": 2}):
+            self.assertFalse(self.gate.reconcile(deployment_only=True))
+        self.assertNotEqual(self.key(), key)
+        self.assertEqual(self.now, NOW)  # No failure cooldown or timer tick elapsed.
+        self.assertEqual(self.github.dispatch.call_count, 2)
+        for _ in range(3):
+            with self.budget():
+                self.assertFalse(self.gate.reconcile(deployment_only=True))
+
+    def test_failed_deployment_and_repeated_events_preserve_deferred_slot(self):
+        self.dispatcher.route(self.issue)
+        key = self.key()
+        self.pause_deployment()
+        self.call(key, "start")
+        self.stop(key)
+        for _ in range(3):
+            self.now += 901
+            self.dispatcher.process({"type": "Issue", "id": self.issue["id"]})
+            self.gate.reconcile()
+            self.queue.reconcile()
+        self.assertEqual(self.github.dispatch.call_count, 1)
+        self.assertEqual(self.table.get(key)[0]["status"], "deployment_deferred")
+        self.assertEqual(self.table.get(key)[0]["retry_after"], 0)
+        slot = self.queue.table(self.route.repository).get("slot")[0]
+        self.assertEqual(slot["active_key"], dispatch_key(self.registry, self.route, self.issue))
+        self.assertIn(SELECTION_LABEL, self.issue["labels"])
+
+    def test_preflight_handoff_during_pause_defers_assessment_and_allows_account_cleanup(self):
+        self.dispatcher.route(self.issue)
+        key = self.key()
+        selector = selector_claims(self.identity_for(key))
+        self.service.handle("start", selector, {"dispatch_key": key, "protocol": PROTOCOL})
+        lease = self.service.handle("claim", selector, {"dispatch_key": key, "account_id": self.identity})
+        self.service.handle("bind_account", selector, {"dispatch_key": key, "account_id": self.identity})
+        self.pause_deployment()
+        self.assertEqual(self.call(key, "start")["status"], "deployment_deferred")
+        self.assertFalse(self.table.get(key)[0].get("execution_started"))
+        self.service.handle("save", selector, {"dispatch_key": key, "account_id": self.identity,
+                                              "lease": lease["lease"], "release": True})
+        self.assertFalse(self.accounts.table.get(self.identity)[0]["owner"])
+        self.resume_deployment()
+        self.assertEqual(self.call(key, "start")["status"], "deployment_deferred")
+        self.assertEqual(self.call(key, "accounts")["status"], "deployment_deferred")
+        self.assertEqual(self.github.dispatch.call_count, 1)
+
+    def test_authorization_and_lost_admission_are_not_deployment_deferrals(self):
+        self.dispatcher.route(self.issue)
+        key = self.key()
+        self.pause_deployment()
+        with self.assertRaises(WorkerError) as denied:
+            self.service.handle("start", {**self.identity_for(key), "repository": "other/repo"},
+                                {"dispatch_key": key, "protocol": PROTOCOL})
+        self.assertEqual(denied.exception.status, 403)
+        self.assertEqual(self.table.get(key)[0]["status"], "dispatched")
+        self.resume_deployment()
+        table = self.queue.table(self.route.repository)
+        slot, etag = table.get("slot")
+        entry_key = dispatch_key(self.registry, self.route, self.issue)
+        entry, version = table.get(entry_key)
+        table.transaction([({**slot, "active_key": ""}, etag), ({**entry, "status": "skipped"}, version)])
+        with self.assertRaises(WorkerError) as lost:
+            self.call(key, "start")
+        self.assertEqual(lost.exception.reason_code, "repository_admission_lost")
+        self.assertEqual(self.table.get(key)[0]["status"], "dispatched")
+
+    def test_resume_discovers_ambiguous_dispatch_and_every_matching_attempt_before_replacement(self):
+        self.github.dispatch.side_effect = DispatchError("response lost", uncertain=True)
+        self.dispatcher.route(self.issue)
+        key = self.key()
+        self.pause_deployment()
+        self.gate.reconcile()
+        self.resume_deployment()
+        self.sha = "d" * 40
+        for _ in range(2):
+            self.assertTrue(self.gate.reconcile(deployment_only=True))
+        self.assertEqual(self.github.dispatch.call_count, 1)
+        self.github.dispatch.side_effect = self.dispatch
+        self.dispatch(self.route, {"dispatch_key": key})
+        self.dispatch(self.route, {"dispatch_key": key})
+        self.stop(key)
+        self.assertTrue(self.gate.reconcile(deployment_only=True))  # First discovered run is still queued.
+        self.remote_runs[key][0]["status"] = "completed"
+        self.assertFalse(self.gate.reconcile(deployment_only=True))
+        self.assertNotEqual(self.key(), key)
+        self.assertEqual(self.github.dispatch.call_count, 2)
+        self.assertEqual(json.loads(self.table.get(self.key())[0]["binding"])["context_sha"], self.sha)
+
+    def test_deferred_known_owner_is_checked_when_run_listing_lags_or_fails(self):
+        self.dispatcher.route(self.issue)
+        key = self.key()
+        self.pause_deployment()
+        self.call(key, "start")
+        self.resume_deployment()
+        with patch.object(self.github, "dispatch_runs", return_value=[]):
+            self.assertTrue(self.gate.reconcile(deployment_only=True))
+            self.assertEqual(self.github.dispatch.call_count, 1)
+            self.stop(key)
+            with patch.object(self.github, "worker_result", side_effect=RequestError(503)), self.assertLogs(level="ERROR"):
+                self.assertTrue(self.gate.reconcile(deployment_only=True))
+            self.assertEqual(self.github.dispatch.call_count, 1)
+            self.assertFalse(self.gate.reconcile(deployment_only=True))
+        self.assertEqual(self.github.dispatch.call_count, 2)
+
+    def test_changed_binding_never_blindly_resends_an_unconfirmed_dispatch(self):
+        self.github.dispatch.side_effect = DispatchError("response lost", uncertain=True)
+        self.dispatcher.route(self.issue)
+        key = self.key()
+        self.issue["description"] = "A materially different intended outcome."
+        self.gate.reconcile()
+        self.assertEqual(self.key(), key)
+        self.assertEqual(self.github.dispatch.call_count, 1)
+        self.github.dispatch.side_effect = self.dispatch
+        self.dispatch(self.route, {"dispatch_key": key})
+        self.gate.reconcile()
+        self.assertEqual(self.key(), key)
+        self.stop(key)
+        self.gate.reconcile()
+        self.assertNotEqual(self.key(), key)
+
+    def test_resume_checks_latest_manual_attempt_even_when_run_list_is_stale(self):
+        self.dispatcher.route(self.issue)
+        key = self.key()
+        self.pause_deployment()
+        self.call(key, "start")
+        self.stop(key)
+        prior = self.remote_runs[key][0]
+        rerun = {**prior, "run_attempt": 2, "status": "in_progress", "conclusion": None}
+        self.attempts[f"{rerun['id']}:2"] = rerun
+        self.resume_deployment()
+        self.assertTrue(self.gate.reconcile(deployment_only=True))
+        self.assertEqual(self.github.dispatch.call_count, 1)
+        rerun.update(status="completed", conclusion="cancelled")
+        self.assertFalse(self.gate.reconcile(deployment_only=True))
+        self.assertEqual(self.github.dispatch.call_count, 2)
+
+    def test_deployment_replacement_requires_current_issue_policy_and_repository_review(self):
+        for changed in ("issue", "policy", "repository"):
+            with self.subTest(changed=changed):
+                self.setUp()
+                self.dispatcher.route(self.issue)
+                key = self.key()
+                original = json.loads(self.table.get(key)[0]["binding"])
+                self.pause_deployment()
+                self.call(key, "start")
+                self.resume_deployment()
+                if changed == "issue":
+                    self.issue["description"] = "A changed outcome requiring another assessment."
+                elif changed == "policy":
+                    self.registry.agent_profiles["codex"] = replace(self.registry.agent_profiles["codex"], model="new-model")
+                else:
+                    self.sha = "d" * 40
+                self.gate.reconcile(deployment_only=True)
+                self.assertEqual(self.key(), key)
+                self.assertEqual(self.github.dispatch.call_count, 1)
+                with self.assertRaises(WorkerError):
+                    self.submit(key, binding=original)
+                self.stop(key)
+                self.gate.reconcile(deployment_only=True)
+                current = self.key()
+                self.assertNotEqual(current, key)
+                self.assertNotEqual(json.loads(self.table.get(current)[0]["binding"]), original)
+                with self.assertRaises(WorkerError):
+                    self.gate.require(self.issue, self.route)
+                self.call(current, "start")
+                self.submit(current)
+                self.assertEqual(self.gate.require(self.issue, self.route)["review_key"], current)
+
+    def test_resume_rechecks_dependencies_and_current_eligibility(self):
+        for hold in ("dependency", "canceled", "enrollment"):
+            with self.subTest(hold=hold):
+                self.setUp()
+                self.dispatcher.route(self.issue)
+                key = self.key()
+                self.pause_deployment()
+                self.call(key, "start")
+                self.stop(key)
+                if hold == "dependency":
+                    prerequisite = self.make_issue(2)
+                    self.linear.issue_dependencies.side_effect = lambda issue: [self.dependency(prerequisite)] if issue == self.issue["id"] else []
+                elif hold == "canceled":
+                    self.issue["state"] = {"id": "canceled", "type": "canceled"}
+                else:
+                    self.issue["project"]["labels"]["nodes"] = []
+                self.resume_deployment()
+                self.gate.reconcile(deployment_only=True)
+                self.queue.reconcile()
+                self.assertEqual(self.github.dispatch.call_count, 1)
+                self.assertFalse(self.receipts.list())
+
+    def test_deployment_recovery_preserves_ordinary_readiness_failure_backoffs(self):
+        for outcome in ("failed", "waiting_for_quota", "timeout"):
+            with self.subTest(outcome=outcome):
+                self.setUp()
+                key, _ = self.begin()
+                if outcome == "timeout":
+                    self.now += 121
+                    self.gate.reconcile()
+                else:
+                    self.call(key, "finish", status=outcome)
+                deadline = self.table.get(key)[0]["retry_after"]
+                self.stop(key)
+                self.pause_deployment()
+                self.gate.reconcile()
+                self.resume_deployment()
+                self.gate.reconcile(deployment_only=True)
+                self.queue.reconcile()
+                self.assertEqual(self.table.get(key)[0]["retry_after"], deadline)
+                self.assertEqual(self.table.get(key)[0]["status"], "retry")
+                self.assertEqual(self.github.dispatch.call_count, 1)
+
+    def test_assessment_in_progress_can_drain_but_new_coding_cannot_start_while_paused(self):
+        self.dispatcher.route(self.issue)
+        key = self.key()
+        selector = selector_claims(self.identity_for(key))
+        self.service.handle("start", selector, {"dispatch_key": key, "protocol": PROTOCOL})
+        self.service.handle("bind_account", selector, {"dispatch_key": key, "account_id": self.identity})
+        self.call(key, "start")
+        self.pause_deployment()
+        self.assertIn("token", self.call(key, "checkout"))
+        self.assertEqual(self.submit(key)["status"], "passed")
+        self.assertFalse(self.receipts.list())
+        self.stop(key)
+        self.resume_deployment()
+        self.queue.reconcile()
+        coding = dispatch_key(self.registry, self.route, self.issue)
+        self.pause_deployment()
+        self.assertEqual(self.call(coding, "start")["status"], "deployment_deferred")
+        self.assertFalse(self.runs.list())
+        self.assertFalse(self.accounts.table.get(self.identity)[0]["owner"])
+        self.resume_deployment()
+        self.queue.reconcile()
+        self.assertEqual(len(self.remote_runs[coding]), 1)  # Prior run still active.
+        self.stop(coding)
+        self.queue.reconcile()
+        self.assertEqual(len(self.remote_runs[coding]), 2)
+        self.assertEqual(self.call(coding, "start")["phase"], "development")
+
+    def test_pause_during_startup_context_read_stops_before_assessment(self):
+        self.dispatcher.route(self.issue)
+        key = self.key()
+        def pause_in_context(issue):
+            self.pause_deployment()
+            return copy.deepcopy(self.threads[issue])
+        self.linear.issue_comments.side_effect = pause_in_context
+        self.assertEqual(self.call(key, "start")["status"], "deployment_deferred")
+        self.assertFalse(self.table.get(key)[0].get("execution_started"))
+        self.assertEqual(self.table.get(key)[0]["retry_after"], 0)
+
+    def test_pause_during_final_coding_dependency_read_preserves_retryable_startup(self):
+        self.pass_review()
+        coding = dispatch_key(self.registry, self.route, self.issue)
+        config = self.call(coding, "start")
+        reads = 0
+        def pause_at_final_boundary(issue):
+            nonlocal reads
+            reads += 1
+            if reads == 2:
+                self.pause_deployment()
+            return []
+        self.linear.issue_dependencies.side_effect = pause_at_final_boundary
+        result = self.call(coding, "progress", stage="coding", context_sha=config["readiness"]["context_sha"])
+        self.assertEqual(result["status"], "deployment_deferred")
+        self.assertFalse(self.queue.table(self.route.repository).get(coding)[0].get("coding_started"))
+        self.assertEqual(self.runs.get(coding)[0]["stage"], "initializing")
+        self.assertEqual(self.receipts.get(coding)[0]["retry_after"], 0)
+
+    def test_status_write_failure_after_dispatch_cannot_become_context_lookup_failure(self):
+        write = self.linear.status_comment.side_effect
+        error = RequestError()
+        error.clusterfork_failure = {"operation": "linear/commentCreate", "kind": "graphql_error",
+                                    "graphql_code": "BAD_USER_INPUT", "graphql_reason": "errors"}
+        def unavailable(issue, identifier, body):
+            if body.startswith("Clusterfork readiness review:"):
+                raise error
+            write(issue, identifier, body)
+        self.linear.status_comment.side_effect = unavailable
+        with self.assertLogs(level="ERROR") as logs:
+            self.assertEqual(self.dispatcher.route(self.issue)["status"], "readiness_pending")
+        key = self.key()
+        self.assertEqual(self.table.get(key)[0]["status"], "dispatched")
+        self.assertNotIn("Infrastructure/context", "\n".join(self.comments.values()))
+        self.assertIn("readiness_reporting_deferred", "\n".join(logs.output))
+        self.assertIn("BAD_USER_INPUT", "\n".join(logs.output))
+        self.linear.status_comment.side_effect = write
+        self.gate.reconcile()
+        self.assertEqual(self.github.dispatch.call_count, 1)
+        self.assertIn("Waiting for the read-only reviewer", self.review_comment(key))
+
+    def test_concurrent_status_creates_after_dispatch_recover_without_generic_comment(self):
+        self.dispatcher.route(self.issue)
+        key = self.key()
+        api = CommentAPI()
+        barrier, local, lock = threading.Barrier(2), threading.local(), threading.RLock()
+        def concurrent(url, **kwargs):
+            with lock:
+                result = api.request(url, **kwargs)
+            if "comments(" in kwargs["data"]["query"] and not getattr(local, "read", False):
+                local.read = True
+                barrier.wait(timeout=5)
+            return result
+        self.linear.status_comment.side_effect = lambda *args: Linear("test", concurrent).status_comment(*args)
+        with self.assertLogs(level="INFO"), ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: self.gate.ensure(copy.deepcopy(self.issue), self.route), range(2)))
+        self.assertEqual([result["status"] for result in results], ["readiness_pending"] * 2)
+        self.assertEqual(len(api.comments), 1)
+        self.assertEqual(list(api.comments), [comment_id(key, "readiness")])
+        self.assertNotIn("Infrastructure/context", api.comments[comment_id(key, "readiness")]["body"])
+        self.assertEqual(self.github.dispatch.call_count, 1)
 
     def test_unresolved_dependencies_take_no_slot_review_worker_or_account(self):
         prerequisite = self.make_issue(2)
@@ -223,8 +571,9 @@ class ReadinessTests(unittest.TestCase):
         key = self.key()
         prerequisite = self.make_issue(2)
         self.linear.issue_dependencies.return_value = [self.dependency(prerequisite)]
-        with self.assertRaisesRegex(WorkerError, "prerequisites"):
+        with self.assertRaisesRegex(WorkerError, "prerequisites") as held:
             self.call(key, "start")
+        self.assertEqual(held.exception.reason_code, "prerequisites_unresolved")
         self.assertFalse(self.accounts.table.get(self.identity)[0]["owner"])
         self.stop(key, "failure")
         self.queue.reconcile()
@@ -1155,6 +1504,24 @@ class ReadinessTests(unittest.TestCase):
                                "invalid": "Rejected: invalid reviewer result."}[result["verdict"]], body)
                 self.assertEqual(body.count(self.registry.notify_user_url),
                                  0 if result["verdict"] == "ready" else 1)
+
+    def test_ambiguous_late_hold_update_repairs_a_pass_even_when_its_response_is_lost(self):
+        key, _ = self.begin()
+        row, _ = self.table.get(key)
+        write, delayed = self.linear.status_comment.side_effect, False
+        def lose_late_response(issue, identifier, body):
+            nonlocal delayed
+            if not delayed:
+                delayed = True
+                self.submit(key)
+                write(issue, identifier, body)
+                raise RequestError(503)
+            write(issue, identifier, body)
+        self.linear.status_comment.side_effect = lose_late_response
+        with self.assertLogs(level="ERROR"):
+            self.gate.report_hold(self.issue, row)
+        self.assertIn("Passed.", self.review_comment(key))
+        self.assertTrue(self.table.get(key)[0]["reported"])
 
     def test_context_lookup_outage_is_visible_and_never_ambiguous(self):
         self.github.branch_sha.side_effect = RequestError(503)

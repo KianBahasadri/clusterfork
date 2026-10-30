@@ -37,6 +37,10 @@ class WorkerFailure(RuntimeError):
     pass
 
 
+class DeploymentDeferred(RuntimeError):
+    pass
+
+
 def json_request(url, token, data=None, method=None, *, operation_name=None):
     request = Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json",
                                     "Content-Type": "application/json", "User-Agent": "clusterfork-worker"},
@@ -56,6 +60,7 @@ class Broker:
         self.lock = threading.RLock()
         self.token, self.expires = "", 0
         self.stage = "initializing"
+        self.deployment_deferred = False
         self.publication_guard = PublicationGuard()
 
     def call(self, action, **data):
@@ -78,6 +83,12 @@ class Broker:
                 try:
                     result = json_request(f"{self.url}/{action}", self.token,
                                           {"dispatch_key": self.key, **data, "request_id": CONTEXT.get()["request_id"]})
+                    if result.get("status") == "deployment_deferred" and result.get("reason_code") == "deployment_paused":
+                        self.deployment_deferred = True
+                        deferred = DeploymentDeferred()
+                        deferred.clusterfork_failure = {"operation": f"broker/{action}", "kind": "worker_error",
+                                                       "reason_code": "deployment_paused"}
+                        raise deferred
                     if action in {"checkout", "github"}:
                         self.publication_guard.remember(result["token"])
                     return result
@@ -102,7 +113,9 @@ class Heartbeat:
                 self.operation()
             except Exception as exc:
                 self.error = exc
-                record("heartbeat_failed", level=logging.ERROR, **failure(exc, "worker/heartbeat"))
+                deferred = isinstance(exc, DeploymentDeferred)
+                record("heartbeat_deferred" if deferred else "heartbeat_failed",
+                       level=logging.INFO if deferred else logging.ERROR, **failure(exc, "worker/heartbeat"))
                 self.failed.set()
                 return
 
@@ -624,6 +637,20 @@ def main(*, select_only=False):
                                  if config.get("auto_merge", True) else "manual merge (project override)\n"))
         return 0
     except Exception as exc:
+        if isinstance(exc, DeploymentDeferred) or getattr(broker, "deployment_deferred", False) is True:
+            # A deferred heartbeat can stop a subprocess/quota read with a
+            # generic lease error. Preserve the broker's startup classification.
+            record("worker_deferred", reason_code="deployment_paused")
+            message = ("Azure deployment paused startup. This runner is exiting to allow deployment to drain; "
+                       "work resumes after successful deployment and confirmation that prior GitHub attempts stopped.")
+            print(message)
+            if select_only:
+                with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                    output.write("selected=false\n")
+            if os.environ.get("GITHUB_STEP_SUMMARY"):
+                with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
+                    stream.write("### Clusterfork deployment wait\n\n" + message + "\n")
+            return 0
         with context(dispatch_key=os.environ.get("DISPATCH_KEY", ""), run_id=os.environ.get("GITHUB_RUN_ID", ""),
                      run_attempt=os.environ.get("GITHUB_RUN_ATTEMPT", ""), stage=getattr(broker, "stage", "initializing")):
             diagnostic = failure(exc)

@@ -34,11 +34,14 @@ GRAPHQL_TYPES = {"forbidden", "authentication error", "invalid input", "ratelimi
                  "user error", "graphql error", "lock timeout", "usage limit exceeded"}
 GRAPHQL_REASONS = {"errors", "invalid_response", "unsuccessful_mutation"}
 ERROR_TYPES = {"Exception", "TimeoutError", "HTTPError", "URLError", "ConnectionError", "OSError",
-               "WorkerFailure", "WorkerError", "CodexError", "CodexRejected", "RequestError", "DispatchError",
+               "WorkerFailure", "WorkerError", "DeploymentDeferred", "CodexError", "CodexRejected", "RequestError", "DispatchError",
                "PermissionError", "FileNotFoundError", "KeyError", "TypeError", "ValueError", "RuntimeError",
                "JSONDecodeError", "ServiceRequestError", "ServiceResponseError", "HttpResponseError",
                "ResourceModifiedError", "ResourceNotFoundError", "ClientAuthenticationError"}
 FAILURE_REASONS = {
+    "deployment_paused": "Azure deployment paused new work; waiting for explicit resume and stopped GitHub attempts",
+    "repository_admission_lost": "the issue no longer owns the repository slot",
+    "prerequisites_unresolved": "issue prerequisites are unresolved or unverifiable",
     "workflows_permission_missing": "workflow publication requires the GitHub App installation's approved Workflows write permission",
     "publication_credentials_detected": "publication blocked because a credential was detected in changes or PR metadata",
     "publication_scan_failed": "publication blocked because the credential scan could not read an auth cache",
@@ -138,6 +141,8 @@ def failure(exc, operation="worker/execution", **fields):
     error_type = type(exc).__name__
     data = {"operation": operation, "kind": kind, "error_type": error_type if error_type in ERROR_TYPES else "Exception",
             **CONTEXT.get(), **fields}
+    if getattr(exc, "reason_code", None) in FAILURE_REASONS:
+        data["reason_code"] = exc.reason_code
     status = getattr(exc, "code", None) if isinstance(exc, HTTPError) else getattr(exc, "status", None)
     if type(status) is int and 100 <= status <= 599:
         data["http_status"] = status
@@ -164,7 +169,9 @@ def operation(name, *, quiet=False, **fields):
         yield
     except Exception as exc:
         details = failure(exc, name, elapsed_ms=round((time.monotonic() - started) * 1000), **fields)
-        record("operation_failed", level=logging.ERROR, **details)
+        deferred = details.get("reason_code") == "deployment_paused"
+        record("operation_deferred" if deferred else "operation_failed",
+               level=logging.INFO if deferred else logging.ERROR, **details)
         raise
     else:
         record("operation_completed", level=level, operation=name,

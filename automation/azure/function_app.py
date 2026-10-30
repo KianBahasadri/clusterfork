@@ -45,9 +45,10 @@ def queue_client():
         retry_total=0)
 
 
-def enqueue(event):
+def enqueue(event, *, visibility_timeout=0):
     event = {**event, "enqueued_at": time.time()}
-    queue_client().send_message(json.dumps(event))
+    queue_client().send_message(json.dumps(event), **({"visibility_timeout": visibility_timeout}
+                                                   if visibility_timeout else {}))
     record("event_enqueued", event_type=event["type"], entity_id=event["id"], **timestamps(event))
 
 
@@ -167,10 +168,30 @@ def route_event(message: func.QueueMessage):
     event["processing_at"] = time.time()
     record("event_processing", at=event["processing_at"], event_type=event["type"], entity_id=event["id"],
            **timestamps(event))
+    if event.get("type") == "DeploymentResume":
+        deployment_recovery(event)
+        return
     results = dispatcher().process(event)
     # No issue descriptions, webhook bodies, API responses, or credentials in logs.
     for result in results:
         logging.info("Clusterfork routing: %s", json.dumps(result))
+
+
+def deployment_recovery(event):
+    service = worker_service()
+    state, _ = service.queue.control.state()
+    if state.get("owner") != event.get("id") or state.get("revision") != event.get("revision"):
+        return  # A newer deployment owns recovery; old wake-ups cannot resume it.
+    if state.get("paused") is not False:
+        # The notification is durable before explicit resume. Azure retries this
+        # small race using the existing queue policy; it never admits work.
+        raise WorkerError("Deployment has not explicitly resumed", 503, reason_code="deployment_paused")
+    pending = service.queue.readiness.reconcile(deployment_only=True)
+    service.queue.reconcile()
+    if pending or service.queue.deployment_pending():
+        # Run discovery can lag, or a prior attempt can still be stopping. Keep
+        # that wait off GitHub runners and independent of the 15-minute timer.
+        enqueue(event, visibility_timeout=15)
 
 
 @app.timer_trigger(arg_name="timer", schedule="0 */15 * * * *", run_on_startup=False,

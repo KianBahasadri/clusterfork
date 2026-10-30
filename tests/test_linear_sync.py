@@ -1,10 +1,12 @@
 """Linear lifecycle behavior across worker, CI, merge, and retry boundaries."""
 
 import copy
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 from uuid import UUID
@@ -137,6 +139,16 @@ class LifecycleTests(unittest.TestCase):
                 self.assertIn("blocked-by issue prerequisites", self.linear.status_comment.call_args.args[2])
                 self.linear.set_stage.assert_called_with(ISSUE, None)
                 self.github.worker_pull.assert_not_called()
+
+    def test_deployment_held_pre_coding_attempt_reports_a_resume_wait_without_failure_state(self):
+        row, version = self.receipts.get(KEY)
+        self.receipts.replace({**row, "deployment_wait_owner": "123:1"}, version)
+        self.update_run(status="running", stage="selecting_account", lease_until=0)
+        self.assertEqual(self.sync_state(), self.route.ready_state_ids[0])
+        self.assertIn("explicit resume", self.linear.status_comment.call_args.args[2])
+        self.linear.set_stage.assert_called_with(ISSUE, None)
+        self.github.worker_result.assert_not_called()
+        self.github.worker_pull.assert_not_called()
 
     def test_pending_ci_stays_in_progress_and_only_merge_marks_done(self):
         checks(self.pull)[0].update(status="IN_PROGRESS", conclusion=None)
@@ -409,6 +421,19 @@ class LifecycleTests(unittest.TestCase):
 
 
 class LifecycleAdapterTests(unittest.TestCase):
+    def test_deployment_recovery_queries_current_github_attempt_and_holds_incomplete_results(self):
+        client = GitHub("app", "private-test-key", request=Mock())
+        with patch.object(client, "installation_token", return_value="test-token"):
+            client.request.return_value = {"id": 123, "run_attempt": 2, "status": "in_progress"}
+            self.assertEqual(client.worker_result("owner/repo", "123:1", latest=True)["run_attempt"], 2)
+            self.assertEqual(client.request.call_args.args[0], "https://api.github.com/repos/owner/repo/actions/runs/123")
+            for invalid in ({"status": "completed"}, {"id": 999, "run_attempt": 1, "status": "completed"},
+                            {"id": 123, "run_attempt": 0, "status": "completed"},
+                            {"id": 123, "run_attempt": 2, "status": "unknown"}):
+                with self.subTest(invalid=invalid), self.assertRaises(RequestError):
+                    client.request.return_value = invalid
+                    client.worker_result("owner/repo", "123:1", latest=True)
+
     def test_comment_creation_and_updates_use_the_same_id_and_skip_identical_text(self):
         api = CommentAPI()
         request = Mock(side_effect=api.request)
@@ -455,13 +480,76 @@ class LifecycleAdapterTests(unittest.TestCase):
                         return {"data": {"commentCreate": {"success": False}}}
                     return result
 
-                with self.assertRaises(RequestError):
+                with self.assertLogs(level="INFO") as logs:
                     Linear("test", request).status_comment(ISSUE, ISSUE, "merged")
+                self.assertIn("linear_comment_create_recovered", "\n".join(logs.output))
                 for _ in range(3):
                     Linear("test", api.request).status_comment(ISSUE, ISSUE, "merged")
                 self.assertEqual(api.comments[ISSUE], original)
                 self.assertEqual(len(api.comments), 2)
                 self.assertEqual(len(api.writes), 1)
+
+    def test_concurrent_deterministic_comment_creates_recover_without_forking_discussion(self):
+        for migrate in (False, True):
+            with self.subTest(migrate=migrate):
+                api = CommentAPI()
+                original = api.seed(ISSUE) if migrate else None
+                barrier, local, lock = threading.Barrier(2), threading.local(), threading.RLock()
+
+                def concurrent(url, **kwargs):
+                    with lock:
+                        result = api.request(url, **kwargs)
+                    if "comments(" in kwargs["data"]["query"] and not getattr(local, "read", False):
+                        local.read = True
+                        barrier.wait(timeout=5)  # Both handlers first observe no target.
+                    return result
+
+                with self.assertLogs(level="INFO") as logs, ThreadPoolExecutor(max_workers=2) as pool:
+                    list(pool.map(lambda _: Linear("test", concurrent).status_comment(ISSUE, ISSUE, "queued"), range(2)))
+                self.assertIn("linear_comment_create_recovered", "\n".join(logs.output))
+                self.assertEqual(len(api.comments), 2 if migrate else 1)
+                self.assertEqual(len(api.writes), 1)
+                target = api.writes[0][1]
+                api.comments[target]["replies"] = ["Keep this human decision."]
+                Linear("test", api.request).status_comment(ISSUE, ISSUE, "review dispatched")
+                self.assertEqual(api.comments[target]["replies"], ["Keep this human decision."])
+                self.assertEqual(api.comments[target]["body"], "review dispatched")
+                if migrate:
+                    self.assertEqual(api.comments[ISSUE], original)
+
+    def test_ambiguous_initial_create_with_missing_author_metadata_recovers_the_same_body(self):
+        api = CommentAPI()
+        def lost_response(url, **kwargs):
+            result = api.request(url, **kwargs)
+            if "commentCreate(" in kwargs["data"]["query"]:
+                identifier = kwargs["data"]["variables"]["id"]
+                api.comments[identifier]["user"] = None
+                api.comments[identifier]["replies"] = ["Keep this decision."]
+                raise RequestError(503)
+            return result
+        Linear("test", lost_response).status_comment(ISSUE, ISSUE, "review dispatched")
+        self.assertEqual(list(api.comments), [ISSUE])
+        self.assertEqual(api.writes, [("create", ISSUE)])
+        self.assertEqual(api.comments[ISSUE]["replies"], ["Keep this decision."])
+
+    def test_failed_create_without_confirmed_comment_preserves_classification_and_id(self):
+        api = CommentAPI()
+        attempts = []
+
+        def forbidden(url, **kwargs):
+            if "commentCreate(" in kwargs["data"]["query"]:
+                attempts.append(kwargs["data"]["variables"]["id"])
+                return {"data": None, "errors": [{"message": "SECRET-authentication-data",
+                        "path": ["commentCreate"], "extensions": {"code": "FORBIDDEN", "type": "forbidden"}}]}
+            return api.request(url, **kwargs)
+
+        for _ in range(2):
+            with self.assertLogs(level="ERROR") as logs, self.assertRaises(RequestError) as caught:
+                Linear("test", forbidden).status_comment(ISSUE, ISSUE, "queued")
+            self.assertEqual(caught.exception.clusterfork_failure["graphql_code"], "FORBIDDEN")
+            self.assertNotIn("SECRET", "\n".join(logs.output))
+        self.assertEqual(attempts, [ISSUE, ISSUE])
+        self.assertFalse(api.comments)
 
     def test_explicit_update_denial_with_matching_author_migrates_once(self):
         api = CommentAPI()

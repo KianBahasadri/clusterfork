@@ -368,12 +368,16 @@ class Linear:
         # random replacement ID, or Azure write after creation is needed for recovery.
         digest = hashlib.sha256(f"clusterfork:comment:{comment_id}:{viewer}".encode()).digest()
         replacement = str(UUID(bytes=digest[:16], version=4))
-        result = self.query("""query($issue: String!, $comments: [ID!]!) {
-          issue(id: $issue) { comments(first: 2, filter: {id: {in: $comments}}) {
-            nodes { id body user { id } }
-          } }
-        }""", {"issue": issue_id, "comments": [comment_id, replacement]})
-        comments = {comment["id"]: comment for comment in result["issue"]["comments"]["nodes"]}
+
+        def lookup():
+            result = self.query("""query($issue: String!, $comments: [ID!]!) {
+              issue(id: $issue) { comments(first: 2, filter: {id: {in: $comments}}) {
+                nodes { id body user { id } }
+              } }
+            }""", {"issue": issue_id, "comments": [comment_id, replacement]})
+            return {comment["id"]: comment for comment in result["issue"]["comments"]["nodes"]}
+
+        comments = lookup()
         legacy = comments.get(comment_id)
         legacy_author = (legacy.get("user") or {}).get("id") if legacy else None
         migrate = bool(legacy and legacy_author != viewer)
@@ -381,30 +385,51 @@ class Linear:
         recovery = "author_changed" if legacy_author else "author_unavailable"
 
         def write(identifier):
+            nonlocal comments
             comment = comments.get(identifier)
+            if (identifier == comment_id and comment
+                    and (comment.get("user") or {}).get("id") != viewer):
+                return write(replacement)
             if comment and comment["body"] == body:
-                return
+                return identifier
             if comment:
                 self.query("""mutation($id: String!, $body: String!) {
                   commentUpdate(id: $id, input: {body: $body}) { success }
                 }""", {"id": identifier, "body": body})
             else:
-                self.query("""mutation($id: String!, $issue: String!, $body: String!) {
-                  commentCreate(input: {id: $id, issueId: $issue, body: $body, doNotSubscribeToIssue: true}) { success }
-                }""", {"id": identifier, "issue": issue_id, "body": body})
+                try:
+                    self.query("""mutation($id: String!, $issue: String!, $body: String!) {
+                      commentCreate(input: {id: $id, issueId: $issue, body: $body, doNotSubscribeToIssue: true}) { success }
+                    }""", {"id": identifier, "issue": issue_id, "body": body})
+                except RequestError as exc:
+                    # A competing handler may have committed this deterministic
+                    # ID, or our own successful response may have been lost.
+                    # Prove existence before updating; never choose another ID.
+                    try:
+                        observed = lookup()
+                    except Exception:
+                        raise exc
+                    if identifier not in observed:
+                        raise
+                    comments = observed
+                    record("linear_comment_create_recovered", operation="linear/commentCreate",
+                           **{k: v for k, v in failure(exc, "linear/commentCreate").items() if k != "operation"})
+                    if comments[identifier]["body"] == body:
+                        return identifier
+                    return write(identifier)
+            return identifier
 
         try:
-            write(identifier)
+            identifier = write(identifier)
         except RequestError as exc:
             details = getattr(exc, "clusterfork_failure", {})
-            if (identifier != comment_id or not legacy or not (
+            if (identifier != comment_id or comment_id not in comments or not (
                     exc.status == 403 or details.get("graphql_code") == "FORBIDDEN"
                     or details.get("graphql_type") == "forbidden")):
                 raise
             # Some integrations omit or share user metadata. A definite update
             # denial can still migrate once; transient failures never create a fork.
-            write(replacement)
-            identifier = replacement
+            identifier = write(replacement)
             recovery = "update_forbidden"
         if identifier == replacement and replacement not in comments:
             record("linear_comment_identity_recovered", operation="linear/commentCreate", reason=recovery)
@@ -468,14 +493,20 @@ class GitHub:
                 or run.get("actor", {}).get("login") != "clusterfork[bot]"):
             raise WorkerError("GitHub run does not match the dispatch", 403)
 
-    def worker_result(self, repository, owner):
+    def worker_result(self, repository, owner, *, latest=False):
         run_id, attempt = owner.split(":")
         if not run_id.isdigit() or not attempt.isdigit():
             raise ValueError("Invalid stored worker identity")
         token = self.installation_token(repository, permissions={"actions": "read"})
-        return self.request(
-            f"https://api.github.com/repos/{repository}/actions/runs/{run_id}/attempts/{attempt}",
-            token=f"Bearer {token}")
+        suffix = "" if latest else f"/attempts/{attempt}"
+        result = self.request(f"https://api.github.com/repos/{repository}/actions/runs/{run_id}{suffix}",
+                              token=f"Bearer {token}")
+        if latest and (not isinstance(result, dict) or type(result.get("id")) is not int or result["id"] != int(run_id)
+                       or type(result.get("run_attempt")) is not int or result["run_attempt"] < int(attempt)
+                       or not isinstance(result.get("status"), str)
+                       or result.get("status") not in {"queued", "in_progress", "completed", "waiting", "requested", "pending"}):
+            raise RequestError()
+        return result
 
     def dispatch_runs(self, route, key):
         """List every matching run's latest attempt, including manual reruns.

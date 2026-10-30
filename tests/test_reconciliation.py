@@ -206,17 +206,18 @@ class BoundedReconciliationTests(unittest.TestCase):
         receipts, runs = copy.deepcopy(c.receipts.rows), copy.deepcopy(c.runs.rows)
         pull.update(state="MERGED", merged=True)
         c.sha = "c" * 40
-        with self.assertLogs(level="ERROR"):
+        with self.assertLogs(level="INFO") as logs:
             self.tick()
+        self.assertIn("linear_comment_create_recovered", "\n".join(logs.output))
         self.assertEqual(c.issue["state"]["id"], c.route.linear_states.done)
-        self.assertFalse(self.notes.get(first)[0]["terminal"])
+        self.assertTrue(self.notes.get(first)[0]["terminal"])
         self.assertNotIn("clusterfork: PR review and CI", c.issue["labels"])
         self.assertEqual(api.comments[legacy_id], legacy)
         self.assertEqual(c.runs.rows, runs)
         self.assertEqual(c.receipts.rows, receipts)
         second = dispatch_key(c.registry, c.route, next_issue)
         self.assertEqual(c.tables[c.route.repository.lower()].get("slot")[0]["active_key"], second)
-        # The next issue can pass review and code while terminal reporting repairs.
+        # The next issue can pass review and code after recovery in the same tick.
         c.pass_review(next_issue)
         c.call(second, "start")
         c.call(second, "progress", stage="coding", context_sha=c.sha)

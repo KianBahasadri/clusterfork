@@ -68,6 +68,26 @@ def active_workers():
         page += 1
 
 
+def notify_resume(owner, revision):
+    """Use the existing app storage/queue; no new endpoint or role grant."""
+    from azure.storage.queue import QueueClient, TextBase64EncodePolicy
+
+    try:
+        connection = pilot.command([
+            "az", "functionapp", "config", "appsettings", "list",
+            "--resource-group", "rg-clusterfork-automation", "--name", "clusterfork-dispatch-7604cac329",
+            "--query", "[?name=='AzureWebJobsStorage'].value | [0]", "--output", "tsv"], sensitive=True)
+        client = QueueClient.from_connection_string(
+            connection, "clusterfork-events", message_encode_policy=TextBase64EncodePolicy(),
+            connection_timeout=2, read_timeout=2, retry_total=0)
+        # Commit the wake-up before unpausing. If resume fails, the consumer
+        # still requires its matching, explicitly unpaused deployment record.
+        client.send_message(json.dumps({"type": "DeploymentResume", "id": owner, "revision": revision}),
+                            visibility_timeout=5)
+    except Exception:
+        raise RuntimeError("Unable to queue deployment recovery; worker dispatch remains paused") from None
+
+
 def ci_state(revision):
     data = github(f"actions/workflows/test.yml/runs?head_sha={revision}&event=push&per_page=100")
     runs = [run for run in data["workflow_runs"]
@@ -113,6 +133,7 @@ def verify(revision, owner):
         if (result.get("deployment") == expected and result.get("serial_admission") is True
                 and result.get("missing") == []):
             if github("commits/main")["sha"] == revision:
+                notify_resume(owner, revision)
                 control().resume(owner, revision)
                 print(f"Verified deployed revision {revision}; worker dispatch resumed.")
             else:

@@ -87,6 +87,7 @@ class SteeringTests(unittest.TestCase):
         self.runs.create(self.run)
         self.linear, self.queue = Tracker(self.registry), Mock()
         self.queue.assert_worker = Mock()
+        self.queue.deployment_paused.return_value = False
         self.queue.readiness.require.return_value = {}
         self.queue.approval.return_value = {}
         self.github = Mock(spec=GitHub)
