@@ -1,108 +1,97 @@
-# Deployment pauses and recovery
+# Controller deployment
 
-The [runtime overview](remote-development.md) covers readiness and worker execution.
-This topic owns deployment draining, startup deferral, resume, KIAN-932 cutover fencing,
-and the KIAN-923 investigation.
+This topic owns runtime rollout and hold semantics. [Controller implementation](remote-development-controller.md)
+owns state, transports, migration and dated live evidence. [Azure infrastructure](azure-infrastructure.md)
+owns the VM, persistent disk, identity and Terraform resources. The retired
+Functions cutover logic remains a [dated record](archive/remote-development-functions-deployments.md).
 
-## Verified deployments
+## Required runtime and project freshness
 
-`.github/workflows/deploy-azure.yml` runs on pushes to main and supports manual
-recovery with `workflow_dispatch`. Every run reconciles the
-[Azure Terraform stack](azure-infrastructure.md) before publishing the package.
-Deployment runs are serialized, with later pushes retaining the newest pending
-run. [Setup](remote-development-setup.md#automatic-deployment-identity) owns the
-GitHub environment and Azure identity configuration.
+`controller/release.py` identifies runtime inputs by the committed Git trees for
+`.github`, `automation`, `infra` and `scripts`. The deployed manifest contains the
+full source revision and digest. It excludes local worktree files and credentials.
+The controller checks current main against these trees before admission, including
+when a merge notification was missed.
 
-Before `automation/deploy.py prepare` reaches its durable pause, a packaged
-broker compares the observed `KianBahasadri/clusterfork` `main` SHA with its own
-`deployment.json` revision. An advanced main immediately holds readiness as
-`deployment_deferred` / `deployment_paused`, without creating a review bound to
-the old policy or dispatching a reviewer. Existing pre-execution reviews are
-deferred. Development dispatch, including retries and auto-repairs that reuse an
-earlier approval, also checks the branch revision before writing a dispatch
-receipt. Held issues retain their repository slots until the matching deployment
-recovers them. Other repositories/branches and unpackaged local processes do not
-use this branch fence.
+A target-only commit does not require a runtime rollout: the next task resolves
+its current repository branch and reviews that checkout. An automation change
+holds the next attempt until the tested required runtime is active. Every job in
+one attempt stays pinned to its admitted immutable runtime; that pin never freezes
+the target checkout at an old project commit.
 
-Before deployment, `automation/deploy.py` writes a durable pause to
-`ClusterforkOperations` (partition `control`). New readiness/development
-dispatches stop, while existing assessments and coding sessions retain their
-broker access and can finish. The workflow waits for the exact main revision's
-`test` CI workflow to succeed and for all worker and isolated Cursor validation runs, including queued runs and
-older manual reruns, to stop. Draining allows 330 minutes within a six-hour job.
+## Automatic rollout
 
-Only the allowlisted Function App ZIP is published using Flex Consumption's remote
-build. `deployment.json` stamps its Git revision and broker source digest.
-The health endpoint returns this metadata, the serial-admission capability, and
-the explicit durable deployment pause flag. Packaged processes whose revision
-differs from the durable deployment revision also treat dispatch as paused, even
-after explicit resume; this fences draining Flex Consumption instances. Health
-keeps reporting the explicit flag so deployment check/verify behavior is unchanged.
-Startup failures return 503 with a `runtime_error`
-class, without credentials or raw exception messages. Dispatch resumes only after
-the live revision/digest match the package, configuration is complete, and main
-still points to that revision. If main advances, the newer deployment inherits
-the pause. CI, drain, deployment, or health failures leave it in place; a corrected
-main push or manual deployment workflow run performs recovery. The pause never expires.
+`.github/workflows/deploy-azure.yml` runs on main pushes changing runtime inputs
+and supports manual dispatch. Deployments are serialized. It uses the existing
+`azure-production` identity and Terraform backend; no new application secrets are
+put in the repository or worker jobs.
 
-## Startup deferral and resume
+`automation/controller_deploy.py` waits for exact-revision main CI and checks
+whether the candidate's runtime inputs remain required. A newer target-only commit
+can coexist with that runtime; a superseding runtime keeps admission held for its
+new deployment. The controller's private operator socket records the distinct
+`deployment:rollout` hold before draining. Required-runtime detection supplies an
+independent hold before a workflow has reached that step.
 
-A readiness start or account preflight/handoff overlapping the pause records
-`deployment_deferred`, `reason_code=deployment_paused`, and no retry deadline.
-On `broker/start`, verified OIDC/run claims and pre-coding deployment deferral
-take precedence over protocol compatibility and readiness-binding rejection.
-Even a newer worker protocol receives `serial_admission: true` with that deferral
-and exits 0; incompatible starts outside the pause still fail with 403.
-Its stable review comment explains the deployment wait. The runner exits
-successfully without starting assessment/coding or reporting a failed reviewer,
-allowing deployment to drain. Account cleanup remains available. Coding startup
-also retains a durable deployment wait if it has not begun coding. Repository
-admission loss, unresolved/unverifiable prerequisites, authorization errors, and
-actual reviewer failures remain distinct. Ordinary infrastructure and quota
-backoffs retain their existing 15-minute delay.
+Drain requires verified stop/publication facts for active attempts and released
+account leases. Uncertain dispatch, missing observations, a running attempt or an
+open PR prevents the switch. A stopped retry can retain its repository grant
+through rollout. Network calls occur outside task transactions, so drain and CI
+checks do not block credential heartbeats.
 
-Verification queues a `DeploymentResume` event in the existing `clusterfork-events`
-queue before explicitly resuming its matching owner/revision. It reuses the app's
-existing storage connection; no authentication or permission changes are required.
-A failed notification leaves dispatch paused. The consumer checks the current
-deployment record, ignores superseded events, and holds work until explicit resume.
-Only a packaged instance matching the event revision performs recovery. An old
-instance re-enqueues `DeploymentResume` with a five-second visibility delay.
-Stale instances also re-enqueue ordinary routing events with that delay and skip
-timer reconciliation, preventing old in-memory policy code from creating bindings
-or dispatching work during rolling cutover.
-It reconciles deferred readiness and repository admission immediately, with delayed
-15-second queue events while prior attempts remain active or undiscovered. Durable
-deployment waits stay in Azure, and recovery does not depend on the shared timer.
+Terraform reconciles the reviewed no-delete/no-replace plan. Azure Run Command
+then installs the exact commit into its own release directory. The installer
+verifies VM identity and the dedicated mounted task disk. Source is root-owned;
+the supervised service has a separate unprivileged user and private operator
+socket. The written unit is reloaded, its stop must succeed, and its state must be
+verified as `inactive` before the current-release symlink changes, including
+on first installation.
+Only one database mutation owner is permitted; the persistent database is reused.
 
-After explicit resume, worker requests reaching a stale instance receive HTTP 503
-with diagnostic reason `deployment_cutover` before protocol or binding checks.
-`Broker.call("start", ...)` retries 503 and URL/timeout transport failures up to
-six attempts, with 2, 4, 5, 5, and 5 seconds of backoff (21 seconds total, excluding
-HTTP request time). A retry can reach the current instance or receive a clean
-deployment deferral. Other HTTP errors and non-start broker requests propagate
-without this retry. Workers never sleep indefinitely inside the workflow, so
-`prepare` can still drain active runs to zero.
+HTTPS health must identify the expected revision/digest. Private verification
+creates or verifies `clusterfork-runtime-<full-sha>` as an exact commit reference
+before dispatch can resume. An automatic installation records its GitHub
+deployment run ID. Admission also requires that exact main revision's deployment
+workflow to complete successfully, including retained-ingress verification.
+Private source/tag verification is independent of that completion gate, so the
+deployment can finish without admitting work early or waiting on itself.
+Only the rollout's hold is cleared. Independent
+operator holds persist across installation, restart and successful deployment.
+CI, drain, infrastructure, install or verification failures retain the holds.
 
-Every matching GitHub run's latest attempt and any recorded owner must be stopped
-before a replacement. Missing/incomplete observations hold work for discovery.
-Retries retain the durable repository slot, recheck current eligibility/dependencies,
-and bind a new review to current issue, policy, image, and repository revisions.
-A changed binding also cannot bypass discovery of an ambiguous earlier dispatch.
-Repeated events and reconciliation reuse durable ownership and dispatch receipts.
+## Existing Linear webhook URL
 
-## Status-reporting investigation
+`automation/webhook_relay` is the retained Function App's stateless ingress package.
+It forwards original signed request bytes to the controller and returns success
+only after the controller accepts the event. Controller unavailability returns a
+retryable failure; event identity deduplicates repeated delivery after acceptance.
+The package contains only HTTP forwarding and metadata health functions, with no
+queue consumer, timer, task database, worker RPC or account access.
 
-KIAN-923 regression coverage confirms a secondary reporting defect: two handlers
-can both observe a missing deterministic readiness comment; the losing
-`commentCreate` rejection escaped after GitHub accepted dispatch and was mislabeled
-as an infrastructure/context lookup failure. The exact 2026-10-29 GraphQL response
-was not retained, so duplicate creation remains an incident hypothesis.
+The deployment workflow packages only its committed allowlisted files, publishes
+them with the existing Functions action, and verifies the exact ingress revision.
+The legacy lifecycle trigger names remain disabled in Terraform. Keeping the
+existing URL needs no Linear webhook administration. A webhook already pointed
+directly at the controller also uses the same signed intake contract.
 
-The shared adapter rereads the same deterministic IDs after a failed or ambiguous
-create, accepting an existing matching body or updating that comment while
-preserving replies and the KIAN-921 identity migration. Without confirmed existence
-it retains the original bounded error classification and retries the same ID.
-Readiness reporting errors log `readiness_reporting_deferred`; they cannot replace
-accepted dispatch with a generic context-failure comment. GraphQL/recovery logs
-exclude raw bodies, error messages, variables, headers, and credentials.
+## Operator commands
+
+On the authorized host, root or the controller user can inspect and control it
+through the local socket:
+
+```bash
+sudo clusterfork-controller deployment-status
+sudo clusterfork-controller pause --owner operator:maintenance --reason 'Planned maintenance'
+sudo clusterfork-controller resume --owner operator:maintenance
+sudo clusterfork-controller reconcile
+```
+
+Releasing one named hold does not release another. These are private host commands;
+public HTTP exposes neither operator actions nor arbitrary state transitions.
+The normal workflow handles routine code rollout without a manual resume step.
+
+Initial cutover additionally requires an explicit operator halt, verified idle
+legacy references, preserved credential storage, proven queue generations and a
+private migration snapshot. It stops old lifecycle writers before starting the
+new service. [Migration](remote-development-controller.md#deployment-and-migration)
+owns that once-only import and its audit history.

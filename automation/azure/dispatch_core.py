@@ -128,7 +128,7 @@ class Registry:
             if (not isinstance(checks, list) or any(not isinstance(c, str) or not c.strip() or "\n" in c for c in checks)
                     or len(set(checks)) != len(checks)):
                 raise ValueError("required_checks must be distinct nonempty check names")
-            if worker_revision and (not commands or not checks or not linear_states):
+            if (worker_revision or row['workflow']=='clusterfork-task.yml') and (not commands or not checks or not linear_states):
                 raise ValueError("shared workers require validation commands, required checks, and lifecycle states")
             routes[project_id] = Route(project_id, row["repository"], row["workflow"],
                                        row["ref"], states, tuple(tuple(c) for c in commands), auto_merge,

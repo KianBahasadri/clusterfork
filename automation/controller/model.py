@@ -70,9 +70,15 @@ class TaskSpec:
     runtime_sha: str
     policy_revision: str
     images_sha: str
+    target_repository: str = ''
+    target_ref: str = 'main'
+    auto_merge: bool = True
 
     def __post_init__(self):
         import re
+        if (self.target_repository and not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+',self.target_repository)
+                or not re.fullmatch(r'[\w./-]+',self.target_ref) or type(self.auto_merge) is not bool):
+            raise ValueError('Invalid original target binding')
         if any(not re.fullmatch(r"[0-9a-f]{40}", value) for value in (self.context_sha, self.runtime_sha)):
             raise ValueError("Task context and runtime require full commit identities")
         if any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in

@@ -79,52 +79,42 @@ does not invent a refresh endpoint or replace the cloud login with a local copy.
 
 ## Worker credential boundary
 
-The broker keeps its App private key in Azure and does not send it to the runner.
-It verifies GitHub's OIDC signature, issuer, audience, expiry, repository,
-main-branch workflow path, hosted-runner type,
-run ID/attempt, and a durable dispatch receipt. It also checks the run through
-GitHub's API and requires dispatch by `clusterfork[bot]`. PR workflows, forks,
-other workflows, and unmapped repositories cannot obtain account credentials.
+The App private key stays in Azure. The broker verifies GitHub's OIDC signature,
+issuer, audience, expiry, pinned central workflow/release, hosted-runner type and
+run/attempt, then checks actual GitHub dispatch by `clusterfork[bot]`. The mapped
+target is authorized through the task grant, not the caller repository name.
+[The native graph](remote-development-controller.md#native-execution-graph) owns
+its distinct signed phase roles and workflow paths.
 
-Both readiness and development run quota selection in
-`.github/workflows/clusterfork-select-account.yml`, a reusable preflight job on a
-separate ephemeral VM from the agent job. Only this job can inspect the enrolled
-pool before assignment. Its role comes from GitHub's signed `job_workflow_ref`
-claim, with `job_workflow_sha` matching the dispatched revision; a request field
-or a changed script on the agent VM cannot grant that role. The broker still
-requires the mapped main-branch caller workflow and bot-dispatched run.
-See [GitHub's reusable-workflow OIDC claims](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-with-reusable-workflows).
+Review and coding each use an independent account preflight on a separate fresh
+VM from their agent. Preflight can inspect/probe the eligible pool but cannot
+obtain target checkout/publication tokens, start an agent turn or run validation.
+It saves refreshed credentials, releases each fenced probe, and binds one account
+to that task, run, attempt and phase. Temporary auth homes disappear on exit;
+only the selection boolean crosses the job boundary.
 
-Preflight runs account/model/quota RPCs without starting an agent turn, executing
-repository validation, or obtaining checkout/publication tokens from the broker.
-It persists refreshed credentials and releases each probe lease, then binds one
-account to the dispatch's run ID/attempt with an ETag update. Temporary auth homes
-are removed on exit. The only workflow output is a `selected` boolean; credentials
-and quota-probe files never cross the job boundary.
+Agent jobs require their phase binding and recheck the assigned account's live
+quota. After binding, listing returns that identity only; other claims/saves are
+denied. Review credentials cannot authorize coding, and coding has its own
+assignment. Releasing a lease or repeating start does not clear the binding.
+Codex coding can replace an account only through the controlled failover below.
+Manual or partial GitHub reruns cannot inherit an earlier attempt's assignment;
+new execution attempts must be authorized by the controller's normal task policy.
 
-The agent job requires that binding before execution and rechecks only its
-assigned account's live quota. For either job, `accounts` returns only the assigned
-identity after binding, and `claim`/`save` requests for other identities fail with
-403. An unbound agent job cannot list or claim accounts before coding. Preflight
-alone binds the initial account and cannot replace an existing assignment.
-Releasing an account lease, losing the lease, or repeating `start` preserves
-the binding unless Codex coding enters the controlled failover below. A finished development
-attempt cannot restart itself to clear it. A new run/attempt selects independently.
-When rerunning a failed GitHub attempt, rerun **all jobs** so preflight executes
-for the new attempt. Rerunning only the agent job cannot inherit the previous
-attempt's assignment and stops before execution.
+Verified saves and releases retain the original task/run/phase binding even if
+the issue or its repository mapping changes. Revocation prevents new access
+without stranding the already leased credentials during cleanup.
 
-Binding gives the worker a 15-minute lease for the job handoff.
-Accounts retain their normal 120-second leases and are not reserved while the
-next VM is queued. If the assigned account becomes busy, depleted, or unavailable,
-the agent job waits for quota and the existing 15-minute reconciliation retry;
-it does not fail over before coding. Readiness starts its bounded review deadline on
-the agent job's first start, without letting repeated starts extend that budget.
+Bindings allow 15 minutes for job handoff. The account itself keeps its ordinary
+120-second fenced lease and is not reserved while another VM queues. A busy,
+depleted or unavailable assignment waits for capacity and the existing retry;
+it does not rotate before coding. A review's deadline starts on its first agent
+start and cannot be extended by repeated starts or heartbeats.
 
-Deploy matching broker/worker sources, setup actions, and worker/preflight workflows to each mapped
-repository. The start protocol includes `codex-first-cursor-grok-high-single-account-v3`; incompatible
-workers/brokers stop before agent execution. The automatic deployment drain still
-applies, and no new credentials, storage tables, or App grants are required.
+The controller and all four jobs use the same tested central runtime. Target
+repositories need no copied worker sources or per-repository worker pin. Protocol
+compatibility remains mandatory before execution; deployment owns version
+selection and drain rather than asking each repository to update a caller.
 
 Cursor gets a fresh private home containing only its assigned CLI login, with
 private config/data paths and no inherited provider keys or job tokens. It never
@@ -146,7 +136,7 @@ temporary `CODEX_HOME`. It saves refreshed credentials with `release=True` and
 deletes the old home, including `auth.json`, before requesting `exhaust_account`.
 The broker requires that successful fenced release, the active coding stage,
 and the original thread ID. It records `exhausted_account_ids` on the
-`ClusterforkWorkers` row and unlocks replacement access for that develop attempt.
+controller coding session and unlocks replacement access for that attempt.
 Neither a repeated start nor preflight can clear or use this failover authority.
 
 Replacement probes are fenced one identity at a time, including an ambiguous
@@ -210,40 +200,14 @@ push or PR creation with a bounded diagnostic reason, without matched values,
 file contents, or credential-bearing paths.
 
 The storage resource is currently named in `automation/accounts.py`; see
-[remote setup](remote-development-setup.md#azure-deployment) before relocating it.
+[remote setup](remote-development-setup.md#deployment-and-identity) before relocating it.
 Local rotation commands and container mounts are covered by
 [Auth Rotation](auth-rotation.md).
 
 ## KIAN-922 post-deployment validation
 
-The one-off KIAN-922 cloud record for Cursor `21kb60` uses a staged cloud state
-until its integration probe passes. This historical probe is independent of
-ordinary reservations and local saved-profile visibility; local recovery does
-not alter that cloud state. The resumed, health-verified deployment event
-automatically asks the App to dispatch `clusterfork-cursor-smoke.yml` on main,
-bound to that broker/worker revision and digest. A durable once-only receipt in `ClusterforkOperations`'s
-`validation` partition precedes dispatch. Repeated events, timer ticks, deployments,
-lost dispatch responses and manual reruns cannot authorize another agent turn.
-
-This workflow runs on a fresh hosted VM. Its signed main-workflow OIDC claims,
-revision, App actor, run ID/attempt and receipt are verified before binding it to
-the reserved Cursor identity. Its broker role can claim only that account, save
-its refreshed login, and report validation. It cannot list the pool, claim another
-identity, obtain checkout/publication tokens, or admit repository work. Azure
-storage credentials remain broker-side; the coding VM cannot assume this role.
-
-The probe rechecks authentication, live usage, eligibility and the exact profile,
-then requests permission for one turn with a 120-second deadline. It verifies a
-harmless file creation and a completed read-tool result in a disposable workspace.
-There is no turn retry, repository publication, or spending-setting change. A
-successful fenced release preserves the latest tokens before activating the staged
-record for normal selection. Reclaim can also restore the latest staged cloud login
-before validation; no stale credential upload is needed.
-
-One stable KIAN-922 comment records the credential-free pending/pass/fail result,
-revision, provider/account/profile, model/effort, actual usage when available, and
-run link after discovery. Missing credentials, unknown usage, unavailable profiles,
-setup failures, ambiguous dispatch and missing finish callbacks remain visible
-failures or pending discovery. Reporting failures retain durable retry intent.
-Unit tests and CI use synthetic credentials; they are separate evidence from this
-post-deployment live result. Production Codex capacity is never altered by the probe.
+The former once-only Cursor `21kb60` probe is a [historical record](archive/cursor-validation-20261030.md).
+Its smoke workflow is disabled and is not part of controller deployment or task
+admission. Cutover preserves existing staged/active account metadata and refreshed
+credentials; it neither activates staged accounts nor changes local profile
+visibility. Normal reservations and local restore/reclaim behavior remain separate.

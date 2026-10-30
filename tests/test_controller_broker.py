@@ -1,6 +1,7 @@
 """Worker requests cross real controller transitions and existing fenced accounts."""
 
 from pathlib import Path
+from dataclasses import replace
 import sys
 import tempfile
 import unittest
@@ -37,7 +38,8 @@ class ControllerBrokerTests(unittest.TestCase):
         observed = IssueObserved(self.issue["id"], self.route.project_id, self.route.repository,
                                  self.registry.generation, self.issue["identifier"], True, True,
                                  content_revision=issue_revision(self.issue))
-        self.spec = TaskSpec(issue_revision(self.issue), "b"*40, "a"*40, policy_version(self.registry,self.route), image_digest([]))
+        self.spec = TaskSpec(issue_revision(self.issue), "b"*40, "a"*40, policy_version(self.registry,self.route), image_digest([]),
+                             self.route.repository,self.route.ref,self.route.auto_merge)
         self.controller.apply(observed, now=1000)
         self.view = self.controller.apply(Admit(observed.task_id,self.spec),now=1000)
         self.key = self.view.attempt["attempt_id"]
@@ -90,6 +92,30 @@ class ControllerBrokerTests(unittest.TestCase):
         self.assertEqual(view.session("coding")["account_id"],self.account_b)
         with self.assertRaisesRegex(Rejected,"another account"):
             self.call(Role.CODING,"claim",account_id=self.account_a)
+
+    def test_saved_failure_identity_comes_from_verified_claims(self):
+        self.review()
+        self.preflight(Role.CODING_SELECT,self.account_b)
+        self.call(Role.CODING,'start',protocol=PROTOCOL)
+        self.call(Role.CODING,'finish',status='failed',failure={
+            'operation':'command/git','kind':'command_failed','exit_code':1,
+            'dispatch_key':'b'*64,'run_id':'999','run_attempt':'2'})
+        saved=self.controller.inspect(self.view.task_id).session('coding')['data']['failure']
+        self.assertEqual(saved['dispatch_key'],self.key)
+        self.assertEqual(saved['run_id'],'123')
+        self.assertEqual(saved['run_attempt'],'1')
+
+    def test_mapping_removal_revokes_new_access_but_preserves_fenced_credential_cleanup(self):
+        self.review()
+        self.preflight(Role.CODING_SELECT,self.account_b)
+        self.call(Role.CODING,'start',protocol=PROTOCOL)
+        leased=self.call(Role.CODING,'claim',account_id=self.account_b)
+        self.broker.registry=replace(self.registry,routes={})
+        self.assertEqual(self.call(Role.CODING,'save',account_id=self.account_b,lease=leased['lease'],
+                                   auth=leased['auth'],release=True),{'saved':True})
+        self.assertEqual(self.pool.table.get(self.account_b)[0]['lease_until'],0)
+        with self.assertRaises(Rejected):
+            self.call(Role.CODING,'accounts')
 
     def test_ambiguous_probe_claim_blocks_other_identities_until_its_release(self):
         self.call(Role.REVIEW_SELECT,"start",protocol=PROTOCOL)

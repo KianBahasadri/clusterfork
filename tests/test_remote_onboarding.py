@@ -47,10 +47,34 @@ def states():
 
 def configured(data=None, revision=PIN):
     return onboard.prepare_configuration(data or original_registry(), PROJECT, REPO, BRANCH, TEAM,
-                                         states(), revision, [["python3", "-m", "unittest", "discover"]], [CHECK])
+                                         states(), revision, [["python3", "-m", "unittest", "discover"]], [CHECK],central=False)
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_central_configuration_writes_mapping_and_ci_without_a_target_worker_workflow(self):
+        initial=original_registry()
+        updated=onboard.prepare_configuration(initial,PROJECT,REPO,BRANCH,TEAM,states(),None,
+                                              [['python3','-m','unittest','discover']],[CHECK])
+        row=updated['projects'][-1]
+        self.assertEqual(row['workflow'],'clusterfork-task.yml')
+        self.assertNotIn('worker_revision',row)
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            registry=root/'registry.json'
+            registry.write_text(json.dumps(initial))
+            existing=root/'.github/workflows/clusterfork-worker.yml'
+            existing.parent.mkdir(parents=True)
+            existing.write_text('Existing user workflow stays intact.')
+            changes=onboard.configure(root,registry,initial,PROJECT,updated,install_ci=True,apply=True)
+            self.assertEqual(len(changes),2)
+            self.assertEqual(existing.read_text(),'Existing user workflow stays intact.')
+            self.assertEqual(onboard.configure(root,registry,updated,PROJECT,updated,install_ci=True,apply=True),[])
+        for field in ('validation_commands','required_checks','linear_states'):
+            bad=copy.deepcopy(updated)
+            bad['projects'][-1].pop(field)
+            with self.assertRaises(ValueError):
+                onboard.validate_registry(bad)
+
     def test_different_names_map_by_uuid_and_second_invocation_writes_nothing(self):
         initial = original_registry()
         initial["operator_metadata"] = {"preserve": True}
@@ -407,7 +431,7 @@ class EnrollmentTests(unittest.TestCase):
             patcher = patch.object(onboard, target, replacement)
             patcher.start()
             self.addCleanup(patcher.stop)
-        for patcher in (patch.object(deploy, "health", side_effect=lambda *a: copy.deepcopy(self.health)),
+        for patcher in (patch.object(deploy, "health", side_effect=lambda *a,**kw: copy.deepcopy(self.health)),
                         patch.object(onboard.pilot, "source_digest", return_value="deployed-source")):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -500,6 +524,45 @@ class EnrollmentTests(unittest.TestCase):
         other["ready"] = [LABEL]
         with self.assertRaisesRegex(onboard.SetupError, "lifecycle"):
             onboard.validate_states(self.linear, PROJECT, TEAM, other)
+
+
+class ControllerEnrollmentTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture=EnrollmentTests(methodName='runTest')
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        f=self.fixture
+        f.data=onboard.prepare_configuration(original_registry(),PROJECT,REPO,BRANCH,TEAM,states(),None,
+                                             [['python3','-m','unittest','discover']],[CHECK])
+        f.path.write_text(json.dumps(f.data))
+        f.health.update(mode='single-controller',phase_isolation=True,registry_digest=digest(f.data),
+                        deployment={'revision':PIN,'digest':'deployed-source'})
+        f.health['repository_setup'].update(workflow_repository=WORKER_REPOSITORY,workflow='clusterfork-task.yml',
+                                            runtime_sha=PIN,runtime_tag_verified=True,workflow_verified=True)
+        self.dirty=''
+        for patcher in (patch.object(onboard,'command',side_effect=lambda args,**kw:self.dirty if 'status' in args else PIN),
+                        patch.object(onboard,'local_manifest',return_value={'digest':'deployed-source'})):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_enrollment_uses_central_identity_without_a_target_worker_pin_or_wrapper(self):
+        f=self.fixture
+        result=onboard.verify(f.checkout,f.path,PROJECT,f.linear)
+        self.assertEqual(result['eligible_todo'][0]['identifier'],'OTHER-1')
+        paths=[call.args[0] for call in onboard.gh.call_args_list]
+        self.assertFalse(any('clusterfork-select-account.yml' in path or 'clusterfork-develop.yml' in path for path in paths))
+        self.assertEqual(f.linear.mutations,[])
+
+    def test_unverified_runtime_or_unpublished_inputs_cannot_enroll(self):
+        f=self.fixture
+        f.health['repository_setup']['runtime_tag_verified']=False
+        with self.assertRaises(onboard.SetupError):
+            onboard.verify(f.checkout,f.path,PROJECT,f.linear)
+        f.health['repository_setup']['runtime_tag_verified']=True
+        self.dirty=' M automation/new-controller.py'
+        with self.assertRaisesRegex(onboard.SetupError,'committed runtime'):
+            onboard.verify(f.checkout,f.path,PROJECT,f.linear)
+        self.assertEqual(f.linear.mutations,[])
 
 
 if __name__ == "__main__":

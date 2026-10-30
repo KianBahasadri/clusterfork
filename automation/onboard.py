@@ -24,11 +24,14 @@ from readiness_policy import PROTOCOL, digest
 from worker_core import WORKER_REPOSITORY
 from worker_reporting import STAGE_LABELS
 from worker_version import protocol_at_revision
+from controller.release import local_manifest,INPUT_ROOTS
+from controller.workflows import WORKFLOW as CONTROLLER_WORKFLOW
 
 WORKFLOW = "clusterfork-worker.yml"
 CI_WORKFLOW = "clusterfork-validation.yml"
 CI_CHECK = "Clusterfork validation"
 REGISTRY = pilot.SOURCE / "projects.json"
+CONTROLLER_HEALTH='https://clusterfork-controller-7604cac329.mexicocentral.cloudapp.azure.com/api/health'
 
 
 class SetupError(RuntimeError):
@@ -206,7 +209,7 @@ def mapping(data, project_id):
     return row
 
 
-def prepare_configuration(data, project_id, repo, branch, team_id, states, revision, commands, checks):
+def prepare_configuration(data, project_id, repo, branch, team_id, states, revision, commands, checks, *, central=True):
     result = copy.deepcopy(data)
     validate_registry(result)  # Reject pre-existing duplicate/invalid mappings before editing.
     existing = next((row for row in result["projects"] if row["project_id"] == project_id), None)
@@ -217,6 +220,9 @@ def prepare_configuration(data, project_id, repo, branch, team_id, states, revis
                ready_state_ids=states["ready"], linear_states={k: states[k] for k in ("in_progress", "blocked", "done")},
                worker_revision=revision, validation_commands=commands,
                required_checks=list(dict.fromkeys([*row.get("required_checks", []), *checks])))
+    if central:
+        row['workflow']=CONTROLLER_WORKFLOW
+        row.pop('worker_revision',None)
     if existing is None:
         result["projects"].append(row)
     validate_registry(result)
@@ -228,7 +234,7 @@ def configure(checkout, registry_path, data, project_id, updated, *, install_ci=
     previous = next((row for row in data["projects"] if row["project_id"] == project_id), {})
     changes = []
     workflow_dir = checkout / ".github/workflows"
-    files = [(WORKFLOW, worker_workflow(row["worker_revision"]),
+    files = [] if row['workflow']==CONTROLLER_WORKFLOW else [(WORKFLOW, worker_workflow(row["worker_revision"]),
               worker_workflow(previous["worker_revision"]) if previous.get("worker_revision") else None)]
     if install_ci:
         files.append((CI_WORKFLOW, validation_workflow(row["validation_commands"]),
@@ -360,11 +366,21 @@ def verify(checkout, registry_path, project_id, linear, *, label_id=None):
     registry = Registry.load(registry_path)
     row = mapping(data, project_id)
     repo, branch = repository(checkout)
-    if (repo, branch) != (row["repository"], row["ref"]) or not row.get("worker_revision"):
-        raise SetupError("The explicit mapping must use this checkout's repository, default branch, and a pinned worker")
+    if (repo, branch) != (row["repository"], row["ref"]):
+        raise SetupError("The explicit mapping must use this checkout's repository and default branch")
     validate_states(linear, project_id, row["linear_team_id"], {"ready": row["ready_state_ids"], **row["linear_states"]})
-    health = deploy.health(project_id)
-    if (health.get("missing") != [] or health.get("deployment_paused") is not False
+    health = deploy.health(project_id,endpoint=CONTROLLER_HEALTH)
+    central=health.get('mode')=='single-controller'
+    if central:
+        revision=command(['git','rev-parse','HEAD'],cwd=pilot.ROOT)
+        if command(['git','status','--porcelain','--',*INPUT_ROOTS],cwd=pilot.ROOT):
+            raise SetupError('Deploy the committed runtime inputs before enrollment')
+        if (health.get('missing')!=[] or health.get('deployment_paused') is not False
+                or health.get('serial_admission') is not True or health.get('phase_isolation') is not True
+                or health.get('registry_digest')!=digest(data) or health.get('protocol')!=PROTOCOL
+                or health.get('deployment',{}).get('digest')!=local_manifest(pilot.ROOT,revision)['digest']):
+            raise SetupError('Deploy the exact central registry/runtime, verify its protocol, and resume admissions')
+    elif (not row.get('worker_revision') or health.get("missing") != [] or health.get("deployment_paused") is not False
             or health.get("serial_admission") is not True or health.get("shared_worker_version") != 1
             or health.get("registry_digest") != digest(data)
             or health.get("deployment", {}).get("digest") != pilot.source_digest()
@@ -383,7 +399,7 @@ def verify(checkout, registry_path, project_id, linear, *, label_id=None):
     permissions = gh(f"repos/{repo}/actions/permissions")
     if permissions.get("enabled") is not True:
         raise SetupError("Enable GitHub Actions for the target repository with existing operator access")
-    if permissions.get("allowed_actions") == "selected":
+    if not central and permissions.get("allowed_actions") == "selected":
         policy = gh(f"repos/{repo}/actions/permissions/selected-actions")
         from fnmatch import fnmatchcase
         actions = [f"{WORKER_REPOSITORY}/.github/workflows/{name}@{row['worker_revision']}"
@@ -395,14 +411,22 @@ def verify(checkout, registry_path, project_id, linear, *, label_id=None):
     source = gh(f"repos/{WORKER_REPOSITORY}")
     if source.get("private"):
         raise SetupError("The caller's Actions token cannot check out a private central engine; central runtime read access must be resolved without adding target repository secrets")
-    if evidence.get("workflow_digest") != hashlib.sha256(worker_workflow(row["worker_revision"]).encode()).hexdigest():
+    if central:
+        if (evidence.get('workflow_repository')!=WORKER_REPOSITORY or evidence.get('workflow')!=CONTROLLER_WORKFLOW
+                or evidence.get('runtime_sha')!=health.get('deployment',{}).get('revision')
+                or evidence.get('runtime_tag_verified') is not True or evidence.get('workflow_verified') is not True):
+            raise SetupError('Verify the central task workflow and immutable deployed runtime tag')
+        if gh(f'repos/{WORKER_REPOSITORY}/actions/permissions').get('enabled') is not True:
+            raise SetupError('Enable GitHub Actions for the central task engine')
+    elif evidence.get("workflow_digest") != hashlib.sha256(worker_workflow(row["worker_revision"]).encode()).hexdigest():
         raise SetupError("Publish the expected pinned worker workflow on the configured default branch")
     if evidence.get("workflow_active") is not True:
         raise SetupError("The configured worker workflow must be active in GitHub Actions")
-    if gh(f"repos/{WORKER_REPOSITORY}/commits/{row['worker_revision']}")["sha"] != row["worker_revision"]:
-        raise SetupError("Publish the pinned worker revision in the central repository")
-    for name in ("clusterfork-select-account.yml", "clusterfork-develop.yml"):
-        gh(f"repos/{WORKER_REPOSITORY}/contents/.github/workflows/{name}?ref={row['worker_revision']}")
+    if not central:
+        if gh(f"repos/{WORKER_REPOSITORY}/commits/{row['worker_revision']}")["sha"] != row["worker_revision"]:
+            raise SetupError("Publish the pinned worker revision in the central repository")
+        for name in ("clusterfork-select-account.yml", "clusterfork-develop.yml"):
+            gh(f"repos/{WORKER_REPOSITORY}/contents/.github/workflows/{name}?ref={row['worker_revision']}")
     info = gh(f"repos/{repo}")
     if not row["auto_merge"] or not info.get("allow_auto_merge") or not info.get("allow_squash_merge"):
         raise SetupError("Configure automatic squash merging without overriding the existing merge policy")
@@ -512,8 +536,8 @@ def main():
             }""", {}, "projects"))}
         print(json.dumps({"repository": repo, "default_branch": branch, **result}, indent=2))
     elif args.action == "configure":
-        if not all((args.team_id, args.states_json, args.worker_revision, args.validation_commands)):
-            parser.error("configure requires --team-id, --states-json, --worker-revision, and --validation-commands")
+        if not all((args.team_id, args.states_json, args.validation_commands)):
+            parser.error("configure requires --team-id, --states-json, and --validation-commands")
         checks = args.required_check + ([CI_CHECK] if args.install_ci else [])
         if not checks:
             parser.error("choose existing --required-check names or --install-ci")

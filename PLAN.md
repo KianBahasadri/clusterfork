@@ -2,8 +2,8 @@
 
 Date: 2026-10-30.
 
-Status: implementation in progress. Production admission remains halted during
-the rebuild. Implementation notes and dated evidence live in
+Status: implementation and live acceptance in progress. Scoped acceptance tasks
+are running through the new controller. Implementation notes and dated evidence live in
 [the controller topic](docs/remote-development-controller.md).
 
 ## Scope
@@ -83,7 +83,7 @@ fenced. Credentials stay out of task records and Linear status.
   status reporting through their assigned responsibilities.
 - [x] Test real database constraints, competing admission requests, duplicate/stale
   observations, readiness guards, completion evidence, and reporting independence.
-- [ ] At a verified idle boundary, transfer necessary pending task references and
+- [x] At a verified idle boundary, transfer necessary pending task references and
   queue order, disable the old lifecycle writers, and activate one new controller.
   Preserve account credentials, unresolved publication identities, and audit history.
 
@@ -133,11 +133,11 @@ GitHub post-job cleanup.
   dependencies between the four jobs.
 - [x] Adapt broker authorization and account bindings to the phase-specific roles
   while preserving provider-selection, quota, sandbox, and publication safeguards.
-- [ ] Remove the old readiness-completion-to-coding-dispatch path. Keep subsequent
+- [x] Remove the old readiness-completion-to-coding-dispatch path. Keep subsequent
   attempts permitted only by the controller's existing task policy.
 - [x] Test rejected readiness, wrong-phase requests, duplicate starts, partial
   reruns, separate account assignments, and preservation of runtime files.
-- [ ] Run a real disposable task through readiness, both preflights, coding,
+- [x] Run a real disposable task through readiness, both preflights, coding,
   validation, publication, CI/merge, credential release, post-job cleanup, and
   Linear completion using the ordinary guarded execution path.
 
@@ -161,8 +161,8 @@ completion and the next repository admission.
   before the second starts, without a routine manual step.
 
 These are compatibility requirements for the two changes, not additional redesign
-workstreams. Production admission remains halted while implementation and live
-acceptance are outstanding; deployment cannot clear an independent operator halt.
+workstreams. Scoped acceptance uses the ordinary execution path. Deployment cannot
+clear an independent operator halt.
 
 Current behavior and safeguards are documented in
 [the remote runtime](docs/remote-development.md),

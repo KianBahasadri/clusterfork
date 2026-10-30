@@ -8,21 +8,24 @@ from pathlib import Path
 import socketserver
 import threading
 import time
+from urllib.parse import parse_qs,urlsplit
 
 from .model import Hold, InboxQueued, Rejected, identity
 from .deployment import verify_release
 from dispatch_core import WebhookError, webhook_event
 from worker_core import WorkerError
 from worker_store import verify_oidc
+from diagnostics import context,operation
 
 
 class Application:
     def __init__(self, controller, broker, driver, *, webhook_secret, metadata, verify=verify_oidc, clock=time.time,
-                 resources_idle=lambda: True):
+                 resources_idle=lambda: True,capabilities=None,setup=None):
         self.controller, self.broker, self.driver = controller, broker, driver
         self.webhook_secret, self.metadata = webhook_secret, metadata
         self.verify, self.clock = verify, clock
         self.resources_idle = resources_idle
+        self.capabilities,self.setup=capabilities or {},setup
         self.wakeup = threading.Event()
 
     def drained(self):
@@ -34,10 +37,16 @@ class Application:
         return bool(self.resources_idle())
 
     def handle(self, method, path, headers, body):
-        if method == "GET" and path == "/api/health":
-            return 200,{"mode":"single-controller","deployment":self.metadata,
+        if method == "GET" and urlsplit(path).path == "/api/health":
+            result={**self.capabilities,"mode":"single-controller","deployment":self.metadata,
                         "holds":list(self.controller.holds()),"active_tasks":len(self.controller.active()),
-                        "serial_admission":True,"phase_isolation":True}
+                        "deployment_paused":bool(self.controller.holds()),"serial_admission":True,"phase_isolation":True}
+            query=parse_qs(urlsplit(path).query,keep_blank_values=True)
+            if query:
+                if set(query)!={'setup_project_id'} or len(query['setup_project_id'])!=1 or self.setup is None:
+                    return 400,{'error':'Invalid setup query'}
+                result['repository_setup']=self.setup(query['setup_project_id'][0])
+            return 200,result
         if method != "POST":
             return 404,{"error":"Unknown operation"}
         if path == "/api/linear":
@@ -53,7 +62,11 @@ class Application:
             data = json.loads(body)
             if not isinstance(data,dict):
                 return 400,{"error":"Invalid worker request"}
-            result = self.broker.handle(path.removeprefix("/api/worker/"),claims,data)
+            action=path.removeprefix('/api/worker/')
+            with context(dispatch_key=data.get('dispatch_key'),run_id=str(claims.get('run_id','')),
+                         run_attempt=str(claims.get('run_attempt','')),request_id=data.get('request_id')):
+                with operation('azure/worker',quiet=action in {'heartbeat','save','instructions'}):
+                    result = self.broker.handle(action,claims,data)
             self.wakeup.set()
             return 200,result
         return 404,{"error":"Unknown operation"}

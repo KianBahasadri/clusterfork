@@ -5,25 +5,32 @@ import hashlib
 import json
 import logging
 import time
+from types import SimpleNamespace
 
 from .authorization import release_ref
 from .model import (Admit, ContextObserved, DispatchObserved, EffectUpdated, ExternalObserved,
                     Hold, InboxDone, IssueObserved, Rejected, Retry, TaskSpec, identity)
 from .workflows import ENGINE, WORKFLOW
+from .reporting import attempt_reports,repair_terminal,repair_report,review_report
 from dispatch_core import DispatchError, dependency_status, eligibility
 from issue_images import capture_images, image_digest
 from linear_sync import comment_id, failed_required_checks, pull_outcome
 from readiness_policy import issue_revision, policy_version, redact_review_text
 from worker_reporting import worker_branch
+from worker_reporting import AUTO_REPAIR_LABEL
+from diagnostics import failure_summary
 
 
 class Driver:
-    def __init__(self, controller, registry, linear, github, runtime_sha, *, runtime_ready, clock=time.time, steering=None):
+    def __init__(self, controller, registry, linear, github, runtime_sha, *, runtime_ready, runtime_source_ready=None,
+                 clock=time.time, steering=None):
         self.controller, self.registry = controller, registry
         self.linear, self.github, self.runtime_sha = linear, github, runtime_sha
         self.runtime_ready, self.clock = runtime_ready, clock
+        self.runtime_source_ready=runtime_source_ready or runtime_ready
         self.steering = steering
         self._reported = {}
+        self._comment_signatures = {}
 
     def apply(self, command):
         return self.controller.apply(command, now=self.clock())
@@ -35,8 +42,16 @@ class Driver:
         return route
 
     def runtime_route(self, route, revision):
-        return replace(route, repository=ENGINE, workflow=WORKFLOW,
-                       ref=release_ref(revision).removeprefix("refs/tags/"), worker_revision="")
+        return SimpleNamespace(repository=ENGINE,workflow=WORKFLOW,
+                               ref=release_ref(revision).removeprefix('refs/tags/'),worker_revision='')
+
+    def original_route(self,view):
+        current=self.registry.routes.get(view.project_id)
+        compatible=current and current.repository.lower()==view.repository
+        return SimpleNamespace(project_id=view.project_id,
+                               repository=view.spec.target_repository or (current.repository if compatible else view.repository),
+                               ref=view.spec.target_ref if view.spec.target_repository or not compatible else current.ref,
+                               auto_merge=view.spec.auto_merge if view.spec.target_repository or not compatible else current.auto_merge)
 
     def observe_issue(self, issue, *, known=None):
         if (known and known.phase in {'completed','canceled'}
@@ -50,14 +65,21 @@ class Driver:
                                                reason="Issue is unavailable or removed.", canceled=known.canceled))
             return None
         mapped = self.registry.routes.get((issue.get("project") or {}).get("id"))
+        if known and (not mapped or mapped.project_id!=known.project_id or mapped.repository.lower()!=known.repository):
+            return self.apply(IssueObserved(known.issue_id,known.project_id,known.repository,self.registry.generation,
+                                           known.identifier,False,False,content_revision=issue_revision(issue),
+                                           reason='Issue or repository mapping changed; original execution remains fenced.',
+                                           canceled=known.canceled or issue.get('state',{}).get('type')=='canceled'))
         if not mapped:
             if known:
                 return self.observe_issue(None, known=known)
             return None
-        extra = (mapped.linear_states.in_progress, mapped.linear_states.blocked) if known and known.active and mapped.linear_states else ()
+        previous=json.loads(known.attempt.get('review_result') or 'null') if known else None
+        denied=previous and previous.get('verdict') in {'rejected','needs_clarification'}
+        extra = (mapped.linear_states.in_progress, mapped.linear_states.blocked) if known and known.active and not denied and mapped.linear_states else ()
         route, reason = eligibility(issue, self.registry, additional_state_ids=extra)
-        if known is None and route != mapped:
-            return None
+        if route != mapped and (known is None or known.task_id!=identity(self.registry.generation,mapped.project_id,issue['id'])):
+            return known
         try:
             _, dependency_reason = dependency_status(self.linear.issue_dependencies(issue["id"]))
         except Exception:
@@ -79,7 +101,7 @@ class Driver:
     def spec(self, issue, route, *, runtime_sha=None):
         images = capture_images(issue.get("description"), self.linear.download_image)
         return TaskSpec(issue_revision(issue), self.github.branch_sha(route), runtime_sha or self.runtime_sha,
-                        policy_version(self.registry, route), image_digest(images))
+                        policy_version(self.registry, route), image_digest(images),route.repository,route.ref,route.auto_merge)
 
     def scan(self):
         for project in self.registry.routes:
@@ -171,7 +193,7 @@ class Driver:
             self.apply(EffectUpdated(view.task_id, effect["effect_id"], "done"))
 
     def observe_execution(self, view):
-        target = self.route(view)
+        target = self.original_route(view)
         engine = self.runtime_route(target, view.spec.runtime_sha)
         key = view.attempt["attempt_id"]
         runs = self.github.dispatch_runs(engine, key)
@@ -183,8 +205,11 @@ class Driver:
             all_stopped = latest["status"] == "completed" and all(r["status"] == "completed" for r in runs)
         else:
             if not runs:
-                return  # No run observation does not prove dispatch rejection.
-            recorded = min(runs, key=lambda r:(r["id"],r["run_attempt"]))
+                if view.attempt['dispatch_status']!='rejected':
+                    return  # Missing runs do not resolve an uncertain dispatch.
+                recorded={'id':'','run_attempt':0,'status':'completed','conclusion':'failure'}
+            else:
+                recorded = min(runs, key=lambda r:(r["id"],r["run_attempt"]))
             all_stopped = all(r["status"] == "completed" for r in runs)
         receipt = {"identifier":view.identifier,"target_dispatch_key":view.task_id,
                    "target_branch":worker_branch(view.identifier,view.task_id)}
@@ -203,7 +228,15 @@ class Driver:
 
     def render(self, view):
         attempt = view.attempt
-        body = f"Clusterfork task: {view.phase.value}.\n\n" + redact_review_text(view.reason)
+        reason=view.reason
+        if view.phase=='queued' and not reason:
+            ahead=next((v for v in self.controller.active() if v.repository==view.repository),None)
+            reason=f'Waiting for {ahead.identifier} to complete.' if ahead else 'Waiting for repository admission.'
+        body = f"Clusterfork task: {view.phase.value}.\n\n" + redact_review_text(reason)
+        session=view.session('coding')
+        diagnostic=(session['data'].get('failure') if session else None)
+        if diagnostic and view.phase in {'held','published'}:
+            body+='\n\n'+failure_summary(diagnostic)
         if view.phase=='queued' or view.phase=='held' and attempt.get('retry_kind'):
             for owner,reason in sorted(self.controller.holds().items()):
                 body+='\n\n'+redact_review_text(reason or f'Admission paused by {owner}.')
@@ -211,14 +244,6 @@ class Driver:
             body += f"\n\n[Worker run](https://github.com/{ENGINE}/actions/runs/{attempt['run_id']}/attempts/{attempt['run_attempt']})"
         if attempt.get("pull_request"):
             body += f"\n\n[Pull request]({attempt['pull_request']})"
-        review = json.loads(attempt.get("review_result") or "null")
-        if review and review.get("verdict") in {"needs_clarification", "rejected"}:
-            body += "\n\n" + review["summary"]
-            for blocker in review.get("blockers", []):
-                body += f"\n\n{blocker['decision']}\nConsequence: {blocker['consequence']}\nQuestion: {blocker['question']}"
-            body += "\n\nAddress the feedback, then move the issue back to Todo for a new review."
-            if self.registry.notify_user_url:
-                body += "\n\n" + self.registry.notify_user_url
         return body
 
     def report(self):
@@ -229,29 +254,61 @@ class Driver:
             try:
                 view = self.controller.inspect(task_id)
                 route = self.route(view)
+                issue=self.linear.issue(view.issue_id)
+                project=(issue or {}).get('project') or {}
+                if not issue or project.get('id')!=view.project_id or issue.get('archivedAt') or project.get('archivedAt'):
+                    continue
+                reviews=self.controller.review_history(task_id)
+                for review in reviews:
+                    self.comment(view.issue_id,comment_id(review['attempt_id'],'controller-review'),review_report(review,self.registry))
+                for execution in self.controller.execution_history(task_id):
+                    attempt=execution['attempt']
+                    for kind,body in attempt_reports(execution,self.registry):
+                        key=comment_id(attempt['attempt_id'],f"{attempt['run_id']}:{attempt['run_attempt']}:{kind}")
+                        self.comment(view.issue_id,key,body)
+                if repair_terminal(view):
+                    self.comment(view.issue_id,comment_id(task_id,'auto-repair-report'),
+                                 repair_report(view,self.controller.repair_parent(task_id),self.registry))
                 body = self.render(view)
                 signature = hashlib.sha256(json.dumps([body,view.active,view.phase.value,
-                                                       view.attempt.get("stage")]).encode()).hexdigest()
+                                                       view.attempt.get("stage"),view.attempt.get('attempt_id'),
+                                                       view.attempt.get('attempt_kind'),view.eligible,
+                                                       repair_terminal(view)]).encode()).hexdigest()
                 if self._reported.get(task_id) != signature:
-                    issue = self.linear.issue(view.issue_id)
                     if issue and (issue.get("project") or {}).get("id") == view.project_id:
                         self.linear.status_comment(view.issue_id,comment_id(task_id,"controller-status"),body)
                         review = json.loads(view.attempt.get("review_result") or "null")
                         denied = review and review.get("verdict") in {"rejected","needs_clarification"}
                         self.linear.set_selected(view.issue_id,view.active and not denied)
                         self.linear.set_queued(view.issue_id,view.phase=="queued" and view.eligible)
-                        self.linear.set_clarification(view.issue_id,bool(review and review.get("verdict")=="needs_clarification"))
+                        clarification=reviews and reviews[-1]['result'].get('verdict')=='needs_clarification'
+                        self.linear.set_clarification(view.issue_id,bool(clarification and view.phase not in {'completed','canceled','skipped'}))
+                        self.linear.set_label(view.issue_id,AUTO_REPAIR_LABEL,
+                                              view.attempt.get('attempt_kind')=='repair' and not repair_terminal(view))
                         stage = view.attempt.get("stage") if view.phase=="executing" else "review" if view.phase=="published" else None
+                        if view.phase=='held' and view.attempt.get('retry_kind')=='capacity':
+                            stage='waiting_for_quota'
                         self.linear.set_stage(view.issue_id,stage)
-                        if route.linear_states and issue.get("state",{}).get("id") in {*route.ready_state_ids,route.linear_states.in_progress,route.linear_states.blocked}:
+                        enrolled=any(label.get('name')==self.registry.enrollment_label for label in project.get('labels',{}).get('nodes',[]))
+                        if enrolled and route.linear_states and issue.get("state",{}).get("id") in {*route.ready_state_ids,route.linear_states.in_progress,route.linear_states.blocked}:
                             desired = (route.linear_states.done if view.phase=="completed" else
                                        route.linear_states.blocked if view.phase=="held" and not view.attempt.get("retry_kind") else
-                                       route.linear_states.in_progress if view.phase in {"executing","published"} or view.attempt.get("attempt_kind")=="repair" else
+                                       route.linear_states.in_progress if view.phase in {"executing","published"} or (
+                                           view.attempt.get("attempt_kind")=="repair" and view.attempt.get('retry_kind')!='capacity') else
                                        route.ready_state_ids[0])
                             if issue["state"]["id"] != desired and view.phase != "canceled":
                                 self.linear.set_state(view.issue_id,desired)
+                                if denied and desired==route.linear_states.blocked:
+                                    self.observe_issue({**issue,'state':{**issue['state'],'id':desired}},known=view)
                     self._reported[task_id] = signature
                 for effect in effects:
                     self.apply(EffectUpdated(task_id,effect["effect_id"],"done"))
             except Exception as exc:
                 logging.warning("Controller reporting deferred for %s (%s)",task_id[:12],type(exc).__name__)
+
+    def comment(self,issue_id,key,body):
+        signature=hashlib.sha256(body.encode()).hexdigest()
+        if self._comment_signatures.get(key)!=signature:
+            if self.linear.status_comment(issue_id,key,body) is False:
+                raise RuntimeError('Linear report was not acknowledged')
+            self._comment_signatures[key]=signature

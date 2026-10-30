@@ -21,6 +21,7 @@ from controller.core import Controller
 from controller.server import Application,HTTPServer,OperatorServer,http_handler
 from controller.store import Database
 from worker_core import WorkerError
+from diagnostics import CONTEXT
 
 
 class ControllerServerTests(unittest.TestCase):
@@ -78,6 +79,30 @@ class ControllerServerTests(unittest.TestCase):
             self.assertEqual(json.load(response),{"running":True})
             self.assertEqual(response.headers["Cache-Control"],"no-store")
         self.broker.handle.assert_called_once_with("heartbeat",{"verified":"fixture"},{"dispatch_key":"fake"})
+
+    def test_setup_query_is_bounded_and_does_not_change_task_state(self):
+        self.app.setup=Mock(return_value={'app_access':True,'workflow_repository':'Owner/Engine'})
+        with self.request('/api/health?setup_project_id=fixture') as response:
+            self.assertTrue(json.load(response)['repository_setup']['app_access'])
+        self.app.setup.assert_called_once_with('fixture')
+        self.assertEqual(self.controller.tasks(),())
+        with self.assertRaises(HTTPError) as caught:
+            self.request('/api/health?setup_project_id=one&setup_project_id=two')
+        self.assertEqual(caught.exception.code,400)
+        caught.exception.close()
+
+    def test_worker_log_context_uses_verified_run_identity_and_is_cleared(self):
+        previous=dict(CONTEXT.get())
+        self.verify.side_effect=None
+        self.verify.return_value={'run_id':'123','run_attempt':'1'}
+        self.broker.handle.side_effect=lambda *_args:dict(CONTEXT.get())
+        status,result=self.app.handle('POST','/api/worker/heartbeat',{},json.dumps({
+            'dispatch_key':'a'*64,'run_id':'999','run_attempt':'2',
+            'request_id':'12345678-1234-1234-1234-123456789abc'}).encode())
+        self.assertEqual(status,200)
+        self.assertEqual(result['run_id'],'123')
+        self.assertEqual(result['run_attempt'],'1')
+        self.assertEqual(CONTEXT.get(),previous)
 
     def test_operator_commands_use_private_socket_and_cannot_clear_another_hold(self):
         path=self.path/"operator.sock"

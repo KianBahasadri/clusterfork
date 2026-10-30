@@ -22,6 +22,7 @@ class ControllerDeploymentTests(unittest.TestCase):
         self.addCleanup(self.fixture.doCleanups)
         self.resources_idle=Mock(return_value=True)
         self.broker,self.driver=Mock(),Mock()
+        self.driver.runtime_source_ready=self.driver.runtime_ready
         self.app=Application(self.fixture.controller,self.broker,self.driver,webhook_secret='fixture',
                              metadata={'revision':'a'*40},resources_idle=self.resources_idle)
 

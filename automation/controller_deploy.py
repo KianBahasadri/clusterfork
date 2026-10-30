@@ -174,6 +174,8 @@ def deploy(revision,*,initialize=False,history=None):
     infrastructure.init(ROOT/'infra/azure')
     infrastructure.plan(ROOT/'infra/azure',apply=True)
     config=json.loads(command(['terraform','output','-json','controller_config'],cwd=ROOT/'infra/azure'))
+    if os.environ.get('GITHUB_RUN_ID'):
+        config['deployment_run_id']=os.environ['GITHUB_RUN_ID']
     if not still_required(manifest):
         print('A newer runtime superseded this release before installation.')
         return
@@ -205,8 +207,10 @@ def deploy(revision,*,initialize=False,history=None):
         operator('resume',owner=HOLD)
         operator('reconcile')
         print(f'Verified controller {revision}; deployment hold cleared. Operator holds are preserved.')
+        return True
     else:
         print('Verified release; a newer runtime keeps new admission held.')
+        return False
 
 
 def main():
@@ -220,8 +224,11 @@ def main():
     os.umask(0o077)
     if args.initialize!=bool(args.migration_file):
         parser.error('Initial installation requires --migration-file; routine deployment preserves existing history')
-    deploy(args.revision,initialize=args.initialize,
-           history=json.loads(args.migration_file.read_text()) if args.migration_file else None)
+    verified=deploy(args.revision,initialize=args.initialize,
+                    history=json.loads(args.migration_file.read_text()) if args.migration_file else None)
+    if os.environ.get('GITHUB_OUTPUT'):
+        with open(os.environ['GITHUB_OUTPUT'],'a') as output:
+            output.write('proceed='+str(bool(verified)).lower()+'\n')
 
 
 if __name__=='__main__':

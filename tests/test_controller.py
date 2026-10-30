@@ -129,6 +129,14 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(second.active)
         self.assertFalse(self.controller.inspect(urgent_blocked.task_id).active)
 
+    def test_a_waiting_issue_that_leaves_and_rejoins_gets_new_fifo_position(self):
+        first=self.issue(1)
+        self.apply(replace(first,eligible=False))
+        second=self.issue(2)
+        self.apply(first)
+        self.assertEqual([view.task_id for view in self.controller.waiting()],[second.task_id,first.task_id])
+        self.assertTrue(self.apply(Admit(second.task_id,SPEC)).active)
+
     def test_parallel_admission_commits_one_grant_and_one_dispatch_intent(self):
         issue = self.issue()
         def attempt(_):

@@ -20,11 +20,13 @@ from controller.instructions import Instructions
 from controller.model import Initialize,LegacyImported
 from controller.release import RequiredRuntime
 from controller.server import Application,HTTPServer,OperatorServer,http_handler
+from controller.setup import evidence
 from controller.store import Database
 from dispatch_clients import GitHub,Linear
 from dispatch_core import Registry
 from worker_core import Accounts,ProviderAccounts
 from worker_store import AzureTable
+from readiness_policy import PROTOCOL,digest
 
 
 def secret(credential,vault,name):
@@ -65,14 +67,17 @@ def build(config,manifest,database,credential,*,table_factory=None,history=None)
         controller.apply(LegacyImported(history['generation'],tuple(history['records']),history['source_digest'],
                                          tuple(tuple(h) for h in history.get('operator_holds',()))),now=time.time())
     instructions=Instructions(controller,registry,table("ClusterforkInstructions","instructions"),linear,clock=time.time)
+    required=RequiredRuntime(github,manifest,deployment_run_id=config.get('deployment_run_id'))
     driver=Driver(controller,registry,linear,github,manifest["revision"],
-                  runtime_ready=RequiredRuntime(github,manifest),steering=instructions)
+                  runtime_ready=required,runtime_source_ready=required.source_matches,steering=instructions)
     broker=Broker(controller,registry,accounts,linear,github,refresh=driver.refresh,steering=instructions)
     def resources_idle():
         return not any(row.get("lease_until",0)>time.time()
                        for pool in accounts.pools.values() for row in pool.table.list())
     return Application(controller,broker,driver,webhook_secret=secret(credential,vault,"linear-webhook-secret"),
-                       metadata=manifest,resources_idle=resources_idle)
+                       metadata=manifest,resources_idle=resources_idle,
+                       capabilities={'protocol':PROTOCOL,'registry_digest':digest(json.loads((Path(__file__).parent/'azure/projects.json').read_text())),
+                                     'missing':[]},setup=lambda project:evidence(registry,github,manifest,project))
 
 
 def serve(args):

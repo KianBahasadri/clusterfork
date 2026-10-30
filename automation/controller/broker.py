@@ -5,6 +5,7 @@ import json
 import re
 import time
 from uuid import UUID
+from types import SimpleNamespace
 
 from .authorization import authorize_job, verify_review_job
 from .model import Authorize, Assign, ExhaustAccount, Finish, Progress, Rejected, Review, Role, SessionUpdated, Start
@@ -44,9 +45,10 @@ class Broker:
         if view.attempt["attempt_id"] != key:
             raise Rejected("This dispatch was superseded")
         route = self.registry.routes.get(view.project_id)
-        if route is None:
+        identity_route=(SimpleNamespace(project_id=view.project_id,repository=view.repository) if action=='save' else route)
+        if identity_route is None:
             raise Rejected("Target project is no longer mapped")
-        role = authorize_job(claims, view, route, action)
+        role = authorize_job(claims, view, identity_route, action)
         run_id, run_attempt = str(claims["run_id"]), int(claims["run_attempt"])
         if view.attempt["run_id"] and (view.attempt["run_id"], view.attempt["run_attempt"]) != (run_id, run_attempt):
             raise Rejected("Request belongs to another GitHub attempt")
@@ -93,6 +95,8 @@ class Broker:
             fields = {"heartbeat_until": self.clock()+120}
             if phase=="coding" and not view.session(phase)["data"].get("steering_started_at"):
                 fields["steering_started_at"] = self.clock()
+                profile=execution_profiles(self.registry,{'assigned_account_id':view.session(phase)['account_id']})
+                fields.update({key:profile[key] for key in ('provider','model','effort')})
             self.metadata(view, phase, **fields)
             return self.config(view, route, role, issue, images)
 
@@ -132,7 +136,8 @@ class Broker:
                 raise Rejected("Preflight cannot report an agent result")
             fields = {}
             if status == "failed" and "failure" in data:
-                fields["failure"] = validate_failure(data["failure"])
+                fields["failure"] = {**validate_failure(data["failure"]),'dispatch_key':key,
+                                     'run_id':run_id,'run_attempt':str(run_attempt)}
             if status == "waiting_for_quota" and "quota_wait" in data:
                 fields["quota_wait"] = validate_quota_wait(data["quota_wait"])
             if "wip_branch" in data or "wip_commit_sha" in data:
@@ -256,7 +261,6 @@ class Broker:
             segments = list(session["data"].get("usage_segments", []))
             if not segments or segments[-1]["account_id"] != session["account_id"]:
                 segments.append({"account_id": session["account_id"], "provider": account_provider(session["account_id"]), "usage_before": before})
-                fields["usage_segments"] = segments
             if not session["data"].get("usage_before"):
                 fields.update(usage_before=before, original_account_id=session["account_id"])
             fields["account_failover"] = False
@@ -265,10 +269,17 @@ class Broker:
                 if not isinstance(value, str) or len(value) > 200:
                     raise Rejected("Invalid account label")
                 fields[key] = value
+                segments[-1].setdefault(key,value)
+            fields['usage_segments']=segments
         if "usage_after" in data:
             if data.get("usage_account_id", session["account_id"]) != session["account_id"]:
                 raise Rejected("Usage measurement belongs to another account")
             fields["usage_after"] = validate_usage(data["usage_after"])
+            segments=list(fields.get('usage_segments',session['data'].get('usage_segments',[])))
+            if not segments or segments[-1]['account_id']!=session['account_id']:
+                raise Rejected('Account selection must be recorded before a final usage reading')
+            segments[-1]={**segments[-1],'usage_after':fields['usage_after']}
+            fields['usage_segments']=segments
         if stage == "publishing":
             fields["steering_closed"] = True
             if data.get("repair_validation_passed") is True:

@@ -48,4 +48,21 @@ jobs:
       - name: Install controller deployment dependencies
         run: python -m pip install -r automation/controller/requirements.txt
       - name: Test, drain, deploy and verify the required controller runtime
+        id: controller
         run: python automation/controller_deploy.py --revision "$GITHUB_SHA"
+      - name: Package the stateless Linear webhook ingress
+        if: steps.controller.outputs.proceed == 'true'
+        run: python automation/webhook_relay/release.py package --revision "$GITHUB_SHA"
+      - name: Fence legacy triggers and activate the retained ingress host
+        if: steps.controller.outputs.proceed == 'true'
+        run: python automation/webhook_relay/release.py prepare --revision "$GITHUB_SHA"
+      - name: Preserve the existing Linear webhook URL
+        if: steps.controller.outputs.proceed == 'true'
+        uses: Azure/functions-action@c5060b3b8bb1ebbcb531abd00c822ecbaa8ea656 # v1
+        with:
+          app-name: clusterfork-dispatch-7604cac329
+          package: /tmp/clusterfork-webhook.zip
+          remote-build: true
+      - name: Verify the stateless webhook ingress
+        if: steps.controller.outputs.proceed == 'true'
+        run: python automation/webhook_relay/release.py verify --revision "$GITHUB_SHA"

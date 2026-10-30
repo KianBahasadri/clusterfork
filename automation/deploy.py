@@ -31,9 +31,9 @@ def github(path):
         return json.load(response)
 
 
-def health(setup_project_id=None):
+def health(setup_project_id=None, *, endpoint=HEALTH):
     try:
-        url = HEALTH + (f"?setup_project_id={uuid_string(setup_project_id)}" if setup_project_id else "")
+        url = endpoint + (f"?setup_project_id={uuid_string(setup_project_id)}" if setup_project_id else "")
         with urlopen(url, timeout=15) as response:
             return json.load(response)
     except HTTPError as exc:

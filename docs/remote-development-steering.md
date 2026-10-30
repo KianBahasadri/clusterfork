@@ -16,13 +16,13 @@ the app identity. To trust other people, add their Linear user UUIDs to the top-
 do not grant steering permission.
 
 Enable **Issue comments** (`Comment`) alongside Issues/Projects in the existing
-[Linear webhook](https://linear.app/developers/webhooks). Azure fetches current
+[Linear webhook](https://linear.app/developers/webhooks). The controller fetches current
 comment authors and text itself. While coding, the authenticated runner polls
-Azure every **10 seconds**, delivering at most one instruction per poll. Normal
+the broker every **10 seconds**, delivering at most one instruction per poll. Normal
 latency is one poll plus service and agent safe-point latency, even without
 Comment webhooks. Initialization/account selection can queue instructions until
-coding starts. The shared **2-minute**
-timer follows the [runtime reconciliation rules](remote-development.md#components-and-dispatch).
+coding starts. Controller observations run every 30 seconds; they also reconcile
+instruction delivery and reporting independently of task lifecycle.
 
 Azure Table `ClusterforkInstructions` (partition `instructions`) freezes the first
 observed addressed comment, its issue, dispatch key, exact GitHub run/attempt, and

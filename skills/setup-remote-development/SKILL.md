@@ -1,6 +1,6 @@
 ---
 name: setup-remote-development
-description: Enroll the current GitHub repository in Clusterfork's shared Linear remote development system, or repair an existing enrollment. Connect an explicitly selected existing Linear project, install pinned shared worker workflows and validation, verify the deployed mapping, and enable the project label last. Use for repository onboarding; ordinary Todo issue execution needs no setup skill.
+description: Enroll the current GitHub repository in Clusterfork's shared Linear remote development system, or repair an existing enrollment. Connect an explicitly selected existing Linear project, configure validation, verify the deployed controller mapping and central task workflow, and enable the project label last. Use for repository onboarding; ordinary Todo issue execution needs no setup skill.
 ---
 
 # Set up remote development
@@ -33,7 +33,7 @@ It does not log in or change authentication. App-access verification happens
 inside the deployed broker. Keep App keys and account credentials there; never
 retrieve them for this skill or put credentials, broker account data, or new
 long-lived secrets in the target repository. Reuse the existing App installation,
-Function App, dispatcher, account pools, model pins, and quota policy.
+controller, account pools, model pins, and quota policy.
 
 ## Choose the binding before writing
 
@@ -62,28 +62,27 @@ Function App, dispatcher, account pools, model pins, and quota policy.
 
 ## Prepare and publish configuration
 
-Choose a **published, tested full commit SHA** containing both
-`clusterfork-select-account.yml` and `clusterfork-develop.yml`. This pins the
-reusable workflows and the engine to the same revision. Never use a moving
-branch/tag as the worker version.
+The deployed controller selects its tested immutable runtime and dispatches
+`clusterfork-task.yml` in the central repository. Target repositories do not need
+a worker workflow or a per-repository runtime pin. Their checkout still resolves
+the current default branch for each admitted task.
 
 Preview the changes with the discovered values. JSON arguments below illustrate
 the shape; replace all UUIDs and commands with the repository's real values:
 
 ```bash
 python3 automation/onboard.py configure --checkout /path/to/target \
-  --project-id PROJECT_UUID --team-id TEAM_UUID --worker-revision FULL_COMMIT_SHA \
+  --project-id PROJECT_UUID --team-id TEAM_UUID \
   --states-json '{"ready":["TODO_UUID"],"in_progress":"STARTED_UUID","blocked":"ATTENTION_UUID","done":"DONE_UUID"}' \
   --validation-commands '[["npm","ci"],["npm","test"]]' \
   --required-check 'Repository tests'
 ```
 
-Use `--apply` to write the previewed local changes. They are the target's small
-`.github/workflows/clusterfork-worker.yml` and the central
-`automation/azure/projects.json` mapping. Existing required check names accumulate;
+Use `--apply` to write the previewed central `automation/azure/projects.json`
+mapping and optional validation CI. Existing required check names accumulate;
 other mappings, the registry generation, model/quota policy, and unrelated files
-are preserved. Workflow collisions stop before writes; reconcile them explicitly
-instead of overwriting user configuration.
+are preserved. Existing target worker workflows are left intact. Validation
+workflow collisions stop before writes; reconcile them explicitly.
 
 If suitable CI is missing, use `--install-ci` in place of `--required-check`.
 It adds `clusterfork-validation.yml` and its `Clusterfork validation` check,
@@ -92,12 +91,10 @@ runner. Check that those commands cover real behavior and fit that environment.
 Keep existing CI. If another toolchain or workflow structure is necessary, add
 the appropriate repository CI and pass its actual check names instead.
 
-Publish the target workflow/CI and central mapping through their normal tested
-review/merge processes when authorized. The worker workflow must exist on the
-configured default branch before enrollment; the Azure packager does not publish
-it. Respect Workflows write permission for the **installation**, not just the App
-registration. Do not request new account secrets or Administration permission
-for the App.
+Publish any target CI changes and the central mapping through their normal tested
+review/merge processes when authorized. Respect the existing App installation's
+grants, including Workflows write access where repository workflow changes are
+permitted. Do not request new account secrets or Administration permission.
 
 Preview and apply merge setup with the operator's existing repository access:
 
@@ -117,13 +114,13 @@ Provision missing team issue labels and an ungrouped **project** label named
 labels first; do not duplicate them. The helper reports missing names and accepts
 `--enrollment-label-id UUID` when label names are ambiguous. Do not apply the
 project label yet. If webhook team coverage needs updating, update the existing
-webhook; keep the shared timer and service.
+webhook; keep the shared controller and its reconciliation loop.
 
 ## Deploy, verify, then enable
 
 Deploy the central mapping through the existing `deploy-azure.yml` process after
 its exact-revision CI passes. It pauses admissions and drains workers before
-updating the shared dispatcher, reconciles the existing Terraform resources, then
+updating the controller, reconciles the existing Terraform resources, then
 verifies health and resumes. Do not deploy around a held pause or cancel active
 workers. Do not provision a new Azure service or reset `generation` to make setup
 take effect.
@@ -132,9 +129,9 @@ take effect.
 python3 automation/onboard.py verify --checkout /path/to/target --project-id PROJECT_UUID
 ```
 
-Verification checks the exact deployed registry/source digests, pinned engine's
-protocol, serial admission, App installation grants, Actions availability/policy,
-default-branch worker content, automatic merge settings, effective required checks,
+Verification checks the exact deployed registry/runtime digests, protocol,
+serial admission and phase isolation, App installation grants, central Actions
+availability, central workflow content and runtime tag, automatic merge settings, effective required checks,
 successful current CI, and Linear state/label availability. It lists existing
 Todo candidates by identifier/title. Show this list to the user before enabling;
 dependencies, prior durable receipts, quota, and readiness review still determine
@@ -150,25 +147,20 @@ python3 automation/onboard.py enroll --checkout /path/to/target --project-id PRO
 `enroll` repeats verification, adds the project label without replacing other
 labels, and reads it back. Existing labels and identical local/merge configuration
 are no-ops on repeat invocation. Report the project UUID, repository/default
-branch, worker pin, validation/checks, verified deployment, and enrollment result.
+branch, verified runtime, validation/checks, verified deployment, and enrollment result.
 When any access/check is missing, keep enrollment disabled and report the exact
 remaining operator action, affected resource/permission, and verification command.
 Prepared files or a healthy broker alone do not establish completed enrollment.
 
-## Updating a pin or repairing setup
+## Updating the runtime or repairing setup
 
-Shared implementation changes are published once in the central repository.
-Re-run `configure` with a new tested SHA, publish only the small caller workflow
-change and its central mapping update, and use the existing drained deployment
-process. Hold admissions before changing an enrolled caller's pin so dispatches
-cannot race the mapping update. The OIDC job revision must equal that mapping's pin. If the readiness
-protocol changes, coordinate all enrolled pins while admissions are paused;
-keep the pause until every caller and the broker are compatible, then verify
-before resuming. Do not rerun `enroll` as a way to repair a protocol mismatch.
-Deployment checks every enrolled pin's contract and installed caller before
-resuming; a mismatched or unpublished caller keeps the pause held. The current
-shared checkout uses Clusterfork's public central source; a private source needs
-runtime read access for the caller, which the helper reports before enrollment.
+Shared implementation changes are published once in the central repository and
+deployed automatically between tasks. The controller and all four jobs use the
+same immutable release; the next task waits for required runtime deployment and
+verification. Do not update target worker pins, republish caller workflows, or
+rerun `enroll` for an ordinary runtime update. Operator holds remain independent
+of deployment holds. The current installer uses Clusterfork's public central
+source; changing that access model requires resolving deployment access first.
 
 For an already enrolled project, preserve its label and durable receipts while
 repairing configuration. Never bump the registry generation, recreate resources,

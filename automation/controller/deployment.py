@@ -7,7 +7,7 @@ from dispatch_clients import RequestError
 
 
 def verify_release(application,revision):
-    if revision!=application.metadata.get('revision') or not application.driver.runtime_ready():
+    if revision!=application.metadata.get('revision') or not application.driver.runtime_source_ready():
         raise Rejected('The requested runtime is not the verified required release')
     ref=release_ref(revision)
     github=application.broker.github

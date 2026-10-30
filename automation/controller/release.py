@@ -40,10 +40,27 @@ def local_manifest(root,revision):
 
 
 class RequiredRuntime:
-    def __init__(self,github,manifest,*,branch="main"):
+    def __init__(self,github,manifest,*,branch="main",deployment_run_id=None):
         self.github,self.manifest,self.branch=github,manifest,branch
+        if deployment_run_id is not None and not re.fullmatch('[1-9][0-9]*',str(deployment_run_id)):
+            raise ValueError('Invalid deployment run identity')
+        self.deployment_run_id=deployment_run_id
+        self._deployment_passed=deployment_run_id is None
 
     def __call__(self):
+        if not self.source_matches():
+            return False
+        if not self._deployment_passed:
+            token=self.github.installation_token(ENGINE,permissions={'actions':'read'})
+            run=self.github.request(f'https://api.github.com/repos/{ENGINE}/actions/runs/{self.deployment_run_id}',token=f'Bearer {token}')
+            self._deployment_passed=(str(run.get('id'))==str(self.deployment_run_id)
+                                     and run.get('head_sha')==self.manifest['revision'] and run.get('head_branch')==self.branch
+                                     and run.get('path')=='.github/workflows/deploy-azure.yml'
+                                     and run.get('event') in {'push','workflow_dispatch'}
+                                     and run.get('status')=='completed' and run.get('conclusion')=='success')
+        return self._deployment_passed
+
+    def source_matches(self):
         token=self.github.installation_token(ENGINE,permissions={"contents":"read"})
         commit=self.github.request(f"https://api.github.com/repos/{ENGINE}/commits/{quote(self.branch,safe='')}",token=f"Bearer {token}")
         tree=self.github.request(f"https://api.github.com/repos/{ENGINE}/git/trees/{commit['commit']['tree']['sha']}",token=f"Bearer {token}")

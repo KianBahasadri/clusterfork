@@ -35,7 +35,9 @@
         "blocked": "26518242-2ca2-486c-884c-f9a829c3988f",
         "done": "aa75d2cb-3bba-44e4-a1c8-d875533a600a"
       },
-      "validation_commands": [["python3", "-m", "unittest", "discover", "-s", "tests", "-q"]]
+      "validation_commands": [["python3", "-m", "unittest", "discover", "-s", "tests", "-q"]],
+      "linear_team_id": "62b50878-78f5-4a97-912e-2198fed3836a",
+      "required_checks": ["test", "routing-runtime"]
     }
   ]
 }

@@ -1,8 +1,8 @@
 # Remote development setup
 
 Read [the runtime overview](remote-development.md) before enrolling a project.
-Cloud automation is independent of the dotfile installer. Infrastructure is
-managed through [Terraform](azure-infrastructure.md); tests and packaging remain local.
+Cloud automation is independent of the dotfile installer. [Azure infrastructure](azure-infrastructure.md)
+owns provisioning, identities, persistent state and secret references.
 
 ## Local configuration
 
@@ -20,7 +20,7 @@ precedence. `--env-file PATH` selects another file.
 | `LINEAR_WEBHOOK_SECRET` | Linear signing secret, filled after initial deployment |
 
 Enable **Client credentials tokens** on the `Clusterfork` OAuth2 Application
-and configure its client ID and secret. The dispatcher exchanges them at
+and configure its client ID and secret. The controller exchanges them at
 `https://api.linear.app/oauth/token` as form data with `grant_type=client_credentials`
 and `scope=read,write,comments:create,issues:create`, then uses the returned Bearer
 token. Tokens stay in process memory, refresh five minutes before `expires_in`
@@ -28,192 +28,87 @@ token. Tokens stay in process memory, refresh five minutes before `expires_in`
 on a GraphQL HTTP 401. Configured OAuth failures do not fall back to the personal
 key. See [Linear's client credentials protocol](https://linear.app/developers/oauth-2-0-authentication#client-credentials-tokens).
 
-Without both OAuth values, the dispatcher uses `LINEAR_API_KEY` unchanged. Create
+Without both OAuth values, the controller uses `LINEAR_API_KEY` unchanged. Create
 that fallback personal key under account Security & access with Read, Write, and
 Create comments access for the mapped team. Webhook creation is a separate
 workspace-admin operation. Store the PEM outside the checkout with mode 0600.
 The helper reports only set/blank credential status and config metadata; secrets,
 access tokens, and remote response bodies are excluded from errors and logs.
 
-Before enrolling a team with the app actor, create its team-scoped issue labels
-using a user account that can manage labels. The app can apply existing labels,
-but label creation can be rejected with `FORBIDDEN`; that rejection also prevents
-automatic repair from creating its sub-issue. Provision all of these names:
-`clusterfork: queued`, `clusterfork: selected`, `clusterfork: needs clarification`,
-`clusterfork: auto-repair`, and the seven stage names in
-`automation/azure/worker_reporting.py`'s `STAGE_LABELS`, including
-`clusterfork: waiting for quota`. Keep each label independently selectable.
-If repair already has a durable intent, create the missing label and reconcile;
-retain its original issue UUID, dispatch receipt, queue position, and repair budget.
+Before enrolling a team with the app actor, provision independent team issue
+labels using an existing label operator. The app can apply labels but may lack
+permission to create them. Required names are `clusterfork: queued`,
+`clusterfork: selected`, `clusterfork: needs clarification`, `clusterfork: auto-repair`
+and the seven stage names in `automation/azure/worker_reporting.py`. Keep existing
+labels and task/repair identity when repairing a missing label.
 
-```bash
-python3 automation/pilot.py check
-```
+`python3 automation/pilot.py check` validates local inputs and the registry. It
+does not launch a worker, verify live quota, or provision Azure. Its legacy source
+packager is not the controller deployment path.
 
-`check` validates required local values and the registry. It reports workflow
-filenames/refs, model/effort, enrollment label, and quota policy. Worker mappings
-report `Codex worker`; mappings all using `clusterfork-pilot.yml` report
-`routing pilot (no coding agent)`. It neither launches a worker nor verifies a
-live agent login. Linear configuration is complete with either both OAuth values
-or an API key; `/api/health` uses the same rule. A missing webhook secret is allowed
-for the initial local check but required by runtime health. Other missing required
-values fail the check.
+## GitHub App and mappings
 
-## GitHub App and repository
+Use the existing GitHub App installation on the central engine and each target.
+It needs Actions, Contents and Pull requests access for dispatch, checkout,
+publication and check observation. Workflows write access is required when edits
+under `.github/workflows/` are permitted. Updated installation grants must be
+approved separately from App registration changes. Administration is not needed
+for the App, and credentials stay outside target repositories.
 
-1. [Register a GitHub App](https://github.com/settings/apps/new) for the owning
-   account. Use the repository URL as its homepage, leave OAuth/callback/setup
-   URLs empty, and disable the App's GitHub webhook.
-2. Grant Repository **Actions**, **Contents**, and **Pull requests** read/write;
-   Metadata read is automatic. The dispatcher needs Actions write, and worker
-   publication needs Contents/Pull requests write. To permit automated edits under
-   `.github/workflows/`, also grant **Workflows** read/write and approve the updated
-   installation permissions. Changing the App registration alone does not update
-   an installation's grant. Administration access is not required.
-3. Record the numeric App ID and download a private key into the paths above.
-4. Install the App on the selected repositories. Approve expanded permissions
-   if updating an existing installation. The dispatcher discovers installation
-   IDs and issues short-lived repository-scoped tokens.
-5. Place the worker workflow on each mapping's default target branch before
-   dispatching. The deploy helper does not publish workflows.
-6. Enable repository auto-merge and branch protection with the required CI checks
-   for mappings using automatic merges. Alternatively set `auto_merge: false`.
-   The runner refuses to request automatic merging without observable required
-   checks; it does not bypass branch protection.
+`automation/azure/projects.json` maps explicit Linear project UUIDs to target
+repositories/default branches, ready/lifecycle states, validation argv arrays and
+merge policy. New central mappings name `clusterfork-task.yml` and required checks;
+the controller chooses its own verified runtime version. Legacy workflow/pin
+fields are tolerated for existing mappings and do not select the new controller's
+execution workflow. A generation change permits eligible issues to run again; it
+is not a retry mechanism.
 
-`automation/azure/projects.json` maps Linear project UUIDs to repository,
-workflow, ref, ready-state IDs, lifecycle-state IDs, validation argv arrays,
-and merge policy. Shared-worker routes also carry an immutable `worker_revision`
-and `required_checks`. Another repository needs both an App installation grant and
-its mapping/workflow. A generation change permits every eligible issue to run
-again; it is not a targeted retry switch.
+The central repository's `CLUSTERFORK_BROKER_URL` Actions variable is
+`https://clusterfork-controller-7604cac329.mexicocentral.cloudapp.azure.com/api/worker`.
+The worker independently allowlists the broker host. Relocation must update these
+contracts as well as Terraform; creating a new host alone does not relocate workers.
 
 ## Repository onboarding
 
-Invoke the repository [setup-remote-development skill](../skills/setup-remote-development/SKILL.md)
-in the target checkout. Its detailed discovery and enrollment procedure is
-canonical in that skill. The helper lives in the central source checkout and
-needs no dotfile installation in the target. It reuses the existing GitHub/Linear
-operator access; it never changes authentication or installs repository secrets.
+The repository [setup-remote-development skill](../skills/setup-remote-development/SKILL.md)
+is canonical for detailed discovery, configuration and enrollment steps. The
+helper runs from the central source checkout against an explicit target checkout
+and reuses existing operator access. No dotfile install, new account secret,
+per-target worker workflow or per-target runtime pin is required.
 
-`automation/onboard.py` provides these operations:
-
-| Operation | Result |
+| Helper action | Purpose |
 | --- | --- |
-| `discover --checkout PATH` | Reads GitHub origin/default branch and existing Linear project UUIDs; `--project-id UUID` discovers its teams and states |
-| `configure --checkout PATH --project-id UUID ...` | Previews the explicit UUID mapping and thin worker workflow; `--apply` writes local files |
-| `configure ... --install-ci` | Also prepares a separate validation workflow using the configured argv commands; existing CI is preserved |
-| `merge --checkout PATH --project-id UUID` | Previews automatic squash merge settings and additive required-check protection; `--apply` writes with existing operator permissions |
-| `verify --checkout PATH --project-id UUID` | Verifies the published/deployed setup and lists existing eligible Todo candidates without enrolling |
-| `enroll --checkout PATH --project-id UUID` | Repeats verification, applies the project label last, and verifies it by reading it back |
+| `discover` | Find the checkout's real GitHub identity and existing Linear project/team/state UUIDs |
+| `configure` | Preview/write the central mapping and optional validation CI, preserving unrelated files |
+| `merge` | Add required checks and automatic squash-merge settings without replacing existing protections |
+| `verify` | Check deployed mapping/runtime, central workflow/tag, App access, current target CI and Linear states/labels |
+| `enroll` | Repeat verification and add the existing enrollment project label last |
 
-There is no project-name/repository-name inference. Select the existing project
-and team before preparing configuration, and supply discovered state UUIDs.
-Validation commands must test meaningful repository behavior and include needed
-dependency setup. Existing CI can supply required checks; the optional generated
-workflow runs the commands on Ubuntu with Python 3.12 and Node 22 for pushes/PRs.
-Merge setup retains all existing protection and uses a branch ruleset with no
-bypass actors to add missing checks. The App still needs no Administration grant;
-changing repository settings requires the existing repository operator's access.
-Missing access or a conflicting existing workflow/ruleset leaves setup incomplete.
+The deployed controller supplies read-only `repository_setup` evidence from
+`/api/health?setup_project_id=UUID`. It identifies the target/ref and current
+branch, existing App grants, central task workflow and immutable runtime tag.
+It never returns installation tokens or App credentials. Enrollment verifies
+committed runtime inputs and exact registry digest; uncommitted/unpublished
+runtime changes, missing grants, inactive workflow or failed current CI keep it
+disabled. Todo candidates are shown before applying the label.
 
-Configuration is an upsert keyed by project UUID. It refuses to silently remap
-that UUID to another repository, retains other mappings and policy, and writes
-nothing on an identical rerun. Existing required checks accumulate instead of
-being removed. Enrollment adds the existing project label with `projectAddLabel`,
-preserving unrelated labels, and is a no-op when it is already applied. Setup
-does not change the generation, issue states, receipts, or cloud resources.
+Project and repository names may differ. The binding uses the selected UUID,
+not name similarity. Existing project enrollment is additive/idempotent; repair
+preserves its label, completed identities, queue references and credential pool.
 
-### Shared worker versions and caller identity
+## Deployment and identity
 
-New repositories carry only `clusterfork-worker.yml`, which calls the central
-`clusterfork-select-account.yml` and `clusterfork-develop.yml` at a full commit
-SHA. Each called workflow checks that its OIDC `job_workflow_sha` equals the
-engine revision before checking out central code. The engine stays at
-`.clusterfork-runtime` beside the caller's `.clusterfork-target` checkout for the
-whole job, so GitHub's post-job cleanup can still load its local setup actions.
-The worker runs from the caller checkout; validation, agent edits, and
-publication operate there. No implementation files are
-copied into enrolled repositories. Clusterfork's own caller uses its current
-commit with local reusable workflow references.
+[Automatic deployment](remote-development-deployments.md) owns testing, draining,
+installation, version verification and independent holds. [Azure infrastructure](azure-infrastructure.md)
+owns the resources and Terraform plan gate. Target-only changes reach subsequent
+tasks through current checkouts; required runtime changes deploy automatically.
 
-The broker authorizes the actual caller repository, caller workflow/ref, hosted
-runner, event, run identity, and durable dispatch. For a shared route it also
-requires the exact central reusable workflow/ref and pinned `job_workflow_sha`.
-It never grants access from the central worker identity alone. Account preflight
-retains its restricted signed-workflow role; development receives only the bound
-account. Every new route uses the existing repository serial queue and readiness
-review. GitHub documents the distinction between caller claims and
-[`job_workflow_ref`](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-with-reusable-workflows).
+The `azure-production` GitHub environment permits main and has no required
+reviewers. Its `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID`
+variables identify the existing user-assigned deployment identity. Federation and
+Azure role grants remain in Terraform.
 
-Publish shared worker updates once, then update the thin callers' SHA references
-and their central `worker_revision` mappings through normal validation/review.
-The helper verifies the contract loaded from that exact git revision against the
-deployed broker's protocol. A protocol-changing update needs coordinated caller
-pins while the existing deployment pause is held; resume only after compatibility
-is restored. Deployment checks each enrolled pin's contract before packaging and
-verifies each installed caller before resuming. Hold admissions before changing
-an enrolled caller's pin. Existing pins continue to select their original implementation.
-The shared engine checkout uses Clusterfork's public source. A private central
-source needs runtime read access for the caller's Actions token; verification
-reports that missing access instead of treating workflow sharing alone as sufficient.
-
-### Enrollment evidence
-
-Health exposes `shared_worker_version`, the readiness protocol, and the canonical
-registry digest. `GET /api/health?setup_project_id=UUID` additionally has the
-broker verify App installation grants and the active worker workflow's content
-digest on that mapped branch. It returns only setup metadata; the App key and
-short-lived installation tokens remain inside the broker. During a deployment
-pause, `workers_drained` checks all deployed mapped repositories through the App.
-The deployment job uses this evidence for external repositories instead of
-retrieving keys or assuming its own `GITHUB_TOKEN` can read them.
-
-Before enabling a project, `verify` requires the complete local registry/source
-digests to match the deployed package, a compatible pinned protocol, resumed
-serial admission, active Actions/workflows, approved App grants, effective required
-checks, successful current default-branch CI, and required Linear states/labels.
-Publish target workflows before deploying their central mapping. Deploy the
-shared-worker support itself before enrolling another repository. Keep the label
-off until verification passes, and show the existing Todo candidates first.
-Candidates still pass through dependencies, durable dispatch deduplication, quota,
-and readiness review. If access is missing, report the precise operator step;
-do not claim enrollment succeeded. Once enabled, project label + Todo suffices.
-
-## Azure deployment
-
-[Azure infrastructure](azure-infrastructure.md) owns Terraform provisioning,
-existing-resource adoption, protected state, runtime credentials, and cloud roles.
-Use that workflow for resource and configuration changes. `pilot.py` remains a
-local configuration check and source packager; it no longer provisions Azure or
-writes app settings.
-
-Routine source updates use [automatic deployment](remote-development.md#automatic-deployments).
-The workflow reconciles Terraform before deploying the tested source package.
-The package uses an explicit allowlist and excludes `.env`, PEMs, auth caches,
-and unrelated local keys.
-
-The existing deployment uses:
-
-| Resource | Name |
-| --- | --- |
-| Function App | `clusterfork-dispatch-7604cac329` |
-| Storage account | `cfdispatch7604cac329` |
-| Resource group | `rg-clusterfork-automation` |
-
-Relocating it also requires updating the broker URL allowlist in
-`automation/worker.py`, the workflow's broker URL, and storage/group names in
-`automation/accounts.py`. Creating new resources alone does not relocate workers.
-
-## Automatic deployment identity
-
-The `azure-production` GitHub environment permits only main and has no required
-reviewers. Its `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID`
-variables identify the user-assigned deployment identity. Azure permissions and
-GitHub OIDC federation are declared in Terraform; see
-[credentials and identity](azure-infrastructure.md#credentials-and-identity).
-
-Run a recovery against the current tested main with:
+A manual recovery of tested current main uses the same workflow:
 
 ```bash
 gh workflow run deploy-azure.yml --repo KianBahasadri/clusterfork --ref main
@@ -221,54 +116,29 @@ gh workflow run deploy-azure.yml --repo KianBahasadri/clusterfork --ref main
 
 ## Linear webhook and first run
 
-1. Create one Linear webhook under workspace **API → Webhooks**, targeting the
-   printed `/api/linear` URL. Select the mapped team and **Issues** and
-   **Projects** resource types.
-2. Store its signing secret through the Terraform credential workflow.
-3. Check `/api/health` returns 200 and `"missing": []`. This verifies runtime
-   configuration presence, not account quota or an end-to-end coding run.
-4. Inspect the mapped project's ready issues before adding the **project label**
-   `clusterfork-symphony`: enrollment can dispatch existing ready issues. The
-   current Clusterfork mapping uses the Kian team's Todo UUID.
-5. Enroll Codex accounts using [remote account setup](remote-development-accounts.md).
-   Create or select a Todo issue and inspect **Clusterfork Codex worker** in
-   [Actions](https://github.com/KianBahasadri/clusterfork/actions). Its summary
-   reports the model, outcome, merge policy, and PR link. The authenticated
-   broker supplies issue text, not workflow inputs.
-6. A second issue edit should not create another dispatch for the same registry
-   generation. Read [retry behavior](remote-development.md#retries-and-troubleshooting)
-   before trying to rerun it.
+The existing webhook URL is retained through stateless signed forwarding; its
+signing secret and selected resources remain unchanged. A webhook already pointed
+directly at the controller uses the same intake contract. New webhook creation is
+a workspace-admin operation, not a routine repository/task step. Select the mapped
+team and Issue/Project resources, with Comment/IssueRelation notifications where
+available. Active steering and periodic project observations also recover missed
+notifications.
+
+After verified configuration, add the project enrollment label
+`clusterfork-symphony` last. The current mapping uses the Kian team's Todo UUID.
+Enroll accounts using [remote account setup](remote-development-accounts.md), then
+use ordinary Todo issues. Inspect **Clusterfork task** in GitHub Actions and the
+controller's task comment in Linear. Health metadata alone does not prove a live
+agent login or a complete coding/merge run. See [dated controller evidence](remote-development-controller.md#live-acceptance-2026-10-30).
 
 ## Local validation
 
-The [repository suite](conventions.md#local-validation) covers routing, worker
-identity, leases, quotas, publication/recovery, and lifecycle reconciliation.
-It uses fixtures/mocks rather than live cloud writes. Packaging is also local:
+The [repository suite](conventions.md#local-validation) covers task constraints,
+signed roles, provider contracts, leases, publication, steering, reporting and
+migration. It is separate from live cloud acceptance. Run:
 
 ```bash
-python3 automation/pilot.py package --output /tmp/clusterfork-function.zip
+python3 -m pip install -r automation/controller/requirements.txt
+python3 -m unittest discover -s tests -q
+terraform fmt -check -recursive infra
 ```
-
-Runtime dependencies are pinned in `automation/azure/requirements.txt`.
-The shared `setup-codex` action installs Python 3.12 and these dependencies before
-account selection or agent execution, so configured worker validation uses the
-same packages as CI. Installation failures stop setup before leasing an account.
-CI also imports the Function App to index all five handlers. Reproduce in an isolated environment:
-
-```bash
-python3.12 -m venv /tmp/clusterfork-routing-venv
-/tmp/clusterfork-routing-venv/bin/pip install -r automation/azure/requirements.txt
-/tmp/clusterfork-routing-venv/bin/python - <<'PY'
-import sys
-sys.path.insert(0, 'automation/azure')
-import function_app
-names = {fn.get_function_name() for fn in function_app.app.get_functions()}
-assert names == {'health', 'linear_webhook', 'route_event', 'reconcile', 'worker'}, names
-print('All five functions indexed')
-PY
-```
-
-Protocol references: [Linear webhooks](https://linear.app/developers/webhooks),
-[GitHub workflow dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event),
-[Azure queues](https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-storage-queue-trigger),
-[Flex Consumption](https://learn.microsoft.com/en-us/azure/azure-functions/flex-consumption-plan).

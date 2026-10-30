@@ -71,6 +71,41 @@ class ControllerReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"Incomplete"):
             RequiredRuntime(github,manifest)()
 
+    def deployment_fixture(self):
+        revision=self.git('rev-parse','HEAD')
+        manifest=local_manifest(self.root,revision)
+        entries=[{'path':root,'type':'tree','sha':self.git('rev-parse',f'{revision}:{root}')} for root in INPUT_ROOTS]
+        source=[{'commit':{'tree':{'sha':'a'*40}}},{'tree':entries,'truncated':False}]
+        run={'id':123,'head_sha':revision,'head_branch':'main','path':'.github/workflows/deploy-azure.yml',
+             'event':'push','status':'completed','conclusion':'success'}
+        return manifest,source,run
+
+    def test_private_source_verification_does_not_deadlock_the_full_deployment_gate(self):
+        manifest,source,run=self.deployment_fixture()
+        github=Mock()
+        required=RequiredRuntime(github,manifest,deployment_run_id='123')
+        github.request.side_effect=source
+        self.assertTrue(required.source_matches())
+        github.request.side_effect=[*source,{**run,'status':'in_progress','conclusion':None}]
+        self.assertFalse(required())
+        github.request.side_effect=[*source,{**run,'conclusion':'failure'}]
+        self.assertFalse(required())
+        github.request.side_effect=[*source,run]
+        self.assertTrue(required())
+        # The exact successful installed version remains verified; target trees
+        # are still checked on each admission, including after target-only merges.
+        github.request.side_effect=source
+        self.assertTrue(required())
+
+    def test_a_successful_other_job_branch_or_revision_cannot_authorize_runtime_admission(self):
+        manifest,source,run=self.deployment_fixture()
+        for fields in ({'id':124},{'head_sha':'b'*40},{'head_branch':'feature'},
+                       {'path':'.github/workflows/test.yml'},{'event':'pull_request'}):
+            with self.subTest(fields=fields):
+                github=Mock()
+                github.request.side_effect=[*source,{**run,**fields}]
+                self.assertFalse(RequiredRuntime(github,manifest,deployment_run_id='123')())
+
 
 if __name__=="__main__":
     unittest.main()

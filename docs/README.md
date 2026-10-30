@@ -39,6 +39,8 @@ where files go; skill-specific instructions stay in each `skills/<name>/SKILL.md
 
 ## Historical investigations
 
+- Retired Functions coordinator: [runtime](archive/remote-development-functions-runtime.md), [lifecycle](archive/remote-development-functions-lifecycle.md), [queues](archive/remote-development-functions-queue.md), [deployment](archive/remote-development-functions-deployments.md), [diagnostics](archive/remote-development-functions-observability.md)
+
 These records are dated evidence and decisions, not current service or client
 compatibility claims. Recheck upstream behavior before adopting an old workaround.
 

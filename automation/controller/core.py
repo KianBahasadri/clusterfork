@@ -37,6 +37,21 @@ class Controller:
             session=db.execute("SELECT data FROM sessions WHERE attempt_id=? AND phase='coding'", (previous["attempt_id"],)).fetchone()
             return {**previous,"data":json.loads(session[0]) if session else {}}
 
+    def execution_history(self, task_id):
+        with self.database.transaction() as db:
+            result=[]
+            for row in db.execute("SELECT * FROM attempts WHERE task_id=? ORDER BY ordinal",(task_id,)).fetchall():
+                session=db.execute("SELECT * FROM sessions WHERE attempt_id=? AND phase='coding'",(row['attempt_id'],)).fetchone()
+                if session:
+                    result.append({'attempt':dict(row),'session':{**dict(session),'data':json.loads(session['data'])}})
+            return tuple(result)
+
+    def review_history(self,task_id):
+        with self.database.transaction() as db:
+            return tuple({**dict(row),'result':json.loads(row['review_result'])} for row in db.execute(
+                'SELECT attempt_id,run_id,run_attempt,review_result FROM attempts WHERE task_id=? AND review_result IS NOT NULL ORDER BY ordinal',
+                (task_id,)).fetchall())
+
     def repair_parent(self, task_id):
         with self.database.transaction() as db:
             row=db.execute("SELECT * FROM attempts WHERE task_id=? AND coding_started=1 AND attempt_kind!='repair' ORDER BY ordinal DESC LIMIT 1",(task_id,)).fetchone()
@@ -87,6 +102,13 @@ class Controller:
             if isinstance(command, Initialize):
                 if db.execute("INSERT OR IGNORE INTO metadata VALUES ('initialized','1')").rowcount:
                     db.execute("INSERT OR IGNORE INTO holds VALUES ('operator:rebuild','Production admission is held for rebuild acceptance.')")
+                if db.execute("INSERT OR IGNORE INTO metadata VALUES ('projection:usage-and-repair-v1','1')").rowcount:
+                    rows=db.execute("SELECT task_id FROM tasks WHERE EXISTS (SELECT 1 FROM attempts a "
+                                    "WHERE a.task_id=tasks.task_id AND (a.review_result IS NOT NULL OR EXISTS "
+                                    "(SELECT 1 FROM sessions s WHERE s.attempt_id=a.attempt_id AND s.phase='coding')))").fetchall()
+                    for row in rows:
+                        db.execute('UPDATE tasks SET revision=revision+1 WHERE task_id=?',(row[0],))
+                        self._report(db,row[0])
                 return None
             if isinstance(command, LegacyImported):
                 from .migration import import_history
@@ -234,6 +256,8 @@ class Controller:
             active = db.execute("SELECT 1 FROM grants WHERE task_id=?", (command.task_id,)).fetchone()
             if not active and task["phase"] in {"queued", "skipped"}:
                 changes.update(phase="queued" if command.eligible else "skipped", reason=command.reason)
+                if task['phase']=='skipped' and command.eligible:
+                    changes['sequence']=db.execute('SELECT MAX(sequence)+1 FROM tasks').fetchone()[0]
             if not active and task["phase"] == "held" and not task["eligible"] and command.eligible:
                 changes.update(phase="queued", reason="Resubmitted for a new readiness review.",
                                sequence=db.execute("SELECT MAX(sequence)+1 FROM tasks").fetchone()[0])
@@ -263,6 +287,8 @@ class Controller:
     def _new_attempt(self, db, task, spec, now, *, initial=False, kind="normal"):
         if not isinstance(spec, TaskSpec) or spec.content_revision != task["content_revision"]:
             raise Rejected("Task specification is stale")
+        if spec.target_repository and spec.target_repository.lower()!=task['repository']:
+            raise Rejected('Task specification belongs to another repository')
         if not task["eligible"] or not task["dependencies_ready"] or db.execute("SELECT 1 FROM holds LIMIT 1").fetchone():
             raise Rejected("New admissions are held")
         if initial:
@@ -284,6 +310,8 @@ class Controller:
                      current_attempt=attempt_id, reason="Waiting for GitHub review preflight.")
         db.execute("INSERT INTO effects(effect_id,task_id,kind,payload) VALUES(?,?,?,?)",
                    (attempt_id, task["task_id"], "dispatch", json.dumps({"attempt_id": attempt_id})))
+        if initial:
+            self._queue_reports(db,task['repository'])
 
     def _start(self, db, task, attempt, command, now):
         self._authority(db, task)
@@ -317,6 +345,10 @@ class Controller:
                         if not session["agent_started"] else session["deadline"])
             db.execute("UPDATE sessions SET agent_started=1,deadline=? WHERE attempt_id=? AND phase=?",
                        (deadline, command.attempt_id, command.role.phase))
+            if not session['agent_started']:
+                data={**json.loads(session['data']),'agent_started_at':now}
+                db.execute("UPDATE sessions SET data=? WHERE attempt_id=? AND phase=?",
+                           (json.dumps(data),command.attempt_id,command.role.phase))
 
     def _session(self, db, task, attempt, command):
         allowed = {"thread_id", "turn_id", "steering_closed", "account_email", "account_plan",
@@ -324,6 +356,7 @@ class Controller:
                    "account_failover", "probe_account_id", "released_account_id", "heartbeat_until",
                    "repair_validation_passed", "repair_result", "failure", "quota_wait", "wip_branch", "wip_commit_sha",
                    "original_account_id", "steering_started_at"}
+        allowed.update({'provider','model','effort'})
         if command.phase not in {"review", "coding"} or not isinstance(command.fields, dict) or set(command.fields) - allowed:
             raise Rejected("Unsupported execution metadata")
         row = db.execute("SELECT data FROM sessions WHERE attempt_id=? AND phase=?", (command.attempt_id, command.phase)).fetchone()
@@ -430,6 +463,9 @@ class Controller:
             raise Rejected("Invalid publication reference")
         # A callback records a result; it never proves the Actions cleanup stopped.
         db.execute("UPDATE sessions SET finished=1 WHERE attempt_id=? AND phase=?", (command.attempt_id, command.phase))
+        data={**json.loads(session['data']),'finished_at':now}
+        db.execute("UPDATE sessions SET data=? WHERE attempt_id=? AND phase=?",
+                   (json.dumps(data),command.attempt_id,command.phase))
         if command.phase == "coding":
             db.execute("UPDATE attempts SET agent_outcome=?,pull_request=? WHERE attempt_id=?",
                        (command.outcome, command.pull_request or attempt["pull_request"], command.attempt_id))
@@ -459,6 +495,7 @@ class Controller:
                 and not attempt["coding_started"] and command.pull_state == "absent"):
             self._update(db, task, phase="queued", reason="Waiting for unresolved prerequisites.")
             db.execute("DELETE FROM grants WHERE task_id=?", (task["task_id"],))
+            self._queue_reports(db,task['repository'])
             return
         no_changes = command.pull_state == "absent" and attempt["agent_outcome"] == "completed" and command.conclusion == "success"
         result = json.loads(attempt["review_result"] or "null")
@@ -467,6 +504,7 @@ class Controller:
             phase = "completed" if command.pull_state == "merged" or no_changes else "held" if review_denied else "canceled"
             self._update(db, task, phase=phase, reason=command.reason or ("Pull request merged." if command.pull_state == "merged" else "Verified task outcome."))
             db.execute("DELETE FROM grants WHERE task_id=?", (task["task_id"],))
+            self._queue_reports(db,task['repository'])
         elif command.pull_state == "open" and not command.repairable:
             self._update(db, task, phase="published", reason=command.reason or "Waiting for PR checks and merge.")
         else:
@@ -497,6 +535,12 @@ class Controller:
             self._update(db, task, repair_used=1)
         kind="repair" if attempt["attempt_kind"]=="repair" else command.kind
         self._new_attempt(db, task, command.spec, now, kind=kind)
+
+    def _queue_reports(self,db,repository):
+        rows=db.execute("SELECT task_id FROM tasks WHERE repository=? AND phase='queued' AND eligible=1",(repository,)).fetchall()
+        for row in rows:
+            db.execute('UPDATE tasks SET revision=revision+1 WHERE task_id=?',(row[0],))
+            self._report(db,row[0])
 
     @staticmethod
     def _report(db, task_id):

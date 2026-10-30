@@ -1,8 +1,8 @@
 # Single controller implementation
 
-This implementation is in progress. The production runtime is still the
-[Functions implementation](remote-development.md); the files below have not been
-cut over or accepted against live task execution.
+The controller is live on its Azure VM. Four acceptance tasks have completed
+through the ordinary guarded path, including an automatic runtime rollout.
+Compatibility projections and the retained webhook ingress are being finalized.
 
 ## Task ownership
 
@@ -58,6 +58,12 @@ required-runtime predicate before admitting or retrying work. A deployment-owned
 hold cannot clear an operator hold. Rendering Linear status is derived from task
 views and does not make execution decisions.
 
+The admitted specification retains the original repository, branch and merge
+policy. Removing or changing a mapping revokes new execution access while the
+driver continues observing the original run and PR until ownership can be
+released. Archived or moved issues retain pending reports without changing their
+human-managed state.
+
 `server.py` exposes authenticated webhook intake, OIDC worker requests, and public
 bounded health metadata. Verified webhook IDs are committed in the local inbox
 before acknowledgement. Operator commands use a local mode-0600 Unix socket;
@@ -69,29 +75,11 @@ holds. Hold changes create fresh reporting intent for waiting tasks. Project sca
 ignore unseen ineligible issues and retain terminal task identity without adding
 new historical completion comments.
 
-`release.py` packages the exact committed runtime inputs and records their Git
-tree digest. Required runtime changes prevent new admission until deployment;
-target-only changes still reach the next task through its fresh checkout. Local
-worktree files, including untracked credentials, are not packaged.
+`release.py` supplies committed runtime identity. [Deployment](remote-development-deployments.md)
+owns runtime-input selection, rollout, verified draining, stateless webhook ingress
+and independent operator/deployment holds.
 
 ## Deployment and migration
-
-`controller_deploy.py` waits for exact-revision CI and checks the required runtime
-trees against current main, allowing newer target-only commits. Its private
-deployment hold stops new attempts while current work drains. Stopped, verified
-retries can retain their repository grant across deployment; an unresolved run,
-open PR, or live credential lease prevents the service switch. Terraform owns the
-host resources described in [Azure infrastructure](azure-infrastructure.md).
-
-The installer verifies VM identity, uses the dedicated persistent disk, installs
-the exact committed runtime and dependencies into a separate release directory,
-and reloads the written unit before stopping the service, including on first
-installation. The stop must succeed and its state must be verified as `inactive`
-before switching the current release. HTTPS and private
-operator verification must pass before clearing the deployment's own hold. The
-running application creates/verifies its exact runtime tag before dispatch can
-resume. Operator holds remain intact. The deployment workflow is still disabled
-pending the initial cutover and live acceptance.
 
 `migration.py` imports verified idle terminal queue history through a controller
 command. It proves each legacy generation/key binding, retains branch/publication
@@ -129,9 +117,8 @@ adapter must cryptographically verify the JWT first. Coding requires a successfu
 `review / run` job from the exact GitHub attempt; an output boolean alone cannot
 grant permission. Account bindings are separate for review and coding.
 
-These new workflows are not yet registered for production admission. The current
-worker now emits the review scheduling output that their graph consumes; existing
-worker behavior otherwise remains under its current broker.
+The controller dispatches the combined workflow at its verified runtime tag.
+The worker emits the review scheduling output that the native graph consumes.
 
 ## Verification
 
@@ -156,8 +143,9 @@ Deployment tests exercise grant/PR/lease draining and runtime tag identity.
 Migration tests reopen real databases and prove completed tasks cannot execute
 again or inherit old credentials.
 
-The VM and persistent disk were provisioned on 2026-10-30. Service installation,
-initial migration, and live acceptance remain outstanding. Unit tests are not
+The VM and persistent disk were provisioned on 2026-10-30. Service installation
+and initial migration are complete. Final compatibility deployment and its full
+workflow-completion acceptance remain outstanding. Unit tests alone are not
 cutover evidence.
 
 ## Rebuild baseline
@@ -173,3 +161,37 @@ A private backup of the seven task/control tables was saved under
 `~/.local/state/clusterfork/rebuild/baseline-20261030.json`. It excludes the account
 credential table. Revalidate current external state before migration; these are
 dated baseline observations, not an ongoing health claim.
+
+## Live acceptance, 2026-10-30
+
+The installed `abc53b7a4665b5193f88577b71ed24d0abdfd8e9` release was verified over
+HTTPS and by its immutable runtime tag. The legacy Function App was stopped before
+the controller started. The persistent disk contains 41 imported historical queue
+records. All four credential rows matched their pre-cutover auth fingerprints.
+Operator holds survived installation and were released explicitly for acceptance.
+
+KIAN-933 used [run 41130619289](https://github.com/KianBahasadri/clusterfork/actions/runs/41130619289).
+All four jobs and their real post-job cleanup steps passed.
+[PR 41](https://github.com/KianBahasadri/clusterfork/pull/41) merged automatically
+as `0b9f9473f5bdab14e54cb1b56e9a174fba033951`; the controller then marked it Done.
+The review and coding phase assignments both recorded credential release.
+
+KIAN-934 used [run 41131982035](https://github.com/KianBahasadri/clusterfork/actions/runs/41131982035).
+Its saved target context is exactly KIAN-933's merge commit while its runtime
+remained pinned to the installed release.
+[PR 42](https://github.com/KianBahasadri/clusterfork/pull/42) merged automatically
+as `fb0a8c842bdd1cfd24d30eb0f3c6c11e51fc83a1`; Linear reached Done without manual
+queue advancement.
+
+KIAN-935 used [run 41133214559](https://github.com/KianBahasadri/clusterfork/actions/runs/41133214559).
+[PR 43](https://github.com/KianBahasadri/clusterfork/pull/43) merged the installer
+stop-verification fix as `9aa974df9d84ee6fa281cea512fdbea888d6a034`.
+[Deployment 41134535439](https://github.com/KianBahasadri/clusterfork/actions/runs/41134535439)
+automatically installed and verified that runtime.
+
+KIAN-936 used [run 41135013810](https://github.com/KianBahasadri/clusterfork/actions/runs/41135013810).
+Its saved runtime and target context both match `9aa974df9d84ee6fa281cea512fdbea888d6a034`.
+All four jobs passed, [PR 44](https://github.com/KianBahasadri/clusterfork/pull/44)
+merged automatically, and Linear reached Done. This proved active-runtime and
+checkout freshness; the final gate additionally waits for the whole deployment
+workflow, including ingress verification, before admitting the following task.

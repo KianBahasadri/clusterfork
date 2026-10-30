@@ -1,6 +1,7 @@
 """Task sequences cross the same controller/broker/driver seams used in production."""
 
 import copy
+from dataclasses import replace
 from pathlib import Path
 import sys
 import unittest
@@ -95,6 +96,41 @@ class ControllerDriverTests(unittest.TestCase):
         self.assertEqual(f.github.dispatch.call_count,2)
         self.assertNotIn("deployment:required-runtime",f.controller.holds())
 
+    def test_waiting_status_tracks_the_new_owner_when_the_previous_task_finishes(self):
+        third=copy.deepcopy(self.second_issue)
+        third.update(id=str(UUID(int=3)),identifier='KIAN-3',createdAt='2026-10-30T00:00:02Z')
+        self.issues[third['id']]=third
+        self.publish_and_merge_first()
+        self.driver.tick()
+        comments=[call.args[2] for call in self.fixture.linear.status_comment.call_args_list if call.args[0]==third['id']]
+        self.assertIn('Waiting for KIAN-2 to complete.',comments[-1])
+        self.assertNotIn('Waiting for KIAN-1',comments[-1])
+
+    def test_removed_mapping_still_observes_the_original_pr_and_stopped_execution(self):
+        self.publish_and_merge_first()
+        self.driver.registry=replace(self.fixture.registry,routes={})
+        with self.assertLogs(level='WARNING'):
+            self.driver.tick()
+        view=self.fixture.controller.inspect(self.fixture.view.task_id)
+        self.assertEqual(view.phase,'completed')
+        self.assertFalse(view.active)
+        target=self.fixture.github.worker_pull.call_args.args[0]
+        self.assertEqual(target.repository,self.fixture.route.repository)
+        self.assertEqual(target.ref,self.fixture.route.ref)
+
+    def test_cancellation_after_project_move_waits_for_original_jobs_to_stop(self):
+        f=self.fixture
+        self.driver.tick(scan=True)
+        f.issue['project']={'id':str(UUID(int=999))}
+        f.issue['state']={'id':'canceled-state','type':'canceled'}
+        self.driver.tick()
+        self.assertTrue(f.controller.inspect(f.view.task_id).active)
+        self.runs[f.key].update(status='completed',conclusion='cancelled')
+        self.driver.tick()
+        view=f.controller.inspect(f.view.task_id)
+        self.assertEqual(view.phase,'canceled')
+        self.assertFalse(view.active)
+
     def test_lost_dispatch_reply_is_discovered_without_another_dispatch(self):
         f=self.fixture
         real_dispatch=f.github.dispatch.side_effect
@@ -107,6 +143,19 @@ class ControllerDriverTests(unittest.TestCase):
         self.driver.tick()
         self.assertEqual(f.github.dispatch.call_count,1)
         self.assertEqual(f.controller.inspect(f.view.task_id).attempt["run_id"],"123")
+
+    def test_canceled_definitely_rejected_dispatch_checks_publication_and_releases_the_queue(self):
+        f=self.fixture
+        f.github.dispatch.side_effect=DispatchError('rejected',uncertain=False)
+        self.driver.tick(scan=True)
+        f.issue['state']={'id':'canceled-state','type':'canceled'}
+        self.driver.tick()
+        view=f.controller.inspect(f.view.task_id)
+        self.assertEqual(view.phase,'canceled')
+        self.assertFalse(view.active)
+        self.assertTrue(f.github.worker_pull.called)
+        second=next(v for v in f.controller.tasks() if v.issue_id==self.second_issue['id'])
+        self.assertTrue(second.active)
 
     def test_linear_reporting_failure_does_not_change_admission_or_redispatch(self):
         f=self.fixture
@@ -162,6 +211,7 @@ class ControllerDriverTests(unittest.TestCase):
         self.driver.tick()
         repair=f.controller.inspect(f.view.task_id)
         self.assertEqual(repair.attempt["attempt_kind"],"repair")
+        f.linear.set_label.assert_any_call(f.view.issue_id,'clusterfork: auto-repair',True)
         self.assertNotEqual(first_key,repair.attempt["attempt_id"])
         f.key=repair.attempt["attempt_id"]
         def call(role,action,**fields):
@@ -177,6 +227,10 @@ class ControllerDriverTests(unittest.TestCase):
         self.assertEqual(final.phase,Phase.HELD)
         self.assertEqual(final.attempt["retry_kind"],"")
         self.assertEqual(f.github.dispatch.call_count,2)
+        f.linear.set_label.assert_any_call(f.view.issue_id,'clusterfork: auto-repair',False)
+        reports=[call for call in f.linear.status_comment.call_args_list if 'Auto-Repair Report' in call.args[2]]
+        self.assertEqual(len(reports),1)
+        self.assertIn('operator review is required',reports[0].args[2])
 
 
 if __name__=="__main__":

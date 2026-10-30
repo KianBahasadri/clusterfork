@@ -2,6 +2,7 @@ name: test
 
 on:
   push:
+    branches: ['**']
   pull_request:
 
 permissions:
@@ -70,6 +71,17 @@ jobs:
           names = {function.get_function_name() for function in function_app.app.get_functions()}
           assert names == {"health", "linear_webhook", "route_event", "reconcile", "worker"}, names
           print("All dispatcher and worker functions index on Python 3.12")
+          PY
+      - name: Index the stateless webhook ingress
+        run: |
+          python - <<'PY'
+          import importlib.util
+          spec = importlib.util.spec_from_file_location("webhook_ingress", "automation/webhook_relay/function_app.py")
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          names = {function.get_function_name() for function in module.app.get_functions()}
+          assert names == {"linear_relay", "health"}, names
+          print("Only stateless HTTP ingress functions are registered")
           PY
       - uses: ./.github/actions/setup-codex
       - uses: ./.github/actions/setup-cursor
