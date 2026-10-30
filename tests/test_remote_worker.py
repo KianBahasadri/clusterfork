@@ -6,6 +6,7 @@ from contextlib import contextmanager, nullcontext, redirect_stdout
 import importlib.util
 import io
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -401,6 +402,13 @@ class WorkerAuthorizationTests(unittest.TestCase):
                 self.assertEqual(diagnostic["failure_output"], "Traceback [REDACTED]")
                 self.assertEqual(diagnostic["run_id"], "123")
 
+    def test_normal_worker_still_requires_the_reviewed_coding_context(self):
+        service, _, _ = self.service()
+        service.queue.readiness.require = Mock(return_value={"review_key": "approved", "context_sha": "a" * 40})
+        service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
+        with self.assertRaisesRegex(WorkerError, "reviewed repository context"):
+            service.handle("progress", claims(), {"dispatch_key": KEY, "stage": "coding", "context_sha": "b" * 40})
+
     def test_failed_finish_rejects_foreign_or_incomplete_wip_identity(self):
         valid = {"wip_branch": "clusterfork/kian-891-aaaaaaaa", "wip_commit_sha": "b" * 40}
         for extra in ({"wip_branch": "main"}, {"wip_branch": "clusterfork/other-aaaaaaaa"},
@@ -664,6 +672,7 @@ class GitPublicationTests(unittest.TestCase):
                     os.chdir(checkout)
                     with patch.object(worker, "run_codex", side_effect=implement) as agent, \
                          patch.object(worker, "find_pr", return_value=url if existing_pr else None), \
+                         patch.object(worker, "repair_check_output", return_value=""), \
                          patch.object(worker, "json_request", return_value=pull) as request, \
                          patch.object(worker, "request_auto_merge") as merge:
                         self.assertEqual(worker.execute(broker, config, heartbeat, root), ("completed", url))
@@ -747,6 +756,293 @@ class GitPublicationTests(unittest.TestCase):
                 self.assertIn("clusterfork-dispatch:" + KEY, request.call_args.args[2]["body"])
             finally:
                 os.chdir(old)
+
+
+class RepairEvidenceTests(unittest.TestCase):
+    def test_failed_required_job_tail_is_scrubbed_byte_bounded_and_kept_out_of_logs(self):
+        broker = SimpleNamespace(publication_guard=worker.PublicationGuard({}))
+        broker.publication_guard.remember("opaque-github-credential")
+        checks = [{"name": "required-test", "bucket": "fail", "description": "Failed tests",
+                   "link": "https://github.com/owner/repo/actions/runs/10/job/20"},
+                  {"name": "passing", "bucket": "pass", "link": "https://github.com/owner/repo/actions/runs/10/job/21"},
+                  {"name": "pending", "bucket": "pending", "link": "https://github.com/owner/repo/actions/runs/10/job/22"}]
+        log = "é" * 10000 + "\nprivate-ci-marker opaque-github-credential ghp_synthetic Bearer opaque-header api_key=opaque-key\x00"
+        stdout, logs = io.StringIO(), io.StringIO()
+        handler = logging.StreamHandler(logs)
+        logging.getLogger().addHandler(handler)
+        try:
+            with patch.object(worker, "command", side_effect=[json.dumps(checks), log]) as command, redirect_stdout(stdout):
+                output = worker.repair_check_output(broker, {"repository": "owner/repo"},
+                                                  "opaque-github-credential", "https://github.com/owner/repo/pull/1")
+        finally:
+            logging.getLogger().removeHandler(handler)
+        self.assertLessEqual(len(output.encode("utf-8")), 16000)
+        self.assertIn("required-test", output)
+        self.assertIn("private-ci-marker", output)
+        for secret in ("opaque-github-credential", "ghp_synthetic", "opaque-header", "opaque-key", "\x00"):
+            self.assertNotIn(secret, output)
+        self.assertNotIn("private-ci-marker", stdout.getvalue() + logs.getvalue())
+        self.assertEqual(command.call_count, 2)
+        self.assertEqual(command.call_args.args[0], ["gh", "api", "repos/owner/repo/actions/jobs/20/logs"])
+        self.assertIn("--required", command.call_args_list[0].args[0])
+
+    def test_ci_collection_falls_back_safely_for_foreign_links_unavailable_logs_and_unreadable_auth(self):
+        broker = SimpleNamespace(publication_guard=worker.PublicationGuard({}))
+        for mode in ("foreign", "log_failure", "malformed", "auth"):
+            with self.subTest(mode=mode):
+                check = {"name": "required", "bucket": "fail", "description": "token=opaque-key",
+                         "link": "https://github.com/owner/repo/actions/runs/10/job/20"}
+                if mode == "foreign":
+                    check["link"] = "https://github.com/attacker/repo/actions/runs/10/job/20"
+                responses = ["not json"] if mode == "malformed" else [json.dumps([check]),
+                    worker.WorkerFailure("log unavailable") if mode == "log_failure" else "private-output"]
+                with patch.object(worker, "command", side_effect=responses) as command, \
+                     patch.object(broker.publication_guard, "refresh_auth",
+                                  side_effect=worker.PublicationScanError() if mode == "auth" else None):
+                    result = worker.repair_check_output(broker, {"repository": "owner/repo"}, "token",
+                                                       "https://github.com/owner/repo/pull/1")
+                self.assertNotIn("opaque-key", result)
+                if mode == "foreign":
+                    self.assertEqual(command.call_count, 1)
+                if mode == "auth":
+                    self.assertNotIn("private-output", result)
+
+    def test_multiple_failed_checks_share_one_utf8_byte_limit(self):
+        broker = SimpleNamespace(publication_guard=worker.PublicationGuard({}))
+        checks = [{"name": f"check-{n}", "bucket": "fail", "description": "Failed tests",
+                   "link": f"https://github.com/owner/repo/actions/runs/10/job/{n}"} for n in (20, 21)]
+        with patch.object(worker, "command", side_effect=[json.dumps(checks), "é" * 10000, "é" * 10000]):
+            output = worker.repair_check_output(broker, {"repository": "owner/repo"}, "token",
+                                              "https://github.com/owner/repo/pull/1")
+        self.assertLessEqual(len(output.encode("utf-8")), 16000)
+        self.assertIn("check-20", output)
+        self.assertIn("check-21", output)
+
+
+class RepairRecoveryTests(unittest.TestCase):
+    @contextmanager
+    def scenario(self, *, wip=None, open_pr=True, keep_branch=False, advanced=False, conflicting=False):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            remote, checkout = root / "origin.git", root / "checkout"
+            def git(*args):
+                return subprocess.check_output(["git", "-C", str(checkout), *args], text=True,
+                                               stderr=subprocess.DEVNULL).strip()
+            def commit(message):
+                git("add", ".")
+                git("-c", "user.name=clusterfork[bot]", "-c",
+                    "user.email=clusterfork[bot]@users.noreply.github.com", "commit", "-m", message)
+                return git("rev-parse", "HEAD")
+            subprocess.run(["git", "init", "--bare", "--initial-branch=main", str(remote)], check=True, capture_output=True)
+            subprocess.run(["git", "clone", str(remote), str(checkout)], check=True, capture_output=True)
+            (checkout / "file.txt").write_text("original\n")
+            initial = commit("initial")
+            git("push", "origin", "main")
+            branch = "clusterfork/kian-891-aaaaaaaa"
+            git("checkout", "-b", branch)
+            (checkout / "file.txt").write_text("broken\n")
+            parent = commit("failed implementation")
+            git("push", "origin", branch)
+            wip_branch = branch.replace("clusterfork/", "clusterfork-wip/")
+            wip_sha = None
+            if wip in {"descendant", "divergent"}:
+                git("checkout", "-b", wip_branch, parent if wip == "descendant" else initial)
+                (checkout / "saved.txt").write_text("preserved WIP\n")
+                wip_sha = commit("save unfinished work")
+                git("push", "origin", wip_branch)
+            git("checkout", "main")
+            if not open_pr and not keep_branch:
+                git("push", "origin", "--delete", branch)
+            if advanced:
+                (checkout / "base.txt").write_text("current base\n")
+                if conflicting:
+                    (checkout / "file.txt").write_text("base changed this line\n")
+                commit("advance base")
+                git("push", "origin", "main")
+                git("reset", "--hard", initial)  # workflow checkout predates base advancement
+            git("branch", "-D", branch)
+            broker = Mock(key="d" * 64, publication_guard=worker.PublicationGuard({}))
+            broker.call.return_value = {"token": "opaque-github-credential"}
+            url = "https://github.com/owner/repo/pull/1"
+            pull = {"html_url": url, "state": "open", "merged": False, "title": "Original work",
+                    "user": {"login": "clusterfork[bot]"}, "base": {"ref": "main"},
+                    "body": f"<!-- clusterfork-dispatch:{KEY} -->",
+                    "head": {"repo": {"full_name": "owner/repo"}, "ref": branch, "sha": parent}}
+            config = {"repository": "owner/repo", "ref": "main", "auto_merge": False,
+                      "readiness": {"context_sha": initial},
+                      "issue": {"identifier": "KIAN-1000", "title": "Auto-repair", "url": "https://linear.app/test"},
+                      "repair": {"target_branch": branch, "target_dispatch_key": KEY,
+                                 "target_identifier": "KIAN-891", "target_pull_request": url if open_pr else "",
+                                 "failure_output": "parent-private-traceback ghp_synthetic opaque-github-credential"},
+                      "validation_commands": [[sys.executable, "-c",
+                          "from pathlib import Path; assert Path('file.txt').read_text() == 'fixed\\n'"]]}
+            if wip:
+                config["repair"].update(wip_branch=wip_branch, wip_commit_sha=wip_sha or "a" * 40)
+            pushes, prompts, ci_commands = [], [], []
+            real_command = worker.command
+            def command(args, **kwargs):
+                if args[0] == "gh":
+                    ci_commands.append((args, kwargs))
+                    if args[1:3] == ["pr", "checks"]:
+                        return json.dumps([{"name": "validation", "bucket": "fail", "description": "Tests failed",
+                                            "link": "https://github.com/owner/repo/actions/runs/10/job/20"}])
+                    return "ci-private-traceback opaque-github-credential ghp_synthetic"
+                if args[:2] == ["git", "push"]:
+                    pushes.append(args)
+                return real_command(args, **kwargs)
+            def request(url, token, data=None):
+                return copy.deepcopy(pull)
+            @contextmanager
+            def implement(broker, config, *args, validate):
+                prompts.append(worker.development_prompt(broker, config))
+                # Replaced by each test with its intended repair operation.
+                run.implement(git, checkout)
+                validate_fake_turns(validate, "Repaired and validated.")
+                yield "Repaired and validated."
+            run = SimpleNamespace(root=root, checkout=checkout, git=git, broker=broker, config=config,
+                                  heartbeat=SimpleNamespace(failed=threading.Event()), branch=branch, parent=parent,
+                                  initial=initial, wip_sha=wip_sha, wip_branch=wip_branch, pull=pull, url=url,
+                                  pushes=pushes, prompts=prompts, ci_commands=ci_commands,
+                                  implement=lambda git, checkout: (checkout / "file.txt").write_text("fixed\n"))
+            old = Path.cwd()
+            try:
+                os.chdir(checkout)
+                with patch.object(worker, "command", side_effect=command), \
+                     patch.object(worker, "find_pr", return_value=url if open_pr else None), \
+                     patch.object(worker, "json_request", side_effect=request), \
+                     patch.object(worker, "run_codex", side_effect=implement):
+                    yield run
+            finally:
+                os.chdir(old)
+
+    def test_repair_restores_wip_and_supplies_scrubbed_worker_and_ci_evidence(self):
+        for open_pr in (False, True):
+            with self.subTest(open_pr=open_pr), self.scenario(wip="descendant", open_pr=open_pr) as run:
+                def implement(git, checkout):
+                    self.assertEqual(git("rev-parse", "HEAD"), run.wip_sha)
+                    self.assertEqual(git("branch", "--show-current"), run.branch)
+                    self.assertEqual((checkout / "saved.txt").read_text(), "preserved WIP\n")
+                    (checkout / "file.txt").write_text("fixed\n")
+                run.implement = implement
+                self.assertEqual(worker.execute(run.broker, run.config, run.heartbeat, run.root), ("completed", run.url))
+                prompt = run.prompts[0]
+                self.assertIn("parent-private-traceback", prompt)
+                self.assertIn("git log origin/main..HEAD", prompt)
+                self.assertIn("git diff origin/main...HEAD", prompt)
+                self.assertIn("git reset --hard origin/main", prompt)
+                self.assertNotIn("opaque-github-credential", prompt)
+                self.assertNotIn("ghp_synthetic", prompt)
+                if open_pr:
+                    self.assertIn("ci-private-traceback", prompt)
+                    self.assertTrue(run.ci_commands)
+                    self.assertEqual(run.ci_commands[-1][1]["env"]["GH_TOKEN"], "opaque-github-credential")
+                self.assertFalse(any("--force" in arg for push in run.pushes for arg in push))
+
+    def test_missing_or_divergent_wip_keeps_the_current_open_pr_branch(self):
+        for wip in ("missing", "divergent"):
+            with self.subTest(wip=wip), self.scenario(wip=wip) as run:
+                def implement(git, checkout):
+                    self.assertEqual(git("rev-parse", "HEAD"), run.parent)
+                    self.assertFalse((checkout / "saved.txt").exists())
+                    (checkout / "file.txt").write_text("fixed\n")
+                run.implement = implement
+                self.assertEqual(worker.execute(run.broker, run.config, run.heartbeat, run.root)[0], "completed")
+
+    def test_foreign_or_changed_wip_is_rejected_before_agent_execution(self):
+        for tamper in ("branch", "sha"):
+            with self.subTest(tamper=tamper), self.scenario(wip="descendant") as run:
+                run.config["repair"]["wip_branch" if tamper == "branch" else "wip_commit_sha"] = (
+                    "main" if tamper == "branch" else "f" * 40)
+                with self.assertRaises(worker.WorkerFailure):
+                    worker.execute(run.broker, run.config, run.heartbeat, run.root)
+                self.assertFalse(run.prompts)
+                self.assertFalse(run.pushes)
+
+    def test_normal_development_cannot_use_an_advanced_unreviewed_base(self):
+        with self.scenario(open_pr=False, advanced=True) as run:
+            del run.config["repair"]
+            with self.assertRaisesRegex(worker.WorkerFailure, "readiness approval"):
+                worker.execute(run.broker, run.config, run.heartbeat, run.root)
+            self.assertFalse(run.prompts)
+            self.assertFalse(run.pushes)
+
+    def test_reset_before_first_pr_verifies_a_new_bot_pr_before_force_update(self):
+        with self.scenario(open_pr=False, keep_branch=True, advanced=True) as run:
+            def implement(git, checkout):
+                git("reset", "--hard", "origin/main")
+                (checkout / "file.txt").write_text("fixed\n")
+            run.implement = implement
+            self.assertEqual(worker.execute(run.broker, run.config, run.heartbeat, run.root), ("completed", run.url))
+            self.assertIn(f"--force-with-lease=refs/heads/{run.branch}:{run.parent}", run.pushes[-1])
+            self.assertEqual(run.git("rev-parse", "HEAD^"), run.git("rev-parse", "origin/main"))
+
+    def test_conflicted_or_behind_pr_can_reset_to_advanced_base_and_force_with_exact_lease(self):
+        for conflicting in (False, True):
+            with self.subTest(conflicting=conflicting), self.scenario(advanced=True, conflicting=conflicting) as run:
+                def implement(git, checkout):
+                    self.assertNotEqual(git("rev-parse", "origin/main"), run.initial)
+                    git("reset", "--hard", "origin/main")
+                    (checkout / "file.txt").write_text("fixed\n")
+                run.implement = implement
+                self.assertEqual(worker.execute(run.broker, run.config, run.heartbeat, run.root), ("completed", run.url))
+                self.assertEqual((run.checkout / "base.txt").read_text(), "current base\n")
+                head = run.git("rev-parse", "HEAD")
+                self.assertEqual(run.git("ls-remote", "origin", f"refs/heads/{run.branch}").split()[0], head)
+                self.assertEqual(run.git("rev-parse", "HEAD^"), run.git("rev-parse", "origin/main"))
+                self.assertIn(f"--force-with-lease=refs/heads/{run.branch}:{run.parent}", run.pushes[-1])
+                self.assertEqual(run.git("log", "-1", "--format=%an <%ae>"),
+                                 "clusterfork[bot] <clusterfork[bot]@users.noreply.github.com>")
+
+    def test_rebase_is_allowed_only_with_bot_authors_and_committers_on_the_worker_branch(self):
+        with self.scenario(advanced=True) as run:
+            def implement(git, checkout):
+                git("-c", "user.name=clusterfork[bot]", "-c",
+                    "user.email=clusterfork[bot]@users.noreply.github.com", "rebase", "origin/main")
+                (checkout / "file.txt").write_text("fixed\n")
+            run.implement = implement
+            self.assertEqual(worker.execute(run.broker, run.config, run.heartbeat, run.root)[0], "completed")
+            self.assertIn(f"--force-with-lease=refs/heads/{run.branch}:{run.parent}", run.pushes[-1])
+        for tamper in ("branch", "author", "committer"):
+            with self.subTest(tamper=tamper), self.scenario(advanced=True) as run:
+                def implement(git, checkout):
+                    git("reset", "--hard", "origin/main")
+                    (checkout / "file.txt").write_text("fixed\n")
+                    if tamper == "branch":
+                        git("branch", "-m", "unexpected")
+                    else:
+                        git("add", ".")
+                        author = "Human <human@example.com>" if tamper == "author" else "clusterfork[bot] <clusterfork[bot]@users.noreply.github.com>"
+                        name = "Human" if tamper == "committer" else "clusterfork[bot]"
+                        email = "human@example.com" if tamper == "committer" else "clusterfork[bot]@users.noreply.github.com"
+                        git("-c", f"user.name={name}", "-c", f"user.email={email}", "commit", "--author", author, "-m", "manual")
+                run.implement = implement
+                with self.assertRaises(worker.WorkerFailure) as caught:
+                    worker.execute(run.broker, run.config, run.heartbeat, run.root)
+                self.assertEqual(caught.exception.clusterfork_failure["reason_code"], "git_integrity_changed")
+                self.assertFalse(run.pushes)
+
+    def test_force_update_refuses_changed_pr_ownership_marker_or_remote_head(self):
+        for tamper in ("owner", "marker", "head", "remote"):
+            with self.subTest(tamper=tamper), self.scenario(advanced=True) as run:
+                def implement(git, checkout):
+                    git("reset", "--hard", "origin/main")
+                    (checkout / "file.txt").write_text("fixed\n")
+                    if tamper == "owner":
+                        run.pull["user"]["login"] = "human"
+                    elif tamper == "marker":
+                        run.pull["body"] = "a different dispatch"
+                    elif tamper == "head":
+                        run.pull["head"]["sha"] = run.initial
+                    else:
+                        git("push", "--force", "origin", f"origin/main:refs/heads/{run.branch}")
+                run.implement = implement
+                with self.assertRaises(worker.WorkerFailure):
+                    worker.execute(run.broker, run.config, run.heartbeat, run.root)
+                if tamper != "remote":
+                    self.assertFalse(run.pushes)
+                else:
+                    self.assertEqual(run.git("ls-remote", "origin", f"refs/heads/{run.branch}").split()[0],
+                                     run.git("rev-parse", "origin/main"))
 
 
 class ValidationRecoveryTests(unittest.TestCase):
@@ -856,6 +1152,8 @@ class ValidationRecoveryTests(unittest.TestCase):
                                      "secondary": {"usedPercent": 20, "windowDurationMins": 10080}}}
             real_command = worker.command
             def command(args, **kwargs):
+                if args[:3] == ["gh", "pr", "checks"]:
+                    return "[]"
                 if kwargs.get("diagnostic_operation", "").startswith("validation/"):
                     validation_liveness.append(not servers[-1].closed)
                 return real_command(args, **kwargs)
@@ -882,6 +1180,19 @@ class ValidationRecoveryTests(unittest.TestCase):
             finally:
                 os.chdir(original)
                 worker.CONTEXT.reset(context_token)
+
+    def test_live_repair_session_receives_private_failure_and_ci_evidence(self):
+        with self.scenario(fix_on_turn=1, open_pr=True) as run, \
+             patch.object(worker, "repair_check_output", return_value="ci-private-output ghp_synthetic"):
+            run.config["repair"]["failure_output"] = "parent-private-output opaque-leased-login"
+            self.assertEqual(worker.execute(run.broker, run.config, run.heartbeat, run.root)[0], "completed")
+            prompt = run.prompts[0]["input"][0]["text"]
+            self.assertIn("parent-private-output", prompt)
+            self.assertIn("ci-private-output", prompt)
+            self.assertIn("Diagnose", prompt)
+            self.assertNotIn("opaque-leased-login", prompt)
+            self.assertNotIn("ghp_synthetic", prompt)
+            self.assertNotIn("private-output", run.output.getvalue())
 
     def test_validation_traceback_is_scrubbed_and_corrected_in_the_same_live_session(self):
         with self.scenario() as run, self.assertLogs(level="ERROR") as logs:

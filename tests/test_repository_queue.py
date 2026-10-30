@@ -753,10 +753,10 @@ class RepositoryQueueTests(unittest.TestCase):
         checks(pull)[0].update(status="IN_PROGRESS", conclusion=None)
         self.assertEqual(self.queue.advance(self.repository)[first]["status"], "waiting")
         self.assertEqual(self.selected, {str(UUID(int=1))})
-        pull["mergeable"] = "CONFLICTING"
+        pull["isDraft"] = True
         self.assertEqual(self.queue.advance(self.repository)[first]["status"], "blocked")
         self.assertEqual(self.selected, {str(UUID(int=1))})
-        pull.update(mergeable="MERGEABLE", autoMergeRequest=None)
+        pull.update(isDraft=False, autoMergeRequest=None)
         checks(pull)[0].update(status="COMPLETED", conclusion="SUCCESS")
         self.assertEqual(self.queue.advance(self.repository)[first]["status"], "blocked")
         self.registry.routes[PROJECT] = replace(self.route, auto_merge=False)
@@ -772,6 +772,7 @@ class RepositoryQueueTests(unittest.TestCase):
         first, _ = [self.enqueue(self.issue(n)) for n in (1, 2)]
         self.queue.advance(self.repository)
         self.start(first)
+        self.service.handle("progress", self.identity(first), {"dispatch_key": first, "stage": "coding"})
         self.now += 10_000
         self.queue.advance(self.repository)
         self.rerun(first)
@@ -789,6 +790,7 @@ class RepositoryQueueTests(unittest.TestCase):
         first, second = [self.enqueue(self.issue(n)) for n in (1, 2)]
         self.queue.advance(self.repository)
         self.start(first)
+        self.service.handle("progress", self.identity(first), {"dispatch_key": first, "stage": "coding"})
         self.finish(first, "failed")
         self.stop(first, "failure")
         # Legacy/exhausted automatic budget still permits human recovery of the
@@ -1871,8 +1873,9 @@ class RepositoryQueueTests(unittest.TestCase):
     def prepare_repair(self, failure="worker"):
         parent, following = [self.enqueue(self.issue(n)) for n in (1, 2)]
         self.queue.advance(self.repository)
+        self.start(parent)
+        self.service.handle("progress", self.identity(parent), {"dispatch_key": parent, "stage": "coding"})
         if failure != "missing_callback":
-            self.start(parent)
             if failure == "checks":
                 pull = self.pulls[parent] = pr()
                 checks(pull)[0].update(conclusion="FAILURE", detailsUrl=f"https://github.com/{self.repository}/actions/runs/500/job/600")
@@ -1888,6 +1891,100 @@ class RepositoryQueueTests(unittest.TestCase):
 
     def repair_reports(self):
         return [call for call in self.linear.status_comment.call_args_list if "Auto-Repair Report" in call.args[2]]
+
+    def test_pre_coding_failures_retry_after_sixty_seconds_without_spending_repair_budget(self):
+        for stage in ("initializing", "selecting_account", "missing_callback"):
+            with self.subTest(stage=stage):
+                self.setUp()
+                parent, following = [self.enqueue(self.issue(n)) for n in (1, 2)]
+                self.queue.advance(self.repository)
+                if stage != "missing_callback":
+                    self.start(parent)
+                    if stage == "selecting_account":
+                        self.service.handle("progress", self.identity(parent),
+                                            {"dispatch_key": parent, "stage": stage})
+                    self.finish(parent, "failed")
+                self.stop(parent, "failure")
+                self.assertFalse(self.queue.started_coding(self.queue.table(self.repository).get(parent)[0]))
+                self.assertEqual(self.queue.advance(self.repository)[parent]["status"], "waiting")
+                self.assertEqual(self.receipts.get(parent)[0]["retry_after"], NOW + 60)
+                self.now += 59
+                self.queue = self.restart()
+                exact = {"linear.issue": 1, "github.dispatch_runs": 1, "github.worker_pull": 1}
+                if stage != "missing_callback":
+                    exact["github.worker_result"] = 1
+                with self.budget(exact=exact):
+                    observed = self.queue.observe(self.queue.table(self.repository).get(parent)[0],
+                        self.receipts.get(parent)[0], self.route, self.slot()["owner"])
+                self.assertEqual(observed[0], "waiting")
+                self.assertEqual(self.queue.advance(self.repository)[parent]["status"], "waiting")
+                self.assertEqual(self.receipts.get(parent)[0]["retry_after"], NOW + 60)
+                self.assertEqual(self.github.dispatch.call_count, 1)
+                self.now += 1
+                self.assertEqual(self.queue.advance(self.repository)[parent]["status"], "dispatched")
+                self.assertEqual(self.github.dispatch.call_count, 2)
+                self.linear.create_issue.assert_not_called()
+                self.assertEqual(self.slot()["active_key"], parent)
+                for row in (self.receipts.get(parent)[0], self.queue.table(self.repository).get(parent)[0]):
+                    self.assertFalse(row.get("repair_attempted"))
+                self.assertEqual(self.queue.table(self.repository).get(following)[0]["status"], "queued")
+                # A stale listing of the failed attempt cannot trigger another dispatch.
+                self.remote_runs[parent].pop()
+                self.assertEqual(self.queue.advance(self.repository)[parent]["status"], "waiting")
+                self.assertEqual(self.github.dispatch.call_count, 2)
+
+    def test_repair_start_supplies_private_parent_failure_and_wip_without_publishing_logs(self):
+        parent, _ = self.prepare_repair()
+        run, version = self.runs.get(parent)
+        output = "é" * 9000 + " private-traceback-marker ghp_synthetic token=opaque-key"
+        branch = worker_branch("KIAN-1", parent).replace("clusterfork/", "clusterfork-wip/")
+        run.update(failure=json.dumps({"operation": "validation/1", "kind": "command_failed",
+                                       "failure_output": output[-7900:]}),
+                   wip_branch=branch, wip_commit_sha="b" * 40)
+        self.runs.replace(run, version)
+        self.queue.advance(self.repository)
+        child = self.repair_row(parent)
+        config = self.start(child["RowKey"])
+        repair = config["repair"]
+        self.assertTrue(repair["failure_output"].startswith("é"))
+        self.assertIn("private-traceback-marker", repair["failure_output"])
+        self.assertIn("[REDACTED]", repair["failure_output"])
+        self.assertNotIn("ghp_synthetic", repair["failure_output"])
+        self.assertNotIn("opaque-key", repair["failure_output"])
+        self.assertLessEqual(len(repair["failure_output"].encode()), 16000)
+        self.assertEqual((repair["wip_branch"], repair["wip_commit_sha"]), (branch, "b" * 40))
+        self.service.handle("checkout", self.identity(child["RowKey"]), {"dispatch_key": child["RowKey"]})
+        self.assertEqual(self.github.installation_token.call_args.kwargs["permissions"],
+                         {"contents": "read", "pull_requests": "read", "actions": "read"})
+        public = str(self.linear.create_issue.call_args_list) + str(self.linear.status_comment.call_args_list)
+        self.assertNotIn("é", public)
+        self.assertNotIn("private-traceback-marker", public)
+        self.assertNotIn("failure_output", public)
+        self.assertNotIn("wip_commit_sha", public)
+        self.assertIn("Diagnose", self.linear.create_issue.call_args.args[0]["description"])
+        self.assertIn("Reset and re-implement", self.linear.create_issue.call_args.args[0]["description"])
+
+    def test_open_pr_conflicts_and_outdated_base_trigger_one_repair(self):
+        for fields in ({"mergeable": "CONFLICTING"}, {"mergeStateStatus": "DIRTY"}, {"mergeStateStatus": "BEHIND"}):
+            with self.subTest(fields=fields):
+                self.setUp()
+                parent, following = self.prepare_repair("checks")
+                checks(self.pulls[parent])[0]["conclusion"] = "SUCCESS"
+                self.pulls[parent].update(fields)
+                self.assertEqual(self.queue.advance(self.repository)[parent]["status"], "repairing")
+                child = self.repair_row(parent)
+                self.assertEqual(self.slot()["active_key"], child["RowKey"])
+                self.assertEqual(self.queue.table(self.repository).get(following)[0]["status"], "queued")
+                description = self.linear.create_issue.call_args.args[0]["description"]
+                self.assertIn("behind its base" if fields.get("mergeStateStatus") == "BEHIND" else "merge conflicts", description)
+                with patch.object(self.queue.repair, "approval", return_value={
+                        "review_key": "auto-repair:" + parent, "context_sha": "a" * 40}):
+                    self.start(child["RowKey"])
+                    self.service.handle("progress", self.identity(child["RowKey"]), {
+                        "dispatch_key": child["RowKey"], "stage": "coding", "context_sha": "b" * 40})
+                self.queue.advance(self.repository)
+                self.assertEqual(self.github.dispatch.call_count, 2)
+                self.linear.create_issue.assert_called_once()
 
     def test_worker_and_required_check_failures_dispatch_one_high_priority_repair(self):
         for failure in ("worker", "checks", "missing_callback"):
@@ -2058,6 +2155,26 @@ class RepositoryQueueTests(unittest.TestCase):
         self.now += 901
         self.queue.advance(self.repository)
         self.assertEqual(self.github.dispatch.call_count, 3)
+
+    def test_repair_startup_failure_retries_same_child_before_coding(self):
+        parent, following = self.prepare_repair()
+        self.queue.advance(self.repository)
+        child = self.repair_row(parent)
+        key = child["RowKey"]
+        self.start(key)
+        self.finish(key, "failed")
+        self.stop(key, "failure")
+        self.assertEqual(self.queue.advance(self.repository)[key]["status"], "waiting")
+        self.assertEqual(self.receipts.get(key)[0]["retry_after"], NOW + 60)
+        self.assertFalse(self.receipts.get(key)[0].get("repair_attempted"))
+        self.now += 60
+        self.assertEqual(self.queue.advance(self.repository)[key]["status"], "dispatched")
+        self.start(key)
+        self.service.handle("progress", self.identity(key), {"dispatch_key": key, "stage": "coding"})
+        self.assertTrue(self.queue.started_coding(self.queue.table(self.repository).get(key)[0]))
+        self.assertEqual(self.slot()["active_key"], key)
+        self.assertEqual(self.queue.table(self.repository).get(following)[0]["status"], "queued")
+        self.linear.create_issue.assert_called_once()
         self.start(key)
         self.finish(key)
         self.stop(key)
@@ -2169,8 +2286,9 @@ class RepositoryQueueTests(unittest.TestCase):
                 self.queue.advance(self.repository)
                 child = self.repair_row(parent)
                 key = child["RowKey"]
+                self.start(key)
+                self.service.handle("progress", self.identity(key), {"dispatch_key": key, "stage": "coding"})
                 if failure != "missing_callback":
-                    self.start(key)
                     self.finish(key, "failed" if failure == "worker" else "completed", self.pulls[parent]["url"])
                 self.stop(key, "failure" if failure != "checks" else "success")
                 self.queue.advance(self.repository)

@@ -103,8 +103,9 @@ to title and description, project, versioned policy/schema and configuration,
 model profile, and target branch commit. Comments, labels, and lifecycle updates
 do not invalidate their own review. Any target branch change invalidates context,
 including a preceding queued task's merge. Admission, dispatch retries, worker
-start, account access, coding, and publication recheck approval; coding must use
-the reviewed base commit. Material edits during account selection prevent coding
+start, account access, coding, and publication recheck approval; initial development uses
+the reviewed base commit. [Fenced auto-repairs](#single-attempt-auto-repair) can use an advanced base.
+Material edits during account selection prevent coding
 and publication.
 
 A rejected review moves the issue to the configured Needs attention state (`blocked` lifecycle key;
@@ -333,8 +334,9 @@ Status updates never reset a completed dispatch receipt.
 ## Single-attempt auto-repair
 
 After GitHub confirms all matching workers and the recorded attempt stopped, an
-admitted coding/validation failure or completed failing required PR checks can
-consume **one** repair budget per dispatch key. Pending CI, intentional cancellation,
+admitted coding/validation failure, completed failing required PR checks, or an open
+worker PR with merge conflicts (`CONFLICTING`/`DIRTY`) or an outdated base (`BEHIND`) can
+consume **one** repair budget per dispatch key. Pending CI alone, intentional cancellation,
 unknown dispatches, readiness/dependency holds, and merge-policy blockers do not
 consume it. The parent queue row atomically records `repair_attempted`, a stable
 `repair_issue_id`, and immutable context under the slot ETag before external creation;
@@ -345,20 +347,41 @@ Azure creates a High-priority Todo sub-issue in the same project, labeled
 bound to that durable intent and its generated content bypasses readiness clarification. Enrollment,
 dependency, worker identity, account leases, and publication gates remain enforced.
 The worker checks out the **parent's** `clusterfork/<identifier-lowercase>-<key[:8]>`
-branch, investigates, runs configured validation, and pushes to the existing PR or
+branch. It restores the saved WIP commit when its branch still exists and either no
+open PR exists or the WIP descends from the current PR branch; divergent WIP cannot
+replace newer PR work. The saved WIP SHA must match the fetched branch.
+The worker runs configured validation and pushes to the existing PR or
 creates its missing PR with the parent's dispatch marker. Required checks and native
 merge requirements and the normal publication permission checks still apply;
 `--admin` bypasses remain refused.
 
-The repair description includes the original task's title and requirements. A
-failure before publication can leave no recoverable branch; in that case the
-repair must implement the original task from the reviewed base. Passing the
-validation suite alone does not establish completion of the missing feature.
+The repair description includes the original task's title and requirements. Only the
+authenticated `broker/start` repair payload receives the parent's stored scrubbed
+`failure_output` (up to 16,000 UTF-8 bytes), `wip_branch`, and `wip_commit_sha` from
+`ClusterforkWorkers`. Public Linear text retains the short failure summary and check
+names/links. In the credentialed parent process, the repair worker reads required PR
+checks with `gh pr checks --required` and fetches failed Actions job logs using the
+repair checkout token's Actions read access. `PublicationGuard` and shared review
+redaction scrub the evidence before a combined 16,000-byte CI tail enters the agent's
+token-free prompt. Unavailable logs retain a bounded fallback; unreadable auth caches
+withhold evidence. Neither log channel is copied to Linear or Actions output.
+
+The repair agent diagnoses Git status, branch history/diff against `origin/<base>`,
+and supplied failure evidence first. It patches viable work in the working tree,
+including resolving base conflicts, or resets to `origin/<base>` and re-implements
+an unsalvageable/missing implementation. Both paths must satisfy the original issue
+and all validation commands; the worker creates the publication commits. Repairs
+may use the latest fetched base despite the parent's initial readiness SHA. Git
+integrity checks retain the worker branch name, allow the original or current base
+HEAD, and permit rebased history only with bot authors and committers on introduced
+commits. A reset/rebased update to an existing open PR uses an explicit
+`--force-with-lease` bound to its original head, after re-verifying the repository,
+base, worker branch, `clusterfork[bot]` owner, and parent dispatch marker.
 Generated GitHub link destinations use Linear's saved Markdown form so exact
 content binding survives creation; later title or description edits still block admission.
 
-The label **or** persisted `is_auto_repair` metadata forbids another generation; failed
-repair workers cannot be rerun automatically or through broker admission.
+The label **or** persisted `is_auto_repair` metadata forbids another generation; a repair
+that has started coding cannot be rerun automatically or through broker admission.
 If it fails or its completed required checks still fail, both issues become Blocked
 (the configured Needs attention state) and the slot stays held for human review.
 After merge, or validated completion with no changes/PR remaining, both become Done;
