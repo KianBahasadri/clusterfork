@@ -649,6 +649,7 @@ class ReadinessTests(unittest.TestCase):
         self.assertIn("Choose the allowed repository", evidence)
         self.assertIn("unexpected fields", evidence)
         self.assertIn("[REDACTED]", evidence)
+        self.assertIn(self.registry.notify_user_url, self.review_comment())
 
     def test_redaction_keeps_a_valid_review_with_maximum_length_text_admissible(self):
         key, _ = self.begin()
@@ -657,6 +658,34 @@ class ReadinessTests(unittest.TestCase):
         self.submit(key, result)
         self.assertEqual(self.gate.require(self.issue, self.route)["review_key"], key)
         self.assertNotIn("sk-x", self.table.get(key)[0]["result"])
+
+    def test_readiness_comments_mention_kian_only_for_rejections(self):
+        notify = "https://linear.app/kian-finishing-zombie-granola/profiles/kian"
+        self.assertEqual(self.registry.notify_user_url, notify)
+        for result, status in ((ready(), "passed"), (clarification(), "needs_clarification"), ({}, "rejected")):
+            with self.subTest(status=status):
+                self.setUp()
+                key, _ = self.begin()
+                self.assertIn("Waiting for the read-only reviewer", self.review_comment(key))
+                self.assertNotIn(notify, self.review_comment(key))
+                self.submit(key, result)
+                self.assertEqual(self.table.get(key)[0]["status"], status)
+                self.assertEqual(self.review_comment(key).count(notify), 0 if status == "passed" else 1)
+
+    def test_rejection_mentions_use_the_optional_registry_setting(self):
+        for notify in ("https://linear.app/example/profiles/reviewer", ""):
+            for result in (clarification(), {}):
+                with self.subTest(notify=notify, result=result):
+                    self.setUp()
+                    self.gate.registry = replace(self.registry, notify_user_url=notify)
+                    key, _ = self.begin()
+                    self.submit(key, result)
+                    body = self.review_comment(key)
+                    self.assertNotIn(self.registry.notify_user_url, body)
+                    if notify:
+                        self.assertIn(notify, body)
+                    else:
+                        self.assertNotIn("https://linear.app/", body)
 
     def test_output_parse_failures_block_with_specific_diagnostics_and_bounded_evidence(self):
         cases = (("invalid_json", '{"verdict":', "not valid JSON at line 1, column 12"),
@@ -923,12 +952,14 @@ class ReadinessTests(unittest.TestCase):
                 self.assertEqual(self.issue["state"]["id"], self.route.ready_state_ids[0])
                 self.assertFalse(self.receipts.list())
                 self.linear.set_clarification.assert_not_called()
+                self.assertNotIn(self.registry.notify_user_url, self.review_comment(key))
                 with self.assertRaises(WorkerError):
                     self.submit(key)
                 self.stop(key, "failure")
                 self.now += 901
                 self.gate.reconcile()
                 self.assertNotEqual(self.key(), key)
+                self.assertNotIn(self.registry.notify_user_url, self.review_comment())
 
     def test_reviewer_can_report_unavailable_context_without_rejecting_the_issue(self):
         key, _ = self.begin()
@@ -938,6 +969,7 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(self.submit(key, result)["status"], "readiness_retry")
         self.assertEqual(json.loads(self.table.get(key)[0]["result"]), result)
         self.assertIn(result["summary"], self.review_comment(key))
+        self.assertNotIn(self.registry.notify_user_url, self.review_comment(key))
         self.linear.set_state.assert_not_called()
         self.linear.set_clarification.assert_not_called()
 
@@ -1100,6 +1132,8 @@ class ReadinessTests(unittest.TestCase):
                 self.assertEqual(self.issue["state"]["id"], self.route.linear_states.blocked if result["verdict"] != "ready"
                                  else self.route.ready_state_ids[0])
                 self.assertEqual(len(self.receipts.list()), 1 if result["verdict"] == "ready" else 0)
+                self.assertEqual(self.review_comment(key).count(self.registry.notify_user_url),
+                                 0 if result["verdict"] == "ready" else 1)
 
     def test_late_pending_comment_cannot_hide_a_passing_or_rejected_review(self):
         for result in (ready(), clarification("risks"), {**ready(), "verdict": "invalid"}):
@@ -1119,6 +1153,8 @@ class ReadinessTests(unittest.TestCase):
                 body = self.review_comment()
                 self.assertIn({"needs_clarification": "Needs clarification.", "ready": "Passed.",
                                "invalid": "Rejected: invalid reviewer result."}[result["verdict"]], body)
+                self.assertEqual(body.count(self.registry.notify_user_url),
+                                 0 if result["verdict"] == "ready" else 1)
 
     def test_context_lookup_outage_is_visible_and_never_ambiguous(self):
         self.github.branch_sha.side_effect = RequestError(503)

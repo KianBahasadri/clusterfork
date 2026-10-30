@@ -115,6 +115,8 @@ class ReadinessGate:
     def comment(self, issue, body, row=None):
         # Each attempt keeps its discussion, including replies to old rejections.
         key = row["RowKey"] if row else issue["id"]
+        if row and row["status"] in REJECTIONS and self.registry.notify_user_url:
+            body += "\n\n" + self.registry.notify_user_url
         self.linear.status_comment(issue["id"], comment_id(key, "readiness"),
                                    "Clusterfork readiness review: " + redact_review_text(body))
 
