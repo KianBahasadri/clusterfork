@@ -96,11 +96,11 @@ class RepositoryQueueTests(unittest.TestCase):
         self.restart().reconcile()
         return keys
 
-    def issue(self, number, project=PROJECT, *, priority=0):
+    def issue(self, number, project=PROJECT, *, priority=0, sort_order=0.0):
         issue = {"id": str(UUID(int=number)), "identifier": f"KIAN-{number}", "title": "Test",
                  "team": {"id": str(UUID(int=999))}, "labels": {"nodes": []},
                  "url": f"https://linear.app/test/issue/KIAN-{number}/test",
-                 "priority": priority,
+                 "priority": priority, "sortOrder": sort_order,
                  "state": {"id": self.registry.routes[project].ready_state_ids[0], "type": "unstarted"},
                  "createdAt": f"2026-10-01T00:00:{number:02d}Z", "archivedAt": None,
                  "project": {"id": project, "archivedAt": None,
@@ -491,7 +491,8 @@ class RepositoryQueueTests(unittest.TestCase):
         self.start(key)
 
     def test_project_scan_admits_by_priority_before_creation_order(self):
-        issues = [self.issue(n, priority=priority) for n, priority in enumerate((0, 4, 3, 2, 1), 1)]
+        issues = [self.issue(n, priority=priority, sort_order=float(n))
+                  for n, priority in enumerate((0, 4, 3, 2, 1), 1)]
         keys = [dispatch_key(self.registry, self.route, issue) for issue in issues]
         self.dispatcher.process({"type": "Project", "id": PROJECT})
         table = self.queue.table(self.repository)
@@ -509,11 +510,11 @@ class RepositoryQueueTests(unittest.TestCase):
         self.assertEqual(self.selected | self.queued, set())
         self.assertEqual(self.github.dispatch.call_count, 5)
 
-    def test_equal_priority_fifo_survives_scans_retries_and_restarts(self):
+    def test_equal_priority_and_sort_order_fifo_survives_scans_retries_and_restarts(self):
         for priority in range(5):
             with self.subTest(priority=priority):
                 self.setUp()
-                issues = [self.issue(n, priority=priority) for n in (8, 2, 5)]
+                issues = [self.issue(n, priority=priority, sort_order=42.5) for n in (8, 2, 5)]
                 keys = [self.enqueue(issue) for issue in issues]
                 table = self.queue.table(self.repository)
                 before = {key: table.get(key)[0] for key in keys}
@@ -536,6 +537,152 @@ class RepositoryQueueTests(unittest.TestCase):
                     after = table.get(key)[0]
                     self.assertEqual(after["sequence"], before[key]["sequence"])
                     self.assertEqual(after["queued_at"], before[key]["queued_at"])
+
+    def test_same_priority_admission_uses_sort_order_before_sequence(self):
+        for priority in range(5):
+            with self.subTest(priority=priority):
+                self.setUp()
+                issues = [self.issue(n, priority=priority, sort_order=sort_order)
+                          for n, sort_order in enumerate((1.75, 1.5, -0.25, 0), 1)]
+                keys = [self.enqueue(issue) for issue in issues]
+                table = self.queue.table(self.repository)
+                self.assertEqual([table.get(key)[0]["sort_order"] for key in keys],
+                                 [issue["sortOrder"] for issue in issues])
+                self.assertTrue(all(type(table.get(key)[0]["sort_order"]) is float for key in keys))
+                self.queue.refresh_waiting(table)
+                with self.budget(exact={"linear.issue": 4, "linear.issue_dependencies": 4,
+                                        "linear.set_selected": 1, "linear.set_queued": 1,
+                                        "queue.transaction": 1, "queue.replace": 2}):
+                    self.queue.reserve(table)
+                for index in (2, 3, 1, 0):
+                    self.assertEqual(self.slot()["active_key"], keys[index])
+                    self.queue.advance(self.repository)
+                    self.start(keys[index])
+                    self.finish(keys[index])
+                    self.stop(keys[index])
+                    self.queue.reconcile()
+                self.assertEqual(self.slot()["active_key"], "")
+                self.assertEqual([table.get(key)[0]["sequence"] for key in keys], [1, 2, 3, 4])
+
+    def test_waiting_sort_order_edits_refresh_without_replacing_entries(self):
+        for source in ("enqueue", "Issue", "Project", "timer"):
+            for sort_order in (-0.5, 3.5):
+                with self.subTest(source=source, sort_order=sort_order):
+                    self.setUp()
+                    active = self.enqueue(self.issue(1))
+                    self.queue.advance(self.repository)
+                    second = self.enqueue(self.issue(2, priority=2, sort_order=1.5))
+                    issue = self.issue(3, priority=2, sort_order=0.5)
+                    third = self.enqueue(issue)
+                    self.queue.advance(self.repository)
+                    table = self.queue.table(self.repository)
+                    before = table.get(third)[0]
+                    self.now += 10
+                    issue["sortOrder"] = sort_order
+                    if source == "enqueue":
+                        with self.budget(exact={"queue.transaction": 1}) as budget:
+                            self.assertEqual(self.enqueue(issue), third)
+                        self.assertEqual(budget.mutated_rows("queue"), {"slot", third})
+                        with self.budget():
+                            self.enqueue(issue)
+                    else:
+                        exact = {"linear.issue": 5 if source == "timer" else 7,
+                                 "linear.issue_dependencies": {"Issue": 6, "Project": 7, "timer": 5}[source],
+                                 "github.dispatch_runs": 1, "queue.transaction": 1}
+                        if source == "Project":
+                            exact["linear.project_issues"] = 1
+                        with self.budget(exact=exact) as budget:
+                            if source == "timer":
+                                self.restart().reconcile()
+                            else:
+                                self.dispatcher.process({"type": source, "id": issue["id"] if source == "Issue" else PROJECT})
+                        self.assertEqual(budget.mutated_rows("queue"), {"slot", third})
+                    after = table.get(third)[0]
+                    self.assertEqual(after["sort_order"], sort_order)
+                    for field in ("sequence", "queued_at", "selection_version", "selection_pending"):
+                        self.assertEqual(after[field], before[field])
+                    self.assertEqual(after["status"], "queued")
+                    self.assertEqual(len(table.list()), 4)
+                    self.assertEqual(self.slot()["active_key"], active)
+                    self.assertEqual(self.selected, {str(UUID(int=1))})
+                    self.assertEqual(self.queued, {str(UUID(int=2)), issue["id"]})
+                    self.assertEqual(self.github.dispatch.call_count, 1)
+                    self.start(active)
+                    self.finish(active)
+                    self.stop(active)
+                    self.restart().reconcile()
+                    self.assertEqual(self.slot()["active_key"], third if sort_order < 1.5 else second)
+
+    def test_legacy_waiting_sort_orders_are_backfilled_before_admission(self):
+        first = self.enqueue(self.issue(1, priority=2, sort_order=1.75))
+        second = self.enqueue(self.issue(2, priority=2, sort_order=1.5))
+        table = self.queue.table(self.repository)
+        self.queue.refresh_waiting(table)
+        for key in (first, second):
+            row, version = table.get(key)
+            del row["sort_order"]
+            table.replace(row, version)
+        with self.budget(exact={"linear.issue": 2, "linear.issue_dependencies": 2,
+                                "linear.set_selected": 1, "linear.set_queued": 1,
+                                "queue.transaction": 3, "queue.replace": 2}):
+            self.restart().reserve(table)
+        self.assertEqual(self.slot()["active_key"], second)
+        self.assertEqual([table.get(key)[0]["sort_order"] for key in (first, second)], [1.75, 1.5])
+        self.assertEqual([table.get(key)[0]["sequence"] for key in (first, second)], [1, 2])
+
+    def test_missing_or_null_sort_orders_use_fifo(self):
+        for missing in (True, False):
+            with self.subTest(missing=missing):
+                self.setUp()
+                issues = [self.issue(n, priority=2, sort_order=None) for n in (8, 2)]
+                if missing:
+                    for issue in issues:
+                        del issue["sortOrder"]
+                keys = [self.enqueue(issue) for issue in issues]
+                table = self.queue.table(self.repository)
+                self.queue.refresh_waiting(table)
+                with self.budget(exact={"linear.issue": 2, "linear.issue_dependencies": 2,
+                                        "linear.set_selected": 1, "linear.set_queued": 1,
+                                        "queue.transaction": 1, "queue.replace": 2}):
+                    self.queue.reserve(table)
+                self.assertEqual(self.slot()["active_key"], keys[0])
+                self.assertEqual([table.get(key)[0]["sort_order"] for key in keys], [0.0, 0.0])
+
+    def test_sort_order_edit_racing_admission_retries_the_choice(self):
+        for source in ("enqueue", "refresh"):
+            with self.subTest(source=source):
+                self.setUp()
+                first = self.enqueue(self.issue(1, priority=2, sort_order=1.75))
+                issue = self.issue(2, priority=2, sort_order=2.0)
+                second = self.enqueue(issue)
+                table = self.queue.table(self.repository)
+                self.queue.refresh_waiting(table)
+                head = self.queue.head
+
+                def edit_during_selection(table):
+                    candidate = head(table)
+                    self.assertEqual(candidate["RowKey"], first)
+                    issue["sortOrder"] = 1.5
+                    if source == "enqueue":
+                        self.enqueue(issue)
+                    else:
+                        self.queue.refresh_waiting_entry(table, second)
+                    return candidate
+
+                reads = 2 if source == "enqueue" else 3
+                with self.budget(exact={"linear.issue": reads, "linear.issue_dependencies": reads,
+                                        "queue.transaction": 2}):
+                    with patch.object(self.queue, "head", side_effect=edit_during_selection):
+                        with self.assertRaises(WorkerError) as conflict:
+                            self.queue.reserve(table)
+                self.assertEqual(conflict.exception.status, 409)
+                self.assertEqual(self.slot()["active_key"], "")
+                with self.budget(exact={"linear.issue": 2, "linear.issue_dependencies": 2,
+                                        "linear.set_selected": 1, "linear.set_queued": 1,
+                                        "queue.transaction": 1, "queue.replace": 2}):
+                    self.queue.reserve(table)
+                self.assertEqual(self.slot()["active_key"], second)
+                self.assertEqual([table.get(key)[0]["sequence"] for key in (first, second)], [1, 2])
 
     def test_equal_priority_batch_uses_creation_time_then_uuid_after_existing_entries(self):
         existing = self.issue(9, priority=2)
