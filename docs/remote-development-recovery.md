@@ -1,9 +1,18 @@
 # Remote development recovery tools
 
-`automation/recover_repair_binding.py` is an operator/agent tool for a generated
-repair that owns the repository slot but was denied dispatch because Linear's
-saved Markdown link form differs from its recorded content binding. Pass either
-the parent or repair issue identifier/UUID. The shared renderer in
+Current repairs run as a second attempt on the original Linear issue, using
+broker-supplied instructions and the original passing readiness review. They do
+not create a generated child issue or check `repair_revision`. A pending repair
+held after human title/description edits needs a fresh readiness review;
+rebinding a generated Markdown hash cannot authorize those edits. The
+[runtime](remote-development.md#single-attempt-auto-repair) owns the current lifecycle.
+
+`automation/recover_repair_binding.py` is retained for legacy generated child
+records and older brokers that denied dispatch because Linear's saved Markdown
+link form differed from their recorded binding. Current broker reconciliation
+can settle existing separate child records without that hash check. This tool
+is unnecessary for current repairs and does not grant readiness approval. Pass
+either the legacy parent or child issue identifier/UUID. The shared renderer in
 `automation/azure/auto_repair.py` supplies the expected title and description.
 
 Run from the checkout with the pinned Azure dependencies installed, an Azure CLI

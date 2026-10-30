@@ -28,7 +28,6 @@ from codex_runtime import (CodexError, CodexUsageLimit, copy_sessions, inspect_a
 from agent_session import run_agent
 import cursor_runtime
 from worker_core import account_provider, valid_account_id
-from auto_repair import repair_instructions
 from dispatch_core import AgentProfile
 from quota_selection import SelectionPolicy, select_account
 from worker_reporting import usage_report, worker_branch
@@ -749,7 +748,10 @@ def development_prompt(broker, config):
               + f"\n\n{issue.get('description') or ''}" + image_prompt(config.get("images", [])))
     if config.get("repair"):
         repair = config["repair"]
-        prompt += "\n\nRepair execution workflow:\n" + repair_instructions(config["ref"])
+        instructions = repair.get("instructions")
+        if not isinstance(instructions, str) or not instructions.strip():
+            raise WorkerFailure("The broker did not supply auto-repair instructions")
+        prompt += "\n\nRepair execution workflow:\n" + instructions
         for name, label in (("failure_output", "Parent worker scrubbed failure output"),
                             ("check_output", "Failed required CI check output")):
             if repair.get(name):

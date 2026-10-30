@@ -32,6 +32,7 @@ from quota_selection import select_account
 from worker_core import Accounts, WorkerError, WorkerService, authorize_claims
 from repository_queue import RepositoryQueue
 from readiness_policy import POLICY, PROTOCOL, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS, digest
+from auto_repair import repair_instructions
 from call_budget import record_api_calls
 
 PROJECT = "374f597c-89f5-4e40-9798-07533f57bfba"
@@ -656,8 +657,9 @@ class GitPublicationTests(unittest.TestCase):
                         "head": {"repo": {"full_name": "owner/repo"}, "ref": branch, "sha": broken},
                         "base": {"ref": "main"}, "body": f"<!-- clusterfork-dispatch:{KEY} -->"}
                 config = {"repository": "owner/repo", "ref": "main", "auto_merge": True,
-                          "issue": {"id": ISSUE, "identifier": "KIAN-1000", "title": "Auto-repair", "url": "https://linear.app/test"},
+                          "issue": {"id": ISSUE, "identifier": "KIAN-891", "title": "Fix original task", "url": "https://linear.app/test"},
                           "repair": {"target_branch": branch, "target_dispatch_key": KEY,
+                                     "instructions": repair_instructions("main") + "\nBroker repair trigger: validation failed.",
                                      "target_identifier": "KIAN-891", "target_pull_request": url if existing_pr else ""},
                           "validation_commands": [[sys.executable, "-c", "from pathlib import Path; assert Path('file.txt').read_text() == 'fixed\\n'"]]}
                 @contextmanager
@@ -759,6 +761,20 @@ class GitPublicationTests(unittest.TestCase):
 
 
 class RepairEvidenceTests(unittest.TestCase):
+    def test_repair_prompt_uses_broker_instructions_with_original_issue_requirements(self):
+        broker = Mock(publication_guard=worker.PublicationGuard({}))
+        config = {"ref": "main", "issue": {"id": ISSUE, "identifier": "KIAN-891", "title": "Original task",
+                  "description": "Keep the original behavior requirements", "url": "https://linear.app/test"},
+                  "repair": {"instructions": "Broker-rendered repair context: diagnose the failed first run and fix its PR."}}
+        prompt = worker.development_prompt(broker, config)
+        for text in ("KIAN-891: Original task", "Keep the original behavior requirements",
+                     "Broker-rendered repair context", "failed first run"):
+            self.assertIn(text, prompt)
+        for invalid in (None, "", "  "):
+            config["repair"]["instructions"] = invalid
+            with self.assertRaisesRegex(worker.WorkerFailure, "broker did not supply"):
+                worker.development_prompt(broker, config)
+
     def test_failed_required_job_tail_is_scrubbed_byte_bounded_and_kept_out_of_logs(self):
         broker = SimpleNamespace(publication_guard=worker.PublicationGuard({}))
         broker.publication_guard.remember("opaque-github-credential")
@@ -870,8 +886,9 @@ class RepairRecoveryTests(unittest.TestCase):
                     "head": {"repo": {"full_name": "owner/repo"}, "ref": branch, "sha": parent}}
             config = {"repository": "owner/repo", "ref": "main", "auto_merge": False,
                       "readiness": {"context_sha": initial},
-                      "issue": {"identifier": "KIAN-1000", "title": "Auto-repair", "url": "https://linear.app/test"},
+                      "issue": {"identifier": "KIAN-891", "title": "Fix original task", "url": "https://linear.app/test"},
                       "repair": {"target_branch": branch, "target_dispatch_key": KEY,
+                                 "instructions": repair_instructions("main"),
                                  "target_identifier": "KIAN-891", "target_pull_request": url if open_pr else "",
                                  "failure_output": "parent-private-traceback ghp_synthetic opaque-github-credential"},
                       "validation_commands": [[sys.executable, "-c",
@@ -1115,7 +1132,8 @@ class ValidationRecoveryTests(unittest.TestCase):
                         result.update(validation_commands=checks, auto_merge=False)
                         if open_pr:
                             result["repair"] = {"target_dispatch_key": KEY, "target_identifier": issue["identifier"],
-                                                "target_branch": branch}
+                                                "target_branch": branch,
+                                                "instructions": repair_instructions("main")}
                     return result
 
             class Server:

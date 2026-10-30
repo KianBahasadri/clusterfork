@@ -38,6 +38,8 @@ class SelectionReporter:
                     raise
                 continue  # A mapped repository may not have a queue yet.
             if slot["active_key"]:
+                # Root and repair rows can name the same issue. Only the slot's
+                # current attempt determines its selected marker.
                 owner, _ = candidate.get(slot["active_key"])
                 if owner["issue_id"] == issue_id:
                     if not owner.get("readiness_rejected"):

@@ -100,7 +100,7 @@ def digest(value):
 # Both phases must agree on readiness, repository selection, and steering. An
 # older broker must not silently start a runner without these capabilities.
 STEERING_PROTOCOL = "linear-steering-v1"
-AUTO_REPAIR_PROTOCOL = "auto-repair-private-evidence-wip-base-recovery-v2"
+AUTO_REPAIR_PROTOCOL = "auto-repair-original-issue-broker-instructions-v3"
 ACCOUNT_ISOLATION_PROTOCOL = "codex-first-cursor-grok-high-single-account-v3"
 WORKER_RECOVERY_PROTOCOL = "in-session-validation-private-failures-wip-v1"
 MAX_CORRECTION_TURNS = 2

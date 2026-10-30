@@ -95,7 +95,7 @@ same slot and dispatch key, records `retry_after = now + 60`, and leaves
 `repair_attempted` unspent. Lifecycle reporting returns known startup failures to
 Todo. Repeated observations and restarts retain the original cooldown; a lagging run
 listing cannot redispatch an already submitted retry. The same startup recovery can
-retry a repair child before it starts coding, without creating another repair issue.
+retry a repair attempt before it starts coding, retaining the same issue and repair key.
 Readiness/dependency/deployment holds retain their own retry rules. Cancellation,
 unconfirmed dispatches, and missing outcomes without confirmed failure do not gain a
 startup retry. An open PR continues through the

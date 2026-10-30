@@ -338,14 +338,22 @@ admitted coding/validation failure, completed failing required PR checks, or an 
 worker PR with merge conflicts (`CONFLICTING`/`DIRTY`) or an outdated base (`BEHIND`) can
 consume **one** repair budget per dispatch key. Pending CI alone, intentional cancellation,
 unknown dispatches, readiness/dependency holds, and merge-policy blockers do not
-consume it. The parent queue row atomically records `repair_attempted`, a stable
-`repair_issue_id`, and immutable context under the slot ETag before external creation;
-the receipt mirrors that intent and prior lifecycle writers drain. Interrupted creation reuses the UUID.
+consume it. The parent queue row atomically records `repair_attempted`, `repair_key`,
+`repair_issue_id` equal to the original issue UUID, and immutable context under the
+slot ETag; the receipt mirrors that intent and prior lifecycle writers drain.
+The deterministic second dispatch key hashes the generation, project, and
+`comment_id(parent_key, "auto-repair-issue")`. Interrupted admission reuses that intent.
 
-Azure creates a High-priority Todo sub-issue in the same project, labeled
-`clusterfork: auto-repair`, and atomically hands it the occupied slot. Only a child
-bound to that durable intent and its generated content bypasses readiness clarification. Enrollment,
-dependency, worker identity, account leases, and publication gates remain enforced.
+Azure creates no Linear sub-issue. It atomically hands the occupied slot to a
+second queue entry and receipt using the original Linear UUID and identifier,
+with `dispatch_key = repair_key`. Only the receipt owning the slot accepts steering;
+`clusterfork: selected` stays on the original issue until slot release. The issue
+stays In Progress, or Todo during a quota wait, with `clusterfork: auto-repair`
+alongside its current stage label. Admission requires the parent's durable repair
+binding, the original issue's current eligibility, and its current passing
+`ClusterforkReadiness` review. Human title/description edits require a fresh review;
+generated Markdown hashes no longer authorize repairs. Enrollment, dependency,
+worker identity, account leases, and publication gates remain enforced.
 The worker checks out the **parent's** `clusterfork/<identifier-lowercase>-<key[:8]>`
 branch. It restores the saved WIP commit when its branch still exists and either no
 open PR exists or the WIP descends from the current PR branch; divergent WIP cannot
@@ -355,8 +363,11 @@ creates its missing PR with the parent's dispatch marker. Required checks and na
 merge requirements and the normal publication permission checks still apply;
 `--admin` bypasses remain refused.
 
-The repair description includes the original task's title and requirements. Only the
-authenticated `broker/start` repair payload receives the parent's stored scrubbed
+The authenticated `broker/start` response's `repair.instructions` supplies the
+rendered original task, trigger, failure summary, branch/PR context, and repair
+instructions directly to the worker. The versioned start protocol rejects older
+brokers/workers; no generated child description is needed. Only this private repair
+payload receives the parent's stored scrubbed
 `failure_output` (up to 16,000 UTF-8 bytes), `wip_branch`, and `wip_commit_sha` from
 `ClusterforkWorkers`. Public Linear text retains the short failure summary and check
 names/links. In the credentialed parent process, the repair worker reads required PR
@@ -377,21 +388,23 @@ HEAD, and permit rebased history only with bot authors and committers on introdu
 commits. A reset/rebased update to an existing open PR uses an explicit
 `--force-with-lease` bound to its original head, after re-verifying the repository,
 base, worker branch, `clusterfork[bot]` owner, and parent dispatch marker.
-Generated GitHub link destinations use Linear's saved Markdown form so exact
-content binding survives creation; later title or description edits still block admission.
 
-The label **or** persisted `is_auto_repair` metadata forbids another generation; a repair
+The label **or** persisted `is_auto_repair` metadata forbids another repair; a repair
 that has started coding cannot be rerun automatically or through broker admission.
-If it fails or its completed required checks still fail, both issues become Blocked
+If it fails or its completed required checks still fail, the original issue becomes Blocked
 (the configured Needs attention state) and the slot stays held for human review.
-After merge, or validated completion with no changes/PR remaining, both become Done;
+After merge, or validated completion with no changes/PR remaining, it becomes Done;
 the same reconciliation pass releases the slot and dispatches the next runnable issue.
+Both terminal outcomes remove the current stage and `clusterfork: auto-repair` labels.
+Legacy records with a separate `repair_issue_id` still settle both issues and their reports.
 
+Repair start/finish usage comments use the repair dispatch key on the original issue.
 `notify_user_url` in `automation/azure/projects.json` configures the profile mention. Each terminal
-outcome writes one stable `comment_id(key, "auto-repair-report")` comment per issue,
+outcome writes one stable `comment_id(parent_key, "auto-repair-report")` comment on that issue,
 starting with Kian's profile URL so the Clusterfork OAuth app can notify `@kian`.
-The Auto-Repair Report links the trigger, repair issue/run and PR, summarizes bounded diagnostics,
-prepared commit/file count and validation, and states whether the queue is flowing or awaiting review.
+The Auto-Repair Report links the trigger, failed initial run, repair run, PR, and
+prepared commit. It summarizes bounded diagnostics, file count, validation, and
+whether the queue is flowing or awaiting review.
 Reports exclude credentials, raw logs, environment dumps and agent transcripts. Pending projections
 and in-flight markers recover failed, ambiguous or interrupted writes even after the next task starts.
 
@@ -401,7 +414,7 @@ Completed issues dispatch once per registry `generation`. Editing an issue or
 moving it out of Todo and back does not reset completion. Capacity waits retry
 through reconciliation; eligible execution/check failures use the single repair above.
 Other blockers require human recovery. Existing PRs use their deterministic branch name.
-The [recovery tools](remote-development-recovery.md) cover verified operator repairs of stored content bindings.
+The [recovery tools](remote-development-recovery.md) cover historical child-issue content bindings.
 Changing generation permits **all** eligible issues to dispatch again.
 
 Each project can set `agent_timeout_minutes` in `automation/azure/projects.json`.

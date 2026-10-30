@@ -1,6 +1,7 @@
 """Repository admission safety across priorities, deliveries, crashes, and reruns."""
 
 import copy
+import hashlib
 import json
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -38,6 +39,7 @@ class RepositoryQueueTests(unittest.TestCase):
         self.dependencies = defaultdict(list)
         self.selected = set()
         self.queued = set()
+        self.stages = {}
         self.receipts, self.runs = MemoryTable(), MemoryTable()
         self.tables = defaultdict(MemoryTable)
         self.linear = Mock(spec=Linear)
@@ -46,6 +48,8 @@ class RepositoryQueueTests(unittest.TestCase):
         self.linear.set_selected.side_effect = self.select
         self.linear.set_queued.side_effect = self.wait
         self.linear.set_state.side_effect = self.set_state
+        self.linear.set_label.side_effect = self.label
+        self.linear.set_stage.side_effect = lambda key, stage: self.stages.update({key: stage})
         self.linear.create_issue.side_effect = self.create_repair
         self.linear.stage_label.return_value = "repair-label-id"
         self.linear.project_issues.side_effect = lambda project: [copy.deepcopy(i) for i in self.issues.values()
@@ -119,6 +123,12 @@ class RepositoryQueueTests(unittest.TestCase):
     def set_state(self, issue_id, state_id):
         self.issues[issue_id]["state"] = {"id": state_id, "type": (
             "completed" if state_id == self.route.linear_states.done else "started")}
+
+    def label(self, issue_id, name, enabled):
+        labels = self.issues[issue_id]["labels"]["nodes"]
+        labels[:] = [label for label in labels if label["name"] != name]
+        if enabled:
+            labels.append({"name": name})
 
     def enqueue(self, issue):
         return self.queue.enqueue(issue, self.registry.routes[issue["project"]["id"]])
@@ -1961,8 +1971,10 @@ class RepositoryQueueTests(unittest.TestCase):
         self.assertNotIn("private-traceback-marker", public)
         self.assertNotIn("failure_output", public)
         self.assertNotIn("wip_commit_sha", public)
-        self.assertIn("Diagnose", self.linear.create_issue.call_args.args[0]["description"])
-        self.assertIn("Reset and re-implement", self.linear.create_issue.call_args.args[0]["description"])
+        self.assertIn("Diagnose", repair["instructions"])
+        self.assertIn("Reset and re-implement", repair["instructions"])
+        self.assertEqual(config["issue"]["id"], str(UUID(int=1)))
+        self.linear.create_issue.assert_not_called()
 
     def test_open_pr_conflicts_and_outdated_base_trigger_one_repair(self):
         for fields in ({"mergeable": "CONFLICTING"}, {"mergeStateStatus": "DIRTY"}, {"mergeStateStatus": "BEHIND"}):
@@ -1975,18 +1987,18 @@ class RepositoryQueueTests(unittest.TestCase):
                 child = self.repair_row(parent)
                 self.assertEqual(self.slot()["active_key"], child["RowKey"])
                 self.assertEqual(self.queue.table(self.repository).get(following)[0]["status"], "queued")
-                description = self.linear.create_issue.call_args.args[0]["description"]
-                self.assertIn("behind its base" if fields.get("mergeStateStatus") == "BEHIND" else "merge conflicts", description)
                 with patch.object(self.queue.repair, "approval", return_value={
                         "review_key": "auto-repair:" + parent, "context_sha": "a" * 40}):
-                    self.start(child["RowKey"])
+                    config = self.start(child["RowKey"])
+                    self.assertIn("behind its base" if fields.get("mergeStateStatus") == "BEHIND" else "merge conflicts",
+                                  config["repair"]["instructions"])
                     self.service.handle("progress", self.identity(child["RowKey"]), {
                         "dispatch_key": child["RowKey"], "stage": "coding", "context_sha": "b" * 40})
                 self.queue.advance(self.repository)
                 self.assertEqual(self.github.dispatch.call_count, 2)
-                self.linear.create_issue.assert_called_once()
+                self.linear.create_issue.assert_not_called()
 
-    def test_worker_and_required_check_failures_dispatch_one_high_priority_repair(self):
+    def test_worker_and_required_check_failures_dispatch_second_attempt_on_original_issue(self):
         for failure in ("worker", "checks", "missing_callback"):
             with self.subTest(failure=failure):
                 self.setUp()
@@ -1998,82 +2010,87 @@ class RepositoryQueueTests(unittest.TestCase):
                 self.assertEqual(result[following]["status"], "queued")
                 self.assertTrue(self.receipts.get(parent)[0]["repair_attempted"])
                 self.assertTrue(self.receipts.get(child["RowKey"])[0]["is_auto_repair"])
-                fields = self.linear.create_issue.call_args.args[0]
-                self.assertEqual(fields["priority"], 2)
-                self.assertEqual(fields["projectId"], PROJECT)
-                self.assertEqual(fields["stateId"], self.route.ready_state_ids[0])
-                self.assertEqual(fields["parentId"], str(UUID(int=1)))
-                self.assertEqual(fields["labelIds"], ["repair-label-id"])
-                self.assertIn("Auto-repair: KIAN-1", fields["title"])
-                self.assertIn(worker_branch("KIAN-1", parent), fields["description"])
-                self.assertIn("Respect the broker's workflow-publication capability", fields["description"])
-                self.assertNotIn("Never edit .github/workflows/", fields["description"])
-                self.assertIn("actions/runs/100/attempts/1", fields["description"])
+                self.assertEqual(child["issue_id"], str(UUID(int=1)))
+                self.assertEqual(child["identifier"], "KIAN-1")
+                identifier = comment_id(parent, "auto-repair-issue")
+                expected_key = hashlib.sha256(f"{self.registry.generation}:{PROJECT}:{identifier}".encode()).hexdigest()
+                self.assertEqual(child["RowKey"], expected_key)
+                self.assertEqual(self.github.dispatch.call_args.args[1], {
+                    "linear_issue_id": child["issue_id"], "linear_identifier": "KIAN-1",
+                    "linear_project_id": PROJECT, "dispatch_key": expected_key})
+                config = self.start(child["RowKey"])
+                description = config["repair"]["instructions"]
+                self.assertIn(worker_branch("KIAN-1", parent), description)
+                self.assertIn("Respect the broker's workflow-publication capability", description)
+                self.assertNotIn("Never edit .github/workflows/", description)
+                self.assertIn("actions/runs/100/attempts/1", description)
                 if failure == "checks":
-                    self.assertIn("actions/runs/500/job/600", fields["description"])
-                    self.assertIn(self.pulls[parent]["url"], fields["description"])
+                    self.assertIn("actions/runs/500/job/600", description)
+                    self.assertIn(self.pulls[parent]["url"], description)
                 for _ in range(4):
                     self.restart().reconcile()
-                self.linear.create_issue.assert_called_once()
+                self.linear.create_issue.assert_not_called()
                 self.assertEqual(self.github.dispatch.call_count, 2)
+                self.assertEqual(self.selected, {child["issue_id"]})
+                self.assertEqual(self.issues[child["issue_id"]]["state"]["id"], self.route.linear_states.in_progress)
+                self.assertIn({"name": AUTO_REPAIR_LABEL}, self.issues[child["issue_id"]]["labels"]["nodes"])
 
-    def test_linear_saved_github_link_format_keeps_repair_content_binding_valid(self):
+    def test_repair_approval_ignores_generated_markdown_hash_and_uses_original_review(self):
         parent, _ = self.prepare_repair()
-        create = self.linear.create_issue.side_effect
-        url = f"https://github.com/{self.repository}/actions/runs/100/attempts/1"
-
-        def saved_form(fields):
-            fields = {**fields, "description": fields["description"].replace(f"]({url})", f"](<{url}>)")}
-            return create(fields)
-
-        self.linear.create_issue.side_effect = saved_form
         self.queue.advance(self.repository)
         child = self.repair_row(parent)
+        table = self.queue.table(self.repository)
+        row, version = table.get(parent)
+        row["repair_revision"] = "obsolete-generated-markdown-hash"
+        table.replace(row, version)
+        require = self.queue.readiness.require = Mock(return_value={"review_key": "original-review"})
         config = self.start(child["RowKey"])
+        self.assertEqual(config["readiness"]["review_key"], "original-review")
         self.assertEqual(config["repair"]["target_dispatch_key"], parent)
-        self.assertEqual(self.github.dispatch.call_count, 2)
-        self.assertIn(f"](<{url}>)", self.issues[child["issue_id"]]["description"])
+        require.assert_called_once_with(self.issues[child["issue_id"]], self.route)
+        self.linear.create_issue.assert_not_called()
 
-    def test_missing_repair_label_resumes_same_intent_with_unpublished_task_requirements(self):
+    def test_missing_repair_label_retries_reporting_without_losing_original_task_or_slot(self):
         parent, following = self.prepare_repair()
         task = self.issues[str(UUID(int=1))]
         task.update(title="Add publication secret checks", description="Reject leased credentials before Git push.")
-        self.linear.stage_label.side_effect = RequestError()
-        with self.assertRaises(RequestError):
+        self.linear.set_label.side_effect = RequestError()
+        with self.assertLogs(level="ERROR"):
             self.queue.advance(self.repository)
         intent = self.queue.table(self.repository).get(parent)[0]
         self.assertTrue(intent["repair_attempted"])
-        self.assertEqual(self.slot()["active_key"], parent)
-        self.linear.create_issue.assert_not_called()
+        self.assertEqual(intent["repair_issue_id"], task["id"])
+        self.assertEqual(self.slot()["active_key"], intent["repair_key"])
+        self.assertTrue(intent["repair_report_pending"])
         self.assertNotIn(parent, self.pulls)
 
-        self.linear.stage_label.side_effect = None
+        self.linear.set_label.side_effect = self.label
         self.queue = self.restart()
-        result = self.queue.advance(self.repository)
+        self.queue.advance(self.repository)
         child = self.repair_row(parent)
-        fields = self.linear.create_issue.call_args.args[0]
-        self.assertEqual(fields["id"], intent["repair_issue_id"])
+        config = self.start(child["RowKey"])
         self.assertEqual(child["RowKey"], intent["repair_key"])
         self.assertEqual(self.slot()["active_key"], intent["repair_key"])
-        self.assertEqual(result[following]["status"], "queued")
-        self.assertIn(task["title"], fields["description"])
-        self.assertIn(task["description"], fields["description"])
-        self.assertIn("If its branch is absent", fields["description"])
-        self.assertIn("passing validation alone does not establish", fields["description"])
-        self.linear.create_issue.assert_called_once()
+        self.assertEqual(self.queue.table(self.repository).get(following)[0]["status"], "queued")
+        instructions = config["repair"]["instructions"]
+        for expected in (task["title"], task["description"], "If its branch is absent",
+                         "passing validation alone does not establish"):
+            self.assertIn(expected, instructions)
+        self.assertIn({"name": AUTO_REPAIR_LABEL}, task["labels"]["nodes"])
+        self.linear.create_issue.assert_not_called()
         self.assertEqual(self.github.dispatch.call_count, 2)
 
-    def test_repair_bypasses_clarification_but_retains_broker_boundaries(self):
+    def test_repair_requires_original_approval_and_retains_broker_boundaries(self):
         parent, _ = self.prepare_repair()
         self.queue.readiness.ensure = Mock(return_value={"status": "needs_clarification"})
-        self.queue.readiness.require = Mock(side_effect=WorkerError("needs clarification"))
+        self.queue.readiness.require = Mock(return_value={"review_key": "original-review"})
         self.queue.advance(self.repository)
         child = self.repair_row(parent)
         config = self.start(child["RowKey"])
         self.assertEqual(config["repair"]["target_dispatch_key"], parent)
         self.assertEqual(config["repair"]["target_branch"], worker_branch("KIAN-1", parent))
         self.queue.readiness.ensure.assert_not_called()
-        self.queue.readiness.require.assert_not_called()
+        self.assertEqual(self.queue.readiness.require.call_count, 2)
         self.service.handle("checkout", self.identity(child["RowKey"]), {"dispatch_key": child["RowKey"]})
         self.service.handle("progress", self.identity(child["RowKey"]),
                             {"dispatch_key": child["RowKey"], "stage": "coding"})
@@ -2081,19 +2098,21 @@ class RepositoryQueueTests(unittest.TestCase):
         with self.assertRaisesRegex(WorkerError, "eligible"):
             self.service.handle("github", self.identity(child["RowKey"]), {"dispatch_key": child["RowKey"]})
 
-    def test_successful_repair_merges_both_issues_and_dispatches_next_in_same_pass(self):
+    def test_successful_repair_merges_original_issue_and_dispatches_next_in_same_pass(self):
         parent, following = self.prepare_repair("checks")
         self.queue.advance(self.repository)
         child = self.repair_row(parent)
         key = child["RowKey"]
         self.start(key)
         self.service.handle("progress", self.identity(key), {
-            "dispatch_key": key, "stage": "publishing", "repair_validation_passed": True})
+            "dispatch_key": key, "stage": "publishing", "repair_validation_passed": True,
+            "repair_result": {"commit_sha": "c" * 40, "changed_files": 3}})
         self.finish(key, pull=self.pulls[parent]["url"])
         self.stop(key)
         checks(self.pulls[parent])[0].update(status="IN_PROGRESS", conclusion=None)
         self.queue.advance(self.repository)
         self.assertEqual(self.slot()["active_key"], key)
+        self.assertEqual(self.selected, {child["issue_id"]})
         self.assertFalse(self.repair_reports())
         checks(self.pulls[parent])[0].update(status="COMPLETED", conclusion="SUCCESS")
         self.pulls[parent].update(merged=True, state="MERGED")
@@ -2103,18 +2122,23 @@ class RepositoryQueueTests(unittest.TestCase):
         for issue in (str(UUID(int=1)), child["issue_id"]):
             self.assertEqual(self.issues[issue]["state"]["id"], self.route.linear_states.done)
         self.assertEqual(self.queue.table(self.repository).get(parent)[0]["status"], "completed")
+        self.assertEqual(self.selected, {str(UUID(int=2))})
+        self.assertIsNone(self.stages[child["issue_id"]])
+        self.assertNotIn({"name": AUTO_REPAIR_LABEL}, self.issues[child["issue_id"]]["labels"]["nodes"])
         reports = self.repair_reports()
-        self.assertEqual(len(reports), 2)
-        self.assertEqual({c.args[1] for c in reports}, {comment_id(parent, "auto-repair-report"), comment_id(key, "auto-repair-report")})
+        self.assertEqual(len(reports), 1)
+        self.assertEqual({c.args[1] for c in reports}, {comment_id(parent, "auto-repair-report")})
         for report in reports:
             self.assertTrue(report.args[2].startswith(self.registry.notify_user_url))
-            for expected in ("Triggered by:", "Repair issue & run:", "Outcome summary:", "Queue status:",
-                             "Fixed & Merged", "All configured validation commands passed", "unblocked"):
+            for expected in ("Triggered by:", "Repair attempt:", "Outcome summary:", "Queue status:",
+                             "Fixed & Merged", "All configured validation commands passed", "unblocked",
+                             "actions/runs/100/attempts/1", "actions/runs/101/attempts/1",
+                             "/pull/1", "/commit/" + "c" * 40, "3 file(s)"):
                 self.assertIn(expected, report.args[2])
         for _ in range(3):
             self.restart().reconcile()
-        self.assertEqual(len(self.repair_reports()), 2)
-        self.linear.create_issue.assert_called_once()
+        self.assertEqual(len(self.repair_reports()), 1)
+        self.linear.create_issue.assert_not_called()
 
     def test_repair_without_repository_changes_releases_slot(self):
         parent, following = self.prepare_repair()
@@ -2126,6 +2150,103 @@ class RepositoryQueueTests(unittest.TestCase):
         self.queue.advance(self.repository)
         self.assertEqual(self.slot()["active_key"], following)
         self.assertEqual(self.issues[child["issue_id"]]["state"]["id"], self.route.linear_states.done)
+
+    def test_parent_selection_cleanup_preserves_shared_issue_repair_until_slot_release(self):
+        from selection_reporting import selection_changed
+
+        parent, _ = self.prepare_repair()
+        self.queue.advance(self.repository)
+        repair = self.repair_row(parent)
+        table = self.queue.table(self.repository)
+        for key in (parent, repair["RowKey"]):
+            row, version = table.get(key)
+            selection_changed(row)
+            table.replace(row, version)
+            self.queue.selection.sync(table, key)
+        self.assertEqual(self.selected, {repair["issue_id"]})
+        self.assertFalse(self.queued.intersection(self.selected))
+        self.start(repair["RowKey"])
+        self.finish(repair["RowKey"])
+        self.stop(repair["RowKey"])
+        self.queue.advance(self.repository)
+        self.assertNotIn(repair["issue_id"], self.selected)
+        for key in (repair["RowKey"], parent):
+            self.queue.selection.sync(table, key, refresh=True)
+        self.assertNotIn(repair["issue_id"], self.selected)
+
+    def test_legacy_separate_child_repair_still_finishes_and_reconciles_both_issues(self):
+        from auto_repair import repair_content
+        from readiness_policy import issue_revision
+        from selection_reporting import selection_changed
+
+        for outcome in ("completed", "blocked"):
+            with self.subTest(outcome=outcome):
+                self.setUp()
+                parent, following = self.prepare_repair("checks")
+                self.queue.advance(self.repository)
+                table = self.queue.table(self.repository)
+                root, version = table.get(parent)
+                repair = self.repair_row(parent)
+                original = self.issues[root["issue_id"]]
+                content = repair_content(json.loads(root["repair_context"]), self.route, original)
+                legacy = self.create_repair({"id": comment_id(parent, "auto-repair-issue"),
+                    "parentId": original["id"], "priority": 2, "stateId": self.route.ready_state_ids[0], **content})
+                root.update(repair_issue_id=legacy["id"], repair_identifier=legacy["identifier"],
+                            repair_issue_url=legacy["url"], repair_revision=issue_revision(legacy))
+                selection_changed(root)
+                table.replace(root, version)
+                for store in (table, self.receipts):
+                    child, version = store.get(repair["RowKey"])
+                    child.update(issue_id=legacy["id"], identifier=legacy["identifier"])
+                    selection_changed(child)
+                    store.replace(child, version)
+                self.label(original["id"], AUTO_REPAIR_LABEL, False)
+                self.queue.readiness.require = Mock(return_value={"review_key": "original-review"})
+                config = self.start(repair["RowKey"])
+                self.assertEqual(config["issue"]["id"], legacy["id"])
+                self.assertIn(original["title"], config["repair"]["instructions"])
+                self.queue.readiness.require.assert_called_once_with(original, self.route)
+                self.service.handle("progress", self.identity(repair["RowKey"]), {
+                    "dispatch_key": repair["RowKey"], "stage": "coding"})
+                self.finish(repair["RowKey"], "completed" if outcome == "completed" else "failed",
+                            self.pulls[parent]["url"])
+                self.stop(repair["RowKey"], "success" if outcome == "completed" else "failure")
+                if outcome == "completed":
+                    self.pulls[parent].update(merged=True, state="MERGED")
+                self.queue.advance(self.repository)
+                self.restart().reconcile()
+                target = self.route.linear_states.done if outcome == "completed" else self.route.linear_states.blocked
+                for issue_id in (original["id"], legacy["id"]):
+                    self.assertEqual(self.issues[issue_id]["state"]["id"], target)
+                    self.assertIsNone(self.stages[issue_id])
+                    self.assertNotIn({"name": AUTO_REPAIR_LABEL}, self.issues[issue_id]["labels"]["nodes"])
+                reports = self.repair_reports()
+                self.assertEqual({call.args[0] for call in reports}, {original["id"], legacy["id"]})
+                self.assertEqual({call.args[1] for call in reports}, {
+                    comment_id(parent, "auto-repair-report"), comment_id(repair["RowKey"], "auto-repair-report")})
+                self.assertEqual(len(reports), 2)
+                self.assertEqual(self.slot()["active_key"], following if outcome == "completed" else repair["RowKey"])
+                self.linear.create_issue.assert_not_called()
+
+    def test_terminal_repair_label_failure_does_not_block_done_or_repeat_report(self):
+        parent, following = self.prepare_repair()
+        self.queue.advance(self.repository)
+        repair = self.repair_row(parent)
+        self.start(repair["RowKey"])
+        self.finish(repair["RowKey"])
+        self.stop(repair["RowKey"])
+        self.linear.set_label.side_effect = RequestError()
+        with self.assertLogs(level="ERROR"):
+            self.queue.advance(self.repository)
+        self.assertEqual(self.slot()["active_key"], following)
+        self.assertEqual(self.issues[repair["issue_id"]]["state"]["id"], self.route.linear_states.done)
+        self.assertTrue(self.queue.table(self.repository).get(parent)[0]["repair_report_pending"])
+        self.assertEqual(len(self.repair_reports()), 1)
+        self.linear.set_label.side_effect = self.label
+        self.restart().reconcile()
+        self.assertFalse(self.queue.table(self.repository).get(parent)[0]["repair_report_pending"])
+        self.assertEqual(len(self.repair_reports()), 1)
+        self.assertNotIn({"name": AUTO_REPAIR_LABEL}, self.issues[repair["issue_id"]]["labels"]["nodes"])
 
     def test_successful_repair_immediately_admits_work_depending_on_parent_completion(self):
         parent, following = self.prepare_repair()
@@ -2152,11 +2273,14 @@ class RepositoryQueueTests(unittest.TestCase):
         self.stop(key)
         self.assertEqual(self.queue.advance(self.repository)[key]["status"], "waiting")
         self.assertEqual(self.issues[child["issue_id"]]["state"]["id"], self.route.ready_state_ids[0])
+        self.assertEqual(self.selected, {child["issue_id"]})
+        self.assertEqual(self.stages[child["issue_id"]], "waiting_for_quota")
+        self.assertIn({"name": AUTO_REPAIR_LABEL}, self.issues[child["issue_id"]]["labels"]["nodes"])
         self.now += 901
         self.queue.advance(self.repository)
         self.assertEqual(self.github.dispatch.call_count, 3)
 
-    def test_repair_startup_failure_retries_same_child_before_coding(self):
+    def test_repair_startup_failure_retries_same_attempt_before_coding(self):
         parent, following = self.prepare_repair()
         self.queue.advance(self.repository)
         child = self.repair_row(parent)
@@ -2174,13 +2298,13 @@ class RepositoryQueueTests(unittest.TestCase):
         self.assertTrue(self.queue.started_coding(self.queue.table(self.repository).get(key)[0]))
         self.assertEqual(self.slot()["active_key"], key)
         self.assertEqual(self.queue.table(self.repository).get(following)[0]["status"], "queued")
-        self.linear.create_issue.assert_called_once()
+        self.linear.create_issue.assert_not_called()
         self.start(key)
         self.finish(key)
         self.stop(key)
         self.queue.advance(self.repository)
         self.assertEqual(self.slot()["active_key"], following)
-        self.linear.create_issue.assert_called_once()
+        self.linear.create_issue.assert_not_called()
 
     def test_repair_dependency_or_eligibility_hold_cannot_release_broken_parent_slot(self):
         for hold in ("dependency", "cancellation", "mapping"):
@@ -2209,11 +2333,12 @@ class RepositoryQueueTests(unittest.TestCase):
                 self.assertNotEqual(self.slot()["active_key"], following)
                 self.assertEqual(self.github.dispatch.call_count, 1)
 
-    def test_simultaneous_failure_observers_create_one_issue_and_dispatch_one_repair(self):
+    def test_simultaneous_failure_observers_dispatch_one_repair_without_creating_issues(self):
         parent, _ = self.prepare_repair()
         with ThreadPoolExecutor(max_workers=6) as pool:
             list(pool.map(lambda _: self.queue.advance(self.repository), range(12)))
-        self.assertEqual(len([i for i in self.issues.values() if i["title"].startswith("Auto-repair:")]), 1)
+        self.assertEqual(len(self.issues), 2)
+        self.linear.create_issue.assert_not_called()
         self.assertEqual(self.github.dispatch.call_count, 2)
         self.assertEqual(self.slot()["active_key"], self.repair_row(parent)["RowKey"])
 
@@ -2227,7 +2352,7 @@ class RepositoryQueueTests(unittest.TestCase):
         self.assertEqual(self.slot()["active_key"], parent)
         self.now += 121
         self.queue.advance(self.repository)
-        self.linear.create_issue.assert_called_once()
+        self.linear.create_issue.assert_not_called()
         self.assertEqual(self.github.dispatch.call_count, 2)
 
     def test_late_or_lost_progress_writer_cannot_undo_terminal_repair_report(self):
@@ -2268,15 +2393,50 @@ class RepositoryQueueTests(unittest.TestCase):
                 self.assertIsNone(stages[child["issue_id"]])
                 self.assertFalse(self.queue.table(self.repository).get(parent)[0]["repair_report_pending"])
 
-    def test_generated_repair_content_edits_cannot_bypass_readiness_authorization(self):
-        parent, _ = self.prepare_repair()
-        self.queue.advance(self.repository)
-        child = self.repair_row(parent)
-        self.issues[child["issue_id"]]["description"] = "A different task requiring new decisions"
-        with self.assertRaisesRegex(WorkerError, "fenced parent"):
-            self.start(child["RowKey"])
-        self.assertFalse(self.runs.get(parent)[0]["status"] == "running")
-        self.assertEqual(self.github.dispatch.call_count, 2)
+    def test_original_issue_edits_require_fresh_readiness_before_dispatch_and_worker_access(self):
+        from readiness import ReadinessGate
+        from readiness_policy import issue_revision
+        from test_readiness import ready
+
+        for field in ("title", "description"):
+            for phase in ("dispatch", "start", "checkout", "coding", "publication"):
+                with self.subTest(field=field, phase=phase):
+                    self.setUp()
+                    parent, _ = self.prepare_repair()
+                    issue = self.issues[str(UUID(int=1))]
+                    gate = ReadinessGate(self.registry, MemoryTable(), Accounts(MemoryTable()),
+                                         self.linear, self.github, clock=lambda: self.now)
+                    self.github.branch_sha.return_value = "b" * 40
+                    binding = gate.binding(issue, self.route)
+                    gate.table.create({"RowKey": "approved", "status": "passed",
+                                       "binding": json.dumps(binding), "result": json.dumps(ready())})
+                    gate.table.create({"RowKey": gate.pointer(issue), "review_key": "approved"})
+                    self.queue.readiness.require = gate.require
+                    self.assertEqual(gate.require(issue, self.route)["issue_revision"], issue_revision(issue))
+                    if phase != "dispatch":
+                        self.queue.advance(self.repository)
+                        child = self.repair_row(parent)
+                    if phase in {"checkout", "coding", "publication"}:
+                        self.start(child["RowKey"])
+                    issue[field] = "A different task requiring new decisions"
+                    with self.assertRaisesRegex(WorkerError, "passing readiness review"):
+                        if phase == "dispatch":
+                            self.queue.advance(self.repository)
+                        elif phase == "start":
+                            self.start(child["RowKey"])
+                        else:
+                            action = "checkout" if phase == "checkout" else "progress"
+                            data = {} if action == "checkout" else {"stage": "coding" if phase == "coding" else "publishing"}
+                            self.service.handle(action, self.identity(child["RowKey"]),
+                                                {"dispatch_key": child["RowKey"], **data})
+                    self.assertEqual(self.github.dispatch.call_count, 1 if phase == "dispatch" else 2)
+                    self.assertTrue(self.queue.table(self.repository).get(parent)[0]["repair_attempted"])
+                    self.linear.create_issue.assert_not_called()
+                    # Only a new passing content binding can restore approval.
+                    approved, version = gate.table.get("approved")
+                    approved["binding"] = json.dumps(gate.binding(issue, self.route))
+                    gate.table.replace(approved, version)
+                    self.assertEqual(gate.require(issue, self.route)["issue_revision"], issue_revision(issue))
 
     def test_failed_repair_worker_or_checks_never_cascade_or_retry(self):
         for failure in ("worker", "checks", "missing_callback"):
@@ -2297,8 +2457,11 @@ class RepositoryQueueTests(unittest.TestCase):
                 self.assertEqual(self.slot()["active_key"], key)
                 self.assertEqual(self.queue.table(self.repository).get(following)[0]["status"], "queued")
                 self.assertEqual(self.github.dispatch.call_count, 2)
-                self.linear.create_issue.assert_called_once()
-                self.assertEqual(len(self.repair_reports()), 2)
+                self.linear.create_issue.assert_not_called()
+                self.assertEqual(len(self.repair_reports()), 1)
+                self.assertEqual(self.selected, {child["issue_id"]})
+                self.assertIsNone(self.stages[child["issue_id"]])
+                self.assertNotIn({"name": AUTO_REPAIR_LABEL}, self.issues[child["issue_id"]]["labels"]["nodes"])
                 for issue in (str(UUID(int=1)), child["issue_id"]):
                     self.assertEqual(self.issues[issue]["state"]["id"], self.route.linear_states.blocked)
                 for report in self.repair_reports():
@@ -2329,39 +2492,32 @@ class RepositoryQueueTests(unittest.TestCase):
                 self.linear.create_issue.assert_not_called()
                 self.assertEqual(self.github.dispatch.call_count, 1)
 
-    def test_repair_intent_and_creation_recover_after_interrupted_writes(self):
-        for interruption in ("before_create", "after_create", "before_handoff", "after_handoff"):
+    def test_repair_intent_and_handoff_recover_after_interrupted_writes(self):
+        for interruption in ("before_intent", "after_intent", "before_handoff", "after_handoff"):
             with self.subTest(interruption=interruption):
                 self.setUp()
                 parent, _ = self.prepare_repair()
-                original_create = self.create_repair
-                def create(fields):
-                    persisted = self.queue.table(self.repository).get(parent)[0]
-                    self.assertTrue(persisted["repair_attempted"])
-                    self.assertTrue(self.receipts.get(parent)[0]["repair_attempted"])
-                    if interruption == "before_create":
-                        raise RuntimeError("interrupted before create")
-                    result = original_create(fields)
-                    if interruption == "after_create":
-                        raise RuntimeError("creation response lost")
-                    return result
-                self.linear.create_issue.side_effect = create
                 table = self.queue.table(self.repository)
                 transaction = table.transaction
-                def handoff(changes):
+                def interrupt(changes):
+                    is_intent = any(row.get("repair_attempted") and row.get("status") == "active" for row, _ in changes)
                     is_handoff = any(row.get("is_auto_repair") and row.get("status") == "active" for row, _ in changes)
-                    if is_handoff and interruption == "before_handoff":
-                        raise RuntimeError("interrupted before handoff")
+                    before = (is_intent and interruption == "before_intent" or
+                              is_handoff and interruption == "before_handoff")
+                    after = (is_intent and interruption == "after_intent" or
+                             is_handoff and interruption == "after_handoff")
+                    if before:
+                        raise RuntimeError("interrupted before transaction")
                     transaction(changes)
-                    if is_handoff and interruption == "after_handoff":
-                        raise RuntimeError("handoff response lost")
-                with patch.object(table, "transaction", side_effect=handoff), self.assertRaises(RuntimeError):
+                    if after:
+                        raise RuntimeError("transaction response lost")
+                with patch.object(table, "transaction", side_effect=interrupt), self.assertRaises(RuntimeError):
                     self.queue.advance(self.repository)
-                self.linear.create_issue.side_effect = original_create
                 self.queue = self.restart()
                 self.queue.reconcile()
                 self.queue.reconcile()
-                self.assertEqual(len([i for i in self.issues.values() if i["title"].startswith("Auto-repair:")]), 1)
+                self.linear.create_issue.assert_not_called()
+                self.assertEqual(len(self.issues), 2)
                 self.assertEqual(self.github.dispatch.call_count, 2)
                 self.assertEqual(self.slot()["active_key"], self.repair_row(parent)["RowKey"])
 
@@ -2397,18 +2553,18 @@ class RepositoryQueueTests(unittest.TestCase):
         self.assertTrue(self.queue.table(self.repository).get(parent)[0]["repair_report_pending"])
         self.restart().reconcile()
         self.assertFalse(self.queue.table(self.repository).get(parent)[0]["repair_report_pending"])
-        for key in (parent, child["RowKey"]):
-            self.assertEqual(api.writes.count(("create", comment_id(key, "auto-repair-report"))), 1)
+        self.assertEqual(api.writes.count(("create", comment_id(parent, "auto-repair-report"))), 1)
+        self.assertNotIn(comment_id(child["RowKey"], "auto-repair-report"), api.comments)
         self.assertEqual(self.issues[child["issue_id"]]["state"]["id"], self.route.linear_states.done)
 
     def test_failure_context_redacts_credentials_and_rejects_foreign_check_links(self):
         parent, _ = self.prepare_repair("checks")
         checks(self.pulls[parent])[0].update(name="test token=private-value ghp_supersecret", detailsUrl="https://evil.example/?token=private-value")
         self.queue.advance(self.repository)
-        fields = self.linear.create_issue.call_args.args[0]
-        self.assertNotIn("private-value", fields["description"])
-        self.assertNotIn("ghp_supersecret", fields["description"])
-        self.assertNotIn("evil.example", fields["description"])
+        instructions = self.start(self.repair_row(parent)["RowKey"])["repair"]["instructions"]
+        self.assertNotIn("private-value", instructions)
+        self.assertNotIn("ghp_supersecret", instructions)
+        self.assertNotIn("evil.example", instructions)
 
     def test_canceled_ambiguous_dispatch_cannot_later_obtain_credentials(self):
         first, second = [self.enqueue(self.issue(n)) for n in (1, 2)]

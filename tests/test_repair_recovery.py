@@ -12,7 +12,8 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
 import recover_repair_binding as recovery
-from auto_repair import trigger_markdown
+from auto_repair import repair_content, trigger_markdown
+from linear_sync import comment_id
 from readiness_policy import issue_revision
 from worker_core import WorkerError
 from test_remote_worker import MemoryTable
@@ -24,8 +25,8 @@ class RepairRecoveryTests(unittest.TestCase):
         fixture = self.fixture = RepositoryQueueTests()
         fixture.setUp()
         self.parent_key, _ = fixture.prepare_repair()
-        # Reproduce an admitted child that failed its content check before a
-        # dispatch receipt or GitHub worker could be created.
+        # Stop before dispatch, then reconstruct a legacy child record. Current
+        # admission uses the original issue and no longer creates this content.
         with patch.object(fixture.queue, "dispatch", side_effect=WorkerError("content binding")):
             with self.assertRaises(WorkerError):
                 fixture.queue.advance(fixture.repository)
@@ -33,8 +34,16 @@ class RepairRecoveryTests(unittest.TestCase):
         parent, version = self.table.get(self.parent_key)
         self.child_key = parent["repair_key"]
         self.original = fixture.issues[parent["issue_id"]]
-        self.repair = fixture.issues[parent["repair_issue_id"]]
         context = json.loads(parent["repair_context"])
+        self.repair = fixture.create_repair({"id": comment_id(self.parent_key, "auto-repair-issue"),
+            "parentId": self.original["id"], "priority": 2, "stateId": fixture.route.ready_state_ids[0],
+            **repair_content(context, fixture.route, self.original)})
+        self.repair = fixture.issues[self.repair["id"]]
+        parent.update(repair_issue_id=self.repair["id"], repair_identifier=self.repair["identifier"],
+                      repair_issue_url=self.repair["url"])
+        child, child_version = self.table.get(self.child_key)
+        child.update(issue_id=self.repair["id"], identifier=self.repair["identifier"])
+        self.table.replace(child, child_version)
         canonical = "Triggered by: " + trigger_markdown(fixture.repository, context["trigger"])
         legacy = {**self.repair, "description": self.repair["description"].replace(
             canonical, "Triggered by: " + context["trigger"], 1)}
