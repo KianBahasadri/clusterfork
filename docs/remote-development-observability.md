@@ -28,6 +28,48 @@ validation command gets a numbered operation such as `validation/1`; failures
 retain its exit code and duration. Azure health reports `diagnostics_version: 1`
 and whether its Application Insights connection is configured.
 
+## Readiness comments and audit records
+
+A passed Linear readiness comment says the issue is ready for development,
+briefly explains that the requirements and repository context are sufficient,
+and links to the GitHub review run. It explicitly places tests during development:
+readiness is a read-only assessment, not evidence that tests or validation passed.
+Clarifications keep the missing decisions, consequences, and questions; rejected
+reviewer output keeps the specific parsing, schema, consistency, or binding error.
+Both retain resubmission instructions. Temporary failures keep their reason and
+retry guidance. Rejection notifications and per-attempt comment identities stay
+the same, preserving earlier discussions and replies.
+
+Revision fingerprints, the consulted policy/context inventory, and rejected output
+snapshots stay out of normal Linear comments. They remain in the private Azure
+Storage table `ClusterforkReadiness`, partition `readiness`:
+
+- `binding` JSON retains `issue_revision`, `policy_version`, `context_sha`, and
+  `images_sha`, with the same approval and invalidation checks.
+- `result` JSON retains the redacted model summary, criteria and reasons,
+  blockers, and `policy_references`, including for a reviewer-requested retry.
+- `rejected_result` retains the bounded, credential-redacted rejected output;
+  `reason` retains the acceptance error or temporary hold explanation.
+- `RowKey`, `issue_id`, `identifier`, `project_id`, `repository`, `created_at`,
+  and the verified GitHub `owner` (`run_id:run_attempt`) identify the review.
+  Older attempt rows remain available after a new review.
+
+To investigate from a Linear comment, open **Readiness run** and take the run ID
+and attempt from its URL. In the broker storage account's **Storage browser →
+Tables → ClusterforkReadiness**, filter by:
+
+```text
+PartitionKey eq 'readiness' and repository eq 'OWNER/REPO' and owner eq 'RUN_ID:RUN_ATTEMPT'
+```
+
+The Actions run name also ends with the dispatch key, which is the review row's
+`RowKey`. If no run started, filter by partition, repository, and issue `identifier`
+instead. Read these records using existing operator access; do not copy their
+contents to public Actions logs, summaries, or Linear comments. The existing
+shared credential redaction and output bounds still apply; this presentation
+change adds no model output, issue content, or policy inventories to operational
+logs or public artifacts.
+
 ## Failure explanations
 
 The worker's failed finish callback sends allowlisted diagnostic fields. Azure
