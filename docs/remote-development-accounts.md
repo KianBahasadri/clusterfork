@@ -8,10 +8,13 @@ are retained when enrollment runs again, so stale local copies cannot overwrite
 refreshed cloud tokens.
 
 The provider's local `remote-profiles.json` manifest records cloud ownership. Both
-rotators skip those profiles for new local selections. Enrollment preserves the
-current symlink and local credential files; it does not stop or lease an already
-running local session. Remote leases coordinate cloud jobs only. Simultaneous
-local and cloud OAuth refreshes are not synchronized and can still conflict;
+providers keep reserved profiles at `auth.json.<name>`, visible in their normal
+`rotate-codex --list` or `rotate-cursor-cli --list` output with a reservation notice.
+The manifest blocks explicit local selection, overwrite, deletion and named
+kickoff; automatic rotation and default kickoff skip reserved profiles. Enrollment
+preserves the current symlink and local credential files; it does not stop or
+lease an already running local session. Remote leases coordinate cloud jobs only.
+Simultaneous local and cloud OAuth refreshes are not synchronized and can still conflict;
 reclaim a profile before starting further local use of its credentials.
 
 ## Enroll and reclaim
@@ -36,14 +39,24 @@ Reclaim a profile before using it locally again:
 ```
 
 Reclaim refuses busy accounts or changed local credentials, persists the latest
-cloud credentials locally, then removes cloud ownership. Keep the installed
-rotator updated when enabling this feature.
+cloud credentials locally, then removes cloud ownership. Codex and Cursor use
+the same enrollment and reclaim lifecycle; Cursor only adds `--provider cursor`.
+Neither provider requires moving files, staging credentials, a validation probe,
+or a separate unblocking command for normal enrollment/reservation.
 
-Cursor reservations can record `backup_path` under the provider's auth store,
-including `remote-staged/auth.json.21kb60`. Reclaim restores the latest cloud login
-to `auth.json.<profile>`, preserving the backup and active local selection. It
-refuses an independently replaced destination. Enrollment adopts existing cloud
-credentials rather than overwriting them with that backup or a stale local copy.
+Reinstalling `install-clusterfork.sh` updates the installed rotator for both
+providers and automatically restores legacy local handoffs such as Cursor
+`21kb60`. Normal account commands and rotators perform the same recovery, including
+when listing. Both old `local_backup` and `backup_path` metadata are understood.
+Recovery copies a backup within the provider's store back to `auth.json.<name>`,
+checks its recorded source SHA-256 when present, and normalizes the reservation to
+the ordinary account ID and source hash. The backup may remain as an unused copy;
+subsequent enrollment and reclaim use the normal saved file. Recovery refuses
+changed credentials, replaced destinations and paths outside the store. It is
+repeatable after interruption, leaves active links and cloud ownership intact,
+and never contacts Azure, claims/deletes an account, or uploads the backup.
+Existing cloud credentials always win over stale local copies during enrollment;
+only normal reclaim writes the latest cloud login back to the local profile.
 
 ## Leases and refresh
 
@@ -203,10 +216,12 @@ Local rotation commands and container mounts are covered by
 
 ## KIAN-922 post-deployment validation
 
-The reserved Cursor profile `21kb60` stays staged until one cloud integration probe
-passes. The resumed, health-verified deployment event automatically asks the App
-to dispatch `clusterfork-cursor-smoke.yml` on main, bound to that broker/worker
-revision and digest. A durable once-only receipt in `ClusterforkOperations`'s
+The one-off KIAN-922 cloud record for Cursor `21kb60` uses a staged cloud state
+until its integration probe passes. This historical probe is independent of
+ordinary reservations and local saved-profile visibility; local recovery does
+not alter that cloud state. The resumed, health-verified deployment event
+automatically asks the App to dispatch `clusterfork-cursor-smoke.yml` on main,
+bound to that broker/worker revision and digest. A durable once-only receipt in `ClusterforkOperations`'s
 `validation` partition precedes dispatch. Repeated events, timer ticks, deployments,
 lost dispatch responses and manual reruns cannot authorize another agent turn.
 

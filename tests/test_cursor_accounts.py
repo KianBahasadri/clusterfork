@@ -326,7 +326,9 @@ class CursorAccountTests(unittest.TestCase):
                  redirect_stdout(io.StringIO()):
                 accounts.main()
             manifest = json.loads((store / accounts.MANIFEST).read_text())
-            self.assertEqual(manifest["21kb60"], reservation)
+            self.assertEqual(manifest["21kb60"], {"account_id": identity,
+                "source_sha256": accounts.digest(store / "auth.json.21kb60")})
+            self.assertEqual(json.loads((store / "auth.json.21kb60").read_text()), auth())
             self.assertEqual(manifest["alias"]["account_id"], identity)
             self.assertEqual(json.loads(pool.table.get(identity)[0]["auth"])["refreshToken"], "latest-cloud-login")
 
