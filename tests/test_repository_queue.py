@@ -1909,6 +1909,8 @@ class RepositoryQueueTests(unittest.TestCase):
                 self.assertEqual(fields["labelIds"], ["repair-label-id"])
                 self.assertIn("Auto-repair: KIAN-1", fields["title"])
                 self.assertIn(worker_branch("KIAN-1", parent), fields["description"])
+                self.assertIn("Respect the broker's workflow-publication capability", fields["description"])
+                self.assertNotIn("Never edit .github/workflows/", fields["description"])
                 self.assertIn("actions/runs/100/attempts/1", fields["description"])
                 if failure == "checks":
                     self.assertIn("actions/runs/500/job/600", fields["description"])

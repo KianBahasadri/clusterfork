@@ -283,6 +283,25 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(self.github.installation_token.call_args.kwargs["permissions"],
                          {"contents": "write", "pull_requests": "write"})
 
+    def test_workflow_capability_reaches_both_phases_without_giving_reviewers_write_tokens(self):
+        self.github.workflow_changes_allowed.return_value = True
+        review, config = self.begin()
+        self.assertIs(config["workflow_changes_allowed"], True)
+        prompt = review_prompt(config["issue"], workflow_changes_allowed=config["workflow_changes_allowed"])
+        self.assertIn("Changes under .github/workflows/ can be published", prompt)
+        self.assertIn("cannot be published", review_prompt(config["issue"]))
+        self.call(review, "checkout")
+        self.assertEqual(self.github.installation_token.call_args.kwargs["permissions"], {"contents": "read"})
+        with self.assertRaisesRegex(WorkerError, "publication credentials"):
+            self.call(review, "github")
+        self.submit(review)
+        self.stop(review)
+        coding = dispatch_key(self.registry, self.route, self.issue)
+        self.assertIs(self.call(coding, "start")["workflow_changes_allowed"], True)
+        self.call(coding, "github")
+        self.assertEqual(self.github.installation_token.call_args.kwargs["permissions"],
+                         {"contents": "write", "pull_requests": "write", "workflows": "write"})
+
     def test_selection_is_reported_before_readiness_runner_dispatch(self):
         waiting = self.make_issue(2)
 

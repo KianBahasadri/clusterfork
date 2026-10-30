@@ -24,6 +24,7 @@ sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
 import worker
 import accounts as account_cli
 from codex_runtime import CodexError, quota_snapshot
+from dispatch_clients import GitHub as GitHubClient
 from dispatch_core import Registry
 from quota_selection import select_account
 from worker_core import Accounts, WorkerError, WorkerService, authorize_claims
@@ -302,8 +303,11 @@ class WorkerAuthorizationTests(unittest.TestCase):
                 return []
         class GitHub:
             permissions = None
+            workflows = False
             def verify_worker_run(self, *args):
                 return None
+            def workflow_changes_allowed(self, repository):
+                return self.workflows
             def installation_token(self, repository, *, permissions):
                 self.permissions = permissions
                 return "temporary-token"
@@ -322,6 +326,20 @@ class WorkerAuthorizationTests(unittest.TestCase):
         self.assertTrue(config["auto_merge"])
         self.assertEqual(config["agent_timeout_minutes"], 300)
         self.assertIs(config["serial_admission"], True)
+        self.assertIs(config["workflow_changes_allowed"], False)
+        service.handle("github", claims(), {"dispatch_key": KEY})
+        self.assertEqual(github.permissions, {"contents": "write", "pull_requests": "write"})
+
+    def test_workflow_grant_is_reported_at_start_and_rechecked_for_publication(self):
+        service, github, _ = self.service()
+        github.workflows = True
+        config = service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
+        self.assertIs(config["workflow_changes_allowed"], True)
+        service.handle("github", claims(), {"dispatch_key": KEY})
+        self.assertEqual(github.permissions, {"contents": "write", "pull_requests": "write", "workflows": "write"})
+        service.handle("checkout", claims(), {"dispatch_key": KEY})
+        self.assertEqual(github.permissions, {"contents": "read", "pull_requests": "read"})
+        github.workflows = False
         service.handle("github", claims(), {"dispatch_key": KEY})
         self.assertEqual(github.permissions, {"contents": "write", "pull_requests": "write"})
 
@@ -352,6 +370,25 @@ class WorkerAuthorizationTests(unittest.TestCase):
         self.assertEqual(service.receipts.get(KEY)[0]["retry_after"], NOW + 900)
 
 
+class GitHubPermissionTests(unittest.TestCase):
+    def test_only_the_installed_workflow_write_grant_enables_workflow_publication(self):
+        for grant, allowed in (("write", True), ("read", False), (None, False)):
+            with self.subTest(grant=grant):
+                request = Mock(return_value={"id": 42, "permissions": {"workflows": grant}})
+                client = GitHubClient("123", "fake-private-key", request=request)
+                with patch.dict(sys.modules, {"jwt": SimpleNamespace(encode=lambda *a, **kw: "fake-jwt")}):
+                    self.assertIs(client.workflow_changes_allowed("owner/repo"), allowed)
+                request.assert_called_once_with("https://api.github.com/repos/owner/repo/installation", token="Bearer fake-jwt")
+
+    def test_workflow_publication_token_stays_scoped_to_one_repository(self):
+        request = Mock(side_effect=[{"id": 42}, {"token": "publication-token"}])
+        client = GitHubClient("123", "fake-private-key", request=request)
+        permissions = {"contents": "write", "pull_requests": "write", "workflows": "write"}
+        with patch.dict(sys.modules, {"jwt": SimpleNamespace(encode=lambda *a, **kw: "fake-jwt")}):
+            self.assertEqual(client.installation_token("owner/repo", permissions=permissions), "publication-token")
+        self.assertEqual(request.call_args.kwargs["data"], {"repositories": ["repo"], "permissions": permissions})
+
+
 class LiveQuotaShapeTests(unittest.TestCase):
     def test_codex_execution_uses_project_timeout_and_defaults_to_five_hours(self):
         selection = SimpleNamespace(account_id="a" * 64, model="gpt-6.1-sol", effort="max", remaining_percent=100)
@@ -372,6 +409,7 @@ class LiveQuotaShapeTests(unittest.TestCase):
                         pass
                 self.assertEqual(run_agent.call_args.kwargs["timeout"], expected)
                 self.assertEqual(run_agent.call_args.args[3], Path.cwd())
+                self.assertIn("no approved Workflows write permission", run_agent.call_args.args[4])
 
     def test_broker_authentication_or_storage_failure_is_not_reported_as_exhausted_quota(self):
         class Broker:
@@ -446,6 +484,75 @@ class LocalRemoteOwnershipTests(unittest.TestCase):
                 backend.select(None)
 
 class GitPublicationTests(unittest.TestCase):
+    def test_workflow_edits_need_broker_permission_including_recovered_branch_changes(self):
+        for allowed in (False, True):
+            for source in ("new", "tracked", "recovered"):
+                with self.subTest(allowed=allowed, source=source), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    remote, checkout = root / "remote.git", root / "checkout"
+                    def git(*args):
+                        return subprocess.check_output(["git", "-C", str(checkout), *args], text=True,
+                                                       stderr=subprocess.DEVNULL).strip()
+                    subprocess.run(["git", "init", "--bare", "--initial-branch=main", str(remote)], check=True, capture_output=True)
+                    subprocess.run(["git", "clone", str(remote), str(checkout)], check=True, capture_output=True)
+                    git("config", "user.name", "Test")
+                    git("config", "user.email", "test@example.com")
+                    (checkout / "file.txt").write_text("original\n")
+                    workflow = checkout / ".github/workflows/example.yml"
+                    workflow.parent.mkdir(parents=True)
+                    if source == "tracked":
+                        workflow.write_text("old workflow\n")
+                    git("add", ".")
+                    git("commit", "-m", "initial")
+                    git("push", "origin", "main")
+                    main = git("rev-parse", "main")
+                    branch = "clusterfork/kian-891-aaaaaaaa"
+                    if source == "recovered":
+                        git("checkout", "-b", branch)
+                        workflow.write_text("updated workflow\n")
+                        git("add", ".")
+                        git("commit", "-m", "previous attempt")
+                        git("push", "origin", branch)
+                        git("checkout", "main")
+                        git("branch", "-D", branch)
+                    before = git("ls-remote", "origin", "refs/heads/" + branch)
+                    validated = root / "validated"
+                    config = {"repository": "owner/repo", "ref": "main", "auto_merge": False,
+                              "workflow_changes_allowed": allowed,
+                              "issue": {"id": ISSUE, "identifier": "KIAN-891", "title": "Update workflow", "url": "https://linear.app/test"},
+                              "validation_commands": [[sys.executable, "-c", f"from pathlib import Path; Path({str(validated)!r}).touch()"]]}
+                    broker = Mock(key=KEY)
+                    broker.call.return_value = {"token": "test-token"}
+                    @contextmanager
+                    def implement(*args):
+                        if source != "recovered":
+                            workflow.parent.mkdir(parents=True, exist_ok=True)
+                            workflow.write_text("updated workflow\n")
+                        yield "Updated workflow."
+                    original = Path.cwd()
+                    try:
+                        os.chdir(checkout)
+                        with patch.object(worker, "run_codex", side_effect=implement), \
+                             patch.object(worker, "find_pr", return_value=None), \
+                             patch.object(worker, "json_request", return_value={"html_url": "https://github.com/owner/repo/pull/1"}) as request:
+                            if allowed:
+                                self.assertEqual(worker.execute(broker, config, SimpleNamespace(failed=threading.Event()), root),
+                                                 ("completed", "https://github.com/owner/repo/pull/1"))
+                                self.assertTrue(validated.exists())
+                                self.assertIn(".github/workflows/example.yml", git("diff", "--name-only", "main..." + branch))
+                                request.assert_called_once()
+                            else:
+                                with self.assertRaises(worker.WorkerFailure) as caught:
+                                    worker.execute(broker, config, SimpleNamespace(failed=threading.Event()), root)
+                                self.assertEqual(caught.exception.clusterfork_failure["reason_code"], "workflows_permission_missing")
+                                self.assertFalse(validated.exists())
+                                self.assertEqual(git("ls-remote", "origin", "refs/heads/" + branch), before)
+                                self.assertFalse(any(call.args[0] == "github" for call in broker.call.call_args_list))
+                                request.assert_not_called()
+                        self.assertEqual(git("ls-remote", "origin", "refs/heads/main").split()[0], main)
+                    finally:
+                        os.chdir(original)
+
     def test_repair_checks_out_parent_branch_validates_and_updates_or_creates_parent_pr(self):
         for existing_pr in (True, False):
             with self.subTest(existing_pr=existing_pr), tempfile.TemporaryDirectory() as directory:

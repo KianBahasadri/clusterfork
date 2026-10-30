@@ -55,8 +55,10 @@ values fail the check.
    URLs empty, and disable the App's GitHub webhook.
 2. Grant Repository **Actions**, **Contents**, and **Pull requests** read/write;
    Metadata read is automatic. The dispatcher needs Actions write, and worker
-   publication needs Contents/Pull requests write. It has no Workflows or
-   Administration grant.
+   publication needs Contents/Pull requests write. To permit automated edits under
+   `.github/workflows/`, also grant **Workflows** read/write and approve the updated
+   installation permissions. Changing the App registration alone does not update
+   an installation's grant. Administration access is not required.
 3. Record the numeric App ID and download a private key into the paths above.
 4. Install the App on the selected repositories. Approve expanded permissions
    if updating an existing installation. The dispatcher discovers installation

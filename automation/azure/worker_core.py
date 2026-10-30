@@ -146,11 +146,13 @@ class WorkerService:
             if action == "start":
                 self.github.verify_worker_run(route.repository, claims, key)
                 self.queue.start_worker(route.repository, parent, owner)
+                workflow_changes_allowed = self.github.workflow_changes_allowed(route.repository) is True
             elif action != "save":
                 self.queue.assert_worker(route.repository, parent, owner)
             result = self.queue.readiness.handle(action, claims, data, review)
             if action == "start":
                 result["serial_admission"] = True
+                result["workflow_changes_allowed"] = workflow_changes_allowed
             if action == "review" and result.get("status") == "passed":
                 issue = self.linear.issue(review["issue_id"])
                 current, _ = eligibility(issue or {}, self.registry)
@@ -291,8 +293,11 @@ class WorkerService:
             current_route, _ = eligibility(issue or {}, self.registry, additional_state_ids=extra)
             if current_route != route:
                 raise WorkerError("Issue is no longer eligible for publication", 403)
+            permissions = {"contents": "write", "pull_requests": "write"}
+            if self.github.workflow_changes_allowed(route.repository) is True:
+                permissions["workflows"] = "write"
             return {"token": self.github.installation_token(
-                route.repository, permissions={"contents": "write", "pull_requests": "write"})}
+                route.repository, permissions=permissions)}
         if action == "finish":
             status = data.get("status")
             if status not in {"completed", "failed", "waiting_for_quota"}:
@@ -381,6 +386,7 @@ class WorkerService:
                     if exc.status != 409:
                         raise
             raise WorkerError("Coding start held for a current passing readiness review", 403) from None
+        workflow_changes_allowed = self.github.workflow_changes_allowed(route.repository) is True
         row = {"RowKey": key, "owner": owner, "status": "running", "stage": "initializing",
                "attempt_id": str(uuid4()), "steering_started_at": self.clock(),
                "readiness_review_key": approval.get("review_key", ""),
@@ -404,6 +410,7 @@ class WorkerService:
         return {"protocol": PROTOCOL, "phase": "development", "readiness": approval,
                 "model": profile.model, "effort": profile.effort,
                 "serial_admission": True,
+                "workflow_changes_allowed": workflow_changes_allowed,
                 "attempt_id": row["attempt_id"], "owner": owner,
                 "selection": {"min_remaining_percent": self.registry.agent_selection.min_remaining_percent,
                               "max_snapshot_age_seconds": self.registry.agent_selection.max_snapshot_age_seconds},

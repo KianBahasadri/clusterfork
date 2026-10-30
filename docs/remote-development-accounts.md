@@ -54,8 +54,11 @@ run ID/attempt, and a durable dispatch receipt. It also checks the run through
 GitHub's API and requires dispatch by `clusterfork[bot]`. PR workflows, forks,
 other workflows, and unmapped repositories cannot obtain account credentials.
 Publication tokens are scoped to one repository with Contents and Pull requests
-write permission. They are issued again before publication and never passed in
-workflow inputs. Account caches and agent transcripts are not uploaded as artifacts.
+write permission, plus Workflows write when the installation currently grants it.
+The broker checks that grant at worker start and again before issuing publication
+credentials; checkout tokens stay read-only. Tokens are issued again before
+publication and never passed in workflow inputs. Account caches and agent
+transcripts are not uploaded as artifacts.
 
 The storage resource is currently named in `automation/accounts.py`; see
 [remote setup](remote-development-setup.md#azure-deployment) before relocating it.

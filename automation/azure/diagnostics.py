@@ -38,6 +38,9 @@ ERROR_TYPES = {"Exception", "TimeoutError", "HTTPError", "URLError", "Connection
                "PermissionError", "FileNotFoundError", "KeyError", "TypeError", "ValueError", "RuntimeError",
                "JSONDecodeError", "ServiceRequestError", "ServiceResponseError", "HttpResponseError",
                "ResourceModifiedError", "ResourceNotFoundError", "ClientAuthenticationError"}
+FAILURE_REASONS = {
+    "workflows_permission_missing": "workflow publication requires the GitHub App installation's approved Workflows write permission",
+}
 
 
 def valid_operation(value):
@@ -81,6 +84,8 @@ def validate_failure(value):
     result = {"operation": value["operation"], "kind": value["kind"], **identifiers(value)}
     if isinstance(value.get("error_type"), str) and value["error_type"] in ERROR_TYPES:
         result["error_type"] = value["error_type"]
+    if isinstance(value.get("reason_code"), str) and value["reason_code"] in FAILURE_REASONS:
+        result["reason_code"] = value["reason_code"]
     for name, maximum in {"elapsed_ms": 86_400_000, "timeout_seconds": 86_400,
                           "http_status": 599, "exit_code": 255, "graphql_error_count": 1000}.items():
         number = value.get(name)
@@ -204,7 +209,8 @@ def failure_summary(value):
                     "transport_error": "connection failed", "command_failed": "command failed",
                     "lease_lost": "credential or worker lease was lost", "worker_error": "worker operation failed",
                     "graphql_error": "GraphQL operation was rejected"}
-    text = f"Failed during {stage}: {descriptions[data['kind']]} ({data['operation']})"
+    description = FAILURE_REASONS.get(data.get("reason_code"), descriptions[data["kind"]])
+    text = f"Failed during {stage}: {description} ({data['operation']})"
     details = []
     if "elapsed_ms" in data:
         details.append(f"after {data['elapsed_ms'] / 1000:g}s")

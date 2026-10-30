@@ -165,8 +165,8 @@ class AutoRepair:
             + (f"Existing PR: {context['target_pull_request']}\n\n" if context['target_pull_request'] else "")
             + "Investigate the failure, fix the code/tests on this branch, run all configured validation commands, "
             "and update the existing PR or create it if publication failed. The worker publishes the fix. "
-            "Read AGENTS.md and the owning repository docs. Never edit .github/workflows/*, bypass merge "
-            "requirements with --admin, change authentication, or include secrets, credentials, raw logs, "
+            "Read AGENTS.md and the owning repository docs. Respect the broker's workflow-publication capability. "
+            "Never bypass merge requirements with --admin, change authentication, or include secrets, credentials, raw logs, "
             "or environment dumps in issues or comments.\n\n"
             "This is the parent's single automatic repair attempt. Do not create another repair task or retry a failed repair."
         )

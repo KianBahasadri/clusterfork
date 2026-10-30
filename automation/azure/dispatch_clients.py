@@ -409,7 +409,7 @@ class GitHub:
     def __init__(self, app_id, private_key, request=request_json):
         self.app_id, self.private_key, self.request = app_id, private_key, request
 
-    def installation_token(self, repository, *, permissions=None):
+    def _installation(self, repository):
         import jwt
 
         now = int(time.time())
@@ -418,6 +418,17 @@ class GitHub:
                                 self.private_key, algorithm="RS256")
             installation = self.request(
                 f"https://api.github.com/repos/{repository}/installation", token=f"Bearer {signed}")
+            return signed, installation
+        except Exception:
+            raise DispatchError("GitHub App authentication failed; check its ID, key and installation") from None
+
+    def workflow_changes_allowed(self, repository):
+        _, installation = self._installation(repository)
+        return installation.get("permissions", {}).get("workflows") == "write"
+
+    def installation_token(self, repository, *, permissions=None):
+        try:
+            signed, installation = self._installation(repository)
             result = self.request(
                 f"https://api.github.com/app/installations/{installation['id']}/access_tokens",
                 token=f"Bearer {signed}", method="POST",
