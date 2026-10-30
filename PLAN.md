@@ -43,12 +43,13 @@ disk attachment. A local database/process lock excludes competing local writers;
 it does not exclude a cloned VM with copied data or credentials. Deployment checks
 must also enforce the authorized host and remove a replaced host's authority.
 
-This is a deliberate trade: scheduled maintenance and a single controller host
-in exchange for avoiding distributed lifecycle writers and overlapping runtime
-versions. A VM introduces OS, disk, and backup administration. Validate those
-obligations and cost during the prototype before provisioning production. Do not
-quietly add autoscaling replicas, distributed leader election, or another database
-service if the single-host assumptions do not fit; revisit the design explicitly.
+This is a deliberate trade: brief automatic deployment windows between tasks and
+a single controller host in exchange for avoiding distributed lifecycle writers
+and overlapping runtime versions. A VM introduces OS, disk, and backup
+administration. Validate those obligations and cost during the prototype before
+provisioning production. Do not quietly add autoscaling replicas, distributed
+leader election, or another database service if the single-host assumptions do
+not fit; revisit the design explicitly.
 
 ### Alternatives considered
 
@@ -90,7 +91,8 @@ flowchart LR
 | Queue, readiness, lifecycle sync, and repair independently interpret task state | One mutation interface and one transition implementation; other modules submit facts or render views | Dependency/import checks plus tests that every mutation passes through that interface |
 | State updates span independently committed lifecycle records | One local transaction owns task, repository grant, attempt identity, and action intent | Real SQLite constraint and transaction tests, including competing requests |
 | Readiness completion triggers another distributed dispatch decision | One GitHub run with explicit job dependencies | Hosted test proving coding cannot start without the valid readiness result |
-| Every main push changes the live control plane | Source merge builds a candidate; promotion is separate and explicit | A main-branch test proving no automatic deployment or resume is triggered |
+| A main push changes the runtime before it is validated or while tasks use it | Source merge builds/tests a candidate; automatic promotion waits for a verified idle boundary | Tests proving promotion requires matching acceptance evidence and never clears an operator halt |
+| A new issue uses code from before the preceding issue's merge | Fetch the current target branch at admission and bind readiness/coding to that commit | Two sequential tasks proving the second reads and uses the first task's merged changes |
 | Old and new runtime instances overlap | Full-drain runtime upgrades with one stopped old process before replacement | Tests for exclusive local ownership, authorized host identity, and deployment exclusion within the supported topology |
 | Target checkout operations remove or replace runtime files | Immutable runtime directory outside the agent's writable target tree, retained through cleanup | Actual hosted setup, execution, git-clean, and post-job cleanup tests |
 | Prompt edits become wire-protocol incompatibilities | Separate wire schema, policy revision, runtime release, and target commit | Compatibility tests for each declared change category |
@@ -142,6 +144,13 @@ content revision, target repository/base commit, runtime release, policy revisio
 permitted provider/model configuration, validation commands, publication scope,
 and execution budget. It contains references and hashes rather than credentials.
 Validate project configuration when registering a project and building a release.
+
+Resolve the latest target-branch commit at admission, after the preceding task's
+merge is verified, rather than freezing code when the issue first joins the queue.
+The target checkout includes that merged work. The runtime release commit and the
+target code commit are independent identities: pinning the runtime must never pin
+the target to old code. If the target advances before coding, apply the documented
+readiness/context invalidation rule and review the new context before execution.
 
 Readiness produces a validated proof for that specification. Coding and publication
 check that proof and current authorization at their required checkpoints. A job
@@ -213,12 +222,32 @@ unblock operation. A feature needing a different lifecycle must be proposed as a
 product change before it is implemented. Changes to workflow/credential behavior
 are highlighted in review rather than hidden inside a general refactor.
 
-## Runtime releases cannot change themselves
+## Fresh target code and automatic tested runtime releases
 
-Separate ordinary repository work from the deployed automation release. An agent
-may propose runtime changes in a PR, but neither merging that PR nor processing
-another issue promotes it. Keep runtime policy/schema changes separate from wire
-compatibility. All jobs in an attempt use the same verified release.
+Keep automatic deployment. Separate its phases so a merge triggers validation
+before activation, and activation happens between tasks. No routine manual
+approval or scheduled human maintenance window is required. Keep runtime
+policy/schema changes separate from wire compatibility. All jobs in an attempt
+use the same verified release; none switches runtime underneath a running task.
+
+Ordinary project changes reach the next issue through its fresh target checkout.
+When a merge changes the automation runtime, the release pipeline automatically
+builds, tests, promotes, and verifies the required release before admitting the
+next task. A merge that changes only target code needs no runtime deployment.
+
+At admission, resolve the current automation branch and derive its required runtime
+identity from the complete declared build/configuration inputs. Compare it with
+the promoted release manifest. This admission check also catches missed merge
+notifications; event delivery is not the only barrier against a stale runtime.
+The build input contract must include imported runtime code, workflow/action
+definitions, dependencies, policies, and effective configuration. It cannot be an
+ad hoc changed-path list that silently misses a runtime dependency.
+
+If the required runtime is not yet verified and active, hold new admissions while
+its automatic pipeline completes. If validation fails, report the exact failed
+release gate; do not run the next task on an older runtime silently. If main moves
+again during a build/deployment, the admission barrier remains until the latest
+required runtime is ready. Superseded pipeline runs cannot release that barrier.
 
 Build once, test that artifact, and promote that artifact. The release manifest
 binds controller/broker code, runner bundle, workflow/action commits, provider CLI
@@ -226,21 +255,27 @@ pins, schema, and policy. It includes checksums and test evidence. Dispatch refs
 must resolve to the verified workflow commit; a floating target branch cannot
 select the runtime implementation.
 
-Use this maintenance procedure instead of rolling version coexistence:
+Use an independent deployment pipeline with this sequence instead of rolling
+version coexistence. The application being replaced cannot be its only deployer:
 
-1. Preserve the operator halt and stop admitting new work.
-2. Finish or explicitly stop existing attempts and resolve their PR ownership;
-   verify all recorded/discoverable attempts and account users are stopped.
-3. Stop the old controller; assert exclusive ownership of its local database.
+1. Automatically build and run the candidate's required release checks in the
+   disposable acceptance environment.
+2. Acquire a deployment-owned admission hold, preserving any independent operator
+   halt. Let existing tasks finish; verify attempts, PR ownership, and account users
+   are drained. A deployment must not cancel useful work merely to advance itself.
+3. Stop the old controller and assert exclusive ownership of its local database.
 4. Install the exact tested release and apply its validated database migration.
-5. Start one controller with the operator halt intact. Resume only by an explicit
-   operator action after verification.
+5. Start one controller and verify its release identity and required contracts.
+6. Clear only this deployment's hold. If the latest required runtime matches and
+   no operator halt exists, automatically admit the next eligible issue using
+   fresh target code. An operator halt still requires the operator to clear it.
 
 No source push, health response, deployment completion, or delayed event clears
 an operator halt. Infrastructure maintenance follows its own reviewed path.
-Planned runtime downtime is intentional; ordinary task work does not deploy the
-runtime. Keeping multiple live runtime versions is outside this design's operating
-model and would require a new architecture decision.
+Brief runtime downtime between tasks is intentional. Automatic deployment and
+automatic queue continuation are normal operation once the initial rebuild halt
+is explicitly lifted. Keeping multiple live runtime versions is outside this
+design's operating model and would require a new architecture decision.
 
 ## Prove the important properties before live use
 
@@ -263,6 +298,12 @@ Use several kinds of evidence, each for the claim it can actually support:
    guarded execution path in disposable repositories/issues. Complete readiness,
    both preflights, coding, validation, PR/check/merge behavior, account release,
    status projection, and post-job cleanup. Test both providers independently.
+6. **Sequential freshness and automatic promotion.** Run task A, merge its change,
+   and prove task B reviews/codes against that changed target. Repeat with a runtime
+   change: B must wait for the exact required candidate's tests, automatic deploy,
+   and verification. No human intervention is needed in the successful path. Test
+   failed gates, superseded releases, missed notifications, and preserved operator
+   holds; none may admit B using a stale or unverified required runtime.
 
 Required invariants include one current task per repository, no coding/publication
 without its evidence and grant, no cross-account credential access, no stale
@@ -293,7 +334,7 @@ host administration are ordinary operating requirements, not a zero-failure proo
 - [ ] Inventory current behavior, state owners, special cases, and actual incidents.
 - [ ] Write the ownership table, task/attempt identities, typed transition graph,
   invariant list, and provider contract before choosing implementation shortcuts.
-- [ ] Record the single-host/maintenance trade-off and estimate Azure operating cost.
+- [ ] Record the single-host/deployment-window trade-off and estimate Azure operating cost.
 
 Gate: the replacement preserves the intended workflow and identifies which
 coordination paths it will delete. Any product behavior changes are explicit.
@@ -323,12 +364,16 @@ capabilities and permissions attributable to the declared owners.
 
 ### 3. Build the prevention gate for releases
 
-- [ ] Separate merge/build, promotion, infrastructure changes, and operator resume.
+- [ ] Implement automatic build/test/promotion between tasks, with a required-runtime
+  admission barrier, fresh target checkout, and independent operator holds.
 - [ ] Bind exact artifacts, workflow commits, schemas, policies, and CLI versions.
 - [ ] Test exclusive database ownership, one authorized host identity, replacement
   authority removal, and prevention of overlapping releases in the supported topology.
 - [ ] Run the complete local, contract, provider, and hosted acceptance checks;
   record links, hashes, model bounds, test results, and remaining limitations.
+- [ ] Prove sequential tasks use preceding merged changes and that runtime changes
+  automatically deploy and verify before the next admission, including when a
+  newer merge supersedes the in-flight release or a notification is missed.
 
 Gate: the release is validated before activation, and every identified incident
 class has a demonstrated prevention check. A test count or health response is insufficient.
