@@ -33,6 +33,42 @@ class QuotaSelectionTests(unittest.TestCase):
         self.assertEqual(result.model, "gpt-6.1-sol")
         self.assertEqual(result.effort, "max")
 
+    def test_provider_precedence_is_stronger_than_quota_and_account_order(self):
+        cursor = self.account("cursor-first", "cursor", used=(0,))
+        codex = self.account("codex-last", used=(75,))
+        for accounts in ([cursor, codex], [codex, cursor]):
+            self.assertEqual(self.choose(accounts).account_id, "codex-last")
+
+    def test_eligible_codex_replacements_win_before_cursor_with_weekly_ranking(self):
+        cursor = self.account("cursor", "cursor", used=(0,))
+        exhausted = self.account("exhausted", used=(100,))
+        self.assertEqual(self.choose([cursor, exhausted, self.timed("a", 65, 10),
+                                      self.timed("b", 20, 30)]).account_id, "a")
+
+    def test_all_codex_eligibility_guards_allow_cursor_fallback(self):
+        base = self.account("codex")
+        cursor = self.account("cursor", "cursor", used=(25,))
+        for ineligible in (replace(base, in_use=True), replace(base, observed_at=NOW - 61),
+                           replace(base, windows=()), replace(base, blocked_until=NOW + 1),
+                           replace(base, model="unsupported"), self.account("codex", used=(81,)),
+                           self.account("codex", used=(None,))):
+            with self.subTest(account=ineligible):
+                result = self.choose([ineligible, cursor])
+                self.assertEqual((result.agent, result.model, result.effort), ("cursor", "grok-4.7-high", "high"))
+
+    def test_new_decisions_prefer_recovered_codex_and_neither_pool_bypasses_guards(self):
+        cursor = self.account("cursor", "cursor", used=(25,))
+        codex = self.account("codex", used=(100,))
+        self.assertEqual(self.choose([cursor, codex]).agent, "cursor")
+        self.assertIsNone(self.choose([replace(cursor, observed_at=NOW - 61), codex]))
+        self.assertEqual(self.choose([cursor, self.account("codex", used=(75,))]).agent, "codex")
+
+    def test_cursor_retains_conservative_provider_ranking(self):
+        first = replace(self.account("cursor-a", "cursor"), windows=(
+            QuotaWindow(65, NOW + 1000, "short", 300), QuotaWindow(10, NOW + 10000, "weekly", 10080)))
+        second = self.account("cursor-b", "cursor", used=(30,))
+        self.assertEqual(self.choose([first, second]).account_id, "cursor-b")
+
     def test_weekly_limit_constrains_account_with_healthy_short_window(self):
         result = self.choose([self.account("weekly-low", used=(2, 95)),
                               self.account("healthy", used=(35, 45))])

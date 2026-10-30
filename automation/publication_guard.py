@@ -37,7 +37,7 @@ class PublicationGuard:
     def remember_auth(self, auth):
         if isinstance(auth, dict):
             for key, value in auth.items():
-                if key in {"access_token", "refresh_token", "account_id", "id_token"}:
+                if key in {"access_token", "refresh_token", "account_id", "id_token", "accessToken", "refreshToken"}:
                     self.remember(value)
                 self.remember_auth(value)
         elif isinstance(auth, list):

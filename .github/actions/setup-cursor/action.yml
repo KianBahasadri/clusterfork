@@ -1,0 +1,18 @@
+name: Set up Cursor cloud execution
+description: Install the pinned Cursor CLI without reading or configuring authentication.
+runs:
+  using: composite
+  steps:
+    - name: Install pinned Cursor CLI
+      shell: bash
+      run: |
+        set -euo pipefail
+        runtime_dir="$RUNNER_TEMP/clusterfork-cursor-cli"
+        mkdir -p "$runtime_dir"
+        curl --fail --silent --show-error --location --max-time 120 \
+          https://downloads.cursor.com/lab/2026.10.22-27dcf5f/linux/x64/agent-cli-package.tar.gz \
+          --output "$runtime_dir/package.tar.gz"
+        printf '%s  %s\n' 85296944e4600a83c4b764f578d1502bf9c416db200d33a593e8f3ecabfdc294 "$runtime_dir/package.tar.gz" | sha256sum --check
+        tar --strip-components=1 -xzf "$runtime_dir/package.tar.gz" -C "$runtime_dir"
+        rm "$runtime_dir/package.tar.gz"
+        echo "$runtime_dir" >> "$GITHUB_PATH"

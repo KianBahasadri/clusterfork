@@ -22,6 +22,26 @@ SELECTION_LABEL = "clusterfork: selected"
 QUEUED_LABEL = "clusterfork: queued"
 SELECTION_PROTOCOL = "repository-selection-v1"
 AUTO_REPAIR_LABEL = "clusterfork: auto-repair"
+QUOTA_WAIT_REASONS = {
+    **{f"{provider}_{code}": f"{provider.title()}: {text}" for provider in ("codex", "cursor")
+       for code, text in {"busy": "account busy, reclaimed or stored login invalid", "no_accounts": "no enrolled accounts",
+                          "inspection_unavailable": "authentication, profile or quota inspection unavailable",
+                          "usage_ineligible": "usage unknown, stale, blocked or below the quota reserve"}.items()},
+    "cursor_profile_unavailable": "Cursor: grok-4.7-high / high is unavailable; no substitute selected",
+    "cursor_authentication_unavailable": "Cursor: saved login invalid, expired or mismatched",
+    "cursor_usage_unknown": "Cursor: included API usage unavailable or unknown",
+}
+
+
+def validate_quota_wait(data):
+    if (not isinstance(data, dict) or set(data) - QUOTA_WAIT_REASONS.keys()
+            or any(type(count) is not int or not 0 < count <= 10000 for count in data.values())):
+        raise ValueError("Invalid quota wait reasons")
+    return dict(data)
+
+
+def quota_wait_text(data):
+    return "; ".join(f"{QUOTA_WAIT_REASONS[reason]} ({count})" for reason, count in sorted(validate_quota_wait(data).items()))
 
 
 def is_auto_repair(issue, metadata=None):
@@ -119,7 +139,7 @@ def attempt_comment(run, repository, *, finished=False):
     before = json.loads(run["usage_before"])
     body = (f"Clusterfork development {'finished' if finished else 'started'}.\n\n"
             f"Account: {account} (ID `{run['account_id']}`, plan: {plan})\n\n"
-            f"Agent: Codex · Model: `{run['model']}` · Reasoning effort: `{run['effort']}`\n\n")
+            f"Provider: {'Cursor' if run.get('provider') == 'cursor' else 'Codex'} · Model: `{run['model']}` · Reasoning effort: `{run['effort']}`\n\n")
     if finished:
         if run.get("finished_at") is not None and run.get("started_at") is not None:
             seconds = max(0, int(run["finished_at"] - run["started_at"]))

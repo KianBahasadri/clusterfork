@@ -1,15 +1,16 @@
-"""Authorization, credential leases, and publication for trusted Codex jobs."""
+"""Authorization, credential leases, and publication for trusted cloud agent jobs."""
 
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 import re
 import time
 from uuid import uuid4
 
 from dispatch_core import eligibility
-from worker_reporting import STAGES, is_auto_repair, validate_usage
+from worker_reporting import STAGES, is_auto_repair, validate_usage, validate_quota_wait
 from readiness_policy import PROTOCOL
 from diagnostics import failure, operation, record, validate_failure
 
@@ -28,7 +29,31 @@ class WorkerError(RuntimeError):
         self.reason_code = reason_code
 
 
-def account_identity(auth):
+def account_provider(identity):
+    return "cursor" if isinstance(identity, str) and identity.startswith("cursor:") else "codex"
+
+
+def valid_account_id(identity):
+    return isinstance(identity, str) and re.fullmatch(r"(?:cursor:)?[0-9a-f]{64}", identity) is not None
+
+
+def account_identity(auth, provider="codex"):
+    if provider == "cursor":
+        if (not isinstance(auth, dict) or set(auth) - {"accessToken", "refreshToken"}
+                or not all(isinstance(auth.get(k), str) and auth[k] for k in ("accessToken", "refreshToken"))
+                or len(json.dumps(auth)) > 30_000):
+            raise WorkerError("Incomplete Cursor CLI account credentials", 400)
+        try:
+            payload = auth["accessToken"].split(".")[1]
+            subject = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["sub"]
+            if not isinstance(subject, str) or not subject:
+                raise ValueError()
+        except (ValueError, KeyError, IndexError, TypeError):
+            raise WorkerError("Cursor access token has no stable subject", 400) from None
+        # This decodes identity only. Live provider authentication is still required.
+        return hashlib.sha256(subject.encode()).hexdigest()
+    if provider != "codex":
+        raise WorkerError("Unsupported account provider", 400)
     if not isinstance(auth, dict) or auth.get("auth_mode") != "chatgpt":
         raise WorkerError("Only saved ChatGPT Codex accounts are supported", 400)
     tokens = auth.get("tokens", {})
@@ -84,12 +109,12 @@ def account_request(accounts, action, data, row, owner, *, selector, run_owner=N
             return {"accounts": [assigned]}
         if selector:
             return {"accounts": accounts.list()}
-        raise WorkerError("This run has no assigned Codex account", 403)
+        raise WorkerError("This run has no assigned agent account", 403)
     identity = data.get("account_id", "")
-    if not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{64}", identity):
+    if not valid_account_id(identity):
         raise WorkerError("Invalid account identity", 400)
     if (assigned or not selector) and identity != assigned:
-        raise WorkerError("This run cannot access another Codex account", 403)
+        raise WorkerError("This run cannot access another agent account", 403)
     if action == "claim":
         return accounts.claim(identity, owner)
     if action == "save":
@@ -97,7 +122,7 @@ def account_request(accounts, action, data, row, owner, *, selector, run_owner=N
                       release=data.get("release") is True)
         return {"saved": True}
     if not selector:
-        raise WorkerError("Only account preflight can bind a Codex account", 403)
+        raise WorkerError("Only account preflight can bind an agent account", 403)
     accounts.table.get(identity)  # Do not bind an unknown/reclaimed profile.
     row["assigned_account_id"] = identity
     return {"account_id": identity}
@@ -105,27 +130,39 @@ def account_request(accounts, action, data, row, owner, *, selector, run_owner=N
 
 class Accounts:
     """Each account has one fenced lease, including while its tokens refresh."""
-    def __init__(self, table, clock=time.time):
-        self.table, self.clock = table, clock
+    def __init__(self, table, clock=time.time, *, provider="codex"):
+        self.table, self.clock, self.provider = table, clock, provider
 
     def enroll(self, auth):
-        identity = account_identity(auth)
+        identity = account_identity(auth, self.provider)
         if not self.table.create({"RowKey": identity, "auth": json.dumps(auth),
+                                  "provider": self.provider, "state": "active",
+                                  **({"credential_format": "cursor-cli-auth-v1"} if self.provider == "cursor" else {}),
                                   "owner": "", "fence": "", "lease_until": 0}):
             raise WorkerError("Account is already enrolled; do not overwrite refreshed cloud credentials")
         return identity
 
     def list(self):
-        return [row["RowKey"] for row in self.table.list()]
+        return [row["RowKey"] for row in self.table.list() if row.get("state", "active") == "active"]
 
-    def claim(self, identity, owner):
+    def claim(self, identity, owner, *, allow_staged=False):
         row, etag = self.table.get(identity)
+        if row.get("state", "active") != "active" and not (allow_staged and row.get("state") == "staged"):
+            raise WorkerError("Account is not enrolled for execution", 403)
+        try:
+            auth = json.loads(row["auth"])
+            if row.get("provider", self.provider) != self.provider or account_identity(auth, self.provider) != identity:
+                raise ValueError()
+        except (ValueError, TypeError, KeyError, WorkerError):
+            # Invalid enrollment is a per-account eligibility failure. It must
+            # not prevent preflight from considering the remaining pool.
+            raise WorkerError("Stored account credentials are invalid", 409) from None
         if row.get("lease_until", 0) > self.clock():
             raise WorkerError("Account is busy")
         fence = str(uuid4())
         row.update(owner=owner, fence=fence, lease_until=int(self.clock()) + LEASE_SECONDS)
         self.table.replace(row, etag)
-        return {"auth": json.loads(row["auth"]), "lease": fence}
+        return {"auth": auth, "lease": fence}
 
     def save(self, identity, owner, fence, auth=None, release=False):
         row, etag = self.table.get(identity)
@@ -133,7 +170,7 @@ class Accounts:
                 or row.get("lease_until", 0) <= self.clock()):
             raise WorkerError("Account lease was lost")
         if auth is not None:
-            if account_identity(auth) != identity:
+            if account_identity(auth, self.provider) != identity:
                 raise WorkerError("Refreshed credentials belong to another account", 400)
             row["auth"] = json.dumps(auth)
         row["lease_until"] = 0 if release else int(self.clock()) + LEASE_SECONDS
@@ -142,9 +179,49 @@ class Accounts:
         self.table.replace(row, etag)
 
 
+class ProviderAccounts:
+    """Provider-qualified references keep existing Codex IDs and storage intact."""
+    def __init__(self, pools):
+        self.pools = pools
+        self.table = self  # Read-only routing for existing lease/assignment checks.
+
+    def pool(self, identity):
+        if not valid_account_id(identity):
+            raise WorkerError("Invalid account identity", 400)
+        provider = account_provider(identity)
+        if provider not in self.pools:
+            raise WorkerError("Account provider is unavailable", 404)
+        return self.pools[provider], identity.split(":")[-1]
+
+    def get(self, identity):
+        pool, key = self.pool(identity)
+        return pool.table.get(key)
+
+    def list(self):
+        return [identity if provider == "codex" else f"{provider}:{identity}"
+                for provider in ("codex", "cursor") if provider in self.pools
+                for identity in self.pools[provider].list()]
+
+    def claim(self, identity, owner):
+        pool, key = self.pool(identity)
+        return pool.claim(key, owner)
+
+    def save(self, identity, owner, fence, auth=None, release=False):
+        pool, key = self.pool(identity)
+        return pool.save(key, owner, fence, auth, release)
+
+
+def execution_profiles(registry, row):
+    provider = account_provider(row.get("assigned_account_id"))
+    profile = registry.agent_profiles[provider]
+    return {"provider": provider, "model": profile.model, "effort": profile.effort,
+            "profiles": {name: {"model": value.model, "effort": value.effort}
+                         for name, value in registry.agent_profiles.items() if name in {"codex", "cursor"}}}
+
+
 class WorkerService:
     def __init__(self, registry, receipts, runs, accounts, linear, github, queue, clock=time.time, sync=None,
-                 steering=None):
+                 steering=None, validation=None):
         self.registry, self.receipts, self.runs = registry, receipts, runs
         self.accounts, self.linear, self.github, self.clock = accounts, linear, github, clock
         self.sync = sync
@@ -152,6 +229,7 @@ class WorkerService:
         if sync:
             self.queue.repair.lifecycle_notes = sync.notes
         self.steering = steering
+        self.validation = validation
 
     def sync_steering(self, issue_id):
         if self.steering:
@@ -172,6 +250,8 @@ class WorkerService:
                 record("linear_sync_deferred", level=logging.ERROR, **failure(exc, "worker/linear_sync"))
 
     def handle(self, action, claims, data):
+        if action.startswith("validation_") and self.validation:
+            return self.validation.handle(action, claims, data)
         key = data.get("dispatch_key", "")
         if not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key):
             raise WorkerError("Invalid dispatch key", 400)
@@ -292,7 +372,7 @@ class WorkerService:
                 raise WorkerError("Worker stage cannot move backwards", 400)
             if "account_id" in data:
                 identity = data["account_id"]
-                if not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{64}", identity):
+                if not valid_account_id(identity):
                     raise WorkerError("Invalid account identity", 400)
                 account, _ = self.accounts.table.get(identity)
                 if account.get("owner") != owner or account.get("lease_until", 0) <= self.clock():
@@ -304,7 +384,8 @@ class WorkerService:
                 if current and current != identity and not row.get("account_failover"):
                     raise WorkerError("Account replacement requires a released, exhausted coding account", 403)
                 if not current or current != identity:
-                    segment = {"account_id": identity, "usage_before": validate_usage(data.get("usage_before"))}
+                    segment = {"account_id": identity, "provider": account_provider(identity),
+                               "usage_before": validate_usage(data.get("usage_before"))}
                     for field in ("account_email", "account_plan"):
                         value = data.get(field)
                         if value is not None and (not isinstance(value, str) or len(value) > 200):
@@ -317,8 +398,8 @@ class WorkerService:
                     segments.append(segment)
                     row["usage_segments"] = json.dumps(segments)
                     row["account_failover"] = False
-                    profile = self.registry.agent_profiles["codex"]
-                    row.update(model=profile.model, effort=profile.effort)
+                    profile = self.registry.agent_profiles[account_provider(identity)]
+                    row.update(provider=account_provider(identity), model=profile.model, effort=profile.effort)
             if "usage_after" in data:
                 if not row.get("usage_before"):
                     raise WorkerError("Account selection was not recorded", 400)
@@ -408,6 +489,8 @@ class WorkerService:
             row.update(status=status, lease_until=0, finished_at=int(self.clock()),
                        steering_closed=True,
                        report_version=row.get("report_version", 0) + 1)
+            if status == "waiting_for_quota" and data.get("quota_wait") is not None:
+                row["quota_wait"] = json.dumps(validate_quota_wait(data["quota_wait"]))
             url = data.get("pull_request", "")
             if url and not re.fullmatch(re.escape(f"https://github.com/{route.repository}/pull/") + r"[1-9][0-9]*", url):
                 raise WorkerError("Invalid pull request URL", 400)
@@ -458,10 +541,13 @@ class WorkerService:
         assigned = row.get("assigned_account_id")
         if action == "accounts":
             return {"accounts": [assigned] if assigned else [
-                identity for identity in self.accounts.list() if identity not in exhausted]}
+                identity for identity in self.accounts.list()
+                if identity not in exhausted and account_provider(identity) == "codex"]}
         identity = data.get("account_id")
-        if not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{64}", identity):
+        if not valid_account_id(identity):
             raise WorkerError("Invalid account identity", 400)
+        if account_provider(identity) != "codex":
+            raise WorkerError("Cross-provider conversation migration is unavailable", 403)
         account, _ = self.accounts.table.get(identity)
         leased = account.get("owner") == owner and account.get("lease_until", 0) > self.clock()
         if action == "exhaust_account":
@@ -603,7 +689,7 @@ class WorkerService:
             self.runs.replace(row, etag)
         self.sync_linear(key)
         self.sync_steering(receipt["issue_id"])
-        profile = self.registry.agent_profiles["codex"]
+        profiles = execution_profiles(self.registry, row)
         repair = ({name: receipt[name] for name in
                    ("target_branch", "target_dispatch_key", "target_identifier", "target_pull_request")}
                   if receipt.get("is_auto_repair") and receipt.get("repair_parent_key") else None)
@@ -611,7 +697,7 @@ class WorkerService:
                 "images": images,
                 "account_selection": is_account_selector(claims),
                 "account_id": row.get("assigned_account_id"),
-                "model": profile.model, "effort": profile.effort,
+                **profiles,
                 "serial_admission": True,
                 "workflow_changes_allowed": workflow_changes_allowed,
                 "attempt_id": row["attempt_id"], "owner": owner,

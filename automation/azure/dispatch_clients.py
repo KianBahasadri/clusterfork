@@ -479,7 +479,7 @@ class GitHub:
             raise RequestError()
         return result["sha"]
 
-    def verify_worker_run(self, repository, claims, dispatch_key):
+    def verify_worker_run(self, repository, claims, dispatch_key, *, workflow="clusterfork-worker.yml"):
         from worker_core import WorkerError
         token = self.installation_token(repository, permissions={"actions": "read"})
         run = self.request(f"https://api.github.com/repos/{repository}/actions/runs/{claims['run_id']}",
@@ -488,7 +488,7 @@ class GitHub:
                 or str(run.get("run_attempt")) != str(claims["run_attempt"])
                 or str(run.get("repository", {}).get("id")) != str(claims["repository_id"])
                 or run.get("head_repository", {}).get("full_name") != repository
-                or run.get("path") != ".github/workflows/clusterfork-worker.yml"
+                or run.get("path") != f".github/workflows/{workflow}"
                 or dispatch_key not in run.get("display_title", "")
                 or run.get("actor", {}).get("login") != "clusterfork[bot]"):
             raise WorkerError("GitHub run does not match the dispatch", 403)

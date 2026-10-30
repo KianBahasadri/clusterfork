@@ -58,14 +58,22 @@ def control():
 
 
 def active_workers():
-    active, page = [], 1
-    while True:
-        data = github(f"actions/workflows/clusterfork-worker.yml/runs?per_page=100&page={page}")
-        runs = data["workflow_runs"]
-        active.extend(run["id"] for run in runs if run["status"] != "completed")
-        if len(runs) < 100:
-            return active
-        page += 1
+    active = []
+    for workflow in ("clusterfork-worker.yml", "clusterfork-cursor-smoke.yml"):
+        page = 1
+        while True:
+            try:
+                data = github(f"actions/workflows/{workflow}/runs?per_page=100&page={page}")
+            except HTTPError as exc:
+                if exc.code == 404 and workflow == "clusterfork-cursor-smoke.yml":
+                    break  # GitHub may not have indexed this new workflow yet.
+                raise
+            runs = data["workflow_runs"]
+            active.extend(run["id"] for run in runs if run["status"] != "completed")
+            if len(runs) < 100:
+                break
+            page += 1
+    return active
 
 
 def notify_resume(owner, revision):

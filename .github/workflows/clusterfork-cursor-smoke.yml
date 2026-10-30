@@ -1,0 +1,40 @@
+name: Clusterfork bounded Cursor cloud validation
+run-name: "KIAN-922 Cursor cloud smoke · ${{ inputs.dispatch_key }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      dispatch_key:
+        description: Broker's once-only KIAN-922 validation receipt
+        required: true
+        type: string
+      revision:
+        description: Health-verified broker and worker revision
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: clusterfork-kian-922-cursor-validation
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'KianBahasadri/clusterfork' && github.ref == 'refs/heads/main' && github.sha == inputs.revision
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/setup-cursor
+      - name: Validate the reserved account and perform one bounded turn
+        env:
+          CLUSTERFORK_BROKER_URL: https://clusterfork-dispatch-7604cac329.azurewebsites.net/api/worker
+        run: python3 automation/cursor_smoke.py

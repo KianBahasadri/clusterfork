@@ -16,7 +16,7 @@ Before deployment, `automation/deploy.py` writes a durable pause to
 `ClusterforkOperations` (partition `control`). New readiness/development
 dispatches stop, while existing assessments and coding sessions retain their
 broker access and can finish. The workflow waits for the exact main revision's
-`test` CI workflow to succeed and for all worker runs, including queued runs and
+`test` CI workflow to succeed and for all worker and isolated Cursor validation runs, including queued runs and
 older manual reruns, to stop. Draining allows 330 minutes within a six-hour job.
 
 Only the allowlisted Function App ZIP is published using Flex Consumption's remote

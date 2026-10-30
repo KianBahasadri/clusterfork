@@ -70,6 +70,7 @@ class Registry:
         profiles = {}
         for agent, row in data["agent_profiles"].items():
             efforts = {"antigravity": {"low", "medium", "high"},
+                       "cursor": {"high"},
                        "codex": {"low", "medium", "high", "xhigh", "max", "ultra"}}
             if agent not in efforts:
                 raise ValueError(f"unsupported agent profile: {agent}")
@@ -77,6 +78,8 @@ class Registry:
                 raise ValueError(f"invalid model for {agent}")
             if row["effort"] not in efforts[agent]:
                 raise ValueError(f"unsupported effort for {agent}")
+            if agent == "cursor" and row["model"] != "grok-4.7-high":
+                raise ValueError("Cursor requires the exact grok-4.7-high / high profile")
             profiles[agent] = AgentProfile(row["model"], row["effort"])
         if "codex" not in profiles:
             raise ValueError("configure the Codex profile explicitly")

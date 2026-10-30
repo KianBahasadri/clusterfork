@@ -15,6 +15,10 @@
     "codex": {
       "model": "gpt-6.1-sol",
       "effort": "max"
+    },
+    "cursor": {
+      "model": "grok-4.7-high",
+      "effort": "high"
     }
   },
   "projects": [

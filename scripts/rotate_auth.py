@@ -481,7 +481,7 @@ class SharedStoreBackend:
         return suffixes_from(self.store_dir, PROFILE_PREFIX)
 
     def remote_profiles(self) -> set[str]:
-        if self.command != "rotate-codex":
+        if self.command not in {"rotate-codex", "rotate-cursor-cli"}:
             return set()
         path = self.store_dir / "remote-profiles.json"
         if not path.exists():

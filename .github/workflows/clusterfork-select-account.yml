@@ -1,4 +1,4 @@
-name: Clusterfork Codex account preflight
+name: Clusterfork account preflight
 
 on:
   workflow_call:
@@ -27,6 +27,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-codex
+      - uses: ./.github/actions/setup-cursor
       - name: Inspect quota and bind one account without agent execution
         id: select
         env:

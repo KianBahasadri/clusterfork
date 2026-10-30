@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one Linear issue on an ephemeral GitHub runner using leased Codex auth."""
+"""Run one Linear issue on an ephemeral runner using one assigned provider account."""
 
 from __future__ import annotations
 
@@ -25,6 +25,8 @@ sys.path.insert(0, str(Path(__file__).parent / "azure"))
 from codex_runtime import (CodexError, CodexUsageLimit, copy_sessions, inspect_account,
                            quota_snapshot, read_usage, write_private)
 from agent_session import run_agent
+import cursor_runtime
+from worker_core import account_provider, valid_account_id
 from dispatch_core import AgentProfile
 from quota_selection import SelectionPolicy, select_account
 from worker_reporting import usage_report, worker_branch
@@ -133,13 +135,15 @@ class Heartbeat:
 def account_lease(broker, identity):
     claimed = broker.call("claim", account_id=identity)
     broker.publication_guard.remember_auth(claimed["auth"])
-    with tempfile.TemporaryDirectory(prefix="clusterfork-codex-") as directory:
+    provider = account_provider(identity)
+    with tempfile.TemporaryDirectory(prefix=f"clusterfork-{provider}-") as directory:
         home = Path(directory)
-        write_private(home / "auth.json", claimed["auth"])
+        path = cursor_runtime.auth_path(home) if provider == "cursor" else home / "auth.json"
+        write_private(path, claimed["auth"])
 
         def save(release=False):
             try:
-                auth = json.loads((home / "auth.json").read_text())
+                auth = json.loads(path.read_text())
             except (OSError, ValueError):
                 # A rejected login may remove the cache. Still release the lease,
                 # preserving the original auth error rather than masking it.
@@ -148,7 +152,7 @@ def account_lease(broker, identity):
             broker.call("save", account_id=identity, lease=claimed["lease"],
                         auth=auth, release=release)
 
-        with broker.publication_guard.watch_auth(home / "auth.json"):
+        with broker.publication_guard.watch_auth(path):
             try:
                 with Heartbeat(save) as heartbeat:
                     yield home, heartbeat
@@ -201,13 +205,14 @@ def _command(args, *, env, timeout, failure_signals, stdin, allowed_returncodes,
 
 
 def clean_environment():
-    # OIDC/job credentials stay in the parent. Codex receives only its leased auth file.
+    # OIDC/job credentials stay in the parent. Agents receive only leased auth.
     return {key: value for key, value in os.environ.items()
             if key in {"PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "SYSTEMROOT"}}
 
 
 def choose_account(broker, config, worker_heartbeat, *, preflight=False, replacement=False, deadline=None):
-    profiles = {"codex": AgentProfile(config["model"], config["effort"])}
+    profiles = ({name: AgentProfile(**profile) for name, profile in config["profiles"].items()}
+                if config.get("profiles") else {config.get("provider", "codex"): AgentProfile(config["model"], config["effort"])})
     policy = SelectionPolicy(**config["selection"])
     snapshots = []
     if worker_heartbeat.failed.is_set() or deadline is not None and time.monotonic() >= deadline:
@@ -215,25 +220,51 @@ def choose_account(broker, config, worker_heartbeat, *, preflight=False, replace
     # Initial pool access belongs to preflight. Coding may probe replacements
     # only after the broker has recorded release of its exhausted identity.
     identities = broker.call("accounts")["accounts"] if preflight or replacement else [config["account_id"]]
-    print(f"Inspecting quota for {len(identities)} Codex accounts", flush=True)
+    reasons = config["quota_wait"] = {}
+    for provider in profiles:
+        if not any(account_provider(identity) == provider for identity in identities):
+            reasons[provider + "_no_accounts"] = 1
+    print(f"Inspecting quota for {len(identities)} enrolled agent accounts", flush=True)
+    # Probe every Codex candidate before opening Cursor credentials. A current
+    # Cursor binding is rechecked in place; only new decisions apply precedence.
+    identities = sorted(identities, key=lambda identity: account_provider(identity) == "cursor")
     for identity in identities:
+        provider = account_provider(identity)
+        if provider not in profiles or replacement and provider != "codex":
+            continue
+        if provider == "cursor" and select_account(snapshots, profiles, policy, now=time.time()):
+            break
+        profile = profiles[provider]
         if (worker_heartbeat.failed.is_set() or deadline is not None and time.monotonic() >= deadline):
             raise WorkerFailure("Codex stopped after timeout or loss of its credential lease")
         try:
             with account_lease(broker, identity) as (home, heartbeat):
-                _, limits = inspect_account(home, config["model"], config["effort"])
-                snapshots.append(quota_snapshot(identity, config["model"], limits))
+                inspect = cursor_runtime.inspect_account if provider == "cursor" else inspect_account
+                snapshot = cursor_runtime.quota_snapshot if provider == "cursor" else quota_snapshot
+                _, limits = inspect(home, profile.model, profile.effort)
+                snapshots.append(snapshot(identity, profile.model, limits))
                 if heartbeat.failed.is_set() or worker_heartbeat.failed.is_set():
                     raise WorkerFailure("Worker lease was lost during quota inspection")
         except HTTPError as exc:
             if exc.code not in {404, 409} or getattr(exc, "clusterfork_action", "claim") != "claim":
                 raise
             print(f"Account {identity[:8]} is no longer available", flush=True)
+            code = provider + "_busy"
+            reasons[code] = reasons.get(code, 0) + 1
             continue
         except CodexError as exc:
             # Unknown/busy/unavailable accounts never count as unused quota.
-            print(f"Account {identity[:8]} unavailable for quota inspection ({type(exc).__name__})", flush=True)
+            reason = str(exc) if isinstance(exc, cursor_runtime.CursorError) else type(exc).__name__
+            code = (exc.reason_code if isinstance(exc, cursor_runtime.CursorError) and exc.reason_code in {
+                "cursor_profile_unavailable", "cursor_authentication_unavailable", "cursor_usage_unknown"}
+                else provider + "_inspection_unavailable")
+            reasons[code] = reasons.get(code, 0) + 1
+            print(f"{provider} account {identity[-64:-56]} unavailable for quota inspection ({reason})", flush=True)
             continue
+    for provider in profiles:
+        count = sum(snapshot.agent == provider for snapshot in snapshots)
+        if count and not select_account([snapshot for snapshot in snapshots if snapshot.agent == provider], profiles, policy, now=time.time()):
+            reasons[provider + "_usage_ineligible"] = count
     return snapshots, profiles, policy
 
 
@@ -244,7 +275,7 @@ def select_account_for_run(broker, config, heartbeat):
     snapshots, profiles, policy = choose_account(broker, config, heartbeat, preflight=True)
     selected = select_account(snapshots, profiles, policy, now=time.time())
     if selected is None:
-        broker.call("finish", status="waiting_for_quota")
+        broker.call("finish", status="waiting_for_quota", quota_wait=config.get("quota_wait", {}))
         return False
     broker.call("bind_account", account_id=selected.account_id)
     return True
@@ -252,6 +283,10 @@ def select_account_for_run(broker, config, heartbeat):
 
 @contextmanager
 def run_codex(broker, config, worker_heartbeat, directory):
+    if account_provider(config.get("account_id")) == "cursor":
+        with run_cursor(broker, config, worker_heartbeat, directory) as summary:
+            yield summary
+        return
     # Keep the selected account leased through validation and publication so the
     # final reading covers the full attempt without another worker consuming it.
     image_paths = materialize_images(config, directory)
@@ -358,6 +393,67 @@ def run_codex(broker, config, worker_heartbeat, directory):
 
 
 @contextmanager
+def run_cursor(broker, config, worker_heartbeat, directory):
+    """The selected Cursor account stays leased through testing/publication."""
+    image_paths = materialize_images(config, directory)
+    broker.call("progress", stage="selecting_account")
+    snapshots, profiles, policy = choose_account(broker, config, worker_heartbeat)
+    selected = select_account(snapshots, profiles, policy, now=time.time())
+    if selected is None:
+        yield None
+        return
+    ran = False
+    try:
+        with account_lease(broker, selected.account_id) as (home, heartbeat):
+            details, limits = cursor_runtime.inspect_account(home, selected.model, selected.effort)
+            fresh = cursor_runtime.quota_snapshot(selected.account_id, selected.model, limits)
+            if not select_account([fresh], profiles, policy, now=time.time()):
+                config.setdefault("quota_wait", {})["cursor_usage_ineligible"] = 1
+                yield None
+                return
+            broker.publication_guard.capture_auth(cursor_runtime.auth_path(home))
+            account = details.get("account") or {}
+            broker.call("progress", stage="coding", account_id=selected.account_id,
+                        context_sha=config.get("checkout_sha"), account_email=account.get("email"),
+                        account_plan=account.get("planType"), usage_before=usage_report(fresh))
+            print(f"Running cursor {selected.model} ({selected.effort}); minimum quota headroom {selected.remaining_percent:g}%", flush=True)
+            issue = config["issue"]
+            prompt = (f"Implement Linear issue {issue['identifier']}: {issue['title']}\nIssue URL: {issue['url']}\n\n"
+                      + workflow_publication_policy(config.get("workflow_changes_allowed"))
+                      + f"\n\n{issue.get('description') or ''}" + image_prompt(config.get("images", [])))
+            ran = True
+            try:
+                timeout = config.get("agent_timeout_minutes", 300) * 60
+                summary = cursor_runtime.run_agent(
+                    broker, config, home, Path.cwd(), prompt, clean_environment(),
+                    timeout=timeout, image_paths=image_paths,
+                    failure_signals=[heartbeat.failed, worker_heartbeat.failed])
+                broker.publication_guard.capture_auth(cursor_runtime.auth_path(home))
+                yield summary
+            finally:
+                try:
+                    if heartbeat.failed.is_set() or worker_heartbeat.failed.is_set():
+                        raise WorkerFailure("Credential lease was lost")
+                    final = cursor_runtime.quota_snapshot(selected.account_id, selected.model,
+                                                          cursor_runtime.read_usage(home), allow_exhausted=True)
+                    broker.call("progress", usage_account_id=selected.account_id, usage_after=usage_report(final))
+                except Exception:
+                    print("Final Cursor quota reading unavailable; usage change is unknown", flush=True)
+    except HTTPError as exc:
+        if ran or exc.code not in {404, 409} or getattr(exc, "clusterfork_action", "claim") != "claim":
+            raise
+        yield None
+    except CodexError as exc:
+        if ran:
+            raise
+        code = (exc.reason_code if isinstance(exc, cursor_runtime.CursorError) and exc.reason_code in {
+            "cursor_profile_unavailable", "cursor_authentication_unavailable", "cursor_usage_unknown"}
+            else "cursor_inspection_unavailable")
+        config.setdefault("quota_wait", {})[code] = 1
+        yield None
+
+
+@contextmanager
 def git_auth(token, directory):
     askpass = directory / "git-askpass"
     askpass.write_text('#!/bin/sh\ncase "$1" in *Username*) printf "%s" "x-access-token";; *) printf "%s" "$CLUSTERFORK_GIT_TOKEN";; esac\n')
@@ -367,7 +463,7 @@ def git_auth(token, directory):
 
 
 def review_readiness(broker, config, worker_heartbeat, directory):
-    """Review in Codex's enforced read-only sandbox, using the normal quota pool."""
+    """Review in the selected provider's read-only sandbox using the quota pool."""
     token = broker.call("checkout")["token"]
     with git_auth(token, directory) as env:
         command(["git", "fetch", "origin", f"+refs/heads/{config['ref']}:refs/remotes/origin/{config['ref']}"], env=env)
@@ -380,18 +476,31 @@ def review_readiness(broker, config, worker_heartbeat, directory):
     while True:
         selected = select_account(snapshots, profiles, policy, now=time.time())
         if not selected:
-            broker.call("finish", status="waiting_for_quota")
+            broker.call("finish", status="waiting_for_quota", quota_wait=config.get("quota_wait", {}))
             return "readiness_retry"
         snapshots = [row for row in snapshots if row.account_id != selected.account_id]
         try:
             with account_lease(broker, selected.account_id) as (home, heartbeat):
-                _, limits = inspect_account(home, config["model"], config["effort"])
-                fresh = quota_snapshot(selected.account_id, config["model"], limits)
+                provider = account_provider(selected.account_id)
+                inspect = cursor_runtime.inspect_account if provider == "cursor" else inspect_account
+                snapshot = cursor_runtime.quota_snapshot if provider == "cursor" else quota_snapshot
+                _, limits = inspect(home, config["model"], config["effort"])
+                fresh = snapshot(selected.account_id, config["model"], limits)
                 if not select_account([fresh], profiles, policy, now=time.time()):
                     continue
                 schema, output = directory / "readiness-schema.json", directory / "readiness-result.json"
                 schema.write_text(json.dumps(RESULT_SCHEMA))
-                command(["codex", "exec", "--ignore-user-config", "--ignore-rules", "--ephemeral",
+                if provider == "cursor":
+                    text = cursor_runtime.run_agent(
+                        broker, config, home, Path.cwd(), review_prompt(config["issue"],
+                            workflow_changes_allowed=config.get("workflow_changes_allowed"), images=config.get("images", []))
+                        + "\nReturn only JSON matching this schema:\n" + json.dumps(RESULT_SCHEMA),
+                        clean_environment(), read_only=True, steering=False, image_paths=image_paths,
+                        timeout=config["review_timeout_seconds"],
+                        failure_signals=[heartbeat.failed, worker_heartbeat.failed])
+                    output.write_text(text)
+                else:
+                    command(["codex", "exec", "--ignore-user-config", "--ignore-rules", "--ephemeral",
                          "--color", "never", "--sandbox", "read-only", "--model", config["model"],
                          "-c", 'approval_policy="never"',
                          "-c", f'model_reasoning_effort="{config["effort"]}"',
@@ -582,7 +691,7 @@ def execute(broker, config, heartbeat, directory):
         broker.call("progress", stage="testing")
         if (command(["git", "rev-parse", "HEAD"]).strip() != original
                 or command(["git", "branch", "--show-current"]).strip() != branch):
-            raise WorkerFailure("Codex changed the worker's Git history or branch")
+            raise WorkerFailure("Agent changed the worker's Git history or branch")
         changed = command(["git", "status", "--porcelain"]).strip()
         paths = command(["git", "diff", "--name-only", "HEAD"]).splitlines()
         paths += command(["git", "ls-files", "--others", "--exclude-standard"]).splitlines()
@@ -653,8 +762,8 @@ def main(*, select_only=False):
             raise WorkerFailure("Deploy a compatible readiness worker and broker")
         if config.get("account_selection") is not select_only:
             raise WorkerFailure("Broker did not authorize this job's account access role")
-        if not select_only and not re.fullmatch(r"[0-9a-f]{64}", config.get("account_id") or ""):
-            raise WorkerFailure("Account preflight must assign one Codex account before agent execution")
+        if not select_only and not valid_account_id(config.get("account_id")):
+            raise WorkerFailure("Account preflight must assign one agent account before execution")
         CONTEXT.set({**CONTEXT.get(), "phase": config["phase"]})
         with Heartbeat(lambda: broker.call("heartbeat")) as heartbeat, \
              tempfile.TemporaryDirectory(prefix="clusterfork-worker-") as directory:
@@ -668,12 +777,14 @@ def main(*, select_only=False):
             else:
                 status, pull = execute(broker, config, heartbeat, Path(directory))
         if config["phase"] == "development":
-            broker.call("finish", status=status, pull_request=pull or "")
+            broker.call("finish", status=status, pull_request=pull or "",
+                        **({"quota_wait": config.get("quota_wait", {})} if status == "waiting_for_quota" else {}))
         print(f"Worker outcome: {status}" + (f"; {pull}" if pull else ""))
         summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary_path:
             with open(summary_path, "a") as stream:
-                stream.write(f"### Clusterfork Codex {config['phase']} worker\n\nIssue: {config['issue']['identifier']}\n\n"
+                stream.write(f"### Clusterfork {config.get('provider', 'codex')} {config['phase']} worker\n\nIssue: {config['issue']['identifier']}\n\n"
+                             f"Account: `{config['account_id']}`\n\n"
                              f"Model: `{config['model']}` / `{config['effort']}`\n\nOutcome: {status}\n\n"
                              + (f"Pull request: {pull}\n" if pull else ""))
                 if pull:

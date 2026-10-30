@@ -9,7 +9,7 @@ import time
 from uuid import UUID, uuid4
 
 from worker_core import WorkerError
-from worker_reporting import STAGES, attempt_comment
+from worker_reporting import STAGES, attempt_comment, quota_wait_text
 from readiness_policy import redact_review_text
 from diagnostics import context, failure, failure_summary, record
 
@@ -188,6 +188,8 @@ class LinearSync:
                 state, reason = "in_progress", "Worker is running."
             elif status == "waiting_for_quota":
                 state, reason = "ready", "Waiting for an account with enough quota; retries automatically."
+                if run.get("quota_wait"):
+                    reason += " " + quota_wait_text(json.loads(run["quota_wait"]))
             elif status == "waiting_for_dependencies":
                 state, reason = "ready", "Waiting for blocked-by issue prerequisites; coding has not started. See the repository queue comment."
             elif status == "waiting_for_deployment":
