@@ -49,6 +49,8 @@ class RepositoryQueue:
         self.control = control
         self.repair = AutoRepair(self)
         self.readiness.admitted = self.is_admitted
+        self.readiness.admission_reason = self.admission_reason
+        self.readiness.deployment_paused = self.deployment_paused
         self.readiness.review_selection = self.review_selection
 
     optional_entry = staticmethod(optional)
@@ -87,19 +89,25 @@ class RepositoryQueue:
         raise WorkerError("Review selection changed concurrently; retry")
 
     def is_admitted(self, issue, route):
-        if self.control and self.control.is_paused():
-            return False
+        return self.admission_reason(issue, route) is None
+
+    def deployment_paused(self):
+        return bool(self.control and self.control.is_paused())
+
+    def admission_reason(self, issue, route, *, allow_paused=False):
         table = self.table(route.repository)
         state, _ = table.get("slot")
         key = dispatch_key(self.registry, route, issue)
         if state["active_key"] != key:
-            return False
+            return "repository_admission_lost"
+        if not allow_paused and self.deployment_paused():
+            return "deployment_paused"
         if not self.dependencies_ready(issue, route):
-            return False
+            return "prerequisites_unresolved"
         # Readiness timer retries can dispatch without calling queue.advance.
         # Adopt legacy slots and retry their marker before that dispatch too.
         state, _ = self.reserve(table)
-        return state["active_key"] == key
+        return None if state["active_key"] == key else "repository_admission_lost"
 
     def started_coding(self, row):
         if row.get("coding_started"):
@@ -153,6 +161,8 @@ class RepositoryQueue:
             held_attempt = owner is not None and (updated.get("dependency_hold") or (
                 receipt and updated.get("dependency_epoch", "") != receipt.get("dependency_epoch", "")))
             if coding and not fields["dependency_reason"] and not held_attempt:
+                if self.deployment_paused():
+                    raise WorkerError("Azure deployment paused coding admission", 503, reason_code="deployment_paused")
                 updated["coding_started"] = True
             try:
                 if updated != row:
@@ -334,13 +344,13 @@ class RepositoryQueue:
     def assert_worker(self, repository, key, owner):
         state, _ = self.table(repository).get("slot")
         if state["active_key"] != key or state["owner"] != owner:
-            raise WorkerError("Worker no longer owns the repository slot")
+            raise WorkerError("Worker no longer owns the repository slot", reason_code="repository_admission_lost")
 
     def start_worker(self, repository, key, owner):
         table = self.table(repository)
         state, etag = self.reserve(table)
         if state["active_key"] != key:
-            raise WorkerError("Another task owns the repository slot")
+            raise WorkerError("Another task owns the repository slot", reason_code="repository_admission_lost")
         row, _ = table.get(key)
         if row.get("repair_attempted") and row.get("repair_issue_id"):
             raise WorkerError("The parent worker yielded its slot to its single auto-repair", 403)
@@ -400,6 +410,7 @@ class RepositoryQueue:
         latest = max(runs, key=lambda r: (r["id"], r["run_attempt"])) if runs else known_result
         latest_owner = f"{latest['id']}:{latest['run_attempt']}" if runs else known_owner
         if (receipt.get("readiness_wait_owner") == latest_owner
+                or receipt.get("deployment_wait_owner") == latest_owner
                 or (run and (run.get("dependency_wait") or run.get("status") == "waiting_for_dependencies"))):
             repairable = False  # Admission holds have not attempted coding/validation.
         failed_run = bool((run and run.get("status") == "failed" and run.get("owner") == latest_owner)
@@ -418,6 +429,16 @@ class RepositoryQueue:
                 return "blocked", reason + " Rerun this task or cancel its Linear issue to abandon it."
         if canceled:
             return "abandoned", "Linear issue canceled; GitHub workers stopped and no open PR remains."
+        if receipt.get("deployment_wait_owner"):
+            # A startup deferral did no coding and cannot trigger auto-repair.
+            # The recorded run is checked directly even if listings lag.
+            deferred = self.github.worker_result(route.repository, receipt["deployment_wait_owner"], latest=True)
+            if deferred.get("status") != "completed":
+                return "waiting", "Waiting for the deployment-deferred GitHub attempt to stop."
+            current, reason = eligibility(issue or {}, self.registry)
+            if current != route:
+                return "skipped", f"Deployment-deferred issue is no longer eligible ({reason})."
+            return "retry", "Deployment resumed; rechecking current readiness before retrying startup."
         if repairable and failed_run and (runs or known_result):
             return "repair", "Worker execution or validation failed."
         if receipt["status"] == "rejected":
@@ -498,9 +519,11 @@ class RepositoryQueue:
         if receipt:
             dependency_retry = current_row.get("dependency_epoch", "") != receipt.get("dependency_epoch", "")
             if not retry or (not dependency_retry and (
-                    not receipt.get("retry_after") or receipt["retry_after"] > self.clock())):
+                    not receipt.get("deployment_wait_owner") and (
+                        not receipt.get("retry_after") or receipt["retry_after"] > self.clock()))):
                 return {"status": "already_claimed", "dispatch_key": key}
             receipt.update(status="dispatching", retry_after=0, readiness_wait_owner="",
+                           deployment_wait_owner="",
                            dependency_epoch=current_row.get("dependency_epoch", ""),
                            readiness_review_key=approval.get("review_key", ""))
             self.receipts.replace(receipt, version)
@@ -767,3 +790,14 @@ class RepositoryQueue:
                 self.advance(repository)
             except Exception:
                 logging.error("Repository queue reconciliation deferred for %s", repository)
+
+    def deployment_pending(self):
+        for receipt in self.receipts.list():
+            if not receipt.get("deployment_wait_owner"):
+                continue
+            table = self.table(receipt["repository"])
+            state, _ = table.get("slot")
+            row, _ = table.get(receipt["RowKey"])
+            if state["active_key"] == receipt["RowKey"] and not row.get("dependency_reason"):
+                return True
+        return False

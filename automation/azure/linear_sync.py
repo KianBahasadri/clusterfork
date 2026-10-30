@@ -165,6 +165,8 @@ class LinearSync:
             if issue["state"]["id"] == states.done and note.get("completion_owner") != owner:
                 return
             status = run["status"]
+            if receipt.get("deployment_wait_owner") == owner:
+                status = "waiting_for_deployment"
             if run.get("dependency_wait") and run.get("stage", "initializing") in {"initializing", "selecting_account"}:
                 status = "waiting_for_dependencies"
             if status == "running" and run.get("lease_until", 0) <= self.clock():
@@ -188,6 +190,8 @@ class LinearSync:
                 state, reason = "ready", "Waiting for an account with enough quota; retries automatically."
             elif status == "waiting_for_dependencies":
                 state, reason = "ready", "Waiting for blocked-by issue prerequisites; coding has not started. See the repository queue comment."
+            elif status == "waiting_for_deployment":
+                state, reason = "ready", "Azure deployment paused startup; waiting for explicit resume and confirmation that the GitHub attempt stopped."
             elif status == "failed":
                 state = "blocked"
                 reason = (failure_summary(json.loads(run["failure"])) if run.get("failure") else

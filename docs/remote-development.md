@@ -125,7 +125,8 @@ it needs no generation change and never consumes or resets a completed coding re
 Unavailable context, dispatch failures, timeouts, quota waits, and infrastructure
 uncertainty hold coding with a visible retry comment. The shared timer retries
 temporary failures after 15 minutes and verifies the old GitHub attempt stopped
-before launching another. An uncertain/crashed dispatch without a confirmed run
+before launching another. Deployment startup deferrals use the recovery below;
+they do not incur this failure cooldown. An uncertain/crashed dispatch without a confirmed run
 is held for discovery and investigation, never blindly resent. Duplicate issue
 events, project scans, and callbacks share the durable review record. Cancellation,
 archive, loss of enrollment, project moves, or human status changes prevent an
@@ -157,30 +158,8 @@ queued/selected markers, worker fencing, slot release, and selection feedback ti
 
 ## Automatic deployments
 
-`.github/workflows/deploy-azure.yml` runs on pushes to main and supports manual
-recovery with `workflow_dispatch`. Every run reconciles the
-[Azure Terraform stack](azure-infrastructure.md) before publishing the package.
-Deployment runs are serialized, with later pushes retaining the newest pending
-run. [Setup](remote-development-setup.md#automatic-deployment-identity) owns the
-GitHub environment and Azure identity configuration.
-
-Before deployment, `automation/deploy.py` writes a durable pause to
-`ClusterforkOperations` (partition `control`). New readiness/development
-dispatches stop, while existing workers retain their broker access and can
-finish. The workflow waits for the exact main revision's `test` CI workflow to
-succeed and for all worker runs, including queued runs and older manual reruns,
-to stop. Draining allows 330 minutes within a six-hour deployment job.
-
-Only the allowlisted Function App ZIP is published using Flex Consumption's remote
-build. `deployment.json` stamps its Git revision and broker source digest.
-The health endpoint returns this metadata, the serial-admission capability, and
-the deployment pause state. Startup failures return 503 with a `runtime_error`
-class, without credentials or raw exception messages. The workflow resumes dispatch only after the live
-revision/digest match the package, configuration is complete, and main still
-points to that revision. If main advances, the newer deployment inherits the
-pause. CI, drain, deployment, or health failures leave the pause in place; a
-corrected main push or manual deployment workflow run performs recovery. The
-pause has no time-based automatic expiry.
+[Deployment pauses and recovery](remote-development-deployments.md) owns verified
+deployment, worker draining, startup deferral, and prompt reconciliation after resume.
 
 ## Agent profiles
 
@@ -260,6 +239,9 @@ same replacement, including after a lost creation response. A definite forbidden
 update can also trigger this migration when author metadata appeared to match;
 timeouts and other transient update failures retry the existing comment. This
 applies to lifecycle, attempt, readiness, queue, and steering reports.
+
+[KIAN-923's reporting investigation](remote-development-deployments.md#status-reporting-investigation)
+owns concurrent/ambiguous comment-creation recovery and readiness reporting isolation.
 
 Confirmed completion records `completion_owner` in `ClusterforkLinearSync`
 before external writes. It attempts the explanation, stage removal, and Done

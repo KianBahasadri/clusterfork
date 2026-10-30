@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 from urllib.error import HTTPError
 import zipfile
 
@@ -84,11 +84,40 @@ class DeploymentTests(unittest.TestCase):
         self.control.pause(OWNER, REVISION)
         with patch.object(deploy, "control", return_value=self.control), \
              patch.object(deploy, "github", return_value={"sha": REVISION}), \
+             patch.object(deploy, "notify_resume") as notify, \
              patch.object(deploy, "health", return_value={
                  "deployment": {"revision": REVISION, "digest": pilot.source_digest()},
                  "serial_admission": True, "missing": []}):
             deploy.verify(REVISION, OWNER)
         self.assertFalse(self.control.is_paused())
+        notify.assert_called_once_with(OWNER, REVISION)
+
+    def test_recovery_notification_is_durable_before_resume_and_failure_keeps_pause(self):
+        self.control.pause(OWNER, REVISION)
+        with patch.object(deploy, "control", return_value=self.control), \
+             patch.object(deploy, "github", return_value={"sha": REVISION}), \
+             patch.object(deploy, "health", return_value={
+                 "deployment": {"revision": REVISION, "digest": pilot.source_digest()},
+                 "serial_admission": True, "missing": []}), \
+             patch.object(deploy, "notify_resume", side_effect=RuntimeError("queue unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "queue unavailable"):
+                deploy.verify(REVISION, OWNER)
+        self.assertTrue(self.control.is_paused())
+
+    def test_recovery_uses_existing_queue_and_does_not_log_storage_credentials(self):
+        with patch.object(deploy.pilot, "command", return_value="private-storage-connection") as command, \
+             patch("azure.storage.queue.QueueClient") as queue:
+            deploy.notify_resume(OWNER, REVISION)
+        self.assertTrue(command.call_args.kwargs["sensitive"])
+        client = queue.from_connection_string
+        self.assertEqual(client.call_args.args, ("private-storage-connection", "clusterfork-events"))
+        event = json.loads(client.return_value.send_message.call_args.args[0])
+        self.assertEqual(event, {"type": "DeploymentResume", "id": OWNER, "revision": REVISION})
+        self.assertEqual(client.return_value.send_message.call_args.kwargs, {"visibility_timeout": 5})
+        with patch.object(deploy.pilot, "command", side_effect=RuntimeError("SECRET")), \
+             self.assertRaises(RuntimeError) as caught:
+            deploy.notify_resume(OWNER, REVISION)
+        self.assertNotIn("SECRET", str(caught.exception))
 
     def test_stale_or_unhealthy_cloud_does_not_resume_dispatch(self):
         self.control.pause(OWNER, REVISION)
@@ -159,6 +188,66 @@ class FunctionAppConfigurationTests(unittest.TestCase):
                         for value in values.values():
                             if value:
                                 self.assertNotIn(value, response.get_body().decode())
+
+    def test_deployment_resume_event_checks_current_pause_and_retries_pending_discovery(self):
+        service = Mock()
+        event = {"type": "DeploymentResume", "id": OWNER, "revision": REVISION}
+        service.queue.control.state.return_value = ({"owner": OWNER, "revision": REVISION, "paused": False}, 1)
+        service.queue.deployment_pending.return_value = False
+        service.queue.readiness.reconcile.side_effect = [True, False]
+        with patch.object(self.app, "worker_service", return_value=service), \
+             patch.object(self.app, "enqueue") as enqueue:
+            for _ in range(2):
+                message = Mock()
+                message.get_body.return_value = json.dumps(event).encode()
+                self.app.route_event(message)
+        self.assertEqual(service.queue.reconcile.call_count, 2)
+        service.queue.readiness.reconcile.assert_called_with(deployment_only=True)
+        enqueue.assert_called_once_with({**event, "processing_at": ANY}, visibility_timeout=15)
+
+    def test_real_deferred_review_recovers_via_queue_event_without_a_timer_tick(self):
+        import test_readiness as fixtures
+
+        fixture = fixtures.ReadinessTests()
+        fixture.setUp()
+        fixture.dispatcher.route(fixture.issue)
+        old = fixture.key()
+        fixture.pause_deployment()
+        fixture.call(old, "start")
+        fixture.resume_deployment()
+        event = {"type": "DeploymentResume", "id": "github:900:1", "revision": "c" * 40}
+        with patch.object(self.app, "worker_service", return_value=fixture.service), \
+             patch.object(self.app, "enqueue") as enqueue:
+            self.app.deployment_recovery(event)
+            self.assertEqual(fixture.github.dispatch.call_count, 1)
+            enqueue.assert_called_once_with(event, visibility_timeout=15)
+            fixture.stop(old, "failure")
+            enqueue.reset_mock()
+            for _ in range(3):
+                self.app.deployment_recovery(event)
+            enqueue.assert_not_called()
+        self.assertNotEqual(fixture.key(), old)
+        self.assertEqual(fixture.github.dispatch.call_count, 2)
+        self.assertEqual(fixture.now, fixtures.NOW)
+        self.assertEqual(fixture.call(fixture.key(), "start")["phase"], "readiness")
+
+    def test_stale_resume_events_and_an_unresumed_deployment_cannot_start_work(self):
+        event = {"type": "DeploymentResume", "id": OWNER, "revision": REVISION}
+        for state in ({"owner": "github:124:1", "revision": REVISION, "paused": False},
+                      {"owner": OWNER, "revision": "b" * 40, "paused": False},
+                      {"owner": OWNER, "revision": REVISION, "paused": True}):
+            service = Mock()
+            service.queue.control.state.return_value = state, 1
+            with self.subTest(state=state), patch.object(self.app, "worker_service", return_value=service), \
+                 patch.object(self.app, "enqueue") as enqueue:
+                if state["owner"] == OWNER and state["revision"] == REVISION:
+                    with self.assertRaises(WorkerError):
+                        self.app.deployment_recovery(event)
+                else:
+                    self.app.deployment_recovery(event)
+                service.queue.reconcile.assert_not_called()
+                service.queue.readiness.reconcile.assert_not_called()
+                enqueue.assert_not_called()
 
     def test_worker_service_uses_oauth_without_requiring_api_key_and_preserves_fallback(self):
         base = {"AzureWebJobsStorage": "test-storage", "GITHUB_APP_ID": "123",

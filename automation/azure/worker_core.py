@@ -22,9 +22,10 @@ SELECTOR_ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "bind_acc
 
 
 class WorkerError(RuntimeError):
-    def __init__(self, message, status=409):
+    def __init__(self, message, status=409, *, reason_code=None):
         super().__init__(message)
         self.status = status
+        self.reason_code = reason_code
 
 
 def account_identity(auth):
@@ -192,13 +193,13 @@ class WorkerService:
             if action == "start":
                 self.github.verify_worker_run(route.repository, claims, key)
                 self.queue.start_worker(route.repository, parent, owner)
-                workflow_changes_allowed = self.github.workflow_changes_allowed(route.repository) is True
             elif action != "save":
                 self.queue.assert_worker(route.repository, parent, owner)
             result = self.queue.readiness.handle(action, claims, data, review)
             if action == "start":
                 result["serial_admission"] = True
-                result["workflow_changes_allowed"] = workflow_changes_allowed
+                if result.get("status") != "deployment_deferred":
+                    result["workflow_changes_allowed"] = self.github.workflow_changes_allowed(route.repository) is True
             if action == "review" and result.get("status") == "passed":
                 issue = self.linear.issue(review["issue_id"])
                 current, _ = eligibility(issue or {}, self.registry)
@@ -215,6 +216,8 @@ class WorkerService:
             return self.start(key, owner, claims, receipt, route)
         self.queue.assert_worker(route.repository, key, owner)
         row, etag = self.runs.get(key)
+        if receipt.get("deployment_wait_owner") == owner and action != "save":
+            return {"status": "deployment_deferred", "reason_code": "deployment_paused"}
         if (row.get("owner") != owner or row.get("status") != "running"
                 or row.get("lease_until", 0) <= self.clock()):
             raise WorkerError("Worker lease was lost")
@@ -223,6 +226,10 @@ class WorkerService:
         self.runs.replace(row, etag)
         if action in {"accounts", "claim", "bind_account", "github", "checkout"} or (
                 action == "progress" and data.get("stage") in {"coding", "publishing"}):
+            if self.queue.deployment_paused():
+                entry, _ = self.queue.table(route.repository).get(key)
+                if not self.queue.started_coding(entry):
+                    return self.hold_for_deployment(key, owner)
             issue = self.linear.issue(receipt["issue_id"])
             extra = (route.linear_states.in_progress, route.linear_states.blocked) if route.linear_states else ()
             current, _ = eligibility(issue or {}, self.registry, additional_state_ids=extra)
@@ -323,9 +330,14 @@ class WorkerService:
                 row["repair_result"] = json.dumps(result)
             if stage in {"testing", "publishing"}:
                 row["steering_closed"] = True
-            if data.get("stage") == "coding" and not self.queue.dependencies_ready(
-                    issue, route, key=key, owner=owner, coding=True):
-                raise WorkerError("Coding start held for unresolved or unverifiable issue prerequisites", 403)
+            if data.get("stage") == "coding":
+                try:
+                    if not self.queue.dependencies_ready(issue, route, key=key, owner=owner, coding=True):
+                        raise WorkerError("Coding start held for unresolved or unverifiable issue prerequisites", 403)
+                except WorkerError as exc:
+                    if exc.reason_code == "deployment_paused":
+                        return self.hold_for_deployment(key, owner)
+                    raise
             self.runs.replace(row, etag)
             self.sync_linear(key)
             self.sync_steering(receipt["issue_id"])
@@ -408,6 +420,19 @@ class WorkerService:
                     raise
         raise WorkerError("Dispatch receipt changed concurrently; retry readiness scheduling")
 
+    def hold_for_deployment(self, key, owner):
+        for _ in range(32):
+            receipt, etag = self.receipts.get(key)
+            receipt.update(deployment_wait_owner=owner, retry_after=0)
+            try:
+                self.receipts.replace(receipt, etag)
+                self.sync_linear(key)
+                return {"status": "deployment_deferred", "reason_code": "deployment_paused"}
+            except WorkerError as exc:
+                if exc.status != 409:
+                    raise
+        raise WorkerError("Dispatch receipt changed concurrently; retry deployment deferral")
+
     def start(self, key, owner, claims, receipt, route):
         # Check the GitHub API as well as JWT claims, including who dispatched it.
         self.github.verify_worker_run(route.repository, claims, key)
@@ -435,6 +460,12 @@ class WorkerService:
                     previous.get("status") == "waiting_for_quota"
                     or (previous.get("status") == "running" and previous.get("owner") == owner)):
                 raise WorkerError("The single auto-repair worker cannot be retried", 403)
+        if receipt.get("deployment_wait_owner") == owner:
+            return {"status": "deployment_deferred", "reason_code": "deployment_paused"}
+        if self.queue.deployment_paused():
+            entry, _ = self.queue.table(route.repository).get(key)
+            if not self.queue.started_coding(entry):
+                return self.hold_for_deployment(key, owner)
         if not self.queue.dependencies_ready(issue, route, key=key, owner=owner):
             raise WorkerError("Coding start held for unresolved or unverifiable issue prerequisites", 403)
         try:

@@ -34,6 +34,51 @@ class DiagnosticsTests(unittest.TestCase):
         broker.expires = time.time() + 3600
         return broker
 
+    def test_deployment_deferral_is_bounded_and_exits_without_failed_finish_or_agent_work(self):
+        for selector in (False, True):
+            with self.subTest(selector=selector), tempfile.TemporaryDirectory() as directory:
+                broker = self.broker()
+                summary, output = Path(directory) / "summary", Path(directory) / "output"
+                with patch.dict(os.environ, {"CLUSTERFORK_BROKER_URL": broker.url, "DISPATCH_KEY": KEY,
+                                             "GITHUB_OUTPUT": str(output), "GITHUB_STEP_SUMMARY": str(summary)}, clear=True), \
+                     patch.object(worker, "Broker", return_value=broker), \
+                     patch.object(worker, "json_request", return_value={"status": "deployment_deferred",
+                                                                        "reason_code": "deployment_paused"}) as request, \
+                     patch.object(worker, "execute") as execute, patch.object(worker, "review_readiness") as review, \
+                     patch.object(worker, "select_account_for_run") as select, self.assertLogs(level="INFO") as logs:
+                    self.assertEqual(worker.main(select_only=selector), 0)
+                execute.assert_not_called()
+                review.assert_not_called()
+                select.assert_not_called()
+                self.assertEqual(request.call_count, 1)  # Start only; no failed finish callback.
+                self.assertIn("deployment_paused", "\n".join(logs.output))
+                self.assertNotIn("worker_failed", "\n".join(logs.output))
+                self.assertNotIn("SECRET", "\n".join(logs.output) + summary.read_text())
+                self.assertIn("exiting", summary.read_text())
+                if selector:
+                    self.assertEqual(output.read_text(), "selected=false\n")
+
+    def test_deferred_heartbeat_cannot_be_reclassified_as_a_failed_preflight_lease(self):
+        broker = self.broker()
+        def stopped_preflight(*args):
+            try:
+                broker.call("heartbeat")
+            except worker.DeploymentDeferred:
+                raise worker.WorkerFailure("Quota inspection stopped after its heartbeat") from None
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.dict(os.environ, {"CLUSTERFORK_BROKER_URL": broker.url, "DISPATCH_KEY": KEY,
+                                     "GITHUB_OUTPUT": str(Path(directory) / "output")}, clear=True), \
+             patch.object(worker, "Broker", return_value=broker), \
+             patch.object(worker, "select_account_for_run", side_effect=stopped_preflight), \
+             patch.object(worker, "json_request", side_effect=[
+                 {"serial_admission": True, "protocol": worker.PROTOCOL, "phase": "readiness", "account_selection": True},
+                 {"status": "deployment_deferred", "reason_code": "deployment_paused"}]) as request, \
+             self.assertLogs(level="INFO") as logs:
+            self.assertEqual(worker.main(select_only=True), 0)
+            self.assertEqual(Path(directory, "output").read_text(), "selected=false\n")
+        self.assertEqual(request.call_count, 2)
+        self.assertNotIn("worker_failed", "\n".join(logs.output))
+
     def test_timeout_keeps_action_run_stage_request_and_elapsed_without_secrets(self):
         broker = self.broker()
         error = TimeoutError("SECRET remote exception text")

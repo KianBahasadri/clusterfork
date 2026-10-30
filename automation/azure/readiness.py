@@ -13,9 +13,12 @@ from readiness_policy import (PROTOCOL, RETRY_SECONDS, REVIEW_TIMEOUT_SECONDS, d
                               result_snapshot, validate_result)
 from worker_core import (ACCOUNT_HANDOFF_SECONDS, LEASE_SECONDS, SELECTOR_ACTIONS, WorkerError,
                          account_request, authorize_claims, is_account_selector)
+from diagnostics import failure, record
 
 REJECTIONS = {"needs_clarification", "rejected"}
 DECISIONS = {"passed", *REJECTIONS}
+DEPLOYMENT_WAIT = ("Azure deployment paused new workers before readiness assessment. Waiting for successful "
+                   "deployment and explicit resume, then confirmation that all previous GitHub attempts stopped.")
 
 
 def optional(table, key):
@@ -32,6 +35,8 @@ class ReadinessGate:
         self.registry, self.table, self.accounts = registry, table, accounts
         self.linear, self.github, self.clock = linear, github, clock
         self.admitted = lambda issue, route: False
+        self.admission_reason = lambda issue, route, **kwargs: "repository_admission_lost"
+        self.deployment_paused = lambda: False
         self.review_selection = lambda issue, route, rejected: None
 
     def pointer(self, issue):
@@ -124,21 +129,59 @@ class ReadinessGate:
         return self.update(row["RowKey"], expected=row, status="retry", reason=reason, lease_until=0,
                            retry_after=int(self.clock()) + RETRY_SECONDS, reported=False)
 
+    def defer_deployment(self, row, *, owner=None):
+        fields = {"status": "deployment_deferred", "reason_code": "deployment_paused",
+                  "reason": DEPLOYMENT_WAIT, "lease_until": 0, "retry_after": 0}
+        if owner is not None:
+            fields["owner"] = owner
+        if all(row.get(key) == value for key, value in fields.items()):
+            return row
+        row = self.update(row["RowKey"], expected=row, **fields)
+        record("readiness_deferred", dispatch_key=row["RowKey"], reason_code="deployment_paused")
+        return row
+
+    @staticmethod
+    def deployment_result():
+        return {"status": "deployment_deferred", "reason_code": "deployment_paused"}
+
+    @staticmethod
+    def reporting_failure(exc):
+        record("readiness_reporting_deferred", level=logging.ERROR, **failure(exc, "worker/linear_sync"))
+
+    def report_decision(self, row, issue, route):
+        try:
+            self.sync(row, issue, route)
+        except Exception as exc:
+            # The verdict/dispatch receipt survives a tracker reporting outage.
+            self.reporting_failure(exc)
+
     def report_hold(self, issue, row):
         current, _ = self.table.get(row["RowKey"])
         pointer, _ = self.table.get(self.pointer(issue))
         if current["status"] in DECISIONS or pointer["review_key"] != row["RowKey"]:
             return
-        self.comment(issue, (row.get("reason") or "Waiting for the read-only reviewer.")
-                     + "\n\nCoding and publication are held. The timer retries temporary failures "
-                     "after 15 minutes, once the previous GitHub attempt has stopped. "
-                     "An unconfirmed dispatch is held for run discovery; it is never blindly resent."
-                     + self.run_link(row), row)
+        row = current
+        recovery = ("\n\nDeployment resume triggers reconciliation without the readiness failure cooldown. "
+                    "The runner exits so deployment can drain."
+                    if row["status"] == "deployment_deferred" else
+                    "\n\nCoding and publication are held. The timer retries temporary failures "
+                    "after 15 minutes, once the previous GitHub attempt has stopped.")
+        try:
+            self.comment(issue, (row.get("reason") or "Waiting for the read-only reviewer.") + recovery
+                         + " An unconfirmed dispatch is held for run discovery; it is never blindly resent."
+                         + self.run_link(row), row)
+        except Exception as exc:
+            self.reporting_failure(exc)
         # A callback can finish while the Linear request is in flight. Repair a
         # late hold message without reapplying labels or a state transition.
         latest, _ = self.table.get(row["RowKey"])
         if latest["status"] in DECISIONS:
-            self.comment(issue, self.review_body(latest), latest)
+            try:
+                self.comment(issue, self.review_body(latest), latest)
+            except Exception as exc:
+                self.reporting_failure(exc)
+        elif latest["status"] == "deployment_deferred" and row["status"] != latest["status"]:
+            self.report_hold(issue, latest)
 
     @staticmethod
     def run_link(row):
@@ -206,8 +249,14 @@ class ReadinessGate:
         runs = self.github.dispatch_runs(route, row["RowKey"])
         if any(run["status"] != "completed" for run in runs):
             return False, runs
-        if row.get("owner") and self.github.worker_result(route.repository, row["owner"])["status"] != "completed":
-            return False, runs
+        if row.get("owner"):
+            # A manual rerun can be newer than the recorded owner and still be
+            # missing from listings. Check the run's current attempt on resume.
+            result = (self.github.worker_result(route.repository, row["owner"], latest=True)
+                      if row["status"] == "deployment_deferred"
+                      else self.github.worker_result(route.repository, row["owner"]))
+            if result["status"] != "completed":
+                return False, runs
         return True, runs
 
     def prework_stopped(self, issue_id, route):
@@ -231,22 +280,40 @@ class ReadinessGate:
                 if exc.status == 503:
                     return {"status": "readiness_retry"}
                 raise
-            except Exception:
+            except Exception as exc:
                 # Infrastructure cannot become a pass or a clarification verdict.
-                logging.error("Readiness review deferred for %s", issue["id"])
-                self.comment(issue, "Infrastructure/context lookup failed. Held for a visible retry "
-                             "on the next event or timer; coding and publication have not been admitted.")
+                record("readiness_context_deferred", level=logging.ERROR, **failure(exc, "worker/readiness"))
+                try:
+                    self.comment(issue, "Infrastructure/context lookup failed. Held for a visible retry "
+                                 "on the next event or timer; coding and publication have not been admitted.")
+                except Exception as report_error:
+                    self.reporting_failure(report_error)
                 return {"status": "readiness_retry"}
         raise WorkerError("Readiness review changed concurrently; retry")
 
     def _ensure(self, issue, route):
         if eligibility(issue, self.registry)[0] != route:
             return {"status": "not_ready"}
-        if not self.admitted(issue, route):
+        admission = self.admission_reason(issue, route)
+        if admission == "deployment_paused":
+            pointer, _ = optional(self.table, self.pointer(issue))
+            row, _ = optional(self.table, pointer["review_key"]) if pointer else (None, None)
+            if row and (row["status"] in {"dispatching", "dispatched", "uncertain", "deployment_deferred"}
+                        or (row["status"] == "running" and not row.get("execution_started"))):
+                self.report_hold(issue, self.defer_deployment(row))
+            return self.deployment_result()
+        if admission:
             return {"status": "queued"}
         binding = self.binding(issue, route)
         pointer, etag = optional(self.table, self.pointer(issue))
         row, _ = optional(self.table, pointer["review_key"]) if pointer else (None, None)
+        if row and row["status"] == "deployment_deferred":
+            stopped, runs = self.stopped(row, route)
+            if not stopped or not (runs or row.get("owner")):
+                self.report_hold(issue, row)
+                return self.deployment_result()
+            # A replacement always binds to current issue/policy/repository data.
+            row = self.new(issue, route, binding, etag)
         if row and row["status"] in REJECTIONS and row.get("applied"):
             # Another delivery may have fetched Todo before our rejection completed.
             # Only a fresh Todo observation is a resubmission, never that stale snapshot.
@@ -255,13 +322,18 @@ class ReadinessGate:
                 return {"status": "not_ready"}
             if issue_revision(latest) != issue_revision(issue):
                 return self.ensure(latest, route)
-            if not self.stopped(row, route)[0]:
-                return {"status": "readiness_pending"}
         if (not row or json.loads(row["binding"]) != binding
                 or (row["status"] in REJECTIONS and row.get("applied"))):
+            if row and row["status"] != "pending":
+                stopped, runs = self.stopped(row, route)
+                if not stopped or not (runs or row.get("owner") or row["status"] == "retry"):
+                    # Editing a binding cannot bypass uncertain-dispatch/run
+                    # discovery, or overlap an older matching GitHub attempt.
+                    self.report_hold(issue, row)
+                    return {"status": "readiness_pending"}
             row = self.new(issue, route, binding, etag)
         if row["status"] in DECISIONS:
-            self.sync(row, issue, route)
+            self.report_decision(row, issue, route)
             return {"status": "ready" if row["status"] == "passed" else row["status"]}
         if row["status"] == "running" and (
                 row["lease_until"] <= self.clock() or row["deadline"] <= self.clock()):
@@ -305,9 +377,11 @@ class ReadinessGate:
             if stopped and runs:
                 row = self.retry(row, "Reviewer stopped without a valid result; awaiting retry.")
         if row["status"] in DECISIONS:
-            self.sync(row, issue, route)
+            self.report_decision(row, issue, route)
             return {"status": "ready" if row["status"] == "passed" else row["status"]}
         self.report_hold(issue, row)
+        if row["status"] == "deployment_deferred":
+            return self.deployment_result()
         return {"status": "readiness_retry" if row["status"] == "retry" else "readiness_pending"}
 
     def handle(self, action, claims, data, row):
@@ -323,19 +397,30 @@ class ReadinessGate:
                                    selector=selector, run_owner=owner)
         if not issue or eligibility(issue, self.registry)[0] != route:
             raise WorkerError("Readiness request was superseded or canceled", 403)
+        if action == "start" and row["status"] in DECISIONS:
+            raise WorkerError("This review already has a result")
+        if action == "start" and row["status"] == "retry" and row.get("owner") == owner:
+            raise WorkerError("This readiness attempt already failed; await a retry")
+        if action in {"start", "checkout", "accounts", "claim", "bind_account"}:
+            admission = self.admission_reason(issue, route, allow_paused=bool(
+                row["status"] == "running" and row.get("execution_started") and row.get("owner") == owner))
+            if admission == "deployment_paused":
+                if row["status"] not in DECISIONS | {"retry"}:
+                    self.report_hold(issue, self.defer_deployment(row, owner=owner))
+                return self.deployment_result()
+            if admission:
+                message = ("Readiness start held for unresolved or unverifiable issue prerequisites"
+                           if admission == "prerequisites_unresolved" else "Readiness repository admission was lost")
+                raise WorkerError(message, 403, reason_code=admission)
         images = self.images(issue) if action == "start" else None
         if not self.current(row, issue, route, images=images, verify_images=action != "heartbeat"):
             raise WorkerError("Readiness request was superseded or canceled", 403)
-        if action in {"start", "checkout", "accounts", "claim", "bind_account"} and not self.admitted(issue, route):
-            raise WorkerError("Readiness start held for unresolved or unverifiable issue prerequisites", 403)
+        if row["status"] == "deployment_deferred":
+            return self.deployment_result()
         if action == "start":
             if data.get("protocol") != PROTOCOL:
                 raise WorkerError("Deploy a compatible readiness worker and broker", 403)
             self.github.verify_worker_run(route.repository, claims, row["RowKey"])
-            if row["status"] in DECISIONS:
-                raise WorkerError("This review already has a result")
-            if row["status"] == "retry" and row.get("owner") == owner:
-                raise WorkerError("This readiness attempt already failed; await a retry")
             if row.get("owner") and row["owner"] != owner:
                 if self.github.worker_result(route.repository, row["owner"])["status"] != "completed":
                     raise WorkerError("Previous readiness worker has not stopped")
@@ -343,6 +428,9 @@ class ReadinessGate:
             # Failure leaves the attempt retryable, never silently description-only.
             comments = sorted(self.linear.issue_comments(issue["id"]),
                               key=lambda comment: (comment["createdAt"], comment["id"]))
+            if self.deployment_paused() and not row.get("execution_started"):
+                self.report_hold(issue, self.defer_deployment(row, owner=owner))
+                return self.deployment_result()
             current, version = self.table.get(row["RowKey"])
             if current != row:
                 raise WorkerError("Readiness worker changed concurrently")
@@ -457,12 +545,15 @@ class ReadinessGate:
     def account_owner(row, owner):
         return f"readiness:{row['RowKey']}:{owner}"
 
-    def reconcile(self):
+    def reconcile(self, *, deployment_only=False):
+        pending = False
         for pointer in self.table.list():
             if not pointer["RowKey"].startswith("issue-"):
                 continue
             try:
                 row, _ = self.table.get(pointer["review_key"])
+                if deployment_only and row["status"] != "deployment_deferred":
+                    continue
                 if ((row["status"] == "passed" and row.get("reported"))
                         or (row["status"] in REJECTIONS and row.get("applied"))):
                     continue  # Issue events/project scans discover Todo reentry.
@@ -474,6 +565,9 @@ class ReadinessGate:
                 elif route and (row["status"] != "passed" or not row.get("reported")):
                     # A reported pass is rechecked by queue admission/dispatch,
                     # not restarted here: its coding receipt may already be complete.
-                    self.ensure(issue, route)
+                    result = self.ensure(issue, route)
+                    pending |= result["status"] in {"deployment_deferred", "readiness_retry"}
             except Exception:
                 logging.error("Readiness reconciliation deferred for %s", pointer["issue_id"])
+                pending = True
+        return pending
