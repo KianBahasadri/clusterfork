@@ -51,6 +51,29 @@ def trigger_markdown(repository, text):
                   lambda match: f"](<{match[1]}>)" if github_url(repository, match[1]) else match[0], text)
 
 
+def repair_content(context, route, issue):
+    """Render the authored content used by admission and operator recovery."""
+    description = (
+        f"Repair [{context['parent_identifier']}]({context['parent_url']}) using its existing worker branch "
+        f"`{context['target_branch']}` in `{route.repository}` (base `{route.ref}`).\n\n"
+        f"Triggered by: {trigger_markdown(route.repository, context['trigger'])}.\n\nSanitized failure summary: {context['summary']}\n\n"
+        + (f"Existing PR: {context['target_pull_request']}\n\n" if context['target_pull_request'] else "")
+        + f"### Original task\n\n{issue['title']}\n\n{issue.get('description') or ''}\n\n"
+        + "### Repair instructions\n\n"
+        "The failed worker may have stopped before publishing its changes. If its branch is absent or "
+        "the original task is not implemented, complete the original task from the reviewed base; "
+        "passing validation alone does not establish that the task is complete. "
+        + "Investigate the failure, fix the code/tests on this branch, run all configured validation commands, "
+        "and update the existing PR or create it if publication failed. The worker publishes the fix. "
+        "Read AGENTS.md and the owning repository docs. Respect the broker's workflow-publication capability. "
+        "Never bypass merge requirements with --admin, change authentication, or include secrets, credentials, raw logs, "
+        "or environment dumps in issues or comments.\n\n"
+        "This is the parent's single automatic repair attempt. Do not create another repair task or retry a failed repair."
+    )
+    return {"title": f"Auto-repair: {context['parent_identifier']} ({context['short_reason']})",
+            "description": description}
+
+
 class AutoRepair:
     def __init__(self, queue):
         self.queue = queue
@@ -165,30 +188,12 @@ class AutoRepair:
         if any(run.get("status") != "completed" for run in runs) or (
                 known_owner and q.github.worker_result(route.repository, known_owner).get("status") != "completed"):
             return False
-        description = (
-            f"Repair [{context['parent_identifier']}]({context['parent_url']}) using its existing worker branch "
-            f"`{context['target_branch']}` in `{route.repository}` (base `{route.ref}`).\n\n"
-            f"Triggered by: {trigger_markdown(route.repository, context['trigger'])}.\n\nSanitized failure summary: {context['summary']}\n\n"
-            + (f"Existing PR: {context['target_pull_request']}\n\n" if context['target_pull_request'] else "")
-            + f"### Original task\n\n{issue['title']}\n\n{issue.get('description') or ''}\n\n"
-            + "### Repair instructions\n\n"
-            "The failed worker may have stopped before publishing its changes. If its branch is absent or "
-            "the original task is not implemented, complete the original task from the reviewed base; "
-            "passing validation alone does not establish that the task is complete. "
-            + "Investigate the failure, fix the code/tests on this branch, run all configured validation commands, "
-            "and update the existing PR or create it if publication failed. The worker publishes the fix. "
-            "Read AGENTS.md and the owning repository docs. Respect the broker's workflow-publication capability. "
-            "Never bypass merge requirements with --admin, change authentication, or include secrets, credentials, raw logs, "
-            "or environment dumps in issues or comments.\n\n"
-            "This is the parent's single automatic repair attempt. Do not create another repair task or retry a failed repair."
-        )
+        content = repair_content(context, route, issue)
         label = q.linear.stage_label(context["team_id"], AUTO_REPAIR_LABEL)
-        title = f"Auto-repair: {context['parent_identifier']} ({context['short_reason']})"
         repair = q.linear.create_issue({"id": row["repair_issue_id"], "teamId": context["team_id"],
                                         "projectId": route.project_id, "parentId": row["issue_id"],
                                         "stateId": route.ready_state_ids[0], "labelIds": [label], "priority": 2,
-                                        "title": title,
-                                        "description": description})
+                                        **content})
         if not repair or repair["id"] != row["repair_issue_id"] or repair["project"]["id"] != route.project_id:
             raise WorkerError("Created repair issue does not match its durable intent")
         # A webhook can already have enqueued this deterministic issue. Adopt it
@@ -205,7 +210,7 @@ class AutoRepair:
         parent, parent_version = table.get(key)
         parent.update(status="repairing", repair_identifier=repair["identifier"], repair_issue_url=issue_url(repair),
                       repair_revision=issue_revision({"id": row["repair_issue_id"], "project": {"id": route.project_id},
-                                                      "title": title, "description": description}))
+                                                      **content}))
         selection_changed(parent)
         # Use the pre-observation ETag. A concurrent worker start invalidates this handoff.
         state.update(active_key=repair_key, owner="")
