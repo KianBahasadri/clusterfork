@@ -29,6 +29,7 @@ from worker_core import Accounts, WorkerError, WorkerService
 from worker_reporting import QUEUED_LABEL, SELECTION_LABEL, STAGE_LABELS
 from test_remote_worker import MemoryTable, NOW, PROJECT, auth, claims
 from test_linear_sync import pr
+from call_budget import CallBudget
 
 DEFAULT_RESULT = object()
 
@@ -89,6 +90,12 @@ class ReadinessTests(unittest.TestCase):
                                      self.linear, self.github, self.queue, clock=lambda: self.now)
         self.dispatcher = Dispatcher(self.registry, self.linear, self.queue)
         self.issue = self.make_issue(1)
+
+    def budget(self, **limits):
+        queues = {f"queue_{number}": table for number, table in enumerate(self.tables.values())}
+        return CallBudget(self, linear=self.linear, github=self.github, readiness=self.table,
+                          receipts=self.receipts, runs=self.runs, accounts=self.accounts.table,
+                          **queues, **limits)
 
     def make_issue(self, number):
         issue = {"id": str(UUID(int=number)), "identifier": f"KIAN-{number}",
@@ -976,12 +983,9 @@ class ReadinessTests(unittest.TestCase):
                 self.assertTrue(row["reported"])
                 if result["verdict"] != "ready":
                     self.assertTrue(row["applied"])
-                self.linear.reset_mock()
-                self.github.reset_mock()
                 for _ in range(3):
-                    self.gate.reconcile()
-                self.assertEqual(self.linear.mock_calls, [])
-                self.assertEqual(self.github.mock_calls, [])
+                    with self.budget():
+                        self.gate.reconcile()
 
     def test_applied_rejection_reentry_is_discovered_by_project_scan(self):
         key, _ = self.begin()

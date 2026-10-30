@@ -14,20 +14,21 @@ import threading
 import unittest
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
 
 from agent_session import run_agent
 from codex_runtime import AppServer, CodexError, CodexRejected
-from dispatch_clients import Linear, RequestError
+from dispatch_clients import GitHub, Linear, RequestError
 from dispatch_core import Dispatcher, Registry, webhook_event
 from readiness_policy import PROTOCOL
 from pending_writes import WRITE_SECONDS
 from steering import DELIVERY_SECONDS, Steering
 from test_linear_dispatch import SECRET, signed
 from test_remote_worker import ISSUE, KEY, NOW, MemoryTable, claims, receipt
+from call_budget import CallBudget, record_api_calls
 from worker_core import Accounts, WorkerError, WorkerService
 import worker
 
@@ -47,6 +48,7 @@ class Tracker:
                         "state": {"id": route.linear_states.in_progress, "type": "started"}}
         self.comments, self.acks, self.writes = [], {}, []
         self.fail_report, self.after_report = False, None
+        record_api_calls(self)
 
     def issue(self, issue_id):
         assert issue_id == self.current["id"]
@@ -63,7 +65,7 @@ class Tracker:
         return {"issue": {"id": ISSUE}}
 
     def status_comment(self, issue_id, comment_id, body):
-        assert issue_id == ISSUE
+        assert issue_id == self.current["id"]
         self.acks[comment_id] = body
         self.writes.append((comment_id, body))
         if self.after_report:
@@ -87,8 +89,9 @@ class SteeringTests(unittest.TestCase):
         self.queue.assert_worker = Mock()
         self.queue.readiness.require.return_value = {}
         self.queue.approval.return_value = {}
+        self.github = Mock(spec=GitHub)
         self.service = WorkerService(self.registry, self.receipts, self.runs, Accounts(MemoryTable()),
-                                     self.linear, Mock(), self.queue, clock=lambda: self.now)
+                                     self.linear, self.github, self.queue, clock=lambda: self.now)
         self.steering = Steering(self.registry, self.receipts, self.runs, self.table,
                                  self.linear, self.queue, clock=lambda: self.now)
         self.service.steering = self.steering
@@ -109,6 +112,28 @@ class SteeringTests(unittest.TestCase):
     def acknowledge(self, instruction, status="accepted"):
         return self.call("instruction_result", comment_id=instruction["comment_id"],
                          delivery=instruction["delivery"], status=status)
+
+    def budget(self, **limits):
+        return CallBudget(self, linear=self.linear, github=self.github, receipts=self.receipts,
+                          runs=self.runs, instructions=self.table, **limits)
+
+    def settled_history(self, count=12):
+        current, comments = self.linear.current, self.linear.comments
+        try:
+            for number in range(100, 100 + count):
+                issue_id, key = str(UUID(int=number)), f"{number:064x}"
+                self.receipts.create({**receipt(), "RowKey": key, "issue_id": issue_id})
+                self.runs.create({**self.run, "RowKey": key, "status": "completed", "steering_closed": True})
+                self.linear.current = {**current, "id": issue_id,
+                                       "state": {"type": "completed" if number % 2 else "canceled"}}
+                item = comment(author=OWNER if number % 2 else STRANGER)
+                self.linear.comments = [item]
+                self.steering.observe(issue_id)
+                row = self.row(item)
+                self.assertEqual(row["reported_state"], row["state"])
+                self.assertFalse(row["report_pending"])
+        finally:
+            self.linear.current, self.linear.comments = current, comments
 
     def test_queue_acceptance_order_and_duplicate_results_survive_restart(self):
         first, second = comment(at=NOW + 1), comment("@clusterfork Then update the references.", at=NOW + 2)
@@ -374,6 +399,8 @@ class SteeringTests(unittest.TestCase):
         for error in (None, RequestError(503), SystemExit()):
             with self.subTest(error=type(error).__name__):
                 self.setUp()
+                self.settled_history()
+                acknowledgements = len(self.linear.acks) + 1
                 item = comment()
                 self.linear.comments = [item]
                 self.steering.observe(ISSUE)
@@ -415,31 +442,37 @@ class SteeringTests(unittest.TestCase):
                     else:
                         future.result(timeout=5)
                 self.change_run(status="completed", steering_closed=True)
-                self.steering.reconcile()
+                repair = ({"linear.issue": 1, "linear.viewer_id": 1, "linear.issue_comments": 1,
+                           "linear.status_comment": 1, "instructions.create": 1, "instructions.replace": 4}
+                          if error is not None else {})
+                with self.budget(exact=repair) as budget:
+                    self.steering.reconcile()
+                self.assertEqual(budget.mutated_rows("instructions"),
+                                 {item["id"], "control:" + ISSUE} if error is not None else set())
                 row = self.row(item)
                 self.assertEqual(row["reported_state"], "accepted")
                 self.assertFalse(row["report_pending"])
                 self.assertNotIn("report_inflight", row)
                 self.assertIn("Agent accepted", self.linear.acks[row["ack_id"]])
-                self.assertEqual(len(self.linear.acks), 1)
-                self.linear.writes.clear()
-                with patch.object(self.linear, "issue") as issue, \
-                     patch.object(self.linear, "issue_comments") as comments:
-                    for _ in range(3):
+                self.assertEqual(len(self.linear.acks), acknowledgements)
+                self.linear.status_comment.assert_called_with(ISSUE, row["ack_id"], self.linear.acks[row["ack_id"]])
+                for _ in range(3):
+                    with self.budget():
                         self.steering.reconcile()
-                    issue.assert_not_called()
-                    comments.assert_not_called()
-                self.assertEqual(self.linear.writes, [])
 
     def test_lost_acknowledgement_writer_expires_and_repairs_without_replaying_instruction(self):
+        self.settled_history()
+        acknowledgements = len(self.linear.acks) + 1
         item = comment()
         self.linear.comments = [item]
         self.acknowledge(self.call("instructions")["instruction"])
         self.change_run(status="completed", steering_closed=True)
 
+        write = self.linear.status_comment
         def interrupted(*args):
             self.assertTrue(self.row(item)["report_pending"])
             self.assertTrue(self.row(item)["report_inflight"])
+            write(*args)
             raise SystemExit()
 
         with patch.object(self.linear, "status_comment", side_effect=interrupted), \
@@ -449,13 +482,21 @@ class SteeringTests(unittest.TestCase):
         self.assertTrue(self.row(item)["report_pending"])
         self.assertTrue(self.row(item)["report_inflight"])
         self.now += WRITE_SECONDS + 1
-        self.steering.reconcile()
+        with self.budget(exact={"linear.issue": 1, "linear.viewer_id": 1,
+                                "linear.issue_comments": 1, "linear.status_comment": 1,
+                                "instructions.create": 1, "instructions.replace": 4}) as budget:
+            self.steering.reconcile()
+        self.assertEqual(budget.mutated_rows("instructions"), {item["id"], "control:" + ISSUE})
         row = self.row(item)
         self.assertEqual(row["state"], "accepted")
         self.assertEqual(row["reported_state"], "accepted")
         self.assertFalse(row["report_pending"])
         self.assertNotIn("report_inflight", row)
-        self.assertEqual(len(self.linear.acks), 1)
+        self.assertEqual(len(self.linear.acks), acknowledgements)
+        self.linear.status_comment.assert_called_with(ISSUE, row["ack_id"], self.linear.acks[row["ack_id"]])
+        for _ in range(3):
+            with self.budget():
+                self.steering.reconcile()
 
     def test_acknowledgement_repair_continues_when_issue_observation_fails(self):
         item = comment()

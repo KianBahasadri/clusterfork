@@ -27,6 +27,7 @@ from dispatch_clients import GitHub, Linear, RequestError, request_json  # noqa:
 from dispatch_core import (Dispatcher, DispatchError, Registry, WebhookError,
                            dependency_status, eligibility, webhook_event)  # noqa: E402
 from test_remote_worker import MemoryTable, repository_queue
+from call_budget import record_api_calls
 
 spec = importlib.util.spec_from_file_location("clusterfork_pilot", ROOT / "automation" / "pilot.py")
 pilot = importlib.util.module_from_spec(spec)
@@ -61,6 +62,7 @@ class Tracker:
     def __init__(self):
         self.current = issue()
         self.fetched = []
+        record_api_calls(self)
 
     def issue(self, issue_id):
         self.fetched.append(issue_id)
@@ -86,6 +88,7 @@ class Workflows:
     def __init__(self):
         self.calls = []
         self.failure = None
+        record_api_calls(self)
 
     def dispatch(self, route, inputs):
         if self.failure:

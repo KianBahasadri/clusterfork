@@ -25,6 +25,7 @@ from pending_writes import WRITE_SECONDS
 from readiness_policy import PROTOCOL
 from test_linear_sync import CommentAPI, pr, checks
 from worker_reporting import AUTO_REPAIR_LABEL, worker_branch
+from call_budget import CallBudget
 
 
 class RepositoryQueueTests(unittest.TestCase):
@@ -63,6 +64,33 @@ class RepositoryQueueTests(unittest.TestCase):
     def restart(self):
         return RepositoryQueue(self.registry, self.receipts, self.runs, self.tables.__getitem__,
                                self.linear, self.github, ApprovedReadiness(), clock=lambda: self.now)
+
+    def budget(self, **limits):
+        queues = {"queue" if repository == self.repository.lower() else f"queue_{number}": table
+                  for number, (repository, table) in enumerate(self.tables.items())}
+        return CallBudget(self, linear=self.linear, github=self.github, receipts=self.receipts,
+                          runs=self.runs, **queues, **limits)
+
+    def settled_history(self, count=12):
+        keys = set()
+        for number in range(100, 100 + count):
+            issue = self.issue(number)
+            key = self.enqueue(issue)
+            self.queue.advance(self.repository)
+            self.start(key)
+            self.finish(key)
+            self.stop(key)
+            if number % 2:
+                issue["state"] = {"id": "canceled", "type": "canceled"}
+            self.queue.advance(self.repository)
+            if not number % 2:
+                issue["state"] = {"id": self.route.linear_states.done, "type": "completed"}
+            row = self.tables[self.repository.lower()].get(key)[0]
+            self.assertEqual(row["status"], "abandoned" if number % 2 else "completed")
+            self.assertFalse(row["selection_pending"])
+            keys.add(key)
+        self.restart().reconcile()
+        return keys
 
     def issue(self, number, project=PROJECT, *, priority=0):
         issue = {"id": str(UUID(int=number)), "identifier": f"KIAN-{number}", "title": "Test",
@@ -1688,6 +1716,7 @@ class RepositoryQueueTests(unittest.TestCase):
         for error in (RequestError(), SystemExit()):
             with self.subTest(error=type(error).__name__):
                 self.setUp()
+                history = self.settled_history()
                 first = self.enqueue(self.issue(1))
                 self.queue.advance(self.repository)
                 self.start(first)
@@ -1729,11 +1758,18 @@ class RepositoryQueueTests(unittest.TestCase):
                         self.assertTrue(table.get(first)[0]["selection_pending"])
                 self.assertEqual(self.selected, {str(UUID(int=1))})
                 self.linear.set_selected.side_effect = self.select
-                self.restart().reconcile()
+                with self.budget(exact={"linear.set_selected": 1, "linear.set_queued": 1,
+                                        "queue.replace": 2}) as budget:
+                    self.restart().reconcile()
+                self.assertEqual(budget.mutated_rows("queue"), {first})
+                self.linear.set_selected.assert_called_with(str(UUID(int=1)), False)
                 self.assertEqual(self.selected, set())
-                self.assertEqual(self.github.dispatch.call_count, 1)
+                self.assertEqual(self.github.dispatch.call_count, len(history) + 1)
+                with self.budget():
+                    self.restart().reconcile()
 
     def test_lost_selection_writer_expires_without_refreshing_settled_history(self):
+        self.settled_history()
         key = self.enqueue(self.issue(1))
         self.queue.advance(self.repository)
         self.start(key)
@@ -1758,15 +1794,16 @@ class RepositoryQueueTests(unittest.TestCase):
         self.assertTrue(table.get(key)[0]["selection_inflight"])
         self.now += WRITE_SECONDS + 1
         self.linear.set_selected.side_effect = self.select
-        self.restart().reconcile()
+        with self.budget(exact={"linear.set_selected": 1, "linear.set_queued": 1,
+                                "queue.replace": 2}) as budget:
+            self.restart().reconcile()
+        self.assertEqual(budget.mutated_rows("queue"), {key})
+        self.linear.set_selected.assert_called_with(str(UUID(int=1)), False)
         self.assertFalse(table.get(key)[0]["selection_pending"])
         self.assertNotIn("selection_inflight", table.get(key)[0])
-        self.linear.reset_mock()
-        self.github.reset_mock()
         for _ in range(3):
-            self.restart().reconcile()
-        self.assertEqual(self.linear.mock_calls, [])
-        self.assertEqual(self.github.mock_calls, [])
+            with self.budget():
+                self.restart().reconcile()
 
     def test_delayed_removal_preserves_same_issue_readmitted_through_another_project_or_repository(self):
         for repository in (self.repository, "owner/another"):
