@@ -161,6 +161,14 @@ class FunctionAppConfigurationTests(unittest.TestCase):
                 raise unittest.SkipTest("Run with automation/azure/requirements.txt for handler integration") from exc
             raise
 
+    def test_reconcile_timer_uses_two_minute_schedule_and_preserves_defaults(self):
+        functions = {function.get_function_name(): function for function in self.app.app.get_functions()}
+        trigger = functions["reconcile"].get_trigger().get_dict_repr()
+        self.assertEqual(trigger["type"], "timerTrigger")
+        self.assertEqual(trigger["schedule"], "0 */2 * * * *")
+        self.assertIs(trigger["runOnStartup"], False)
+        self.assertIs(trigger["useMonitor"], True)
+
     def test_health_accepts_either_linear_authentication_mode_and_rejects_partial_oauth(self):
         base = {"LINEAR_WEBHOOK_SECRET": "test-webhook-secret", "GITHUB_APP_ID": "123",
                 "GITHUB_APP_PRIVATE_KEY": "test-private-key"}
