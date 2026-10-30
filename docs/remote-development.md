@@ -375,6 +375,7 @@ Completed issues dispatch once per registry `generation`. Editing an issue or
 moving it out of Todo and back does not reset completion. Capacity waits retry
 through reconciliation; eligible execution/check failures use the single repair above.
 Other blockers require human recovery. Existing PRs use their deterministic branch name.
+The [recovery tools](remote-development-recovery.md) cover verified operator repairs of stored content bindings.
 Changing generation permits **all** eligible issues to dispatch again.
 
 Each project can set `agent_timeout_minutes` in `automation/azure/projects.json`.
