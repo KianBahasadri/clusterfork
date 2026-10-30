@@ -116,13 +116,16 @@ exec /opt/clusterfork/current/.venv/bin/python /opt/clusterfork/current/automati
 CLI
 chmod 755 /usr/local/bin/clusterfork-controller
 
-# Stop before switching the release. There is never an overlapping task owner.
-systemctl stop clusterfork-controller.service 2>/dev/null || true
+# Load the written unit on first installation, then require the old owner to stop
+# before switching the release. There is never an overlapping task owner.
+systemctl daemon-reload
+systemctl stop clusterfork-controller.service
+cf_service_state=$(systemctl show --property=ActiveState --value clusterfork-controller.service)
+test "$cf_service_state" = inactive
 ln -sfn "$cf_release" /opt/clusterfork/current
 cf_hostname=$(python3 -c 'import json; print(json.load(open("/etc/clusterfork/controller.json"))["hostname"])')
 printf '%s {\n handle /api/* {\n  reverse_proxy 127.0.0.1:8765\n }\n respond 404\n}\n' "$cf_hostname" >/etc/caddy/Caddyfile
 chmod 644 /etc/caddy/Caddyfile
-systemctl daemon-reload
 systemctl enable --now clusterfork-controller.service
 systemctl enable --now caddy.service
 systemctl reload caddy.service
