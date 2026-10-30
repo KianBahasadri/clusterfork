@@ -192,26 +192,23 @@ class ReadinessGate:
 
     @classmethod
     def review_body(cls, row):
-        if row["status"] == "rejected":
+        # Detailed evidence stays in the durable row. Model prose can include
+        # audit inventories or claims about tests a read-only review cannot run.
+        if row["status"] == "passed":
+            body = ("Ready for development. The requirements are clear and the repository provides "
+                    "the needed context. Tests will run during development.")
+        elif row["status"] == "rejected":
             # Do not parse rejected output or assume it matches the result schema.
-            snapshot = row["rejected_result"].replace("`", "\\u0060")
-            body = ("Rejected: invalid reviewer result. Validation failed: " + row["reason"]
-                    + "\n\nRejected reviewer output (credentials redacted):\n```json\n" + snapshot + "\n```")
+            body = "Rejected: invalid reviewer result. Reviewer output error: " + row["reason"]
         else:
             result = json.loads(row["result"])
-            body = ("Passed. " if row["status"] == "passed" else "Needs clarification. ") + result["summary"]
+            body = "Needs clarification. " + result["summary"]
             for number, blocker in enumerate(result["blockers"], 1):
                 body += (f"\n\n{number}. {blocker['decision']}\n"
                          f"Consequence: {blocker['consequence']}\nQuestion: {blocker['question']}")
-            if result["policy_references"]:
-                body += "\n\nRepository policy/context: " + "; ".join(result["policy_references"])
-        binding = json.loads(row["binding"])
-        body += (f"\n\nIssue content revision: `{binding['issue_revision']}`; "
-                 f"policy: `{binding['policy_version']}`; repository: `{binding['context_sha']}`.")
-        if row["status"] == "passed":
-            body += "\n\nReady for development in the admitted repository slot. This is not a security certification."
-        else:
-            body += ("\n\nBlocked; this review will not retry automatically. Address the feedback in the "
+        if row["status"] in REJECTIONS:
+            body += ("\n\nNo tests were run during this read-only review. "
+                     "Blocked; this review will not retry automatically. Address the feedback in the "
                      "description or comments, or record an explicit decision in a reply. For invalid output, "
                      "inspect the validation error and review run. Move this issue from Blocked to Todo "
                      "to request another review; the reviewer will read this discussion.")
