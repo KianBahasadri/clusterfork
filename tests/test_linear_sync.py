@@ -17,6 +17,7 @@ from linear_sync import LinearSync, comment_id, pull_outcome
 from readiness_policy import PROTOCOL
 from worker_core import Accounts, WorkerError, WorkerService
 from test_remote_worker import KEY, NOW, PROJECT, ISSUE, MemoryTable, claims, receipt, repository_queue
+from call_budget import CallBudget
 
 
 def pr():
@@ -258,13 +259,11 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(len(api.writes), 1)
         self.assertIn("Pull request merged", api.comments[api.writes[0][1]]["body"])
         self.assertTrue(self.notes.get(KEY)[0]["terminal"])
-        self.github.reset_mock()
-        self.linear.reset_mock()
         for _ in range(3):
-            LinearSync(self.registry, self.receipts, self.runs, self.notes,
-                       self.linear, self.github, clock=lambda: NOW).reconcile()
-        self.assertEqual(self.linear.mock_calls, [])
-        self.assertEqual(self.github.mock_calls, [])
+            with CallBudget(self, linear=self.linear, github=self.github, receipts=self.receipts,
+                            runs=self.runs, notes=self.notes):
+                LinearSync(self.registry, self.receipts, self.runs, self.notes,
+                           self.linear, self.github, clock=lambda: NOW).reconcile()
         self.assertEqual((self.receipts.rows, self.runs.rows), (receipts, runs))
 
     def test_merged_issue_finishes_despite_comment_failure_and_repairs_after_restart(self):

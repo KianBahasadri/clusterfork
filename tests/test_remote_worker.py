@@ -1,7 +1,7 @@
 """Worker trust boundaries, credential fencing, and real Git publication behavior."""
 
 import copy
-from collections import defaultdict
+from collections import Counter, defaultdict
 from contextlib import contextmanager, redirect_stdout
 import importlib.util
 import io
@@ -29,6 +29,7 @@ from quota_selection import select_account
 from worker_core import Accounts, WorkerError, WorkerService, authorize_claims
 from repository_queue import RepositoryQueue
 from readiness_policy import POLICY, PROTOCOL, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS, digest
+from call_budget import record_api_calls
 
 PROJECT = "374f597c-89f5-4e40-9798-07533f57bfba"
 ISSUE = "66547614-8ed4-4928-834e-aac76f01afd2"
@@ -40,9 +41,13 @@ class MemoryTable:
     def __init__(self):
         self.rows = {}
         self.lock = threading.RLock()
+        self.operations = Counter()
+        self.mutations = []
 
     def create(self, row):
         with self.lock:
+            self.operations["create"] += 1
+            self.mutations.append(("create", (row["RowKey"],)))
             if row["RowKey"] in self.rows:
                 return False
             self.rows[row["RowKey"]] = (copy.deepcopy(row), 1)
@@ -61,12 +66,17 @@ class MemoryTable:
 
     def replace(self, row, etag):
         with self.lock:
+            self.operations["replace"] += 1
+            self.mutations.append(("replace", (row["RowKey"],)))
             if self.rows[row["RowKey"]][1] != etag:
                 raise WorkerError("concurrent modification")
             self.rows[row["RowKey"]] = (copy.deepcopy(row), etag + 1)
 
     def transaction(self, changes):
         with self.lock:
+            changes = list(changes)
+            self.operations["transaction"] += 1
+            self.mutations.append(("transaction", tuple(row["RowKey"] for row, _ in changes)))
             for row, etag in changes:
                 current = self.rows.get(row["RowKey"])
                 if (etag is None and current is not None) or (etag is not None and (not current or current[1] != etag)):
@@ -299,9 +309,9 @@ class WorkerAuthorizationTests(unittest.TestCase):
                 return "temporary-token"
             def worker_result(self, *args):
                 return {"status": "in_progress"}
-        github = GitHub()
-        service = WorkerService(self.registry, receipts, runs, Accounts(MemoryTable()), Linear(), github,
-                                repository_queue(self.registry, receipts, runs, Linear(), github),
+        linear, github = record_api_calls(Linear()), record_api_calls(GitHub())
+        service = WorkerService(self.registry, receipts, runs, Accounts(MemoryTable()), linear, github,
+                                repository_queue(self.registry, receipts, runs, linear, github),
                                 clock=lambda: NOW)
         return service, github, issue
 

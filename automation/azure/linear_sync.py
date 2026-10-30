@@ -134,8 +134,13 @@ class LinearSync:
             return
         run, _ = self.runs.get(key)
         owner = run["owner"]
-        self.notes.create({"RowKey": key, "lease_until": 0})
-        note, etag = self.notes.get(key)
+        try:
+            note, etag = self.notes.get(key)
+        except WorkerError as exc:
+            if exc.status != 404:
+                raise
+            self.notes.create({"RowKey": key, "lease_until": 0})
+            note, etag = self.notes.get(key)
         if note.get("terminal") and note.get("owner") == owner:
             return
         if note.get("lease_until", 0) > self.clock():

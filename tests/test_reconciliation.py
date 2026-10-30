@@ -7,6 +7,7 @@ from unittest.mock import call
 from uuid import UUID
 
 import test_readiness as fixtures
+from call_budget import CallBudget
 from dispatch_clients import Linear, RequestError
 from linear_sync import LinearSync, comment_id
 from repository_queue import dispatch_key
@@ -36,6 +37,14 @@ class BoundedReconciliationTests(unittest.TestCase):
         self.steering = Steering(c.registry, c.receipts, c.runs, self.instructions,
                                  c.linear, c.queue, clock=lambda: c.now)
         c.service.sync, c.service.steering, c.dispatcher.steering = self.sync, self.steering, self.steering
+
+    def budget(self, **limits):
+        c = self.case
+        queues = {"queue" if repository == c.route.repository.lower() else f"queue_{number}": table
+                  for number, (repository, table) in enumerate(c.tables.items())}
+        return CallBudget(self, linear=c.linear, github=c.github, receipts=c.receipts, runs=c.runs,
+                          readiness=c.table, instructions=self.instructions, notes=self.notes,
+                          accounts=c.accounts.table, **queues, **limits)
 
     def tick(self):
         # Same services and order as the Azure timer, followed by its queued scan.
@@ -102,21 +111,64 @@ class BoundedReconciliationTests(unittest.TestCase):
         c.dispatcher.process({"type": "Project", "id": PROJECT})
         return history
 
+    def mixed_history(self):
+        """Exercise real terminal transitions, including cancellation and review rejection."""
+        c = self.case
+        history = self.complete_history(count=6)
+        queue = c.tables[c.route.repository.lower()]
+        for number in range(7, 13):
+            issue = c.make_issue(number)
+            _, key, session = self.start_coding(issue)
+            c.now += 1
+            item = self.instruction(issue, number)
+            instruction = c.call(key, "instructions", **session)["instruction"]
+            c.call(key, "instruction_result", **session, comment_id=item["id"],
+                   delivery=instruction["delivery"], status="accepted")
+            c.call(key, "finish", status="completed", pull_request="")
+            c.stop(key)
+            # A human cancellation after completion reporting still needs the
+            # queue to verify the stopped worker and release its slot.
+            issue["state"] = {"id": "canceled", "type": "canceled"}
+            self.tick()
+            self.assertEqual(queue.get(key)[0]["status"], "abandoned")
+            self.assertTrue(self.notes.get(key)[0]["terminal"])
+            history.append(issue["id"])
+        for number in range(13, 19):
+            issue = c.make_issue(number)
+            review, _ = c.begin(issue)
+            result = fixtures.clarification() if number % 2 else {**fixtures.ready(), "verdict": "invalid"}
+            c.submit(review, result)
+            c.stop(review)
+            self.instruction(issue, number)
+            self.steering.observe(issue["id"])
+            self.tick()
+            self.assertTrue(c.table.get(review)[0]["applied"])
+            key = dispatch_key(c.registry, c.route, issue)
+            self.assertEqual(queue.get(key)[0]["status"], "skipped")
+            history.append(issue["id"])
+        self.tick()
+        c.dispatcher.process({"type": "Project", "id": PROJECT})
+        self.assertEqual(len(history), 18)
+        self.assertEqual(len(c.receipts.rows), 12)
+        self.assertEqual(len(c.runs.rows), 12)
+        self.assertEqual(len([r for r in c.table.list() if r.get("issue_id") and "status" in r]), 18)
+        self.assertEqual(len([r for r in self.instructions.list() if r.get("issue_id")]), 18)
+        return history
+
     def test_settled_history_makes_no_per_issue_api_calls_on_timers_or_project_scans(self):
         c = self.case
-        self.complete_history()
-        c.linear.reset_mock()
-        c.github.reset_mock()
-        queue_rows = copy.deepcopy(c.tables[c.route.repository.lower()].rows)
-        instruction_rows = copy.deepcopy(self.instructions.rows)
-        for _ in range(3):
+        self.mixed_history()
+        operations = {"readiness": c.gate.reconcile, "lifecycle": self.sync.reconcile,
+                      "queue": c.queue.reconcile, "steering": self.steering.reconcile,
+                      "routing": lambda: c.dispatcher.route_issues(copy.deepcopy(list(c.issues.values())))}
+        for tick in range(3):
             c.now += 901
-            self.tick()
-            c.dispatcher.process({"type": "Project", "id": PROJECT})
-        self.assertEqual(c.linear.mock_calls, [call.project_issues(PROJECT)] * 3)
-        self.assertEqual(c.github.mock_calls, [])
-        self.assertEqual(c.tables[c.route.repository.lower()].rows, queue_rows)
-        self.assertEqual(self.instructions.rows, instruction_rows)
+            for name, operation in operations.items():
+                with self.subTest(tick=tick, operation=name), self.budget():
+                    operation()
+            with self.subTest(tick=tick, operation="project scan"), \
+                 self.budget(exact={"linear.project_issues": 1}):
+                c.dispatcher.process({"type": "Project", "id": PROJECT})
 
     def test_identity_recovery_and_report_retries_do_not_readmit_completed_work(self):
         c = self.case
@@ -182,25 +234,47 @@ class BoundedReconciliationTests(unittest.TestCase):
         self.assertEqual(c.tables[c.route.repository.lower()].get("slot")[0]["active_key"], second)
 
     def test_active_worker_is_polled_without_touching_completed_history(self):
-        c = self.case
-        history = set(self.complete_history())
-        active = c.make_issue(5)
-        _, key, _ = self.start_coding(active)
-        c.linear.reset_mock()
-        c.github.reset_mock()
-        self.tick()
-        c.dispatcher.process({"type": "Project", "id": PROJECT})
-        self.assertGreaterEqual(c.linear.issue_comments.call_count, 2)
-        for method, args, _ in c.linear.mock_calls:
-            if method != "project_issues" and args:
-                self.assertNotIn(args[0], history, (method, args))
-        for args in c.github.dispatch_runs.call_args_list:
-            self.assertEqual(args.args[1], key)
-        for args in c.github.worker_pull.call_args_list:
-            self.assertEqual(args.args[2], key)
-        owner = c.runs.get(key)[0]["owner"]
-        for args in c.github.worker_result.call_args_list:
-            self.assertEqual(args.args[1], owner)
+        for historical in (False, True):
+            with self.subTest(historical=historical):
+                self.setUp()
+                c = self.case
+                history = set(self.mixed_history()) if historical else set()
+                if not historical:
+                    c.issues.clear()
+                active = c.make_issue(19)
+                review, key, _ = self.start_coding(active)
+                # Finish first-change reporting before measuring steady polling.
+                self.tick()
+                c.dispatcher.process({"type": "Project", "id": PROJECT})
+                operations = (
+                    (c.gate.reconcile, {}),
+                    (self.sync.reconcile, {"linear.issue": 2, "linear.set_stage": 1, "notes.replace": 3}),
+                    (c.queue.reconcile, {"linear.issue": 1, "github.dispatch_runs": 1}),
+                    (self.steering.reconcile, {"linear.issue": 1, "linear.viewer_id": 1,
+                                              "linear.issue_comments": 1, "instructions.create": 1,
+                                              "instructions.replace": 2}),
+                    (lambda: c.dispatcher.process({"type": "Project", "id": PROJECT}),
+                     {"linear.project_issues": 1, "linear.issue": 1, "linear.viewer_id": 1,
+                      "linear.issue_comments": 1, "github.dispatch_runs": 1,
+                      "instructions.create": 1, "instructions.replace": 2}),
+                )
+                c.linear.reset_mock()
+                c.github.reset_mock()
+                for _ in range(2):
+                    for operation, maximums in operations:
+                        with self.budget(at_most=maximums) as budget:
+                            operation()
+                        for table, allowed in (("notes", {key}), ("queue", {key, "slot"}),
+                                               ("readiness", {review, c.gate.pointer(active)}),
+                                               ("instructions", {"control:" + active["id"]})):
+                            self.assertLessEqual(budget.mutated_rows(table), allowed)
+                self.assertEqual({args.args[0] for args in c.linear.issue.call_args_list}, {active["id"]})
+                self.assertEqual({args.args[0] for args in c.linear.issue_comments.call_args_list}, {active["id"]})
+                for method, args, _ in c.linear.mock_calls:
+                    if method != "project_issues" and args:
+                        self.assertNotIn(args[0], history, (method, args))
+                for args in c.github.dispatch_runs.call_args_list:
+                    self.assertEqual(args.args[1], key)
 
     def test_late_comments_on_completed_issues_are_answered_only_when_webhooks_arrive(self):
         c = self.case

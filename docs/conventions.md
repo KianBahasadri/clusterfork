@@ -28,6 +28,23 @@ The notification color tests explicitly force ANSI output; an inherited
 Tests use temporary repositories, home directories, fake credentials, and
 mocked services. They do not need real agent logins or cloud credentials.
 
+Remote-service tests share `tests/call_budget.py`. Wrap the operation under test
+in `CallBudget(self, linear=..., github=..., queue=..., exact={...}, at_most={...})`;
+keys such as `linear.issue` and `queue.replace` count calls since entering the
+scope, and every unlisted operation must remain zero. Native service mocks and
+stateful fakes wrapped with `record_api_calls` retain their existing behavior.
+`MemoryTable.operations` counts attempted `create`, `replace`, and `transaction`
+calls, including conflicts and duplicate creates; `mutations` records affected
+row keys, and `budget.mutated_rows("queue")` isolates keys touched in one scope.
+Keep fixture setup and the first settling pass outside the measured scope.
+
+`tests/test_reconciliation.py` exercises completed, canceled, and rejected
+histories across the remote services, repeated quiet ticks/project scans, and
+fixed budgets for one active worker with and without history. Selection and
+steering crash-recovery tests include settled peers and constrain recovery to
+the pending row (plus its steering observation control row). Check operation
+counts as well as final state; unchanged data can still incur billed requests.
+
 For shell changes, check each script separately:
 
 ```bash
