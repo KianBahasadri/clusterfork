@@ -70,6 +70,8 @@ queue consumer, timer, task database, worker RPC or account access.
 
 The deployment workflow packages only its committed allowlisted files, publishes
 them with the existing Functions action, and verifies the exact ingress revision.
+Package entries are regular Unix files with mode `0644`, including deployment
+metadata, so the unprivileged Functions host can read the mounted archive.
 The legacy lifecycle trigger names remain disabled in Terraform. Keeping the
 existing URL needs no Linear webhook administration. A webhook already pointed
 directly at the controller also uses the same signed intake contract.

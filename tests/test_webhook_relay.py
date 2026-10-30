@@ -92,5 +92,9 @@ class WebhookRelayTests(unittest.TestCase):
                 release.package(revision,destination)
             with zipfile.ZipFile(destination) as archive:
                 self.assertEqual(set(archive.namelist()),set(release.FILES)|{'deployment.json'})
+                for member in archive.infolist():
+                    self.assertEqual(member.create_system,3)
+                    self.assertEqual(member.external_attr >> 16,0o100644,
+                                     'The unprivileged Functions host must be able to read each mounted package file')
                 self.assertEqual(archive.read('function_app.py'),b'committed function_app.py')
                 self.assertEqual(json.loads(archive.read('deployment.json')),{'revision':revision})

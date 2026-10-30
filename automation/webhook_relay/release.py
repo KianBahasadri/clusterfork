@@ -22,10 +22,16 @@ def package(revision,destination):
     if not re.fullmatch('[0-9a-f]{40}',revision):
         raise ValueError('A full source revision is required')
     with zipfile.ZipFile(destination,'w',zipfile.ZIP_DEFLATED) as archive:
+        def write(name,source):
+            member=zipfile.ZipInfo(name)
+            member.create_system=3
+            member.external_attr=0o100644 << 16
+            member.compress_type=zipfile.ZIP_DEFLATED
+            archive.writestr(member,source)
         for name in FILES:
             source=subprocess.run(['git','show',f'{revision}:automation/webhook_relay/{name}'],cwd=ROOT,capture_output=True,check=True).stdout
-            archive.writestr(name,source)
-        archive.writestr('deployment.json',json.dumps({'revision':revision}))
+            write(name,source)
+        write('deployment.json',json.dumps({'revision':revision}))
 
 
 def prepare():
