@@ -1,6 +1,7 @@
 {
   "enrollment_label": "clusterfork-symphony",
   "generation": "codex-worker-1",
+  "notify_user_url": "https://linear.app/kian-finishing-zombie-granola/profiles/kian",
   "steering": {
     "trusted_user_ids": ["62a4e98c-29f0-4b6c-8062-ede9c6176c1d"]
   },

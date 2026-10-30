@@ -1,6 +1,7 @@
 """Repository admission safety across priorities, deliveries, crashes, and reruns."""
 
 import copy
+import json
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -22,7 +23,8 @@ from test_remote_worker import ApprovedReadiness, MemoryTable, NOW, PROJECT, cla
 from linear_sync import comment_id
 from pending_writes import WRITE_SECONDS
 from readiness_policy import PROTOCOL
-from test_linear_sync import pr, checks
+from test_linear_sync import CommentAPI, pr, checks
+from worker_reporting import AUTO_REPAIR_LABEL, worker_branch
 
 
 class RepositoryQueueTests(unittest.TestCase):
@@ -42,12 +44,16 @@ class RepositoryQueueTests(unittest.TestCase):
         self.linear.issue.side_effect = lambda key: copy.deepcopy(self.issues.get(key))
         self.linear.set_selected.side_effect = self.select
         self.linear.set_queued.side_effect = self.wait
+        self.linear.set_state.side_effect = self.set_state
+        self.linear.create_issue.side_effect = self.create_repair
+        self.linear.stage_label.return_value = "repair-label-id"
         self.linear.project_issues.side_effect = lambda project: [copy.deepcopy(i) for i in self.issues.values()
                                                                 if i["project"]["id"] == project]
         self.github = Mock(spec=GitHub)
         self.github.dispatch.side_effect = self.dispatch
         self.github.dispatch_runs.side_effect = lambda route, key: copy.deepcopy(self.remote_runs.get(key, []))
-        self.github.worker_pull.side_effect = lambda route, receipt, key, url: copy.deepcopy(self.pulls.get(key))
+        self.github.worker_pull.side_effect = lambda route, receipt, key, url: copy.deepcopy(
+            self.pulls.get(receipt.get("target_dispatch_key", key)))
         self.github.worker_result.side_effect = lambda repo, owner: copy.deepcopy(self.attempts[owner])
         self.queue = self.restart()
         self.service = WorkerService(self.registry, self.receipts, self.runs, Accounts(MemoryTable()),
@@ -60,6 +66,8 @@ class RepositoryQueueTests(unittest.TestCase):
 
     def issue(self, number, project=PROJECT, *, priority=0):
         issue = {"id": str(UUID(int=number)), "identifier": f"KIAN-{number}", "title": "Test",
+                 "team": {"id": str(UUID(int=999))}, "labels": {"nodes": []},
+                 "url": f"https://linear.app/test/issue/KIAN-{number}/test",
                  "priority": priority,
                  "state": {"id": self.registry.routes[project].ready_state_ids[0], "type": "unstarted"},
                  "createdAt": f"2026-10-01T00:00:{number:02d}Z", "archivedAt": None,
@@ -67,6 +75,22 @@ class RepositoryQueueTests(unittest.TestCase):
                              "labels": {"nodes": [{"name": self.registry.enrollment_label}]}}}
         self.issues[issue["id"]] = issue
         return issue
+
+    def create_repair(self, fields):
+        with self.receipts.lock:
+            if fields["id"] not in self.issues:
+                parent = self.issues[fields["parentId"]]
+                self.issues[fields["id"]] = {
+                    **copy.deepcopy(parent), "id": fields["id"], "identifier": "KIAN-1000",
+                    "url": "https://linear.app/test/issue/KIAN-1000/auto-repair",
+                    "title": fields["title"], "description": fields["description"],
+                    "priority": fields["priority"], "labels": {"nodes": [{"name": AUTO_REPAIR_LABEL}]},
+                    "state": {"id": fields["stateId"], "type": "unstarted"}}
+            return copy.deepcopy(self.issues[fields["id"]])
+
+    def set_state(self, issue_id, state_id):
+        self.issues[issue_id]["state"] = {"id": state_id, "type": (
+            "completed" if state_id == self.route.linear_states.done else "started")}
 
     def enqueue(self, issue):
         return self.queue.enqueue(issue, self.registry.routes[issue["project"]["id"]])
@@ -726,10 +750,12 @@ class RepositoryQueueTests(unittest.TestCase):
         with self.assertRaisesRegex(WorkerError, "has not stopped"):
             self.start(first)
         self.assertEqual(self.github.dispatch.call_count, 1)
-        # A crash without a finish callback remains blocked after GitHub stops.
+        # A crash without a finish callback receives one repair after GitHub stops.
         self.stop(first, "failure")
         self.attempts["100:1"].update(status="completed", conclusion="failure")
-        self.assertEqual(self.queue.advance(self.repository)[first]["status"], "blocked")
+        self.assertEqual(self.queue.advance(self.repository)[first]["status"], "repairing")
+        self.assertNotEqual(self.slot()["active_key"], first)
+        self.assertEqual(self.github.dispatch.call_count, 2)
 
     def test_manual_rerun_resolves_same_failed_task_and_cannot_overlap_next(self):
         first, second = [self.enqueue(self.issue(n)) for n in (1, 2)]
@@ -737,6 +763,11 @@ class RepositoryQueueTests(unittest.TestCase):
         self.start(first)
         self.finish(first, "failed")
         self.stop(first, "failure")
+        # Legacy/exhausted automatic budget still permits human recovery of the
+        # original task when no generated repair owns its slot.
+        receipt, version = self.receipts.get(first)
+        receipt["repair_attempted"] = True
+        self.receipts.replace(receipt, version)
         self.assertEqual(self.queue.advance(self.repository)[first]["status"], "blocked")
         self.rerun(first)
         self.start(first)
@@ -970,8 +1001,8 @@ class RepositoryQueueTests(unittest.TestCase):
         self.stop(first)
         self.rerun(first)
         self.stop(first, "failure")
-        self.assertEqual(self.queue.advance(self.repository)[first]["status"], "blocked")
-        self.assertEqual(self.github.dispatch.call_count, 1)
+        self.assertEqual(self.queue.advance(self.repository)[first]["status"], "repairing")
+        self.assertEqual(self.github.dispatch.call_count, 2)
 
     def test_existing_receipts_are_imported_before_new_todo_tasks(self):
         old = self.issue(1)
@@ -1799,6 +1830,382 @@ class RepositoryQueueTests(unittest.TestCase):
         self.assertEqual(sum(admitted), 1)
         owner = self.runs.get(first)[0]["owner"]
         self.assertEqual(self.slot()["owner"], owner)
+
+    def prepare_repair(self, failure="worker"):
+        parent, following = [self.enqueue(self.issue(n)) for n in (1, 2)]
+        self.queue.advance(self.repository)
+        if failure != "missing_callback":
+            self.start(parent)
+            if failure == "checks":
+                pull = self.pulls[parent] = pr()
+                checks(pull)[0].update(conclusion="FAILURE", detailsUrl=f"https://github.com/{self.repository}/actions/runs/500/job/600")
+                self.finish(parent, pull=pull["url"])
+            else:
+                self.finish(parent, "failed")
+        self.stop(parent, "success" if failure == "checks" else "failure")
+        return parent, following
+
+    def repair_row(self, parent):
+        row = self.queue.table(self.repository).get(parent)[0]
+        return self.queue.table(self.repository).get(row["repair_key"])[0]
+
+    def repair_reports(self):
+        return [call for call in self.linear.status_comment.call_args_list if "Auto-Repair Report" in call.args[2]]
+
+    def test_worker_and_required_check_failures_dispatch_one_high_priority_repair(self):
+        for failure in ("worker", "checks", "missing_callback"):
+            with self.subTest(failure=failure):
+                self.setUp()
+                parent, following = self.prepare_repair(failure)
+                result = self.queue.advance(self.repository)
+                self.assertEqual(result[parent]["status"], "repairing")
+                child = self.repair_row(parent)
+                self.assertEqual(self.slot()["active_key"], child["RowKey"])
+                self.assertEqual(result[following]["status"], "queued")
+                self.assertTrue(self.receipts.get(parent)[0]["repair_attempted"])
+                self.assertTrue(self.receipts.get(child["RowKey"])[0]["is_auto_repair"])
+                fields = self.linear.create_issue.call_args.args[0]
+                self.assertEqual(fields["priority"], 2)
+                self.assertEqual(fields["projectId"], PROJECT)
+                self.assertEqual(fields["stateId"], self.route.ready_state_ids[0])
+                self.assertEqual(fields["parentId"], str(UUID(int=1)))
+                self.assertEqual(fields["labelIds"], ["repair-label-id"])
+                self.assertIn("Auto-repair: KIAN-1", fields["title"])
+                self.assertIn(worker_branch("KIAN-1", parent), fields["description"])
+                self.assertIn("actions/runs/100/attempts/1", fields["description"])
+                if failure == "checks":
+                    self.assertIn("actions/runs/500/job/600", fields["description"])
+                    self.assertIn(self.pulls[parent]["url"], fields["description"])
+                for _ in range(4):
+                    self.restart().reconcile()
+                self.linear.create_issue.assert_called_once()
+                self.assertEqual(self.github.dispatch.call_count, 2)
+
+    def test_repair_bypasses_clarification_but_retains_broker_boundaries(self):
+        parent, _ = self.prepare_repair()
+        self.queue.readiness.ensure = Mock(return_value={"status": "needs_clarification"})
+        self.queue.readiness.require = Mock(side_effect=WorkerError("needs clarification"))
+        self.queue.advance(self.repository)
+        child = self.repair_row(parent)
+        config = self.start(child["RowKey"])
+        self.assertEqual(config["repair"]["target_dispatch_key"], parent)
+        self.assertEqual(config["repair"]["target_branch"], worker_branch("KIAN-1", parent))
+        self.queue.readiness.ensure.assert_not_called()
+        self.queue.readiness.require.assert_not_called()
+        self.service.handle("checkout", self.identity(child["RowKey"]), {"dispatch_key": child["RowKey"]})
+        self.service.handle("progress", self.identity(child["RowKey"]),
+                            {"dispatch_key": child["RowKey"], "stage": "coding"})
+        self.issues[child["issue_id"]]["project"]["labels"]["nodes"] = []
+        with self.assertRaisesRegex(WorkerError, "eligible"):
+            self.service.handle("github", self.identity(child["RowKey"]), {"dispatch_key": child["RowKey"]})
+
+    def test_successful_repair_merges_both_issues_and_dispatches_next_in_same_pass(self):
+        parent, following = self.prepare_repair("checks")
+        self.queue.advance(self.repository)
+        child = self.repair_row(parent)
+        key = child["RowKey"]
+        self.start(key)
+        self.service.handle("progress", self.identity(key), {
+            "dispatch_key": key, "stage": "publishing", "repair_validation_passed": True})
+        self.finish(key, pull=self.pulls[parent]["url"])
+        self.stop(key)
+        checks(self.pulls[parent])[0].update(status="IN_PROGRESS", conclusion=None)
+        self.queue.advance(self.repository)
+        self.assertEqual(self.slot()["active_key"], key)
+        self.assertFalse(self.repair_reports())
+        checks(self.pulls[parent])[0].update(status="COMPLETED", conclusion="SUCCESS")
+        self.pulls[parent].update(merged=True, state="MERGED")
+        self.queue.advance(self.repository)
+        self.assertEqual(self.slot()["active_key"], following)
+        self.assertEqual(self.github.dispatch.call_count, 3)
+        for issue in (str(UUID(int=1)), child["issue_id"]):
+            self.assertEqual(self.issues[issue]["state"]["id"], self.route.linear_states.done)
+        self.assertEqual(self.queue.table(self.repository).get(parent)[0]["status"], "completed")
+        reports = self.repair_reports()
+        self.assertEqual(len(reports), 2)
+        self.assertEqual({c.args[1] for c in reports}, {comment_id(parent, "auto-repair-report"), comment_id(key, "auto-repair-report")})
+        for report in reports:
+            self.assertTrue(report.args[2].startswith(self.registry.notify_user_url))
+            for expected in ("Triggered by:", "Repair issue & run:", "Outcome summary:", "Queue status:",
+                             "Fixed & Merged", "All configured validation commands passed", "unblocked"):
+                self.assertIn(expected, report.args[2])
+        for _ in range(3):
+            self.restart().reconcile()
+        self.assertEqual(len(self.repair_reports()), 2)
+        self.linear.create_issue.assert_called_once()
+
+    def test_repair_without_repository_changes_releases_slot(self):
+        parent, following = self.prepare_repair()
+        self.queue.advance(self.repository)
+        child = self.repair_row(parent)
+        self.start(child["RowKey"])
+        self.finish(child["RowKey"])
+        self.stop(child["RowKey"])
+        self.queue.advance(self.repository)
+        self.assertEqual(self.slot()["active_key"], following)
+        self.assertEqual(self.issues[child["issue_id"]]["state"]["id"], self.route.linear_states.done)
+
+    def test_successful_repair_immediately_admits_work_depending_on_parent_completion(self):
+        parent, following = self.prepare_repair()
+        dependent, prerequisite = self.issues[str(UUID(int=2))], self.issues[str(UUID(int=1))]
+        self.block(dependent, prerequisite)
+        self.queue.advance(self.repository)
+        child = self.repair_row(parent)
+        self.start(child["RowKey"])
+        self.finish(child["RowKey"])
+        self.stop(child["RowKey"])
+        result = self.queue.advance(self.repository)
+        self.assertEqual(self.slot()["active_key"], following)
+        self.assertEqual(result[following]["status"], "dispatched")
+        self.assertEqual(prerequisite["state"]["type"], "completed")
+        self.assertEqual(self.github.dispatch.call_count, 3)
+
+    def test_repair_quota_wait_retains_budget_and_retries_before_coding(self):
+        parent, following = self.prepare_repair()
+        self.queue.advance(self.repository)
+        child = self.repair_row(parent)
+        key = child["RowKey"]
+        self.start(key)
+        self.finish(key, "waiting_for_quota")
+        self.stop(key)
+        self.assertEqual(self.queue.advance(self.repository)[key]["status"], "waiting")
+        self.assertEqual(self.issues[child["issue_id"]]["state"]["id"], self.route.ready_state_ids[0])
+        self.now += 901
+        self.queue.advance(self.repository)
+        self.assertEqual(self.github.dispatch.call_count, 3)
+        self.start(key)
+        self.finish(key)
+        self.stop(key)
+        self.queue.advance(self.repository)
+        self.assertEqual(self.slot()["active_key"], following)
+        self.linear.create_issue.assert_called_once()
+
+    def test_repair_dependency_or_eligibility_hold_cannot_release_broken_parent_slot(self):
+        for hold in ("dependency", "cancellation", "mapping"):
+            with self.subTest(hold=hold):
+                self.setUp()
+                parent, following = self.prepare_repair()
+                dispatch = self.queue.dispatch
+                changed = False
+                def change_before_dispatch(table, state, etag, row, route, **kwargs):
+                    nonlocal changed
+                    if row.get("repair_parent_key") and not changed:
+                        changed = True
+                        if hold == "dependency":
+                            self.block(self.issues[row["issue_id"]], self.issues[str(UUID(int=2))])
+                        elif hold == "cancellation":
+                            self.issues[row["issue_id"]]["state"] = {"id": "canceled", "type": "canceled"}
+                        else:
+                            self.registry.routes.clear()
+                    return dispatch(table, state, etag, row, route, **kwargs)
+                with patch.object(self.queue, "dispatch", side_effect=change_before_dispatch):
+                    self.queue.advance(self.repository)
+                child = self.repair_row(parent)
+                for _ in range(2):
+                    self.restart().reconcile()
+                self.assertEqual(self.slot()["active_key"], child["RowKey"])
+                self.assertNotEqual(self.slot()["active_key"], following)
+                self.assertEqual(self.github.dispatch.call_count, 1)
+
+    def test_simultaneous_failure_observers_create_one_issue_and_dispatch_one_repair(self):
+        parent, _ = self.prepare_repair()
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            list(pool.map(lambda _: self.queue.advance(self.repository), range(12)))
+        self.assertEqual(len([i for i in self.issues.values() if i["title"].startswith("Auto-repair:")]), 1)
+        self.assertEqual(self.github.dispatch.call_count, 2)
+        self.assertEqual(self.slot()["active_key"], self.repair_row(parent)["RowKey"])
+
+    def test_repair_waits_for_prior_lifecycle_writer_after_fencing_receipt(self):
+        parent, _ = self.prepare_repair()
+        notes = self.queue.repair.lifecycle_notes = MemoryTable()
+        notes.create({"RowKey": parent, "lease_until": self.now + 120})
+        self.queue.advance(self.repository)
+        self.assertTrue(self.receipts.get(parent)[0]["repair_attempted"])
+        self.linear.create_issue.assert_not_called()
+        self.assertEqual(self.slot()["active_key"], parent)
+        self.now += 121
+        self.queue.advance(self.repository)
+        self.linear.create_issue.assert_called_once()
+        self.assertEqual(self.github.dispatch.call_count, 2)
+
+    def test_late_or_lost_progress_writer_cannot_undo_terminal_repair_report(self):
+        for lost_process in (False, True):
+            with self.subTest(lost_process=lost_process):
+                self.setUp()
+                parent, following = self.prepare_repair()
+                self.queue.advance(self.repository)
+                child = self.repair_row(parent)
+                key = child["RowKey"]
+                self.start(key)
+                self.service.handle("progress", self.identity(key), {"dispatch_key": key, "stage": "coding"})
+                stages = {}
+                def stage(issue_id, value):
+                    if value == "coding":
+                        self.finish(key)
+                        self.stop(key)
+                        self.queue.advance(self.repository)
+                        # The older external write arrives after Done was reported.
+                        self.set_state(issue_id, self.route.linear_states.in_progress)
+                        stages[issue_id] = value
+                        if lost_process:
+                            raise SystemExit("reporter process lost")
+                    else:
+                        stages[issue_id] = value
+                self.linear.set_stage.side_effect = stage
+                snapshot = self.queue.table(self.repository).get(parent)[0]
+                if lost_process:
+                    with self.assertRaises(SystemExit):
+                        self.queue.repair.progress(self.queue.table(self.repository), snapshot)
+                else:
+                    self.queue.repair.progress(self.queue.table(self.repository), snapshot)
+                self.assertTrue(self.queue.table(self.repository).get(parent)[0]["repair_report_pending"])
+                self.now += WRITE_SECONDS + 1
+                self.restart().reconcile()
+                self.assertEqual(self.slot()["active_key"], following)
+                self.assertEqual(self.issues[child["issue_id"]]["state"]["id"], self.route.linear_states.done)
+                self.assertIsNone(stages[child["issue_id"]])
+                self.assertFalse(self.queue.table(self.repository).get(parent)[0]["repair_report_pending"])
+
+    def test_generated_repair_content_edits_cannot_bypass_readiness_authorization(self):
+        parent, _ = self.prepare_repair()
+        self.queue.advance(self.repository)
+        child = self.repair_row(parent)
+        self.issues[child["issue_id"]]["description"] = "A different task requiring new decisions"
+        with self.assertRaisesRegex(WorkerError, "fenced parent"):
+            self.start(child["RowKey"])
+        self.assertFalse(self.runs.get(parent)[0]["status"] == "running")
+        self.assertEqual(self.github.dispatch.call_count, 2)
+
+    def test_failed_repair_worker_or_checks_never_cascade_or_retry(self):
+        for failure in ("worker", "checks", "missing_callback"):
+            with self.subTest(failure=failure):
+                self.setUp()
+                parent, following = self.prepare_repair("checks")
+                self.queue.advance(self.repository)
+                child = self.repair_row(parent)
+                key = child["RowKey"]
+                if failure != "missing_callback":
+                    self.start(key)
+                    self.finish(key, "failed" if failure == "worker" else "completed", self.pulls[parent]["url"])
+                self.stop(key, "failure" if failure != "checks" else "success")
+                self.queue.advance(self.repository)
+                for _ in range(4):
+                    self.restart().reconcile()
+                self.assertEqual(self.slot()["active_key"], key)
+                self.assertEqual(self.queue.table(self.repository).get(following)[0]["status"], "queued")
+                self.assertEqual(self.github.dispatch.call_count, 2)
+                self.linear.create_issue.assert_called_once()
+                self.assertEqual(len(self.repair_reports()), 2)
+                for issue in (str(UUID(int=1)), child["issue_id"]):
+                    self.assertEqual(self.issues[issue]["state"]["id"], self.route.linear_states.blocked)
+                for report in self.repair_reports():
+                    self.assertTrue(report.args[2].startswith(self.registry.notify_user_url))
+                    self.assertIn("Repair Failed", report.args[2])
+                    self.assertIn("awaiting human review", report.args[2])
+                if failure == "worker":
+                    self.rerun(key)
+                    with self.assertRaisesRegex(WorkerError, "cannot be retried"):
+                        self.start(key)
+                    with self.assertRaises(WorkerError):
+                        self.service.handle("accounts", self.identity(key), {"dispatch_key": key})
+
+    def test_label_or_persisted_metadata_alone_prevents_repair_cascade(self):
+        for guard in ("label", "receipt", "row"):
+            with self.subTest(guard=guard):
+                self.setUp()
+                parent, _ = self.prepare_repair()
+                if guard == "label":
+                    self.issues[str(UUID(int=1))]["labels"]["nodes"].append({"name": AUTO_REPAIR_LABEL})
+                else:
+                    table = self.receipts if guard == "receipt" else self.queue.table(self.repository)
+                    row, version = table.get(parent)
+                    row["is_auto_repair"] = True
+                    table.replace(row, version)
+                self.queue.advance(self.repository)
+                self.assertEqual(self.slot()["active_key"], parent)
+                self.linear.create_issue.assert_not_called()
+                self.assertEqual(self.github.dispatch.call_count, 1)
+
+    def test_repair_intent_and_creation_recover_after_interrupted_writes(self):
+        for interruption in ("before_create", "after_create", "before_handoff", "after_handoff"):
+            with self.subTest(interruption=interruption):
+                self.setUp()
+                parent, _ = self.prepare_repair()
+                original_create = self.create_repair
+                def create(fields):
+                    persisted = self.queue.table(self.repository).get(parent)[0]
+                    self.assertTrue(persisted["repair_attempted"])
+                    self.assertTrue(self.receipts.get(parent)[0]["repair_attempted"])
+                    if interruption == "before_create":
+                        raise RuntimeError("interrupted before create")
+                    result = original_create(fields)
+                    if interruption == "after_create":
+                        raise RuntimeError("creation response lost")
+                    return result
+                self.linear.create_issue.side_effect = create
+                table = self.queue.table(self.repository)
+                transaction = table.transaction
+                def handoff(changes):
+                    is_handoff = any(row.get("is_auto_repair") and row.get("status") == "active" for row, _ in changes)
+                    if is_handoff and interruption == "before_handoff":
+                        raise RuntimeError("interrupted before handoff")
+                    transaction(changes)
+                    if is_handoff and interruption == "after_handoff":
+                        raise RuntimeError("handoff response lost")
+                with patch.object(table, "transaction", side_effect=handoff), self.assertRaises(RuntimeError):
+                    self.queue.advance(self.repository)
+                self.linear.create_issue.side_effect = original_create
+                self.queue = self.restart()
+                self.queue.reconcile()
+                self.queue.reconcile()
+                self.assertEqual(len([i for i in self.issues.values() if i["title"].startswith("Auto-repair:")]), 1)
+                self.assertEqual(self.github.dispatch.call_count, 2)
+                self.assertEqual(self.slot()["active_key"], self.repair_row(parent)["RowKey"])
+
+    def test_lost_report_response_and_failed_state_write_recover_without_duplicate_comments(self):
+        parent, following = self.prepare_repair()
+        self.queue.advance(self.repository)
+        child = self.repair_row(parent)
+        self.start(child["RowKey"])
+        self.finish(child["RowKey"])
+        self.stop(child["RowKey"])
+        api = CommentAPI()
+        client = Linear("test", api.request)
+        lost = False
+        def report(issue_id, identifier, body):
+            nonlocal lost
+            client.status_comment(issue_id, identifier, body)
+            if identifier == comment_id(parent, "auto-repair-report") and not lost:
+                lost = True
+                raise RequestError()
+        self.linear.status_comment.side_effect = report
+        original_state = self.set_state
+        state_failed = False
+        def state(issue_id, state_id):
+            nonlocal state_failed
+            if issue_id == child["issue_id"] and not state_failed:
+                state_failed = True
+                raise RequestError()
+            original_state(issue_id, state_id)
+        self.linear.set_state.side_effect = state
+        with self.assertLogs(level="ERROR"):
+            self.queue.advance(self.repository)
+        self.assertEqual(self.slot()["active_key"], following)
+        self.assertTrue(self.queue.table(self.repository).get(parent)[0]["repair_report_pending"])
+        self.restart().reconcile()
+        self.assertFalse(self.queue.table(self.repository).get(parent)[0]["repair_report_pending"])
+        for key in (parent, child["RowKey"]):
+            self.assertEqual(api.writes.count(("create", comment_id(key, "auto-repair-report"))), 1)
+        self.assertEqual(self.issues[child["issue_id"]]["state"]["id"], self.route.linear_states.done)
+
+    def test_failure_context_redacts_credentials_and_rejects_foreign_check_links(self):
+        parent, _ = self.prepare_repair("checks")
+        checks(self.pulls[parent])[0].update(name="test token=private-value ghp_supersecret", detailsUrl="https://evil.example/?token=private-value")
+        self.queue.advance(self.repository)
+        fields = self.linear.create_issue.call_args.args[0]
+        self.assertNotIn("private-value", fields["description"])
+        self.assertNotIn("ghp_supersecret", fields["description"])
+        self.assertNotIn("evil.example", fields["description"])
 
     def test_canceled_ambiguous_dispatch_cannot_later_obtain_credentials(self):
         first, second = [self.enqueue(self.issue(n)) for n in (1, 2)]

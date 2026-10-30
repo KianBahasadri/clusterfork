@@ -436,6 +436,85 @@ class LocalRemoteOwnershipTests(unittest.TestCase):
                 backend.select(None)
 
 class GitPublicationTests(unittest.TestCase):
+    def test_repair_checks_out_parent_branch_validates_and_updates_or_creates_parent_pr(self):
+        for existing_pr in (True, False):
+            with self.subTest(existing_pr=existing_pr), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                remote, checkout = root / "remote.git", root / "checkout"
+                def git(*args):
+                    return subprocess.check_output(["git", "-C", str(checkout), *args], text=True, stderr=subprocess.DEVNULL).strip()
+                subprocess.run(["git", "init", "--bare", "--initial-branch=main", str(remote)], check=True, capture_output=True)
+                subprocess.run(["git", "clone", str(remote), str(checkout)], check=True, capture_output=True)
+                (checkout / "file.txt").write_text("original\n")
+                git("add", ".")
+                git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial")
+                git("push", "origin", "main")
+                main = git("rev-parse", "main")
+                branch = "clusterfork/kian-891-aaaaaaaa"
+                git("checkout", "-b", branch)
+                (checkout / "file.txt").write_text("broken\n")
+                git("add", ".")
+                git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "failed parent")
+                broken = git("rev-parse", "HEAD")
+                git("push", "origin", branch)
+                git("checkout", "main")
+                git("branch", "-D", branch)
+                broker = Mock(key="d" * 64)
+                broker.call.return_value = {"token": "temporary-token"}
+                heartbeat = SimpleNamespace(failed=threading.Event())
+                url = "https://github.com/owner/repo/pull/1"
+                pull = {"html_url": url, "state": "open", "merged": False,
+                        "user": {"login": "clusterfork[bot]"},
+                        "head": {"repo": {"full_name": "owner/repo"}, "ref": branch, "sha": broken},
+                        "base": {"ref": "main"}, "body": f"<!-- clusterfork-dispatch:{KEY} -->"}
+                config = {"repository": "owner/repo", "ref": "main", "auto_merge": True,
+                          "issue": {"id": ISSUE, "identifier": "KIAN-1000", "title": "Auto-repair", "url": "https://linear.app/test"},
+                          "repair": {"target_branch": branch, "target_dispatch_key": KEY,
+                                     "target_identifier": "KIAN-891", "target_pull_request": url if existing_pr else ""},
+                          "validation_commands": [[sys.executable, "-c", "from pathlib import Path; assert Path('file.txt').read_text() == 'fixed\\n'"]]}
+                @contextmanager
+                def implement(*args):
+                    self.assertEqual(git("branch", "--show-current"), branch)
+                    self.assertEqual((checkout / "file.txt").read_text(), "broken\n")
+                    (checkout / "file.txt").write_text("fixed\n")
+                    yield "Fixed the parent's validation failure."
+                original = Path.cwd()
+                try:
+                    os.chdir(checkout)
+                    with patch.object(worker, "run_codex", side_effect=implement) as agent, \
+                         patch.object(worker, "find_pr", return_value=url if existing_pr else None), \
+                         patch.object(worker, "json_request", return_value=pull) as request, \
+                         patch.object(worker, "request_auto_merge") as merge:
+                        self.assertEqual(worker.execute(broker, config, heartbeat, root), ("completed", url))
+                    agent.assert_called_once()
+                    self.assertEqual(git("ls-remote", "origin", "refs/heads/main").split()[0], main)
+                    repaired = git("ls-remote", "origin", "refs/heads/" + branch).split()[0]
+                    self.assertNotEqual(repaired, broken)
+                    self.assertFalse(git("ls-remote", "origin", "refs/heads/clusterfork/kian-1000-*"))
+                    self.assertEqual(merge.call_args.args[3:5], (KEY, branch))
+                    self.assertEqual(merge.call_args.kwargs["expected_sha"], repaired)
+                    broker.call.assert_any_call("progress", stage="publishing", repair_validation_passed=True)
+                    creates = [call for call in request.call_args_list if len(call.args) > 2]
+                    self.assertEqual(len(creates), 0 if existing_pr else 1)
+                    if creates:
+                        self.assertIn("clusterfork-dispatch:" + KEY, creates[0].args[2]["body"])
+                        self.assertEqual(creates[0].args[2]["head"], branch)
+                finally:
+                    os.chdir(original)
+
+    def test_repair_cannot_reuse_foreign_pr_even_with_manual_merge_policy(self):
+        config = {"repository": "owner/repo", "ref": "main", "auto_merge": False,
+                  "issue": {"identifier": "KIAN-1000"},
+                  "repair": {"target_dispatch_key": KEY, "target_identifier": "KIAN-891",
+                             "target_branch": "clusterfork/kian-891-aaaaaaaa"}}
+        broker = Mock(key="d" * 64)
+        broker.call.return_value = {"token": "temporary-token"}
+        with patch.object(worker, "find_pr", return_value="https://github.com/owner/repo/pull/1"), \
+             patch.object(worker, "json_request", return_value={"head": {"repo": {"full_name": "attacker/repo"}}}), \
+             patch.object(worker, "run_codex") as agent, self.assertRaises(worker.WorkerFailure):
+            worker.execute(broker, config, SimpleNamespace(failed=threading.Event()), Path("/tmp"))
+        agent.assert_not_called()
+
     def test_worker_pushes_a_separate_branch_and_opens_a_pr_after_validation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

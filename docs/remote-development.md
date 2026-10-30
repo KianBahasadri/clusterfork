@@ -135,7 +135,7 @@ issue to Todo to request its new review; the rerun cannot grant itself a pass.
 `automation/worker.py` and shared policy code on every mapped repository's
 workflow branch. The broker and runner require the
 `readiness-v1:<contract hash>` start protocol (including the prompt, schema,
-budget, `repository-selection-v1` reporting, and `linear-steering-v1` contracts) and an explicit
+budget, `repository-selection-v1`, `linear-steering-v1`, and `auto-repair-v1` contracts) and an explicit
 broker-selected phase. An old runner is denied start; a new runner receiving an
 old broker response stops before execution. Selection reporting versions this
 hash too: Azure and every workflow branch need matching shared policy/reporting
@@ -167,8 +167,8 @@ finish. The workflow waits for the exact main revision's `test` CI workflow to
 succeed and for all worker runs, including queued runs and older manual reruns,
 to stop. Draining allows 330 minutes within a six-hour deployment job.
 
-Only the allowlisted Function App ZIP is published, using Flex Consumption's
-remote build. `deployment.json` stamps its Git revision and broker source digest.
+Only the allowlisted Function App ZIP is published using Flex Consumption's remote
+build. `deployment.json` stamps its Git revision and broker source digest.
 The health endpoint returns this metadata, the serial-admission capability, and
 the deployment pause state. Startup failures return 503 with a `runtime_error`
 class, without credentials or raw exception messages. The workflow resumes dispatch only after the live
@@ -236,7 +236,8 @@ and Done. Only ready states such as Todo dispatch new issues.
 | --- | --- |
 | Worker starts, or required CI is pending | In Progress |
 | Merge conflicts, failed/canceled required checks, closed unmerged PR, draft PR, or unmet merge requirements | Needs attention |
-| Worker fails, is canceled, or ends without a recorded outcome | Needs attention |
+| Worker/check failure eligible for its single automatic repair | In Progress while repairing |
+| Failed repair, cancellation, or missing outcome without a confirmed failure | Needs attention |
 | PR merges, or validated work needs no repository changes | Done |
 | No account has enough quota | Todo; retries after 15 minutes |
 
@@ -322,16 +323,50 @@ blocker clears, then Done after merging. Unknown/incomplete GitHub responses lea
 the previous state unchanged. Archived issues/projects, removed enrollment labels,
 project moves, and manually completed/canceled issues are respected. Publication
 accepts the worker's In Progress state while preserving other eligibility checks.
-A manual GitHub job rerun can resume its still-admitted Needs attention work after the
-previous worker stops; status updates alone never
-reset the completed dispatch receipt or automatically rerun a failed agent.
+A manual GitHub job rerun can resume still-admitted work after the previous worker
+stops, unless its slot was handed to a repair or its single repair worker failed.
+Status updates never reset a completed dispatch receipt.
+
+## Single-attempt auto-repair
+
+After GitHub confirms all matching workers and the recorded attempt stopped, an
+admitted coding/validation failure or completed failing required PR checks can
+consume **one** repair budget per dispatch key. Pending CI, intentional cancellation,
+unknown dispatches, readiness/dependency holds, and merge-policy blockers do not
+consume it. The parent queue row atomically records `repair_attempted`, a stable
+`repair_issue_id`, and immutable context under the slot ETag before external creation;
+the receipt mirrors that intent and prior lifecycle writers drain. Interrupted creation reuses the UUID.
+
+Azure creates a High-priority Todo sub-issue in the same project, labeled
+`clusterfork: auto-repair`, and atomically hands it the occupied slot. Only a child
+bound to that durable intent and its generated content bypasses readiness clarification. Enrollment,
+dependency, worker identity, account leases, and publication gates remain enforced.
+The worker checks out the **parent's** `clusterfork/<identifier-lowercase>-<key[:8]>`
+branch, investigates, runs configured validation, and pushes to the existing PR or
+creates its missing PR with the parent's dispatch marker. Required checks and native
+merge requirements still apply; workflow edits and `--admin` bypasses remain refused.
+
+The label **or** persisted `is_auto_repair` metadata forbids another generation; failed
+repair workers cannot be rerun automatically or through broker admission.
+If it fails or its completed required checks still fail, both issues become Blocked
+(the configured Needs attention state) and the slot stays held for human review.
+After merge, or validated completion with no changes/PR remaining, both become Done;
+the same reconciliation pass releases the slot and dispatches the next runnable issue.
+
+`notify_user_url` in `automation/azure/projects.json` configures the profile mention. Each terminal
+outcome writes one stable `comment_id(key, "auto-repair-report")` comment per issue,
+starting with Kian's profile URL so the Clusterfork OAuth app can notify `@kian`.
+The Auto-Repair Report links the trigger, repair issue/run and PR, summarizes bounded diagnostics,
+prepared commit/file count and validation, and states whether the queue is flowing or awaiting review.
+Reports exclude credentials, raw logs, environment dumps and agent transcripts. Pending projections
+and in-flight markers recover failed, ambiguous or interrupted writes even after the next task starts.
 
 ## Retries and troubleshooting
 
 Completed issues dispatch once per registry `generation`. Editing an issue or
 moving it out of Todo and back does not reset completion. Capacity waits retry
-through reconciliation; execution failures are marked Needs attention and require a
-GitHub job rerun. Existing open PRs are recovered by their deterministic branch name.
+through reconciliation; eligible execution/check failures use the single repair above.
+Other blockers require human recovery. Existing PRs use their deterministic branch name.
 Changing generation permits **all** eligible issues to dispatch again.
 
 Each project can set `agent_timeout_minutes` in `automation/azure/projects.json`.
@@ -346,8 +381,8 @@ Configured validation commands run after the agent finishes. Publication recheck
 current project enrollment and status, pushes a separate branch, opens a PR, and requests the
 configured merge policy. GitHub waits for required checks before automatic merging.
 Workflow-file edits are refused because the App has no Workflows permission.
-Durable agent-session resume and automatic retries after a mid-task usage limit
-are not implemented. Linear credentials stay in Azure and are not sent to the agent.
+Durable agent-session resume is not implemented. A mid-task usage failure can use
+the same single repair budget. Linear credentials stay in Azure, outside the agent.
 
 Azure Table `ClusterforkDispatches` records `dispatching`, `dispatched`, `rejected`, or
 `uncertain`. `dispatched` means GitHub accepted the request; verify actual runner

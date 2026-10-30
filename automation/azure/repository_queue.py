@@ -15,10 +15,12 @@ from functools import lru_cache
 from uuid import uuid4
 
 from dispatch_core import DispatchError, Route, dependency_status, eligibility
-from linear_sync import comment_id, pull_outcome
+from linear_sync import comment_id, failed_required_checks, pull_outcome
+from auto_repair import AutoRepair, RECEIPT_FIELDS
 from selection_reporting import SelectionReporter, selection_changed
 from routing_timing import record, timestamps
 from worker_core import WorkerError
+from worker_reporting import is_auto_repair
 
 
 TERMINAL = {"completed", "abandoned", "skipped"}
@@ -45,8 +47,19 @@ class RepositoryQueue:
         self.readiness = readiness
         self.selection = SelectionReporter(linear, self.selection_tables, clock=clock)
         self.control = control
+        self.repair = AutoRepair(self)
         self.readiness.admitted = self.is_admitted
         self.readiness.review_selection = self.review_selection
+
+    optional_entry = staticmethod(optional)
+
+    def optional_run(self, key):
+        return optional(self.runs, key)
+
+    def approval(self, issue, route, row):
+        if row.get("is_auto_repair") and row.get("repair_parent_key"):
+            return self.repair.approval(issue, route, row)
+        return self.readiness.require(issue, route)
 
     def review_selection(self, issue, route, rejected):
         """Clear rejected work's marker while its runner drains under the slot fence."""
@@ -195,9 +208,11 @@ class RepositoryQueue:
 
     def defer_dependencies(self, table, state, etag, row, route, receipt):
         reason = row["dependency_reason"]
-        released = (self.prework_stopped(state, row, route, receipt)
+        released = (not row.get("repair_parent_key") and self.prework_stopped(state, row, route, receipt)
                     and self.finish_entry(table, state, etag, row, "queued", reason))
-        if not released:
+        if row.get("repair_parent_key"):
+            reason += " The repair retains the repository slot until the parent's failed work is resolved."
+        elif not released:
             reason += " Waiting for the previously dispatched worker to stop before releasing the repository slot."
         self.report(table, row, reason)
         return {"status": "dependency_waiting", "dispatch_key": row["RowKey"],
@@ -242,6 +257,9 @@ class RepositoryQueue:
                 row = {"RowKey": key, "sequence": sequence, "status": "submitted" if submitted else "queued",
                        "priority": priority, "queued_at": self.clock(), **timestamps(fields),
                        **{k: fields[k] for k in ("issue_id", "identifier", "repository", "project_id")}}
+                row.update({name: fields[name] for name in RECEIPT_FIELDS if name in fields})
+                if is_auto_repair(fields):
+                    row["is_auto_repair"] = True
                 if existing:
                     # Rejoining a skipped task must not lose a pending label removal.
                     row.update({k: v for k, v in existing.items() if k.startswith("selection_")})
@@ -264,6 +282,7 @@ class RepositoryQueue:
                             {"issue_id": issue["id"], "identifier": issue["identifier"],
                              "priority": issue.get("priority", 0),
                              "repository": route.repository, "project_id": route.project_id,
+                             "is_auto_repair": is_auto_repair(issue),
                              **timestamps(timing or {})})
                 return key
             except WorkerError as exc:
@@ -321,6 +340,9 @@ class RepositoryQueue:
         state, etag = self.reserve(table)
         if state["active_key"] != key:
             raise WorkerError("Another task owns the repository slot")
+        row, _ = table.get(key)
+        if row.get("repair_attempted") and row.get("repair_issue_id"):
+            raise WorkerError("The parent worker yielded its slot to its single auto-repair", 403)
         existing, _ = optional(self.runs, key)
         previous = state["owner"] or (existing or {}).get("owner", "")
         if previous and previous != owner:
@@ -356,7 +378,8 @@ class RepositoryQueue:
             return "waiting", "Waiting for the previous GitHub worker to stop."
         run, _ = optional(self.runs, key)
         known_owner = owner or (run or {}).get("owner", "")
-        if known_owner and self.github.worker_result(route.repository, known_owner).get("status") != "completed":
+        known_result = self.github.worker_result(route.repository, known_owner) if known_owner else None
+        if known_result and known_result.get("status") != "completed":
             # Listings can lag a newly started run. Its recorded identity must
             # also be stopped, even when cancellation would otherwise release it.
             return "waiting", "Waiting for the recorded GitHub worker to stop."
@@ -370,11 +393,23 @@ class RepositoryQueue:
         # Always look up the branch, including after a lost finish callback or
         # an outcome claiming no changes. An unresolved PR retains the slot.
         pull = self.github.worker_pull(route, receipt, key, (run or {}).get("pull_request", ""))
+        repairable = (not canceled and not is_auto_repair(issue, row) and not is_auto_repair(issue, receipt)
+                      and not row.get("repair_attempted") and not receipt.get("repair_attempted")
+                      and not row.get("repair_issue_id") and not receipt.get("repair_issue_id"))
+        latest = max(runs, key=lambda r: (r["id"], r["run_attempt"])) if runs else known_result
+        latest_owner = f"{latest['id']}:{latest['run_attempt']}" if runs else known_owner
+        if (receipt.get("readiness_wait_owner") == latest_owner
+                or (run and (run.get("dependency_wait") or run.get("status") == "waiting_for_dependencies"))):
+            repairable = False  # Admission holds have not attempted coding/validation.
+        failed_run = bool((run and run.get("status") == "failed" and run.get("owner") == latest_owner)
+                          or (latest and latest.get("conclusion") == "failure"))
         if pull:
             outcome, reason = pull_outcome(pull, route.auto_merge)
             if pull.get("merged"):
                 return "completed", reason
             if pull.get("state") == "OPEN":
+                if repairable and (failed_run or failed_required_checks(pull)):
+                    return "repair", reason if not failed_run else "Worker execution or validation failed; its PR remains open."
                 if not run or run["status"] != "completed":
                     return "blocked", "Worker did not complete successfully; its pull request remains open. " + reason
                 return "blocked" if outcome == "blocked" else "waiting", reason
@@ -382,6 +417,8 @@ class RepositoryQueue:
                 return "blocked", reason + " Rerun this task or cancel its Linear issue to abandon it."
         if canceled:
             return "abandoned", "Linear issue canceled; GitHub workers stopped and no open PR remains."
+        if repairable and failed_run and (runs or known_result):
+            return "repair", "Worker execution or validation failed."
         if receipt["status"] == "rejected":
             if receipt.get("retry_after", 0) <= self.clock():
                 return "retry", "Retrying a rejected dispatch."
@@ -404,7 +441,8 @@ class RepositoryQueue:
         if run["status"] == "completed" and latest.get("conclusion") == "success":
             return "completed", "Validated work completed without repository changes."
         if run["status"] == "waiting_for_quota" and latest.get("conclusion") == "success":
-            current, reason = eligibility(issue or {}, self.registry)
+            extra = (route.linear_states.in_progress, route.linear_states.blocked) if row.get("repair_parent_key") and route.linear_states else ()
+            current, reason = eligibility(issue or {}, self.registry, additional_state_ids=extra)
             if current != route:
                 return "skipped", f"Quota-waiting issue is no longer eligible ({reason})."
             if receipt.get("retry_after", 0) and receipt["retry_after"] <= self.clock():
@@ -427,20 +465,26 @@ class RepositoryQueue:
     def dispatch(self, table, state, etag, row, route, *, retry=False):
         key = row["RowKey"]
         issue = self.linear.issue(row["issue_id"])
-        current, reason = eligibility(issue or {}, self.registry)
+        generated = row.get("is_auto_repair") and row.get("repair_parent_key")
+        extra = (route.linear_states.in_progress, route.linear_states.blocked) if generated and route.linear_states else ()
+        current, reason = eligibility(issue or {}, self.registry, additional_state_ids=extra)
         if current != route:
             message = f"No longer eligible ({reason})."
+            if generated:
+                # Skipping a repair cannot abandon its parent's broken branch.
+                self.report(table, row, message)
+                return {"status": "blocked", "dispatch_key": key, "reason": message}
             if not self.finish_entry(table, state, etag, row, "skipped", message):
                 return {"status": "waiting", "dispatch_key": key, "reason": "Waiting for the readiness worker to stop."}
             return {"status": "skipped", "dispatch_key": key}
         if not self.dependencies_ready(issue, route, key=key):
             return {"status": "dependency_waiting", "dispatch_key": key}
-        review = self.readiness.ensure(issue, route)
+        review = {"status": "ready"} if generated else self.readiness.ensure(issue, route)
         if review["status"] != "ready":
             if table.get(key)[0].get("dependency_reason"):
                 return {"status": "dependency_waiting", "dispatch_key": key}
             return {**review, "dispatch_key": key}
-        approval = self.readiness.require(issue, route)
+        approval = self.approval(issue, route, row)
         if not self.dependencies_ready(issue, route, key=key):
             return {"status": "dependency_waiting", "dispatch_key": key}
         # Fence observations before crossing the external dispatch boundary.
@@ -465,6 +509,7 @@ class RepositoryQueue:
                        "readiness_review_key": approval.get("review_key", ""),
                        "dependency_epoch": current_row.get("dependency_epoch", ""),
                        **{k: row[k] for k in ("issue_id", "identifier", "repository", "project_id")}}
+            receipt.update({name: row[name] for name in RECEIPT_FIELDS if name in row})
             if not self.receipts.create(receipt):
                 return {"status": "already_claimed", "dispatch_key": key}
         inputs = {"linear_issue_id": row["issue_id"], "linear_identifier": row["identifier"],
@@ -572,6 +617,7 @@ class RepositoryQueue:
                 # Retain repair even when GitHub observation/dispatch fails.
                 self.refresh_waiting(table)
                 self.selection.reconcile(table)
+                self.repair.reconcile(table)
                 for row in table.list():
                     if row.get("status") in TERMINAL and row.get("reason"):
                         self.report(table, row, row["reason"])
@@ -596,6 +642,14 @@ class RepositoryQueue:
             row, _ = table.get(key)
             receipt, _ = optional(self.receipts, key)
             route = self.current_route(row, receipt)
+            if route and receipt and row.get("repair_attempted") and row.get("repair_issue_id"):
+                reason = "The single automatic repair is being admitted for this repository slot."
+                if self.repair.admit(table, state, etag, row, receipt, route, reason):
+                    results[key] = {"status": "repairing", "dispatch_key": key}
+                    continue
+                self.report(table, row, reason)
+                results[key] = {"status": "blocked", "dispatch_key": key, "reason": reason}
+                return results
             if route is not None and not self.started_coding(row):
                 self.dependencies_ready({"id": row["issue_id"]}, route, key=key)
                 state, etag = table.get("slot")
@@ -610,6 +664,10 @@ class RepositoryQueue:
                     results.update(self.waiting_results(table, row, result["reason"]))
                     return results
             if route is None and not receipt:
+                if row.get("repair_parent_key"):
+                    reason = "Repair repository mapping changed; restore it to resolve the parent's failed work."
+                    self.report(table, row, reason)
+                    return {key: {"status": "blocked", "dispatch_key": key, "reason": reason}}
                 reason = "Skipped because the project's repository mapping changed."
                 if not self.finish_entry(table, state, etag, row, "skipped", reason):
                     return {key: {"status": "waiting", "dispatch_key": key,
@@ -635,6 +693,17 @@ class RepositoryQueue:
                     reason = "Prerequisites completed; waiting for the previous worker to stop before retrying."
                 else:
                     action, reason = self.observe(row, receipt, route, state["owner"])
+                if action == "repair":
+                    if self.repair.admit(table, state, etag, row, receipt, route, reason):
+                        results[key] = {"status": "repairing", "dispatch_key": key, "reason": reason}
+                        continue
+                    action = "blocked"
+                if row.get("repair_parent_key") and action in {"completed", "blocked", "abandoned", "skipped"}:
+                    finished = self.repair.finish(table, state, etag, row, route, action, reason)
+                    if action == "completed" and finished:
+                        results[key] = {"status": "completed", "dispatch_key": key, "reason": reason}
+                        continue
+                    action = "blocked"
                 if action in TERMINAL:
                     if not self.finish_entry(table, state, etag, row, action, reason):
                         return {key: {"status": "waiting", "dispatch_key": key,

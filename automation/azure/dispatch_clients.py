@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 from uuid import UUID
 
 from dispatch_core import DispatchError
-from worker_reporting import QUEUED_LABEL, SELECTION_LABEL, STAGE_LABELS
+from worker_reporting import QUEUED_LABEL, SELECTION_LABEL, STAGE_LABELS, worker_branch
 from diagnostics import failure, graphql_failure, http_operation, operation, record
 
 
@@ -49,6 +49,8 @@ def request_json(url, *, token=None, method="GET", data=None, form=False):
 ISSUE_FIELDS = """
 id identifier title description url archivedAt createdAt priority
 state { id type }
+team { id }
+labels(first: 2, filter: {name: {eq: "clusterfork: auto-repair"}}) { nodes { name } pageInfo { hasNextPage } }
 """
 PROJECT_FIELDS = "id archivedAt labels(first: 100) { nodes { name } pageInfo { hasNextPage } }"
 
@@ -128,6 +130,8 @@ class Linear:
 
     @staticmethod
     def complete(issue):
+        if issue and issue.get("labels", {}).get("pageInfo", {}).get("hasNextPage"):
+            raise ValueError("Incomplete issue labels; cannot evaluate auto-repair guard")
         if issue and issue.get("project"):
             if issue["project"]["labels"]["pageInfo"]["hasNextPage"]:
                 raise ValueError("project has more than 100 labels; cannot evaluate enrollment")
@@ -137,6 +141,23 @@ class Linear:
         query = ("query($id: String!) { issue(id: $id) { " + ISSUE_FIELDS
                  + " project { " + PROJECT_FIELDS + " } } }")
         return self.complete(self.query(query, {"id": issue_id})["issue"])
+
+    def create_issue(self, fields):
+        """A caller-supplied UUID makes ambiguous creates recoverable without duplicates."""
+        try:
+            result = self.query("""mutation($input: IssueCreateInput!) {
+              issueCreate(input: $input) { success issue { id } }
+            }""", {"input": fields})["issueCreate"]
+            if not result["success"] or (result.get("issue") or {}).get("id") != fields["id"]:
+                raise RequestError()
+        except RequestError:
+            # Includes a conflicting create and a successful create whose response
+            # was lost. Never generate a replacement ID on a retry.
+            existing = self.issue(fields["id"])
+            if not existing:
+                raise
+            return existing
+        return self.issue(fields["id"])
 
     def issue_dependencies(self, issue_id):
         """Read every incoming relation, including sources outside mapped projects.
@@ -477,7 +498,8 @@ class GitHub:
 
         repository = route.repository
         token = self.installation_token(repository, permissions={"contents": "read", "pull_requests": "read"})
-        branch = f"clusterfork/{receipt['identifier'].lower()}-{key[:8]}"
+        target_key = receipt.get("target_dispatch_key", key)
+        branch = receipt.get("target_branch") or worker_branch(receipt["identifier"], key)
         number = None
         if url:
             match = re.fullmatch(re.escape(f"https://github.com/{repository}/pull/") + r"([1-9][0-9]*)", url)
@@ -512,8 +534,8 @@ class GitHub:
                 commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) {
                   nodes {
                     __typename
-                    ... on CheckRun { name status conclusion isRequired(pullRequestNumber: $number) }
-                    ... on StatusContext { context state isRequired(pullRequestNumber: $number) }
+                    ... on CheckRun { name status conclusion detailsUrl isRequired(pullRequestNumber: $number) }
+                    ... on StatusContext { context state targetUrl isRequired(pullRequestNumber: $number) }
                   } pageInfo { hasNextPage }
                 } } } } }
               } }
@@ -524,7 +546,7 @@ class GitHub:
                 or pull.get("headRefName") != branch
                 or (pull.get("headRepository") or {}).get("nameWithOwner") != repository
                 or pull.get("author") != {"login": "clusterfork", "__typename": "Bot"}
-                or f"<!-- clusterfork-dispatch:{key} -->" not in (pull.get("body") or "")):
+                or f"<!-- clusterfork-dispatch:{target_key} -->" not in (pull.get("body") or "")):
             raise RequestError()
         return pull
 

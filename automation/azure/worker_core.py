@@ -9,7 +9,7 @@ import time
 from uuid import uuid4
 
 from dispatch_core import eligibility
-from worker_reporting import STAGES, validate_usage
+from worker_reporting import STAGES, is_auto_repair, validate_usage
 from readiness_policy import PROTOCOL
 from diagnostics import failure, operation, record, validate_failure
 
@@ -104,6 +104,8 @@ class WorkerService:
         self.accounts, self.linear, self.github, self.clock = accounts, linear, github, clock
         self.sync = sync
         self.queue = queue
+        if sync:
+            self.queue.repair.lifecycle_notes = sync.notes
         self.steering = steering
 
     def sync_steering(self, issue_id):
@@ -175,7 +177,7 @@ class WorkerService:
             current, _ = eligibility(issue or {}, self.registry, additional_state_ids=extra)
             if current != route:
                 raise WorkerError("Issue is no longer eligible", 403)
-            approval = self.queue.readiness.require(issue, route)
+            approval = self.queue.approval(issue, route, receipt)
             if approval.get("review_key", "") != row.get("readiness_review_key", ""):
                 raise WorkerError("Worker readiness approval was superseded", 403)
             if (action == "progress" and data.get("stage") == "coding" and approval.get("context_sha")
@@ -247,6 +249,19 @@ class WorkerService:
                     raise WorkerError("Account selection was not recorded", 400)
                 row["usage_after"] = json.dumps(validate_usage(data["usage_after"]))
             row.update(stage=stage, report_version=row.get("report_version", 0) + 1)
+            if receipt.get("is_auto_repair") and data.get("repair_validation_passed") is True:
+                if stage != "publishing":
+                    raise WorkerError("Repair validation must finish before publication", 400)
+                row["repair_validation_passed"] = True
+            if receipt.get("is_auto_repair") and "repair_result" in data:
+                result = data["repair_result"]
+                if (stage != "publishing" or not isinstance(result, dict)
+                        or not isinstance(result.get("commit_sha"), str)
+                        or not re.fullmatch(r"[0-9a-f]{40}", result["commit_sha"])
+                        or type(result.get("changed_files")) is not int or not 0 <= result["changed_files"] <= 100_000
+                        or set(result) != {"commit_sha", "changed_files"}):
+                    raise WorkerError("Invalid structured repair result", 400)
+                row["repair_result"] = json.dumps(result)
             if stage in {"testing", "publishing"}:
                 row["steering_closed"] = True
             if data.get("stage") == "coding" and not self.queue.dependencies_ready(
@@ -342,11 +357,17 @@ class WorkerService:
         else:
             if previous.get("status") == "completed":
                 raise WorkerError("Issue already completed")
+            if is_auto_repair(issue, receipt) and not (
+                    previous.get("status") == "waiting_for_quota"
+                    or (previous.get("status") == "running" and previous.get("owner") == owner)):
+                raise WorkerError("The single auto-repair worker cannot be retried", 403)
         if not self.queue.dependencies_ready(issue, route, key=key, owner=owner):
             raise WorkerError("Coding start held for unresolved or unverifiable issue prerequisites", 403)
         try:
-            approval = self.queue.readiness.require(issue, route)
+            approval = self.queue.approval(issue, route, receipt)
         except WorkerError:
+            if receipt.get("is_auto_repair") and receipt.get("repair_parent_key"):
+                raise
             self.queue.readiness.ensure(issue, route)
             # A dispatch can become stale while GitHub is scheduling it. Record
             # a retryable admission hold without starting coding or consuming an account.
@@ -377,6 +398,9 @@ class WorkerService:
         self.sync_linear(key)
         self.sync_steering(receipt["issue_id"])
         profile = self.registry.agent_profiles["codex"]
+        repair = ({name: receipt[name] for name in
+                   ("target_branch", "target_dispatch_key", "target_identifier", "target_pull_request")}
+                  if receipt.get("is_auto_repair") and receipt.get("repair_parent_key") else None)
         return {"protocol": PROTOCOL, "phase": "development", "readiness": approval,
                 "model": profile.model, "effort": profile.effort,
                 "serial_admission": True,
@@ -385,6 +409,7 @@ class WorkerService:
                               "max_snapshot_age_seconds": self.registry.agent_selection.max_snapshot_age_seconds},
                 "repository": route.repository, "ref": route.ref,
                 "auto_merge": route.auto_merge,
+                "repair": repair,
                 "agent_timeout_minutes": route.agent_timeout_minutes,
                 "validation_commands": route.validation_commands,
                 "issue": {key: issue.get(key) for key in ("id", "identifier", "title", "description", "url")}}

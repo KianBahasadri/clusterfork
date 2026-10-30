@@ -249,6 +249,44 @@ class RoutingTests(unittest.TestCase):
 
 
 class ClientTests(unittest.TestCase):
+    def test_issue_creation_recovers_committed_and_conflicting_creates_using_same_uuid(self):
+        stored = {}
+        inputs = {"id": ISSUE, "teamId": OTHER, "projectId": PROJECT, "parentId": TODO,
+                  "title": "Auto-repair: KIAN-1 (worker failed)", "stateId": TODO,
+                  "priority": 2, "labelIds": [OTHER], "description": "Sanitized failure context"}
+        lost = True
+        def request(url, **kwargs):
+            nonlocal lost
+            query, variables = kwargs["data"]["query"], kwargs["data"]["variables"]
+            if "issueCreate(" in query:
+                fields = variables["input"]
+                self.assertEqual(fields, inputs)
+                if fields["id"] not in stored:
+                    stored[fields["id"]] = {**issue(), "title": fields["title"]}
+                if lost:
+                    lost = False
+                    raise RequestError(503)
+                return {"errors": [{"extensions": {"code": "BAD_USER_INPUT"}}]}
+            return {"data": {"issue": stored.get(variables["id"])}}
+        self.assertEqual(Linear("test", request).create_issue(inputs)["id"], ISSUE)
+        with self.assertLogs(level="ERROR"):
+            self.assertEqual(Linear("test", request).create_issue(inputs)["id"], ISSUE)
+        self.assertEqual(len(stored), 1)
+
+    def test_failed_issue_creation_does_not_invent_another_issue_id(self):
+        def request(url, **kwargs):
+            if "issueCreate(" in kwargs["data"]["query"]:
+                raise RequestError(503)
+            return {"data": {"issue": None}}
+        with self.assertRaises(RequestError):
+            Linear("test", request).create_issue({"id": ISSUE})
+
+    def test_truncated_repair_labels_fail_closed(self):
+        row = issue()
+        row["labels"]["pageInfo"] = {"hasNextPage": True}
+        with self.assertRaises(ValueError):
+            Linear.complete(row)
+
     def test_incoming_dependency_pages_include_cross_project_and_archived_sources(self):
         calls = []
         completed = {"id": ISSUE, "identifier": "KIAN-905", "trashed": None,

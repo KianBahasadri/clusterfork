@@ -95,8 +95,9 @@ def digest(value):
 # Both phases must agree on readiness, repository selection, and steering. An
 # older broker must not silently start a runner without these capabilities.
 STEERING_PROTOCOL = "linear-steering-v1"
+AUTO_REPAIR_PROTOCOL = "auto-repair-v1"
 PROTOCOL = "readiness-v1:" + digest([POLICY, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS,
-                                    SELECTION_PROTOCOL, STEERING_PROTOCOL])
+                                    SELECTION_PROTOCOL, STEERING_PROTOCOL, AUTO_REPAIR_PROTOCOL])
 
 
 def issue_revision(issue):
