@@ -19,7 +19,17 @@ class DeploymentControl:
             return {"RowKey": "deployment", "paused": False}, None
 
     def is_paused(self):
-        return self.state()[0].get("paused") is True
+        state, _ = self.state()
+        return state.get("paused") is True or self.instance_mismatch(state=state)
+
+    def instance_mismatch(self, metadata=None, *, state=None):
+        """Fence packaged instances against the durable target deployment revision."""
+        revision = (build_metadata() if metadata is None else metadata).get("revision")
+        if not revision:
+            return False  # Unpackaged/local processes have no deployment identity.
+        if state is None:
+            state, _ = self.state()
+        return bool(state.get("revision") and revision != state["revision"])
 
     def pause(self, owner, revision):
         for _ in range(32):

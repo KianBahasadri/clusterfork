@@ -15,7 +15,7 @@ import sys
 import tempfile
 import traceback
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs
 import zipfile
@@ -26,6 +26,7 @@ sys.path.insert(0, str(SOURCE))
 from dispatch_clients import GitHub, Linear, RequestError, request_json  # noqa: E402
 from dispatch_core import (Dispatcher, DispatchError, Registry, WebhookError,
                            dependency_status, eligibility, webhook_event)  # noqa: E402
+from deployment_control import DeploymentControl
 from test_remote_worker import KEY, MemoryTable, claims, repository_queue
 import test_remote_worker as worker_fixtures
 from readiness_policy import PROTOCOL
@@ -496,6 +497,120 @@ class WorkerRecoveryContractTests(unittest.TestCase):
         result = service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
         self.assertEqual(result["protocol"], PROTOCOL)
         self.assertEqual(result["phase"], "development")
+
+
+class DeploymentCutoverRoutingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.app = importlib.import_module("function_app")
+        except ModuleNotFoundError as exc:
+            if exc.name in {"azure", "azure.functions"}:
+                raise unittest.SkipTest("Run with automation/azure/requirements.txt for handler integration") from exc
+            raise
+
+    def setUp(self):
+        self.owner, self.old, self.current = "github:900:1", "a" * 40, "b" * 40
+        self.control = DeploymentControl(MemoryTable())
+        self.control.pause(self.owner, self.current)
+        self.control.resume(self.owner, self.current)
+        self.service = Mock()
+        self.service.queue.control = self.control
+        self.service.queue.readiness.reconcile.return_value = False
+        self.service.queue.deployment_pending.return_value = False
+        self.service.validation = None
+
+    def message(self, event):
+        message = Mock()
+        message.get_body.return_value = json.dumps(event).encode()
+        return message
+
+    def test_draining_instance_requeues_resume_until_matching_instance_can_reconcile(self):
+        event = {"type": "DeploymentResume", "id": self.owner, "revision": self.current}
+        with patch.object(self.app, "worker_service", return_value=self.service), \
+             patch.object(self.app, "build_metadata", return_value={"revision": self.old}) as metadata, \
+             patch.object(self.app, "enqueue") as enqueue:
+            self.app.route_event(self.message(event))
+            enqueue.assert_called_once_with({**event, "processing_at": ANY}, visibility_timeout=5)
+            self.service.queue.readiness.reconcile.assert_not_called()
+            self.service.queue.reconcile.assert_not_called()
+            self.assertFalse(self.control.state()[0]["paused"])
+            metadata.return_value = {"revision": self.current}
+            enqueue.reset_mock()
+            self.app.route_event(self.message(event))
+            self.service.queue.readiness.reconcile.assert_called_once_with(deployment_only=True)
+            self.service.queue.reconcile.assert_called_once_with()
+            enqueue.assert_not_called()
+
+    def test_draining_instance_requeues_ordinary_events_without_using_stale_dispatcher(self):
+        with patch.object(self.app, "worker_service", return_value=self.service), \
+             patch.object(self.app, "build_metadata", return_value={"revision": self.old}) as metadata, \
+             patch.object(self.app, "enqueue") as enqueue, \
+             patch.object(self.app, "dispatcher") as dispatcher:
+            for event_type in ("Issue", "Project", "Comment", "IssueRelation"):
+                with self.subTest(event_type=event_type):
+                    event = {"type": event_type, "id": ISSUE}
+                    self.app.route_event(self.message(event))
+                    enqueue.assert_called_with({**event, "processing_at": ANY}, visibility_timeout=5)
+            self.assertEqual(enqueue.call_count, 4)
+            dispatcher.assert_not_called()
+            self.service.queue.readiness.reconcile.assert_not_called()
+            self.service.queue.reconcile.assert_not_called()
+            metadata.return_value = {"revision": self.current}
+            dispatcher.return_value.process.return_value = []
+            event = {"type": "Issue", "id": ISSUE}
+            self.app.route_event(self.message(event))
+            dispatcher.return_value.process.assert_called_once_with({**event, "processing_at": ANY})
+            self.assertEqual(enqueue.call_count, 4)
+
+    def test_draining_instance_skips_timer_reconciliation_and_project_scans(self):
+        with patch.object(self.app, "worker_service", return_value=self.service), \
+             patch.object(self.app, "missing_config", return_value=[]), \
+             patch.object(self.app, "build_metadata", return_value={"revision": self.old}) as metadata, \
+             patch.object(self.app, "enqueue") as enqueue:
+            self.app.reconcile(None)
+            for service in (self.service.queue.readiness, self.service.queue, self.service.sync, self.service.steering):
+                service.reconcile.assert_not_called()
+            enqueue.assert_not_called()
+            metadata.return_value = {"revision": self.current}
+            self.app.reconcile(None)
+            for service in (self.service.queue.readiness, self.service.queue, self.service.sync, self.service.steering):
+                service.reconcile.assert_called_once_with()
+            self.assertEqual(enqueue.call_count, len(self.app.registry().routes))
+
+    def test_health_reports_explicit_pause_even_when_old_instance_is_fenced(self):
+        self.service.github.active_worker_runs.return_value = []
+        with patch.object(self.app, "worker_service", return_value=self.service), \
+             patch.object(self.app, "missing_config", return_value=[]), \
+             patch.object(self.app, "build_metadata", return_value={"revision": self.old}), \
+             patch("deployment_control.build_metadata", return_value={"revision": self.old}):
+            for paused in (False, True):
+                with self.subTest(paused=paused):
+                    if paused:
+                        self.control.pause(self.owner, self.current)
+                    self.assertTrue(self.control.is_paused())
+                    response = self.app.health(self.app.func.HttpRequest("GET", "https://example.test/api/health", body=b""))
+                    self.assertEqual(response.status_code, 200)
+                    result = json.loads(response.get_body())
+                    self.assertIs(result["deployment_paused"], paused)
+                    self.assertEqual(result["deployment"]["revision"], self.old)
+
+    def test_worker_http_endpoint_returns_cutover_503_instead_of_protocol_403(self):
+        self.registry = Registry.load(SOURCE / "projects.json")
+        service, _, _ = worker_fixtures.WorkerAuthorizationTests.service(self)
+        service.queue.control = self.control
+        request = self.app.func.HttpRequest("POST", "https://example.test/api/worker/start",
+            route_params={"action": "start"},
+            body=json.dumps({"dispatch_key": KEY, "protocol": "readiness-v1:" + "f" * 64}).encode())
+        with patch.object(self.app, "worker_service", return_value=service), \
+             patch.object(self.app, "verify_oidc", return_value=claims()), \
+             patch("deployment_control.build_metadata", return_value={"revision": self.old}), \
+             self.assertLogs(level="WARNING") as logs:
+            response = self.app.worker(request)
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("retry", response.get_body().decode())
+        self.assertIn('"reason_code": "deployment_cutover"', "\n".join(logs.output))
+        self.assertEqual(service.runs.list(), [])
 
 
 class LinearOAuthTests(unittest.TestCase):

@@ -17,7 +17,7 @@ import sys
 import tempfile
 import threading
 import time
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 from uuid import uuid4
@@ -60,7 +60,7 @@ def json_request(url, token, data=None, method=None, *, operation_name=None):
 
 
 class Broker:
-    def __init__(self, url, dispatch_key):
+    def __init__(self, url, dispatch_key, *, sleep=time.sleep, retry_delays=(2, 4, 5, 5, 5)):
         parsed = urlparse(url)
         if parsed.scheme != "https" or parsed.netloc != "clusterfork-dispatch-7604cac329.azurewebsites.net":
             raise WorkerFailure("Unrecognized credential broker")
@@ -70,6 +70,7 @@ class Broker:
         self.stage = "initializing"
         self.deployment_deferred = False
         self.publication_guard = PublicationGuard()
+        self.sleep, self.retry_delays = sleep, retry_delays
 
     def call(self, action, **data):
         if action == "progress" and data.get("stage"):
@@ -89,8 +90,17 @@ class Broker:
                 self.expires = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["exp"]
             with operation(f"broker/{action}", quiet=action in {"heartbeat", "save", "instructions"}, timeout_seconds=20):
                 try:
-                    result = json_request(f"{self.url}/{action}", self.token,
-                                          {"dispatch_key": self.key, **data, "request_id": CONTEXT.get()["request_id"]})
+                    for attempt in range(len(self.retry_delays) + 1):
+                        try:
+                            result = json_request(f"{self.url}/{action}", self.token,
+                                                  {"dispatch_key": self.key, **data,
+                                                   "request_id": CONTEXT.get()["request_id"]})
+                            break
+                        except (HTTPError, URLError, TimeoutError) as exc:
+                            if (action != "start" or (isinstance(exc, HTTPError) and exc.code != 503)
+                                    or attempt == len(self.retry_delays)):
+                                raise
+                            self.sleep(self.retry_delays[attempt])
                     if result.get("status") == "deployment_deferred" and result.get("reason_code") == "deployment_paused":
                         self.deployment_deferred = True
                         deferred = DeploymentDeferred()

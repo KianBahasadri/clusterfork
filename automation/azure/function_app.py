@@ -140,7 +140,8 @@ def health(req: func.HttpRequest) -> func.HttpResponse:
               "monitoring_enabled": bool(os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING"))}
     try:
         result.update(deployment=build_metadata(),
-                      deployment_paused=worker_service().queue.control.is_paused() if not missing else None)
+                      deployment_paused=worker_service().queue.control.state()[0].get("paused") is True
+                      if not missing else None)
         if result["deployment_paused"] is True:
             service = worker_service()
             routes = {(route.repository, route.workflow): route for route in registry().routes.values()}
@@ -188,6 +189,10 @@ def route_event(message: func.QueueMessage):
     if event.get("type") == "DeploymentResume":
         deployment_recovery(event)
         return
+    metadata = build_metadata()
+    if metadata.get("revision") and worker_service().queue.control.instance_mismatch(metadata):
+        enqueue(event, visibility_timeout=5)
+        return
     results = dispatcher().process(event)
     # No issue descriptions, webhook bodies, API responses, or credentials in logs.
     for result in results:
@@ -199,6 +204,10 @@ def deployment_recovery(event):
     state, _ = service.queue.control.state()
     if state.get("owner") != event.get("id") or state.get("revision") != event.get("revision"):
         return  # A newer deployment owns recovery; old wake-ups cannot resume it.
+    revision = build_metadata().get("revision")
+    if revision and revision != event.get("revision"):
+        enqueue(event, visibility_timeout=5)
+        return  # A draining process must leave recovery to the matching package.
     if state.get("paused") is not False:
         # The notification is durable before explicit resume. Azure retries this
         # small race using the existing queue policy; it never admits work.
@@ -226,11 +235,13 @@ def reconcile(timer: func.TimerRequest):
     # projects. Durable receipts make repeat scans harmless for this pilot.
     if missing_config():
         return
-    worker_service().queue.readiness.reconcile()
-    worker_service().sync.reconcile()
-    worker_service().queue.reconcile()
-    worker_service().steering.reconcile()
     service = worker_service()
+    if service.queue.control.instance_mismatch(build_metadata()):
+        return
+    service.queue.readiness.reconcile()
+    service.sync.reconcile()
+    service.queue.reconcile()
+    service.steering.reconcile()
     if service.validation:
         try:
             service.validation.ensure(service.queue.control.state()[0])

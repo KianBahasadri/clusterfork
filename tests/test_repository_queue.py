@@ -186,6 +186,72 @@ class RepositoryQueueTests(unittest.TestCase):
             "id": str(UUID(int=10_000 + len(self.dependencies[dependent["id"]]))),
             "type": "blocks", "issue": prerequisite})
 
+    def test_main_advance_holds_new_and_retry_development_dispatches_in_the_reserved_slot(self):
+        for retry in (False, True):
+            with self.subTest(retry=retry):
+                self.setUp()
+                first, second = [self.enqueue(self.issue(n)) for n in (1, 2)]
+                if retry:
+                    self.queue.advance(self.repository)
+                    self.start(first)
+                    self.finish(first, "waiting_for_quota")
+                    self.stop(first)
+                    self.now += 901
+                before = self.receipts.list()
+                dispatched = self.github.dispatch.call_count
+                self.github.branch_sha.return_value = "b" * 40
+                self.queue.control = DeploymentControl(MemoryTable())
+                self.queue.control.pause("previous-deployment", "a" * 40)
+                self.queue.control.resume("previous-deployment", "a" * 40)
+                with patch("repository_queue.build_metadata", return_value={"revision": "a" * 40}):
+                    result = self.queue.advance(self.repository)
+                self.assertEqual(result[first], {"status": "deployment_paused", "dispatch_key": first})
+                self.assertEqual(self.github.dispatch.call_count, dispatched)
+                self.assertEqual(self.receipts.list(), before)
+                self.assertFalse(self.queue.control.state()[0]["paused"])
+                self.assertEqual(self.slot()["active_key"], first)
+                self.assertEqual(self.queue.table(self.repository).get(second)[0]["status"], "queued")
+                with patch("repository_queue.build_metadata", return_value={"revision": "b" * 40}):
+                    self.assertEqual(self.queue.advance(self.repository)[first]["status"], "dispatched")
+                self.assertEqual(self.github.dispatch.call_count, dispatched + 1)
+
+    def test_main_advance_holds_auto_repair_dispatch_without_a_receipt_or_new_readiness(self):
+        parent, following = self.prepare_repair()
+        self.github.branch_sha.return_value = "b" * 40
+        self.queue.readiness.ensure = Mock(side_effect=AssertionError("A repair must reuse its original review"))
+        with patch("repository_queue.build_metadata", return_value={"revision": "a" * 40}):
+            result = self.queue.advance(self.repository)
+        repair = self.repair_row(parent)["RowKey"]
+        self.assertEqual(result[repair], {"status": "deployment_paused", "dispatch_key": repair})
+        self.assertEqual(self.slot()["active_key"], repair)
+        self.assertEqual(self.queue.table(self.repository).get(following)[0]["status"], "queued")
+        self.assertEqual(self.github.dispatch.call_count, 1)
+        self.assertNotIn(repair, self.receipts.rows)
+        self.queue.readiness.ensure.assert_not_called()
+        with patch("repository_queue.build_metadata", return_value={"revision": "b" * 40}):
+            self.assertEqual(self.queue.advance(self.repository)[repair]["status"], "dispatched")
+        self.assertEqual(self.github.dispatch.call_count, 2)
+
+    def test_dispatch_revision_fence_is_scoped_to_packaged_dispatcher_main(self):
+        for repository, ref, metadata, held in (
+                (self.repository.lower(), "main", {"revision": "a" * 40}, True),
+                (self.repository, "main", {}, False),
+                (self.repository, "main", {"revision": "b" * 40}, False),
+                (self.repository, "release", {"revision": "a" * 40}, False),
+                ("example/other", "main", {"revision": "a" * 40}, False)):
+            with self.subTest(repository=repository, ref=ref, metadata=metadata):
+                self.setUp()
+                self.route = replace(self.route, repository=repository, ref=ref)
+                self.registry.routes[PROJECT] = self.route
+                self.repository = repository
+                key = self.enqueue(self.issue(1))
+                self.github.branch_sha.return_value = "b" * 40
+                with patch("repository_queue.build_metadata", return_value=metadata):
+                    result = self.queue.advance(repository)
+                self.assertEqual(result[key]["status"], "deployment_paused" if held else "dispatched")
+                self.assertEqual(self.github.dispatch.call_count, 0 if held else 1)
+                self.assertEqual(self.slot()["active_key"], key)
+
     def test_kian_904_waits_for_905_despite_earlier_fifo_and_higher_priority(self):
         dependent = self.issue(904, priority=1)
         prerequisite = self.issue(905, priority=4)

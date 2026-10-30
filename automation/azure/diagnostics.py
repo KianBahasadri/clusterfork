@@ -50,6 +50,7 @@ FAILURE_REASONS = {
     "cursor_readiness_tool_denied": "Cursor readiness requested a tool outside its read-only admission permissions",
     "file_check_failed": "Cursor cloud probe did not verify the requested harmless file creation and read",
     "deployment_paused": "Azure deployment paused new work; waiting for explicit resume and stopped GitHub attempts",
+    "deployment_cutover": "Worker broker instance is draining after deployment; retry startup on the current instance",
     "repository_admission_lost": "the issue no longer owns the repository slot",
     "prerequisites_unresolved": "issue prerequisites are unresolved or unverifiable",
     "workflows_permission_missing": "workflow publication requires the GitHub App installation's approved Workflows write permission",

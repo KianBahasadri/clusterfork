@@ -265,13 +265,16 @@ class WorkerService:
                 record("linear_sync_deferred", level=logging.ERROR, **failure(exc, "worker/linear_sync"))
 
     def handle(self, action, claims, data):
+        if self.queue.control:
+            state, _ = self.queue.control.state()
+            if state.get("paused") is False and self.queue.control.instance_mismatch(state=state):
+                raise WorkerError("Worker broker instance is draining after deployment; retry", 503,
+                                  reason_code="deployment_cutover")
         if action.startswith("validation_") and self.validation:
             return self.validation.handle(action, claims, data)
         key = data.get("dispatch_key", "")
         if not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key):
             raise WorkerError("Invalid dispatch key", 400)
-        if action == "start" and data.get("protocol") != PROTOCOL:
-            raise WorkerError("Deploy a compatible readiness worker and broker", 403)
         try:
             receipt, _ = self.receipts.get(key)
         except WorkerError as exc:
@@ -308,7 +311,9 @@ class WorkerService:
             raise WorkerError("Account preflight cannot execute or publish agent work", 403)
         owner = f"{claims['run_id']}:{claims['run_attempt']}"
         if action == "start":
-            return self.start(key, owner, claims, receipt, route)
+            result = self.start(key, owner, claims, receipt, route, data)
+            result["serial_admission"] = True
+            return result
         self.queue.assert_worker(route.repository, key, owner)
         row, etag = self.runs.get(key)
         if receipt.get("deployment_wait_owner") == owner and action != "save":
@@ -653,7 +658,7 @@ class WorkerService:
                     raise
         raise WorkerError("Dispatch receipt changed concurrently; retry deployment deferral")
 
-    def start(self, key, owner, claims, receipt, route):
+    def start(self, key, owner, claims, receipt, route, data):
         # Check the GitHub API as well as JWT claims, including who dispatched it.
         self.github.verify_worker_run(route.repository, claims, key)
         issue = self.linear.issue(receipt["issue_id"])
@@ -690,6 +695,8 @@ class WorkerService:
             entry, _ = self.queue.table(route.repository).get(key)
             if not self.queue.started_coding(entry):
                 return self.hold_for_deployment(key, owner)
+        if data.get("protocol") != PROTOCOL:
+            raise WorkerError("Deploy a compatible readiness worker and broker", 403)
         if not self.queue.dependencies_ready(issue, route, key=key, owner=owner):
             raise WorkerError("Coding start held for unresolved or unverifiable issue prerequisites", 403)
         try:
