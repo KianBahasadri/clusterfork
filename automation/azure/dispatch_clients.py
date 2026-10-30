@@ -47,7 +47,7 @@ def request_json(url, *, token=None, method="GET", data=None, form=False):
 
 
 ISSUE_FIELDS = """
-id identifier title description url archivedAt createdAt priority
+id identifier title description url archivedAt createdAt priority sortOrder
 state { id type }
 team { id }
 labels(first: 2, filter: {name: {eq: "clusterfork: auto-repair"}}) { nodes { name } pageInfo { hasNextPage } }

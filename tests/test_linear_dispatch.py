@@ -387,21 +387,26 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(RequestError):
             Linear("test", lambda *a, **kw: next(responses)).issue_dependencies(ISSUE)
 
-    def test_issue_fetch_requests_and_preserves_priority(self):
+    def test_issue_fetch_requests_and_preserves_priority_and_sort_order(self):
         def request(url, **kwargs):
             self.assertRegex(kwargs["data"]["query"], r"\bpriority\b")
-            return {"data": {"issue": {**issue(), "priority": 2}}}
+            self.assertRegex(kwargs["data"]["query"], r"\bsortOrder\b")
+            return {"data": {"issue": {**issue(), "priority": 2, "sortOrder": -1.75}}}
 
-        self.assertEqual(Linear("test", request).issue(ISSUE)["priority"], 2)
+        row = Linear("test", request).issue(ISSUE)
+        self.assertEqual(row["priority"], 2)
+        self.assertEqual(row["sortOrder"], -1.75)
 
     def test_all_project_pages_are_scanned(self):
         calls = []
 
         def request(url, **kwargs):
             self.assertRegex(kwargs["data"]["query"], r"\bpriority\b")
+            self.assertRegex(kwargs["data"]["query"], r"\bsortOrder\b")
             after = kwargs["data"]["variables"]["after"]
             calls.append(after)
-            row = {**issue(), "priority": 1 if after is None else 4}
+            row = {**issue(), "priority": 1 if after is None else 4,
+                   "sortOrder": 1.75 if after is None else -2.5}
             return {"data": {"project": {**issue()["project"], "issues": {"nodes": [row],
                      "pageInfo": {"hasNextPage": after is None, "endCursor": "next"}}}}}
 
@@ -409,6 +414,7 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["project"], issue()["project"])
         self.assertEqual([row["priority"] for row in rows], [1, 4])
+        self.assertEqual([row["sortOrder"] for row in rows], [1.75, -2.5])
         self.assertEqual(calls, [None, "next"])
 
     def test_graphql_errors_never_become_a_successful_empty_scan(self):

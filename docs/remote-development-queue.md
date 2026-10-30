@@ -6,17 +6,20 @@ This topic owns repository admission, dependency waits, queue reporting, and slo
 Eligible Todo issues enter one durable priority queue per GitHub repository before readiness review. Projects targeting
 the same case-insensitive repository share its queue; different repositories advance independently. Runnable waiting issues are
 admitted in Linear priority order: **Urgent → High → Normal → Low → No priority** (values **1 → 2 → 3 → 4 → 0**).
-Within each priority, FIFO follows first eligible observations committed to storage. A project scan inserts its complete
-batch before dispatch, assigning sequence numbers by creation time and UUID. Later events/scans, priority edits, retries,
-and restarts retain those sequences; missed historical Todo transitions cannot be reconstructed.
+Within each priority, lower Linear `sortOrder` values come first, reflecting manual issue ordering. Equal sort values
+fall back to FIFO sequence from first eligible observations committed to storage. A project scan inserts its complete
+batch before dispatch, assigning sequence numbers by creation time and UUID. Later events/scans, priority or order edits,
+retries, and restarts retain those sequences; missed historical Todo transitions cannot be reconstructed.
 
-Issue webhooks, project scans, and timer reconciliation persist updated priorities for waiting entries without changing
-their sequence or queued-label intent. Before reserving a free slot, Azure refreshes waiting eligibility and priority,
-including during a handoff and for legacy rows without priority. Priority updates fence concurrent admission choices.
-Temporary Linear read failures retain the last known priority and durable position for retry. Once selected, an issue
-keeps its slot through review, dispatch retries, quota waits, coding, and unresolved PRs until normal release conditions
-are met, except for a new pre-coding dependency hold described below; an urgent arrival or priority edit only affects the next admission. Imported pre-queue dispatches still precede
-new Todo work because they have already crossed the dispatch boundary.
+Issue webhooks, project scans, and timer reconciliation persist updated priorities and floating-point `sort_order` values
+for waiting entries without changing their sequence or queued-label intent. Before reserving a free slot, Azure refreshes
+waiting eligibility, priority, and order, including during a handoff and for legacy rows missing these fields. Priority
+and order updates fence concurrent admission choices. Missing/null Linear sort values default to `0.0`; equal values
+retain FIFO behavior. Temporary Linear read failures retain the last known priority, order, and durable position for
+retry. Once selected, an issue keeps its slot through review, dispatch retries, quota waits, coding, and unresolved PRs
+until normal release conditions are met, except for a new pre-coding dependency hold described below; an urgent arrival,
+priority edit, or reorder only affects the next admission. Imported pre-queue dispatches still precede new Todo work
+because they have already crossed the dispatch boundary.
 
 Azure Table `ClusterforkRepositoryQueue` partitions by lowercase repository name. Transactions insert each entry with
 its sequence and atomically reserve the head/slot. Waiting issues remain Todo without a runner or account; context
@@ -83,10 +86,10 @@ run has stopped. Before every dispatch, the dispatcher fetches current enrollmen
 ready-state data. Events and reconciliation also recheck waiting entries while the head is active, including empty
 project scans and issues moved out of mapped projects. Leaving Todo, cancellation, issue/project archive, project moves,
 or loss of enrollment durably skips a waiting entry and removes its queued marker without waiting for the active task
-to finish. An undispatched issue that later becomes eligible rejoins with a new sequence, at the tail of its priority.
-A temporary eligibility-read failure retains its durable position for retry. Before coding a newly admitted task, the
-worker fetches the latest target branch and creates its branch from that revision, including the preceding task's merged
-changes.
+to finish. An undispatched issue that later becomes eligible rejoins using its current priority and Linear order with a
+new FIFO sequence for equal sort values. A temporary eligibility-read failure retains its durable position for retry.
+Before coding a newly admitted task, the worker fetches the latest target branch and creates its branch from that
+revision, including the preceding task's merged changes.
 
 A confirmed worker failure before coding starts (`initializing` or `selecting_account`,
 with no open PR and no durable `coding_started` flag) is a retryable dispatch failure.
@@ -123,9 +126,10 @@ and deletion never grant completion. Missing sources/statuses, GraphQL errors, a
 hold the issue for verification. A successfully read removal of the blocking relationship releases that prerequisite.
 
 Dependency-held issues keep their original sequence and priority and the `clusterfork: queued` marker, without taking the
-repository slot, readiness runner, or account. The queue selects the highest-priority runnable candidate and retains FIFO
-ties. Cycles therefore stay waiting while independent tasks progress. One stable queue comment lists outstanding
-prerequisite identifiers and status types, or explains unavailable data; failed comment writes retry without admitting work.
+repository slot, readiness runner, or account. The queue selects the highest-priority runnable candidate, then uses Linear
+order and FIFO sequence to break ties. Cycles therefore stay waiting while independent tasks progress. One stable queue
+comment lists outstanding prerequisite identifiers and status types, or explains unavailable data; failed comment writes
+retry without admitting work.
 
 Dependencies are read again immediately before readiness dispatch, at reviewer/development startup and account access,
 and at the final coding callback. A blocker added after selection holds that attempt; once GitHub confirms previously

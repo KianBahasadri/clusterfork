@@ -1,4 +1,4 @@
-"""Durable priority admission with FIFO ties and non-expiring repository slots.
+"""Durable Linear priority and sort order with FIFO ties and non-expiring slots.
 
 Queue entries and their sequence/slot live in one Azure Table partition. ETags
 fence admission, worker starts, and completion observations against each other.
@@ -254,19 +254,21 @@ class RepositoryQueue:
         # The counter and entry change together: no lost queue entries or
         # duplicate sequence numbers after contention or a dispatcher crash.
         priority = fields.get("priority") or 0
+        sort_order = float(fields.get("sort_order") or 0.0)
         for _ in range(32):
             state, etag = table.get("slot")
             existing, version = optional(table, key)
             if existing and (existing["status"] != "skipped" or submitted):
-                if submitted or existing["status"] != "queued" or existing.get("priority") == priority:
+                if (submitted or existing["status"] != "queued" or
+                        (existing.get("priority") == priority and existing.get("sort_order") == sort_order)):
                     return key
-                # Priority edits retain the original FIFO position and label
+                # Priority/order edits retain the original sequence and label
                 # intent. Touch the slot too, fencing a concurrent head choice.
-                row = {**existing, "priority": priority}
+                row = {**existing, "priority": priority, "sort_order": sort_order}
             else:
                 sequence = state["sequence"] + 1
                 row = {"RowKey": key, "sequence": sequence, "status": "submitted" if submitted else "queued",
-                       "priority": priority, "queued_at": self.clock(), **timestamps(fields),
+                       "priority": priority, "sort_order": sort_order, "queued_at": self.clock(), **timestamps(fields),
                        **{k: fields[k] for k in ("issue_id", "identifier", "repository", "project_id")}}
                 row.update({name: fields[name] for name in RECEIPT_FIELDS if name in fields})
                 if is_auto_repair(fields):
@@ -292,6 +294,7 @@ class RepositoryQueue:
                 self.insert(self.table(route.repository), key,
                             {"issue_id": issue["id"], "identifier": issue["identifier"],
                              "priority": issue.get("priority", 0),
+                             "sort_order": issue.get("sortOrder"),
                              "repository": route.repository, "project_id": route.project_id,
                              "is_auto_repair": is_auto_repair(issue),
                              **timestamps(timing or {})})
@@ -309,13 +312,14 @@ class RepositoryQueue:
         # Linear uses 1..4 for Urgent..Low and 0 for No priority (sorted last).
         return min(rows, key=lambda r: (r["status"] == "queued",
                                        (r.get("priority") or 5) if r["status"] == "queued" else 0,
+                                       r.get("sort_order", 0.0) if r["status"] == "queued" else 0.0,
                                        r["sequence"])) if rows else None
 
     def reserve(self, table):
         state, etag = table.get("slot")
         if not state["active_key"]:
             # Refresh before choosing, including a handoff in this same advance
-            # and legacy rows without priority. An occupied slot never preempts.
+            # and legacy rows without priority/order. An occupied slot never preempts.
             self.refresh_waiting(table)
             state, etag = table.get("slot")
         if not state["active_key"]:
@@ -607,12 +611,13 @@ class RepositoryQueue:
                 row.update(status="skipped", reason=f"No longer eligible for this queue ({reason}).")
                 selection_changed(row)
             else:
-                row.update(priority=issue.get("priority") or 0, **self.dependency_fields(row))
+                row.update(priority=issue.get("priority") or 0,
+                           sort_order=float(issue.get("sortOrder") or 0.0), **self.dependency_fields(row))
                 if not row.get("selection_version"):
                     selection_changed(row)
             if row == original:
                 return
-            # Fence priority/dependency edits, removal, and adoption against admission/reentry.
+            # Fence priority/order/dependency edits, removal, and adoption against admission/reentry.
             try:
                 table.transaction([(state, etag), (row, version)])
                 return
@@ -627,7 +632,7 @@ class RepositoryQueue:
                 try:
                     self.refresh_waiting_entry(table, row["RowKey"])
                 except Exception:
-                    # Unavailable Linear data retains position and known priority.
+                    # Unavailable Linear data retains position and known priority/order.
                     logging.error("Waiting issue refresh deferred for %s", row["RowKey"])
 
     def observe_issues(self, issues):
