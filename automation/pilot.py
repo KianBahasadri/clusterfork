@@ -25,7 +25,7 @@ CONFIG_NAMES = ("LINEAR_API_KEY", "LINEAR_OAUTH_CLIENT_ID", "LINEAR_OAUTH_CLIENT
 PACKAGE_FILES = ("function_app.py", "dispatch_core.py", "dispatch_clients.py", "quota_selection.py",
                  "worker_core.py", "worker_store.py", "worker_reporting.py", "linear_sync.py", "repository_queue.py",
                  "selection_reporting.py", "pending_writes.py", "routing_timing.py", "steering.py", "diagnostics.py", "auto_repair.py",
-                 "readiness.py", "readiness_policy.py", "deployment_control.py",
+                 "readiness.py", "readiness_policy.py", "issue_images.py", "deployment_control.py",
                  "host.json", "requirements.txt", "projects.json")
 
 

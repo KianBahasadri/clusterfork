@@ -28,6 +28,7 @@ from dispatch_core import AgentProfile
 from quota_selection import SelectionPolicy, select_account
 from worker_reporting import usage_report, worker_branch
 from readiness_policy import PROTOCOL, RESULT_SCHEMA, review_prompt, workflow_publication_policy
+from issue_images import image_prompt, materialize_images
 from diagnostics import CONTEXT, context, failure, failure_summary, http_operation, identifiers, operation, record
 
 
@@ -225,6 +226,7 @@ def select_account_for_run(broker, config, heartbeat):
 def run_codex(broker, config, worker_heartbeat, directory):
     # Keep the selected account leased through validation and publication so the
     # final reading covers the full attempt without another worker consuming it.
+    image_paths = materialize_images(config, directory)
     broker.call("progress", stage="selecting_account")
     snapshots, profiles, policy = choose_account(broker, config, worker_heartbeat)
     while True:
@@ -253,6 +255,7 @@ def run_codex(broker, config, worker_heartbeat, directory):
                     f"Issue URL: {issue['url']}\n\n"
                     + workflow_publication_policy(config.get("workflow_changes_allowed"))
                     + f"\n\n{issue.get('description') or ''}"
+                    + image_prompt(config.get("images", []))
                 )
                 env = {**clean_environment(), "CODEX_HOME": str(home)}
                 ran_agent = True
@@ -260,6 +263,7 @@ def run_codex(broker, config, worker_heartbeat, directory):
                     with operation("worker/agent", timeout_seconds=config.get("agent_timeout_minutes", 300) * 60):
                         summary = run_agent(broker, config, home, Path.cwd(), prompt, env,
                                             timeout=config.get("agent_timeout_minutes", 300) * 60,
+                                            image_paths=image_paths,
                                             failure_signals=[heartbeat.failed, worker_heartbeat.failed])
                     yield summary
                     return
@@ -304,6 +308,7 @@ def review_readiness(broker, config, worker_heartbeat, directory):
     if (command(["git", "rev-parse", "HEAD"]).strip() != config["binding"]["context_sha"]
             or command(["git", "status", "--porcelain"]).strip()):
         raise WorkerFailure("Readiness checkout does not match its clean, reviewed context")
+    image_paths = materialize_images(config, directory)
     snapshots, profiles, policy = choose_account(broker, config, worker_heartbeat)
     while True:
         selected = select_account(snapshots, profiles, policy, now=time.time())
@@ -324,8 +329,10 @@ def review_readiness(broker, config, worker_heartbeat, directory):
                          "-c", 'approval_policy="never"',
                          "-c", f'model_reasoning_effort="{config["effort"]}"',
                          "-c", 'cli_auth_credentials_store="file"',
-                         "--output-schema", str(schema), "--output-last-message", str(output), "-"],
-                        stdin=review_prompt(config["issue"], workflow_changes_allowed=config.get("workflow_changes_allowed")),
+                         "--output-schema", str(schema), "--output-last-message", str(output)]
+                        + [arg for path in image_paths for arg in ("--image", path)] + ["-"],
+                        stdin=review_prompt(config["issue"], workflow_changes_allowed=config.get("workflow_changes_allowed"),
+                                            images=config.get("images", [])),
                         env={**clean_environment(), "CODEX_HOME": str(home)},
                         timeout=config["review_timeout_seconds"],
                         failure_signals=[heartbeat.failed, worker_heartbeat.failed])

@@ -142,6 +142,11 @@ class Linear:
                  + " project { " + PROJECT_FIELDS + " } } }")
         return self.complete(self.query(query, {"id": issue_id})["issue"])
 
+    def download_image(self, url, *, deadline=None):
+        from issue_images import download_image
+
+        return download_image(url, self._authorization, deadline=deadline)
+
     def create_issue(self, fields):
         """A caller-supplied UUID makes ambiguous creates recoverable without duplicates."""
         try:

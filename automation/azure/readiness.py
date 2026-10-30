@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from dispatch_core import DispatchError, eligibility
 from linear_sync import comment_id
+from issue_images import ImageContextError, capture_images, image_digest
 from readiness_policy import (PROTOCOL, RETRY_SECONDS, REVIEW_TIMEOUT_SECONDS, digest,
                               issue_revision, policy_version, redact_review_text, redact_review_value,
                               result_snapshot, validate_result)
@@ -36,23 +37,44 @@ class ReadinessGate:
     def pointer(self, issue):
         return "issue-" + digest(issue["id"])
 
-    def binding(self, issue, route):
+    def images(self, issue):
+        try:
+            return capture_images(issue.get("description"),
+                                  lambda url, **kwargs: self.linear.download_image(url, **kwargs))
+        except ImageContextError as exc:
+            reason = (str(exc) + "\n\nThe description images could not all be supplied as visual inputs; "
+                      "no visual review is claimed. Coding and publication are held. "
+                      "Upload accessible PNG, JPEG, or still WebP images within the documented limits. "
+                      "Temporary retrieval failures retry on the next event or timer.")
+            self.comment(issue, reason)
+            raise WorkerError("Issue description images are unavailable; see the Linear readiness comment", 503) from None
+
+    def binding(self, issue, route, *, images=None):
         return {"issue_revision": issue_revision(issue),
                 "policy_version": policy_version(self.registry, route),
+                "images_sha": image_digest(self.images(issue) if images is None else images),
                 # Conservatively version all repository rules and relevant code.
                 "context_sha": self.github.branch_sha(route)}
 
-    def current(self, row, issue, route):
+    def current(self, row, issue, route, *, images=None, verify_images=True):
         pointer, _ = optional(self.table, self.pointer(issue))
+        if not pointer or pointer["review_key"] != row["RowKey"]:
+            return False
+        binding = json.loads(row["binding"])
+        observed = self.binding(issue, route, images=images if verify_images else [])
+        if not verify_images:
+            # Heartbeats cannot admit work or accept a result. Recheck bytes at
+            # admission, account access, review acceptance, coding and publication.
+            observed["images_sha"] = binding.get("images_sha")
         return (pointer and pointer["review_key"] == row["RowKey"]
-                and json.loads(row["binding"]) == self.binding(issue, route))
+                and binding == observed)
 
-    def require(self, issue, route):
+    def require(self, issue, route, *, images=None):
         if route.workflow != "clusterfork-worker.yml":
             return {}
         pointer, _ = optional(self.table, self.pointer(issue))
         row, _ = optional(self.table, pointer["review_key"]) if pointer else (None, None)
-        if not row or row["status"] != "passed" or not self.current(row, issue, route):
+        if not row or row["status"] != "passed" or not self.current(row, issue, route, images=images):
             raise WorkerError("A current passing readiness review is required", 403)
         # Persisted data is also checked; a text/model instruction cannot grant admission.
         try:
@@ -204,6 +226,8 @@ class ReadinessGate:
             except WorkerError as exc:
                 if exc.status == 409:
                     continue
+                if exc.status == 503:
+                    return {"status": "readiness_retry"}
                 raise
             except Exception:
                 # Infrastructure cannot become a pass or a clarification verdict.
@@ -295,7 +319,10 @@ class ReadinessGate:
         if action == "save":
             return account_request(self.accounts, action, data, row, self.account_owner(row, owner),
                                    selector=selector, run_owner=owner)
-        if not issue or eligibility(issue, self.registry)[0] != route or not self.current(row, issue, route):
+        if not issue or eligibility(issue, self.registry)[0] != route:
+            raise WorkerError("Readiness request was superseded or canceled", 403)
+        images = self.images(issue) if action == "start" else None
+        if not self.current(row, issue, route, images=images, verify_images=action != "heartbeat"):
             raise WorkerError("Readiness request was superseded or canceled", 403)
         if action in {"start", "checkout", "accounts", "claim", "bind_account"} and not self.admitted(issue, route):
             raise WorkerError("Readiness start held for unresolved or unverifiable issue prerequisites", 403)
@@ -331,6 +358,7 @@ class ReadinessGate:
             self.table.replace(row, version)
             profile = self.registry.agent_profiles["codex"]
             return {"protocol": PROTOCOL, "phase": "readiness", "model": profile.model,
+                    "images": images,
                     "account_selection": selector, "account_id": row.get("assigned_account_id"),
                     "effort": profile.effort, "repository": route.repository, "ref": route.ref,
                     "binding": json.loads(row["binding"]), "review_timeout_seconds": REVIEW_TIMEOUT_SECONDS,

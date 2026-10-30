@@ -26,6 +26,7 @@ where files go; skill-specific instructions stay in each `skills/<name>/SKILL.md
 ## Remote development
 
 - [Runtime](remote-development.md) — routing, quota selection, publication, lifecycle, and retries
+- [Issue description images](remote-development-images.md) — visual inputs, download limits, approval binding, and validation
 - [Repository queues](remote-development-queue.md) — dependency waits, priority/FIFO admission, slot release, and queue reporting
 - [Agent steering](remote-development-steering.md) — addressed Linear comments, authorization, delivery, and acknowledgements
 - [Setup](remote-development-setup.md) — project mappings, GitHub App, Azure, Linear, and local validation

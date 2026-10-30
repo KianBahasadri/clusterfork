@@ -228,9 +228,16 @@ class WorkerService:
             current, _ = eligibility(issue or {}, self.registry, additional_state_ids=extra)
             if current != route:
                 raise WorkerError("Issue is no longer eligible", 403)
-            approval = self.queue.approval(issue, route, receipt)
-            if approval.get("review_key", "") != row.get("readiness_review_key", ""):
-                raise WorkerError("Worker readiness approval was superseded", 403)
+            try:
+                approval = self.queue.approval(issue, route, receipt)
+                if approval.get("review_key", "") != row.get("readiness_review_key", ""):
+                    raise WorkerError("Worker readiness approval was superseded", 403)
+            except WorkerError:
+                if not receipt.get("repair_parent_key"):
+                    # An unavailable/changed visual context is an admission
+                    # hold, not a coding failure that can bypass review via repair.
+                    self.hold_for_readiness(key, owner)
+                raise
             if (action == "progress" and data.get("stage") == "coding" and approval.get("context_sha")
                     and data.get("context_sha") != approval["context_sha"]):
                 raise WorkerError("Coding checkout does not match the reviewed repository context", 403)
@@ -389,6 +396,18 @@ class WorkerService:
             return {"status": status}
         raise WorkerError("Unknown worker action", 404)
 
+    def hold_for_readiness(self, key, owner):
+        for _ in range(32):
+            updated, etag = self.receipts.get(key)
+            updated.update(readiness_wait_owner=owner, retry_after=int(self.clock()) + 900)
+            try:
+                self.receipts.replace(updated, etag)
+                return
+            except WorkerError as exc:
+                if exc.status != 409:
+                    raise
+        raise WorkerError("Dispatch receipt changed concurrently; retry readiness scheduling")
+
     def start(self, key, owner, claims, receipt, route):
         # Check the GitHub API as well as JWT claims, including who dispatched it.
         self.github.verify_worker_run(route.repository, claims, key)
@@ -419,22 +438,18 @@ class WorkerService:
         if not self.queue.dependencies_ready(issue, route, key=key, owner=owner):
             raise WorkerError("Coding start held for unresolved or unverifiable issue prerequisites", 403)
         try:
-            approval = self.queue.approval(issue, route, receipt)
+            # Fetch once for both approval verification and the runner payload.
+            # The shared manifest binds native coding inputs to reviewed bytes.
+            images = self.queue.readiness.images(issue) if issue.get("description") else []
+            approval = (self.queue.approval(issue, route, receipt, images=images) if images
+                        else self.queue.approval(issue, route, receipt))
         except WorkerError:
             if receipt.get("is_auto_repair") and receipt.get("repair_parent_key"):
                 raise
             self.queue.readiness.ensure(issue, route)
             # A dispatch can become stale while GitHub is scheduling it. Record
             # a retryable admission hold without starting coding or consuming an account.
-            for _ in range(32):
-                updated, etag = self.receipts.get(key)
-                updated.update(readiness_wait_owner=owner, retry_after=int(self.clock()) + 900)
-                try:
-                    self.receipts.replace(updated, etag)
-                    break
-                except WorkerError as exc:
-                    if exc.status != 409:
-                        raise
+            self.hold_for_readiness(key, owner)
             raise WorkerError("Coding start held for a current passing readiness review", 403) from None
         workflow_changes_allowed = self.github.workflow_changes_allowed(route.repository) is True
         row = {"RowKey": key, "owner": owner, "status": "running", "stage": "initializing",
@@ -462,6 +477,7 @@ class WorkerService:
                    ("target_branch", "target_dispatch_key", "target_identifier", "target_pull_request")}
                   if receipt.get("is_auto_repair") and receipt.get("repair_parent_key") else None)
         return {"protocol": PROTOCOL, "phase": "development", "readiness": approval,
+                "images": images,
                 "account_selection": is_account_selector(claims),
                 "account_id": row.get("assigned_account_id"),
                 "model": profile.model, "effort": profile.effort,
