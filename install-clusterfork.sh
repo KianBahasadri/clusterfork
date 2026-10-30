@@ -184,6 +184,22 @@ configure_shared_auth() {
   local -A available=()
 
   AUTH_STORE_CONFIGURED=0
+  if [[ "$label" == "Codex" || "$label" == "Cursor" ]]; then
+    # The installed rotator owns reservation guards and legacy local handoffs.
+    # Restore saved-profile visibility before discovering profiles below.
+    python3 - "$(dirname "$ROTATE_AUTH_DEST")" "$store_dir" <<'PY' || return 1
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from rotate_auth import load_remote_profiles
+
+try:
+    load_remote_profiles(Path(sys.argv[2]))
+except (OSError, ValueError, TypeError):
+    raise SystemExit("Cannot read or restore local cloud-reserved profiles") from None
+PY
+  fi
   agent_link_target="$(realpath -ms --relative-to="$agent_dir" "$current_path")" ||
     return 1
 

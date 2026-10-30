@@ -11,11 +11,13 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent / "azure"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from codex_runtime import write_private
+from rotate_auth import REMOTE_MANIFEST, load_remote_profiles
 from worker_core import Accounts, WorkerError, account_identity
 from worker_store import AzureTable
 
-MANIFEST = "remote-profiles.json"
+MANIFEST = REMOTE_MANIFEST
 
 
 def connect(provider="codex"):
@@ -41,7 +43,10 @@ def main():
     args = parser.parse_args()
     args.store = args.store or Path.home() / f".local/share/clusterfork-auth/{args.provider}"
     manifest_path = args.store / MANIFEST
-    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+    try:
+        manifest = load_remote_profiles(args.store)
+    except (OSError, ValueError, TypeError):
+        raise WorkerError("Cannot read or restore local cloud-reserved profiles") from None
     if args.action == "list":
         print(f"Cloud-reserved {args.provider} profiles: {len(manifest)}")
         for name, record in sorted(manifest.items()):
@@ -51,15 +56,6 @@ def main():
     accounts = Accounts(table, provider=args.provider)
     profiles = {p.name[len("auth.json."):]: p for p in args.store.glob("auth.json.*")
                 if p.is_file() and p.name != "auth.json.lock"}
-    # The operator can move a cloud-reserved profile out of local rotation.
-    # Reclaim reads that preserved backup but restores the latest cloud login.
-    for name, record in manifest.items():
-        if name not in profiles and record.get("backup_path"):
-            backup = Path(record["backup_path"]).expanduser()
-            if not backup.is_absolute():
-                backup = args.store / backup
-            if backup.is_file() and backup.resolve().is_relative_to(args.store.resolve()):
-                profiles[name] = backup
     names = args.profile or sorted(profiles if args.action == "enroll" else manifest)
     if any(name not in profiles or Path(name).name != name for name in names):
         raise WorkerError("Unknown saved profile")
@@ -91,15 +87,10 @@ def main():
             aliases = [alias for alias, value in manifest.items() if value["account_id"] == record["account_id"]]
             if any(Path(alias).name != alias or alias not in profiles for alias in aliases):
                 raise WorkerError("Unknown saved profile alias")
-            if any((manifest[alias].get("source_sha256") is not None
-                    and digest(profiles[alias]) != manifest[alias]["source_sha256"])
-                   or (manifest[alias].get("source_sha256") is None
-                       and profiles[alias] == args.store / f"auth.json.{alias}")
+            if any(digest(profiles[alias]) != manifest[alias].get("source_sha256")
                    or identities[alias] != record["account_id"] for alias in aliases):
                 raise WorkerError("Local credentials changed; refusing to overwrite them with cloud state")
             destinations = {alias: args.store / f"auth.json.{alias}" for alias in aliases}
-            if any((path.exists() or path.is_symlink()) and path != profiles[alias] for alias, path in destinations.items()):
-                raise WorkerError("Local profile was replaced; refusing to overwrite it")
             leased = accounts.claim(record["account_id"], "local-reclaim", allow_staged=True)
             try:
                 for alias in aliases:
@@ -113,7 +104,6 @@ def main():
                 for alias in aliases:
                     if destinations[alias].exists():
                         manifest[alias]["source_sha256"] = digest(destinations[alias])
-                        manifest[alias].pop("backup_path", None)
                 write_private(manifest_path, manifest)
                 raise
             for alias in aliases:

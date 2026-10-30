@@ -8,6 +8,7 @@ Grok / OpenCode), and GNOME Keyring (Antigravity).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import locale
 import os
@@ -15,11 +16,13 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 
 SUFFIX_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 PROFILE_PREFIX = "auth.json."
+REMOTE_MANIFEST = "remote-profiles.json"
 CLAUDE_ACTIVE = ".credentials.json"
 CLAUDE_PREFIX = ".credentials.json."
 
@@ -139,6 +142,70 @@ def atomic_write_bytes(dest: Path, data: bytes, mode: int = 0o600) -> None:
         tmp.unlink(missing_ok=True)
         raise
     atomic_replace(tmp, dest)
+
+
+def load_remote_profiles(store_dir: Path) -> dict:
+    """Read reservations and undo legacy local staging without transferring ownership.
+
+    Normal reservations only need the manifest. Old handoffs used either backup
+    key; restore those files once, leaving the backup and all active links alone.
+    This runs in the installed rotator too, without cloud access or dependencies.
+    """
+    manifest_path = store_dir / REMOTE_MANIFEST
+    if not manifest_path.exists():
+        return {}
+    manifest = json.loads(manifest_path.read_text())
+    if not isinstance(manifest, dict):
+        raise ValueError("Invalid remote account ownership")
+    changed = False
+    for name, record in manifest.items():
+        if not SUFFIX_RE.fullmatch(name) or not isinstance(record, dict):
+            raise ValueError("Invalid remote account ownership")
+        backup_name = record.get("local_backup") or record.get("backup_path")
+        if not backup_name and record.get("state") != "staged":
+            continue
+        destination = store_dir / f"{PROFILE_PREFIX}{name}"
+        source = destination
+        if backup_name:
+            source = Path(backup_name).expanduser()
+            if not source.is_absolute():
+                source = store_dir / source
+            if not source.resolve().is_relative_to(store_dir.resolve()):
+                raise ValueError("Reserved profile backup is outside its auth store")
+        # A completed file restore can precede a failed manifest write. Prefer
+        # that destination on retry, but never replace independently changed data.
+        destination_present = destination.exists() or destination.is_symlink()
+        expected = record.get("source_sha256")
+        if destination_present:
+            if destination.is_symlink() or not destination.is_file():
+                raise ValueError("Reserved profile destination was replaced")
+            data = destination.read_bytes()
+            if expected is None:
+                expected = hashlib.sha256(source.read_bytes()).hexdigest()
+        else:
+            data = source.read_bytes()
+            if expected is None:
+                expected = hashlib.sha256(data).hexdigest()
+        if hashlib.sha256(data).hexdigest() != expected:
+            raise ValueError("Reserved profile credentials changed; refusing to overwrite them")
+        if not destination_present:
+            fd, temporary = tempfile.mkstemp(prefix=".remote-profile-", dir=store_dir)
+            try:
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(data)
+                # Unlike replace(), link() cannot clobber a concurrent login.
+                os.link(temporary, destination)
+            finally:
+                os.unlink(temporary)
+        record["source_sha256"] = expected
+        for key in ("backup_path", "local_backup", "staged_for_issue", "staged_for_issue_id"):
+            record.pop(key, None)
+        if record.get("state") == "staged":
+            record.pop("state")
+        changed = True
+    if changed:
+        atomic_write_text(manifest_path, json.dumps(manifest))
+    return manifest
 
 
 def prefixed_paths(directory: Path, prefix: str) -> list[Path]:
@@ -483,22 +550,17 @@ class SharedStoreBackend:
     def remote_profiles(self) -> set[str]:
         if self.command not in {"rotate-codex", "rotate-cursor-cli"}:
             return set()
-        path = self.store_dir / "remote-profiles.json"
-        if not path.exists():
-            return set()
         try:
-            value = json.loads(path.read_text())
-            if not isinstance(value, dict):
-                raise ValueError()
-            return set(value)
-        except (OSError, ValueError):
+            return set(load_remote_profiles(self.store_dir))
+        except (OSError, ValueError, TypeError):
             fail(f"{self.command}: cannot read remote account ownership; refusing local rotation")
 
     def local_profiles(self, requested: str | None = None) -> list[str]:
         remote = self.remote_profiles()
         if requested in remote:
+            provider = "cursor" if self.command == "rotate-cursor-cli" else "codex"
             fail(f"{self.command}: profile is reserved for remote work",
-                 "  Reclaim it with automation/accounts.py reclaim --profile NAME first.")
+                 f"  Reclaim it with automation/accounts.py reclaim --provider {provider} --profile NAME first.")
         return [name for name in self.suffixes() if name not in remote]
 
     def current_suffix(self) -> str | None:
@@ -511,9 +573,9 @@ class SharedStoreBackend:
         return suffix or None
 
     def list_profiles(self) -> int:
+        remote = self.remote_profiles()
         current = self.current_suffix() if self.current.is_symlink() else None
         result = print_profile_list(self.command, self.suffixes(), current)
-        remote = self.remote_profiles()
         if remote:
             print(f"  {len(remote)} profiles reserved for remote work; skipped by local rotation")
         return result

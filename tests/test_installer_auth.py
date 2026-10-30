@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -15,6 +16,76 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class InstallerSharedAuthTests(unittest.TestCase):
+    def test_reinstall_updates_both_ownership_guards_and_restores_legacy_cursor_visibility(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home, repo = root / "home", root / "repo"
+            home.mkdir()
+            shutil.copytree(REPO_ROOT, repo, ignore=shutil.ignore_patterns(
+                ".git", ".pytest_cache", ".codeview", ".env", "__pycache__", ".notify-relay.sock"))
+            (repo / ".env").write_text("CONTEXT7_API_KEY=test\nPIXELLAB_API_KEY=test\n")
+            installed = home / ".config/clusterfork/scripts/rotate_auth.py"
+            installed.parent.mkdir(parents=True)
+            # Reproduce a stale installed rotator that only guards Codex.
+            installed.write_text((REPO_ROOT / "scripts/rotate_auth.py").read_text().replace(
+                'if self.command not in {"rotate-codex", "rotate-cursor-cli"}:',
+                'if self.command != "rotate-codex":'))
+            stores, links, manifests = {}, {}, {}
+            for provider, agent_dir in (("codex", home / ".codex"), ("cursor", home / ".config/cursor")):
+                store = home / ".local/share/clusterfork-auth" / provider
+                stores[provider] = store
+                store.mkdir(parents=True)
+                agent_dir.mkdir(parents=True)
+                for name in ("local-a", "local-b", "21kb60"):
+                    (store / f"auth.json.{name}").write_text(json.dumps({"fixture": name}))
+                (store / "current").symlink_to("auth.json.local-a")
+                (agent_dir / "auth.json").symlink_to(os.path.relpath(store / "current", agent_dir))
+                links[provider] = (agent_dir / "auth.json").readlink()
+                source = store / "auth.json.21kb60"
+                record = {"account_id": f"synthetic-{provider}",
+                          "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+                manifests[provider] = {"21kb60": dict(record)}
+                if provider == "cursor":
+                    backup = store / "remote-staged/auth.json.21kb60"
+                    backup.parent.mkdir()
+                    source.rename(backup)
+                    record.update(local_backup="remote-staged/auth.json.21kb60",
+                                  state="staged", staged_for_issue="KIAN-922")
+                (store / "remote-profiles.json").write_text(json.dumps({"21kb60": record}))
+
+            env = {key: value for key, value in os.environ.items() if not key.startswith("ROTATE_")}
+            env["HOME"] = str(home)
+            for _ in range(2):
+                proc = subprocess.run([str(repo / "install-clusterfork.sh")], cwd=repo,
+                                      capture_output=True, text=True, env=env, timeout=20)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertNotIn("shared auth was not configured", proc.stderr)
+                for provider in ("codex", "cursor"):
+                    store = stores[provider]
+                    self.assertTrue((store / "auth.json.21kb60").is_file())
+                    self.assertEqual((store / "current").readlink(), Path("auth.json.local-a"))
+                    self.assertEqual(json.loads((store / "remote-profiles.json").read_text()), manifests[provider])
+                    self.assertEqual(hashlib.sha256((store / "auth.json.21kb60").read_bytes()).hexdigest(),
+                                     manifests[provider]["21kb60"]["source_sha256"])
+                    agent_dir = home / (".codex" if provider == "codex" else ".config/cursor")
+                    self.assertEqual((agent_dir / "auth.json").readlink(), links[provider])
+
+            for provider, command in (("codex", "rotate-codex"), ("cursor", "rotate-cursor-cli")):
+                def run_wrapper(*args):
+                    return subprocess.run([
+                        "bash", "--noprofile", "--norc", "-c", 'source "$1"; shift; "$@"',
+                        "test", str(home / f".config/clusterfork/shell/{provider}.sh"), command, *args],
+                        cwd=root, capture_output=True, text=True, env=env, timeout=10)
+                listed = run_wrapper("--list")
+                self.assertEqual(listed.returncode, 0, listed.stderr)
+                self.assertIn("21kb60", listed.stdout)
+                self.assertIn("1 profiles reserved for remote work", listed.stdout)
+                refused = run_wrapper("21kb60")
+                self.assertEqual(refused.returncode, 1)
+                self.assertIn("reserved for remote work", refused.stderr)
+                self.assertIn(f"--provider {provider}", refused.stderr)
+                self.assertEqual((stores[provider] / "current").readlink(), Path("auth.json.local-a"))
+
     def test_grok_runtime_lock_is_not_treated_as_a_saved_profile(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
