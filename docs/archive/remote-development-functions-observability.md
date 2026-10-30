@@ -107,7 +107,7 @@ Unreadable auth caches withhold output. Codex and OIDC operations never attach i
 The same private evidence can return to the active agent during correction. It is
 excluded from structured logs, Actions stdout/stderr, step summaries, and Linear
 comments, including automatic repair reports. WIP push identity is stored separately
-on the worker row; [runtime recovery](../remote-development.md#retries-and-troubleshooting)
+on the worker row; [runtime recovery](remote-development-functions-lifecycle.md#retries-and-troubleshooting)
 owns that publication behavior.
 
 Clusterfork operational records otherwise exclude request/response bodies, headers,

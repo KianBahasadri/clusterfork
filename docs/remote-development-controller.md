@@ -1,8 +1,9 @@
 # Single controller implementation
 
-The controller is live on its Azure VM. Four acceptance tasks have completed
-through the ordinary guarded path, including an automatic runtime rollout.
-Compatibility projections and the retained webhook ingress are being finalized.
+The controller is live on its Azure VM. Five acceptance tasks have completed
+through the ordinary guarded path, including automatic runtime rollout and
+verified deployment completion before the following task starts. Linear intake,
+account cleanup, onboarding and existing reporting are verified on the live release.
 
 ## Task ownership
 
@@ -144,8 +145,8 @@ Migration tests reopen real databases and prove completed tasks cannot execute
 again or inherit old credentials.
 
 The VM and persistent disk were provisioned on 2026-10-30. Service installation
-and initial migration are complete. Final compatibility deployment and its full
-workflow-completion acceptance remain outstanding. Unit tests alone are not
+and initial migration are complete. Final compatibility deployment and acceptance
+passed. The dated receipts below establish live cutover; unit tests alone are not
 cutover evidence.
 
 ## Rebuild baseline
@@ -195,3 +196,30 @@ All four jobs passed, [PR 44](https://github.com/KianBahasadri/clusterfork/pull/
 merged automatically, and Linear reached Done. This proved active-runtime and
 checkout freshness; the final gate additionally waits for the whole deployment
 workflow, including ingress verification, before admitting the following task.
+
+The final compatibility release is `64897b746a2247a2cd474fc8ebe0f609df954033`.
+[Deployment 41143295703](https://github.com/KianBahasadri/clusterfork/actions/runs/41143295703)
+completed successfully at **23:20:45 UTC**. KIAN-937's
+[run 41143929662](https://github.com/KianBahasadri/clusterfork/actions/runs/41143929662)
+was created automatically at **23:20:58 UTC**, 13 seconds later. Its saved runtime
+and target context both match that verified release. The task was already in Todo
+while earlier ingress verification failed; it remained queued until the complete
+deployment passed, without manual admission or resume.
+
+All four jobs and every real post-job cleanup step passed. Only the historical
+acceptance fixture changed in [PR 45](https://github.com/KianBahasadri/clusterfork/pull/45),
+which passed required CI and merged automatically as
+`3a1ac89c1cde43eebc1be35d25a691ceefb91d71` at 23:30:27 UTC. The controller marked
+KIAN-937 Done at 23:31:08 UTC and removed its execution labels. Separate readiness,
+development-start and development-finish usage comments were present.
+
+Real Linear issue updates produced 17 verified native inbox events by the final
+inspection. The retained Function App exposed exactly `health` and `linear_relay`; its
+old worker RPC returned 404. HTTPS health and the immutable runtime tag identified
+the deployed release. The read-only `onboard.py verify` command passed against the
+live project, runtime, App grants, workflow, CI, labels and protocol. All four
+account rows remained present, with zero live leases after execution.
+The final database inspection confirmed completion, stopped jobs, merged
+publication, released review/coding assignments, no repository grants and no
+admission holds. The service was active under its unprivileged user; the database
+remained on the persistent disk, with mode `0600` for it and the operator socket.

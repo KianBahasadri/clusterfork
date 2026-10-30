@@ -53,7 +53,7 @@ update can also trigger this migration when author metadata appeared to match;
 timeouts and other transient update failures retry the existing comment. This
 applies to lifecycle, attempt, readiness, queue, and steering reports.
 
-[KIAN-923's reporting investigation](../remote-development-deployments.md#status-reporting-investigation)
+[KIAN-923's reporting investigation](remote-development-functions-deployments.md#status-reporting-investigation)
 owns concurrent/ambiguous comment-creation recovery and readiness reporting isolation.
 
 Confirmed completion records `completion_owner` in `ClusterforkLinearSync`
@@ -225,7 +225,7 @@ running attempt. Automatic checkpoint/continuation across jobs is not implemente
 After each coding turn, the live agent session checks Git history/branch integrity,
 workflow permissions, all configured validation commands, and staged publication
 credentials. A failed check returns its identity, exit code when available, and
-[scrubbed failure evidence](../remote-development-observability.md#failure-explanations)
+[scrubbed failure evidence](remote-development-functions-observability.md#failure-explanations)
 to the same conversation. At most **two correction turns** may fix the existing
 workspace under the original deadline and active account/worker heartbeats. Every
 gate runs again after each correction; account failover retains this shared budget.
@@ -236,7 +236,7 @@ Both readiness and coding prompts receive the broker's current workflow-publicat
 capability. Readiness identifies required edits without that capability as a
 permission blocker; the worker also refuses unauthorized workflow changes, including
 changes recovered from an earlier attempt's branch. Authorized edits follow the same
-validation and PR process. [Setup](../remote-development-setup.md#github-app-and-repository)
+validation and PR process. [Setup](../remote-development-setup.md#github-app-and-mappings)
 owns the installation grant; [accounts](../remote-development-accounts.md#worker-credential-boundary)
 owns publication token scope.
 Coding quota failures resume the persistent conversation on another account;

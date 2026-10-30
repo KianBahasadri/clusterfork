@@ -16,7 +16,7 @@ and the KIAN-923 investigation.
 recovery with `workflow_dispatch`. Every run reconciles the
 [Azure Terraform stack](../azure-infrastructure.md) before publishing the package.
 Deployment runs are serialized, with later pushes retaining the newest pending
-run. [Setup](../remote-development-setup.md#automatic-deployment-identity) owns the
+run. [Setup](../remote-development-setup.md#deployment-and-identity) owns the
 GitHub environment and Azure identity configuration.
 
 Before `automation/deploy.py prepare` reaches its durable pause, a packaged

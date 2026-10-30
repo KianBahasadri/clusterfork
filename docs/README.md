@@ -25,7 +25,7 @@ where files go; skill-specific instructions stay in each `skills/<name>/SKILL.md
 
 ## Remote development
 
-- [Controller implementation](remote-development-controller.md) — in-progress single-owner task database and combined GitHub workflow
+- [Controller implementation](remote-development-controller.md) — live single-owner task database, combined GitHub workflow and acceptance evidence
 - [Runtime](remote-development.md) — routing, quota selection, publication, lifecycle, and retries
 - [Deployment pauses and recovery](remote-development-deployments.md) — worker draining, startup deferral, resume, and status-reporting recovery
 - [Issue description images](remote-development-images.md) — visual inputs, download limits, approval binding, and validation

@@ -104,8 +104,8 @@ VM resource identity before opening its service. Legacy Function triggers are
 declared disabled; initial cutover also stops the old Function App. Protected
 legacy resources and their runtime data remain available for audit.
 
-The host/disk are provisioned; the replacement runtime's cutover and live
-acceptance are tracked in [controller implementation](remote-development-controller.md).
+The host/disk are provisioned and the controller is active. Cutover and live
+acceptance evidence are tracked in [controller implementation](remote-development-controller.md).
 
 ## Bootstrap and adoption
 
@@ -152,17 +152,17 @@ diagnostic summaries. It withholds raw values and Terraform expression context.
 Saved plans use private temporary directories and are removed after use. An apply
 uses the reviewed plan and verifies Key Vault references afterwards.
 
-The controller deployment workflow, once enabled at cutover, handles main pushes
+The enabled controller deployment workflow handles main pushes
 that change runtime inputs and manual deployments. It waits for exact-revision
 CI and verified drain, reconciles Terraform through the same plan gate, then
 installs and verifies the controller release. Deployment, migration and hold
-semantics live in [controller implementation](remote-development-controller.md).
+semantics live in [controller deployment](remote-development-deployments.md).
 There are no parallel ARM/CLI provisioning or app-setting mutation helpers.
 `pilot.py` remains a local checker and legacy Functions packager.
 
 After adoption, a normal plan should report no resource changes. Monitoring and
 logging are covered by [remote diagnostics](remote-development-observability.md);
-worker draining and publication by [remote runtime](remote-development.md#automatic-deployments).
+worker draining and publication by [controller deployment](remote-development-deployments.md).
 
 Local validation:
 

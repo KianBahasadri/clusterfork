@@ -54,13 +54,13 @@ historical removals and comments. Label failures are reporting failures: they ca
 but do not discard ownership, outcomes, FIFO positions, or dispatch receipts, or trigger another worker. Pending queued
 and selected additions/removals survive restarts and retry on events and the shared timer, including removals after the
 queue empties. Reporters recheck current queue/slot state across repositories after writes and repair superseded updates
-without touching stage labels. The [runtime reconciliation rules](../remote-development.md#components-and-dispatch)
+without touching stage labels. The [runtime reconciliation rules](remote-development-functions-runtime.md#components-and-dispatch)
 define recovery after a reporting process stops. Dispatch receipts keep repositories discoverable for pending cleanup
 after a mapping is removed.
 
 The repository slot has **no expiry**. It spans readiness review, dispatch, coding, validation, publication, pending CI,
 review, and merging. A finish callback or auto-merge request does not release it. The
-[shared timer](../remote-development.md#components-and-dispatch) advances
+[shared timer](remote-development-functions-runtime.md#components-and-dispatch) advances
 automatically after GitHub confirms all matching runs' latest attempts have stopped and the PR has merged, or a
 successful worker validated that no changes were needed. The recorded worker identity is checked directly as well,
 because run listings can lag. Open PRs hold the slot even with manual merging enabled. Worker starts and completion
@@ -81,7 +81,7 @@ fails the runner setup instead of repeatedly spending quota on reviewers that ca
 the [Ubuntu sandbox prerequisites](https://learn.chatgpt.com/docs/sandboxing).
 
 Failures, missing outcomes, closed unmerged PRs, and merge/CI blockers pause the repository. The
-[runtime lifecycle](../remote-development.md#single-attempt-auto-repair) owns automatic repair and human recovery rules.
+[runtime lifecycle](remote-development-functions-lifecycle.md#single-attempt-auto-repair) owns automatic repair and human recovery rules.
 To abandon active work, cancel the Linear issue, stop/cancel its GitHub run, and
 close or merge any remaining PR. Reconciliation verifies those GitHub facts before releasing the slot. Changing Linear
 status to Done, archiving, or removing enrollment alone does not abandon active work. An expired worker/account lease
@@ -108,7 +108,7 @@ retry a repair attempt before it starts coding, retaining the same issue and rep
 Readiness/dependency/deployment holds retain their own retry rules. Cancellation,
 unconfirmed dispatches, and missing outcomes without confirmed failure do not gain a
 startup retry. An open PR continues through the
-[single repair policy](../remote-development.md#single-attempt-auto-repair), including CI,
+[single repair policy](remote-development-functions-lifecycle.md#single-attempt-auto-repair), including CI,
 merge-conflict, and outdated-base recovery, rather than the startup path.
 
 Dispatch receipts retain their original workflow and target branch so active work can still be checked after its project
