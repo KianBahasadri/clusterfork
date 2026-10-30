@@ -7,3 +7,7 @@ sequence-one: established
 sequence-two: observed preceding merge
 
 The prerequisite was read from the task checkout.
+
+runtime-change: observed after automatic deployment
+
+The installer fix was read from this task's checkout.
