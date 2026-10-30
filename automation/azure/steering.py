@@ -80,6 +80,8 @@ class Steering:
                 continue
             if self.accepting(run):
                 try:
+                    # A root receipt and its repair share issue_id. A stale root
+                    # heartbeat cannot compete with the receipt owning the slot.
                     self.queue.assert_worker(route.repository, receipt["RowKey"], run["owner"])
                 except WorkerError:
                     continue

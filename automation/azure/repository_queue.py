@@ -502,12 +502,12 @@ class RepositoryQueue:
     def dispatch(self, table, state, etag, row, route, *, retry=False):
         key = row["RowKey"]
         issue = self.linear.issue(row["issue_id"])
-        generated = row.get("is_auto_repair") and row.get("repair_parent_key")
-        extra = (route.linear_states.in_progress, route.linear_states.blocked) if generated and route.linear_states else ()
+        repair = row.get("is_auto_repair") and row.get("repair_parent_key")
+        extra = (route.linear_states.in_progress, route.linear_states.blocked) if repair and route.linear_states else ()
         current, reason = eligibility(issue or {}, self.registry, additional_state_ids=extra)
         if current != route:
             message = f"No longer eligible ({reason})."
-            if generated:
+            if repair:
                 # Skipping a repair cannot abandon its parent's broken branch.
                 self.report(table, row, message)
                 return {"status": "blocked", "dispatch_key": key, "reason": message}
@@ -516,7 +516,9 @@ class RepositoryQueue:
             return {"status": "skipped", "dispatch_key": key}
         if not self.dependencies_ready(issue, route, key=key):
             return {"status": "dependency_waiting", "dispatch_key": key}
-        review = {"status": "ready"} if generated else self.readiness.ensure(issue, route)
+        # A repair reuses the original passing review through approval(). Its
+        # distinct dispatch key must not enqueue another copy of the issue.
+        review = {"status": "ready"} if repair else self.readiness.ensure(issue, route)
         if review["status"] != "ready":
             if table.get(key)[0].get("dependency_reason"):
                 return {"status": "dependency_waiting", "dispatch_key": key}

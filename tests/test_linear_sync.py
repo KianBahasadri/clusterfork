@@ -124,9 +124,67 @@ class LifecycleTests(unittest.TestCase):
                 self.assertFalse(self.linear.mock_calls)
                 self.assertFalse(self.github.mock_calls)
 
+    def test_repair_usage_comments_use_repair_key_on_original_issue_without_owning_status(self):
+        from test_worker_reporting import usage
+
+        repair_key = "b" * 64
+        root, version = self.receipts.get(KEY)
+        root.update(repair_attempted=True, repair_issue_id=ISSUE, repair_key=repair_key)
+        self.receipts.replace(root, version)
+        self.receipts.create({**receipt(), "RowKey": repair_key, "is_auto_repair": True, "repair_parent_key": KEY})
+        self.runs.create({**self.run, "RowKey": repair_key, "owner": "456:1", "status": "running",
+                          "lease_until": NOW + 120,
+                          "started_at": NOW, "account_id": "test-account", "account_email": "worker@example.com",
+                          "model": "gpt-6.1-sol", "effort": "max", "usage_before": json.dumps(usage())})
+        self.sync.reconcile()
+        start_id, finish_id = [comment_id(repair_key, f"456:1:{kind}") for kind in ("start", "finish")]
+        self.assertEqual(self.linear.status_comment.call_count, 1)
+        self.assertEqual(self.linear.status_comment.call_args.args[:2], (ISSUE, start_id))
+        self.assertIn("development started", self.linear.status_comment.call_args.args[2])
+        self.assertIn("actions/runs/456/attempts/1", self.linear.status_comment.call_args.args[2])
+        run, version = self.runs.get(repair_key)
+        run.update(status="completed", finished_at=NOW + 62, usage_after=json.dumps(usage(15, 23)))
+        self.runs.replace(run, version)
+        self.linear.status_comment.side_effect = RequestError()
+        with self.assertRaises(RequestError):
+            self.sync.sync(repair_key)
+        self.linear.status_comment.side_effect = None
+        restarted = LinearSync(self.registry, self.receipts, self.runs, self.notes,
+                               self.linear, self.github, clock=lambda: NOW)
+        restarted.sync(repair_key)
+        args = self.linear.status_comment.call_args.args
+        self.assertEqual(args[:2], (ISSUE, finish_id))
+        self.assertIn("development finished", args[2])
+        self.assertIn("0h 1m 2s", args[2])
+        self.assertIn("percentage points", args[2])
+        self.linear.issue.assert_not_called()
+        self.linear.set_state.assert_not_called()
+        self.linear.set_stage.assert_not_called()
+        self.linear.set_label.assert_not_called()
+        self.assertFalse(self.github.mock_calls)
+        with CallBudget(self, linear=self.linear, github=self.github):
+            restarted.reconcile()
+
     def sync_state(self):
         self.sync.sync(KEY)
         return self.issue["state"]["id"]
+
+    def test_stopped_repair_without_finish_callback_reports_unavailable_final_usage_once(self):
+        from test_worker_reporting import usage
+
+        row, version = self.receipts.get(KEY)
+        self.receipts.replace({**row, "is_auto_repair": True, "repair_parent_key": "b" * 64}, version)
+        self.update_run(status="running", lease_until=NOW - 1, account_id="test-account",
+                        model="gpt-6.1-sol", effort="max", usage_before=json.dumps(usage()), started_at=NOW - 60)
+        self.github.worker_result.return_value = {"status": "completed", "conclusion": "failure"}
+        self.sync.sync(KEY)
+        finish = next(call.args[2] for call in self.linear.status_comment.call_args_list
+                      if call.args[1] == comment_id(KEY, "123:1:finish"))
+        self.assertIn("Total worker time: unavailable", finish)
+        self.assertIn("final reading unavailable", finish)
+        self.assertEqual(self.linear.status_comment.call_count, 2)
+        with CallBudget(self, linear=self.linear, github=self.github):
+            self.sync.reconcile()
 
     def test_dependency_held_pre_coding_attempt_returns_to_todo_without_failure_state(self):
         for status in ("running", "failed", "waiting_for_dependencies"):

@@ -242,6 +242,38 @@ class SteeringTests(unittest.TestCase):
         self.queue.advance.assert_not_called()
         self.assertEqual(self.linear.current["state"]["type"], "backlog")
 
+    def test_shared_issue_routes_instruction_only_to_repair_receipt_owning_slot(self):
+        from test_remote_worker import repository_queue
+
+        repair_key = "b" * 64
+        repair_owner = "456:1"
+        root, version = self.receipts.get(KEY)
+        root.update(repair_attempted=True, repair_issue_id=ISSUE, repair_key=repair_key)
+        self.receipts.replace(root, version)
+        self.receipts.create({**receipt(), "RowKey": repair_key, "is_auto_repair": True, "repair_parent_key": KEY})
+        repair = {**self.run, "RowKey": repair_key, "owner": repair_owner, "attempt_id": str(uuid4()),
+                  "thread_id": "repair-thread", "turn_id": "repair-turn"}
+        self.runs.create(repair)
+        # Leave the old root heartbeat accepting. Slot ownership disambiguates
+        # the two live-looking receipts sharing this issue.
+        queue = repository_queue(self.registry, self.receipts, self.runs, self.linear, self.github)
+        slot_table = queue.table(receipt()["repository"])
+        slot, version = slot_table.get("slot")
+        slot.update(active_key=repair_key, owner=repair_owner)
+        slot_table.replace(slot, version)
+        self.steering.queue = queue
+        item = comment(at=NOW + 2)
+        self.linear.comments = [item]
+        self.steering.observe(ISSUE)
+        row = self.row(item)
+        self.assertEqual((row["dispatch_key"], row["owner"], row["attempt_id"]),
+                         (repair_key, repair_owner, repair["attempt_id"]))
+        instruction = self.steering.poll(self.receipts.get(repair_key)[0], repair)["instruction"]
+        self.assertEqual(instruction["comment_id"], item["id"])
+        self.assertIn("actions/runs/456/attempts/1", self.linear.acks[row["ack_id"]])
+        with self.assertRaises(WorkerError):
+            queue.assert_worker(receipt()["repository"], KEY, self.run["owner"])
+
     def test_comment_predating_replacement_attempt_is_never_delivered(self):
         self.change_run(owner="456:2", attempt_id=str(uuid4()), steering_started_at=NOW + 5)
         self.linear.comments = [comment(at=NOW + 2)]

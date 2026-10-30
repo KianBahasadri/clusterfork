@@ -31,6 +31,8 @@ import test_remote_worker as worker_fixtures
 from readiness_policy import PROTOCOL
 from worker_core import WorkerError
 from call_budget import record_api_calls
+from linear_sync import comment_id
+from worker_reporting import worker_branch
 
 spec = importlib.util.spec_from_file_location("clusterfork_pilot", ROOT / "automation" / "pilot.py")
 pilot = importlib.util.module_from_spec(spec)
@@ -192,6 +194,36 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(inputs["linear_issue_id"], ISSUE)
         self.assertEqual(inputs["linear_project_id"], PROJECT)
         self.assertEqual(self.receipts.get(result["dispatch_key"])[0]["status"], "dispatched")
+
+    def test_repair_dispatch_uses_original_linear_identity_and_distinct_dispatch_key(self):
+        root_key = self.dispatcher.process(self.event)[0]["dispatch_key"]
+        route = self.registry.routes[PROJECT]
+        table = self.queue.table(route.repository)
+        root, version = table.get(root_key)
+        identifier = comment_id(root_key, "auto-repair-issue")
+        repair_key = hashlib.sha256(f"{self.registry.generation}:{PROJECT}:{identifier}".encode()).hexdigest()
+        context = {"target_dispatch_key": root_key, "target_identifier": self.tracker.current["identifier"],
+                   "target_branch": worker_branch(self.tracker.current["identifier"], root_key), "target_pull_request": ""}
+        root.update(repair_attempted=True, repair_issue_id=ISSUE, repair_key=repair_key,
+                    repair_context=json.dumps(context), status="repairing")
+        repair = {**root, **context, "RowKey": repair_key, "status": "active", "is_auto_repair": True,
+                  "repair_parent_key": root_key, "repair_parent_issue_id": ISSUE}
+        for name in ("repair_attempted", "repair_issue_id", "repair_key", "repair_context"):
+            repair.pop(name)
+        slot, etag = table.get("slot")
+        slot.update(active_key=repair_key, owner="")
+        table.transaction([(slot, etag), (root, version), (repair, None)])
+        self.tracker.current["state"] = {"id": route.linear_states.in_progress, "type": "started"}
+        self.queue.readiness.require = Mock(return_value={"review_key": "original-review"})
+        self.tracker.create_issue = Mock(side_effect=AssertionError("Repairs must reuse the original issue"))
+        slot, etag = table.get("slot")
+        result = self.queue.dispatch(table, slot, etag, repair, route)
+        self.assertEqual(result, {"status": "dispatched", "dispatch_key": repair_key})
+        self.assertEqual(self.github.calls[-1][1], {
+            "linear_issue_id": ISSUE, "linear_identifier": self.tracker.current["identifier"],
+            "linear_project_id": PROJECT, "dispatch_key": repair_key})
+        self.queue.readiness.require.assert_called_once_with(self.tracker.current, route)
+        self.tracker.create_issue.assert_not_called()
 
     def test_issue_label_cannot_enroll_project(self):
         self.tracker.current["project"]["labels"]["nodes"] = []

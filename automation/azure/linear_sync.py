@@ -125,14 +125,16 @@ class LinearSync:
 
     def sync(self, key):
         receipt, _ = self.receipts.get(key)
-        if repair_managed(receipt):
-            # The repository queue owns both issues' repair lifecycle, including
-            # stopped-run verification and the durable terminal report.
+        managed = repair_managed(receipt)
+        if managed and not receipt.get("repair_parent_key"):
+            # The root yielded lifecycle ownership to its second attempt.
             return
         route = self.registry.routes.get(receipt["project_id"])
         if not route or not route.linear_states or receipt["repository"] != route.repository:
             return
         run, _ = self.runs.get(key)
+        if managed and not run.get("usage_before"):
+            return
         owner = run["owner"]
         try:
             note, etag = self.notes.get(key)
@@ -149,6 +151,26 @@ class LinearSync:
         note.update(lease_until=int(self.clock()) + 120, fence=fence)
         self.notes.replace(note, etag)
         try:
+            if managed:
+                # Queue reconciliation owns repair state/stages and its terminal
+                # report. Attempt usage still belongs on the tracked Linear issue
+                # with this repair dispatch key, including legacy child attempts.
+                status = run["status"]
+                if status == "running" and run.get("lease_until", 0) <= self.clock():
+                    if self.github.worker_result(route.repository, owner)["status"] == "completed":
+                        status = "failed"  # No finish callback: report unavailable final usage/time.
+                current, _ = self.runs.get(key)
+                if any(current.get(field) != run.get(field) for field in
+                       ("owner", "status", "report_version")):
+                    return
+                updated = dict(note)
+                self.attempts(key, receipt, {**run, "status": status}, note, updated, self.linear.status_comment)
+                current, version = self.notes.get(key)
+                if current.get("fence") != fence or current["lease_until"] <= self.clock():
+                    raise WorkerError("Linear synchronization lease was lost")
+                updated.update(owner=owner, terminal=status != "running")
+                self.notes.replace(updated, version)
+                return
             issue = self.linear.issue(receipt["issue_id"])
             project = (issue or {}).get("project") or {}
             if (not issue or issue.get("archivedAt") or project.get("archivedAt")
@@ -254,21 +276,8 @@ class LinearSync:
                     return False
                 return True
 
-            if run.get("usage_before"):
-                previous_attempt = note.get("attempt_owner") == owner
-                updated["attempt_owner"] = owner
-                for kind in ("start", "finish"):
-                    if kind == "finish" and status == "running":
-                        continue
-                    attempt_body = attempt_comment({**run, "status": status}, route.repository,
-                                                   finished=kind == "finish")
-                    attempt_signature = hashlib.sha256(attempt_body.encode()).hexdigest()
-                    field = f"{kind}_signature"
-                    if not previous_attempt or note.get(field) != attempt_signature:
-                        # An older attempt's signature cannot acknowledge this one.
-                        updated.pop(field, None)
-                        if write(self.linear.status_comment, issue["id"], comment_id(key, f"{owner}:{kind}"), attempt_body):
-                            updated[field] = attempt_signature
+            self.attempts(key, receipt, {**run, "status": status}, note, updated,
+                          lambda *args: write(self.linear.status_comment, *args))
             if note.get("signature") != signature:
                 if write(self.linear.status_comment, issue["id"], comment_id(key, "status"), body):
                     updated["signature"] = signature
@@ -292,3 +301,21 @@ class LinearSync:
             if updated.get("fence") == fence:
                 updated["lease_until"] = 0
                 self.notes.replace(updated, etag)
+
+    @staticmethod
+    def attempts(key, receipt, run, note, updated, write):
+        if not run.get("usage_before"):
+            return
+        owner = run["owner"]
+        previous_attempt = note.get("attempt_owner") == owner
+        updated["attempt_owner"] = owner
+        for kind in ("start", "finish"):
+            if kind == "finish" and run["status"] == "running":
+                continue
+            body = attempt_comment(run, receipt["repository"], finished=kind == "finish")
+            signature = hashlib.sha256(body.encode()).hexdigest()
+            field = f"{kind}_signature"
+            if not previous_attempt or note.get(field) != signature:
+                updated.pop(field, None)
+                if write(receipt["issue_id"], comment_id(key, f"{owner}:{kind}"), body) is not False:
+                    updated[field] = signature

@@ -713,7 +713,7 @@ class WorkerService:
         self.sync_linear(key)
         self.sync_steering(receipt["issue_id"])
         profiles = execution_profiles(self.registry, row)
-        repair = (self.queue.repair.worker_config(receipt)
+        repair = (self.queue.repair.worker_config(receipt, route, issue)
                   if receipt.get("is_auto_repair") and receipt.get("repair_parent_key") else None)
         return {"protocol": PROTOCOL, "phase": "development", "readiness": approval,
                 "images": images,
