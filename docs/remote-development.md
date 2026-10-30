@@ -347,6 +347,11 @@ creates its missing PR with the parent's dispatch marker. Required checks and na
 merge requirements and the normal publication permission checks still apply;
 `--admin` bypasses remain refused.
 
+The repair description includes the original task's title and requirements. A
+failure before publication can leave no recoverable branch; in that case the
+repair must implement the original task from the reviewed base. Passing the
+validation suite alone does not establish completion of the missing feature.
+
 The label **or** persisted `is_auto_repair` metadata forbids another generation; failed
 repair workers cannot be rerun automatically or through broker admission.
 If it fails or its completed required checks still fail, both issues become Blocked

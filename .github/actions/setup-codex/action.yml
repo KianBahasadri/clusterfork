@@ -3,6 +3,12 @@ description: Install the pinned CLI and verify its read-only Linux sandbox witho
 runs:
   using: composite
   steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Install dispatcher and validation dependencies
+      shell: bash
+      run: python3 -m pip install -r automation/azure/requirements.txt
     - uses: actions/setup-node@v4
       with:
         node-version: "22"

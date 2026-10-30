@@ -163,6 +163,11 @@ class AutoRepair:
             f"`{context['target_branch']}` in `{route.repository}` (base `{route.ref}`).\n\n"
             f"Triggered by: {context['trigger']}.\n\nSanitized failure summary: {context['summary']}\n\n"
             + (f"Existing PR: {context['target_pull_request']}\n\n" if context['target_pull_request'] else "")
+            + f"### Original task\n\n{issue['title']}\n\n{issue.get('description') or ''}\n\n"
+            + "### Repair instructions\n\n"
+            "The failed worker may have stopped before publishing its changes. If its branch is absent or "
+            "the original task is not implemented, complete the original task from the reviewed base; "
+            "passing validation alone does not establish that the task is complete. "
             + "Investigate the failure, fix the code/tests on this branch, run all configured validation commands, "
             "and update the existing PR or create it if publication failed. The worker publishes the fix. "
             "Read AGENTS.md and the owning repository docs. Respect the broker's workflow-publication capability. "
