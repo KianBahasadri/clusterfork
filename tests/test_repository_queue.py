@@ -1920,6 +1920,23 @@ class RepositoryQueueTests(unittest.TestCase):
                 self.linear.create_issue.assert_called_once()
                 self.assertEqual(self.github.dispatch.call_count, 2)
 
+    def test_linear_saved_github_link_format_keeps_repair_content_binding_valid(self):
+        parent, _ = self.prepare_repair()
+        create = self.linear.create_issue.side_effect
+        url = f"https://github.com/{self.repository}/actions/runs/100/attempts/1"
+
+        def saved_form(fields):
+            fields = {**fields, "description": fields["description"].replace(f"]({url})", f"](<{url}>)")}
+            return create(fields)
+
+        self.linear.create_issue.side_effect = saved_form
+        self.queue.advance(self.repository)
+        child = self.repair_row(parent)
+        config = self.start(child["RowKey"])
+        self.assertEqual(config["repair"]["target_dispatch_key"], parent)
+        self.assertEqual(self.github.dispatch.call_count, 2)
+        self.assertIn(f"](<{url}>)", self.issues[child["issue_id"]]["description"])
+
     def test_missing_repair_label_resumes_same_intent_with_unpublished_task_requirements(self):
         parent, following = self.prepare_repair()
         task = self.issues[str(UUID(int=1))]

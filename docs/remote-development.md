@@ -351,6 +351,8 @@ The repair description includes the original task's title and requirements. A
 failure before publication can leave no recoverable branch; in that case the
 repair must implement the original task from the reviewed base. Passing the
 validation suite alone does not establish completion of the missing feature.
+Generated GitHub link destinations use Linear's saved Markdown form so exact
+content binding survives creation; later title or description edits still block admission.
 
 The label **or** persisted `is_auto_repair` metadata forbids another generation; failed
 repair workers cannot be rerun automatically or through broker admission.
