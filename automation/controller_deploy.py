@@ -179,8 +179,9 @@ def deploy(revision,*,initialize=False,history=None):
         return
     if initialize:
         command(['az','functionapp','stop','--resource-group',GROUP,'--name','clusterfork-dispatch-7604cac329','--only-show-errors'])
-        state=command(['az','functionapp','show','--resource-group',GROUP,'--name','clusterfork-dispatch-7604cac329',
-                       '--query','state','--output','tsv','--only-show-errors']).strip()
+        state=command(['az','resource','show','--resource-group',GROUP,'--resource-type','Microsoft.Web/sites',
+                       '--name','clusterfork-dispatch-7604cac329','--api-version','2024-04-01',
+                       '--query','properties.state','--output','tsv','--only-show-errors']).strip()
         if state!='Stopped':
             raise RuntimeError('Legacy lifecycle writers have not stopped')
     output=run_host(install_script(config,manifest,history))
