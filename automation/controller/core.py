@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 import math
 import re
@@ -11,7 +11,7 @@ from .model import (Admit, Assign, DispatchObserved, ExternalObserved, Finish, H
                     IssueObserved, Phase, Progress, Rejected, Retry, Review, Role,
                     Start, TaskSpec, TaskView, identity, SessionUpdated, EffectUpdated, Authorize, ExhaustAccount,
                     ContextObserved, InboxQueued, InboxDone, Initialize, ReportConfirmed, AccountRequest, InstructionRequest,
-                    Resubmit, EvidenceChanged, dependency_admission_applies)
+                    Resubmit, EvidenceChanged, ProjectionUpdated, dependency_admission_applies)
 from common.policy import REVIEW_MAX_ATTEMPTS, REVIEW_RETRY_DELAYS, review_failure_class
 
 
@@ -21,6 +21,14 @@ class Controller:
         from .accounts import Accounts
         self.accounts=Accounts(database)
         self._upgrade_readiness()
+        self._upgrade_intents()
+
+    def _upgrade_intents(self):
+        from .linear_state import record_intent
+        with self.database.transaction() as db:
+            if db.execute("INSERT OR IGNORE INTO metadata VALUES ('linear:intents-v1','1')").rowcount:
+                for row in db.execute('SELECT payload FROM inbox').fetchall():
+                    record_intent(db, json.loads(row[0]))
 
     def _upgrade_readiness(self):
         """Charge durable pre-upgrade history; never give old loops a fresh cycle."""
@@ -67,6 +75,65 @@ class Controller:
     def inspect(self, task_id):
         with self.database.transaction() as db:
             return self._view(db, task_id)
+
+    def authorize(self, task_id, attempt_id, role, action='execute', *, now):
+        """A fresh, read-only policy query; no report effects or network calls."""
+        if type(now) not in (float, int) or not math.isfinite(now):
+            raise ValueError('A finite authorization timestamp is required')
+        from .authority import authorize
+        with self.database.transaction() as db:
+            task = self._task(db, task_id)
+            attempt = self._attempt(db, task, attempt_id)
+            authorize(db, task, attempt, role, action, now, self.accounts)
+            return self._view(db, task_id)
+
+    def accepts_instructions(self, view, *, now):
+        try:
+            self.authorize(view.task_id, view.attempt['attempt_id'], Role.CODING, 'instructions', now=now)
+            return True
+        except (Rejected, KeyError):
+            return False
+
+    def context_failure(self, task_id, attempt_id, error, *, now):
+        """Interpret trusted retrieval facts; absence of a response is not drift."""
+        from common.clients import RequestError
+        from common.context import ContextError
+        if isinstance(error, RequestError):
+            if error.retryable or error.status not in {401, 403, 404}:
+                raise error
+        elif isinstance(error, ContextError):
+            if error.status in {'timeout', 'incomplete'}:
+                raise RequestError(503) from None
+            if error.status in {'budget_exceeded', 'oversized'}:
+                raise Rejected('Related context retrieval budget is exhausted') from None
+            if error.status not in {'material_evidence_changed', 'required_source_unavailable',
+                                    'new_evidence_requires_review', 'missing_approval', 'required_source_incomplete',
+                                    'missing', 'denied', 'inaccessible', 'identity_mismatch', 'changed'}:
+                raise Rejected('Related context could not be validated') from None
+        else:
+            raise error
+        self.apply(EvidenceChanged(task_id, attempt_id), now=now)
+        raise Rejected('Related context requires a fresh readiness assessment') from None
+
+    @staticmethod
+    def observes_workflow(known, policy):
+        from .linear_state import observes_workflow
+        return observes_workflow(known, policy)
+
+    def _projected_states(self, issue_id):
+        with self.database.transaction() as db:
+            payloads = db.execute("SELECT e.payload FROM effects e JOIN tasks t USING(task_id) "
+                                  "WHERE t.issue_id=? AND e.kind='linear_state'", (issue_id,)).fetchall()
+            return {value['state'] for row in payloads if (value := json.loads(row[0])).get('issued')
+                    or value.get('outcome') in {'claimed', 'uncertain', 'confirmed'}}
+
+    def submission_snapshot(self, snapshot, submission, blocked):
+        from .linear_state import submission_snapshot
+        return submission_snapshot(snapshot, submission, blocked, owned_states=self._projected_states(snapshot['id']))
+
+    def may_project_attention(self, snapshot, attention_at, blocked):
+        from .linear_state import may_project_attention
+        return may_project_attention(snapshot, attention_at, blocked, owned_states=self._projected_states(snapshot['id']))
 
     def report_signature(self,key):
         with self.database.transaction() as db:
@@ -180,8 +247,31 @@ class Controller:
                 if not re.fullmatch(r"[0-9a-f]{64}", command.event_id) or len(json.dumps(command.event)) > 3000:
                     raise Rejected("Invalid event receipt")
                 db.execute("INSERT OR IGNORE INTO inbox(event_id,payload) VALUES (?,?)", (command.event_id,json.dumps(command.event)))
+                from .linear_state import record_intent, human_withdrawal
+                record_intent(db, command.event)
+                for row in db.execute("SELECT * FROM tasks WHERE issue_id=? AND phase NOT IN ('completed','canceled','skipped')",
+                                      (command.event.get('id'),)).fetchall():
+                    task = dict(row)
+                    if human_withdrawal(db, task):
+                        attempt = self._attempt(db, task, task['current_attempt']) if task['current_attempt'] else None
+                        if attempt and not task['review_attention']:
+                            self._review_attention(db, task, attempt, 'human_withdrawal',
+                                                   'Human workflow action withdrew execution authorization.', now)
+                        self._update(db, self._task(db, task['task_id']), eligible=0, pending_submission_at=0)
+                        self._report(db, task['task_id'])
                 return None
             if isinstance(command, InboxDone):
+                row = db.execute('SELECT payload FROM inbox WHERE event_id=?', (command.event_id,)).fetchone()
+                event = json.loads(row[0]) if row else {}
+                submission = event.get('submission')
+                policies = db.execute("SELECT w.policy FROM tasks t JOIN linear_workflows w USING(task_id) "
+                                      "WHERE t.issue_id=? AND t.eligible=0 AND t.phase NOT IN ('completed','canceled','skipped')",
+                                      (event.get('id'),)).fetchall()
+                if submission and any(submission['to_state'] in json.loads(row[0])['ready'] for row in policies):
+                    # An acknowledged structurally ineligible action is explicitly
+                    # withdrawn, rather than silently spending an idempotency key.
+                    db.execute('UPDATE linear_intents SET withdrawn=1 WHERE issue_id=? AND action_id=?',
+                               (event['id'], identity(event['id'], submission)))
                 db.execute("UPDATE inbox SET done=1 WHERE event_id=?", (command.event_id,))
                 return None
             if isinstance(command, Hold):
@@ -202,13 +292,21 @@ class Controller:
                         self._report(db,row[0])
                 return None
             if isinstance(command, IssueObserved):
-                self._issue(db, command)
+                if self._issue(db, command, now) is False:
+                    return None
                 return self._view(db, command.task_id)
             task = self._task(db, command.task_id)
+            if isinstance(command, ProjectionUpdated):
+                from .linear_state import update_projection
+                result = update_projection(db, task, command)
+                if result and command.outcome == 'confirmed' and task['review_attention'] and task['eligible']:
+                    self._update(db, task, eligible=0)
+                    self._report(db, task['task_id'])
+                return result
             if isinstance(command,AccountRequest):
                 attempt=self._attempt(db,task,command.attempt_id)
                 if command.operation!='save':
-                    self.apply(Authorize(command.task_id,command.attempt_id,command.role),now=now)
+                    self.authorize(command.task_id,command.attempt_id,command.role,command.operation,now=now)
                 view=self._view(db,command.task_id)
                 owner=f"{command.attempt_id}:{attempt['run_id']}:{attempt['run_attempt']}:{command.role.phase}"
                 from .account_commands import execute
@@ -256,7 +354,7 @@ class Controller:
                 elif isinstance(command, Review):
                     self._review(db, task, attempt, command, now)
                 elif isinstance(command, Progress):
-                    self._progress(db, task, attempt, command)
+                    self._progress(db, task, attempt, command, now)
                 elif isinstance(command, Finish):
                     self._finish(db, task, attempt, command, now)
                 elif isinstance(command, ExternalObserved):
@@ -264,15 +362,9 @@ class Controller:
                 elif isinstance(command, SessionUpdated):
                     self._session(db, task, attempt, command)
                 elif isinstance(command, Authorize):
-                    self._authority(db, task)
-                    session = db.execute("SELECT * FROM sessions WHERE attempt_id=? AND phase=?",
-                                         (command.attempt_id, command.role.phase)).fetchone()
-                    if (not session or session["finished"] or session["deadline"] <= now
-                            or not command.role.selector and not session["agent_started"]
-                            or command.role.selector and session['agent_started']):
-                        raise Rejected("Execution phase is not active")
+                    return self.authorize(command.task_id, command.attempt_id, command.role, command.action, now=now)
                 elif isinstance(command, ExhaustAccount):
-                    self._exhaust(db, task, attempt, command)
+                    self._exhaust(db, task, attempt, command, now)
                 elif isinstance(command, ContextObserved):
                     if (asdict(command.binding) != json.loads(task["spec"])
                             and not task['review_attention'] and not attempt['retry_kind']):
@@ -317,7 +409,7 @@ class Controller:
         db.execute("UPDATE tasks SET " + ",".join(assignments) + " WHERE task_id=?",
                    (*fields.values(), task["task_id"]))
 
-    def _issue(self, db, command):
+    def _issue(self, db, command, now):
         if (type(command.priority) is not int or command.priority not in range(5)
                 or not math.isfinite(command.sort_order) or not re.fullmatch(
                     r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", command.repository)
@@ -325,7 +417,11 @@ class Controller:
                 or type(command.canceled) is not bool or type(command.submission_current) is not bool):
             raise Rejected("Invalid issue observation")
         row = db.execute("SELECT * FROM tasks WHERE task_id=?", (command.task_id,)).fetchone()
+        from .linear_state import observed_eligibility
+        command = replace(command, eligible=observed_eligibility(db, dict(row) if row else None, command))
         if row is None:
+            if command.workflow and not command.eligible:
+                return False
             if db.execute("SELECT 1 FROM tasks WHERE issue_id=? AND current_attempt IS NOT NULL "
                           "AND phase NOT IN ('completed','canceled','skipped')", (command.issue_id,)).fetchone():
                 raise Rejected('An unresolved submission already owns this issue identity')
@@ -335,6 +431,8 @@ class Controller:
                         command.repository.lower(), command.identifier, "queued" if command.eligible else "skipped",
                         command.eligible, command.dependencies_ready, command.priority, command.sort_order,
                         command.content_revision, command.reason, command.canceled))
+            if command.workflow:
+                db.execute('INSERT INTO linear_workflows VALUES (?,?)', (command.task_id, json.dumps(command.workflow)))
         else:
             task = dict(row)
             changes = dict(eligible=command.eligible, dependencies_ready=command.dependencies_ready,
@@ -359,23 +457,15 @@ class Controller:
                     pass  # Reporting/eligibility changes cannot erase actionable feedback.
                 elif changed or not command.eligible:
                     changes.update(phase="held", reason="Task content or eligibility changed; execution authorization held.")
+                    if command.workflow and command.workflow['state'] == command.workflow['blocked']:
+                        self._review_attention(db, task, dict(attempt), 'human_withdrawal',
+                                               'Issue moved to Needs attention; execution authorization held.', now)
                 elif not command.dependencies_ready and dependency_admission_applies(attempt):
                     changes.update(phase="held", reason=command.reason or "Prerequisites are unresolved.")
             if any(task[k] != v for k, v in changes.items()):
                 self._update(db, task, **changes)
             self._accept_resubmission(db, self._task(db, command.task_id))
         self._report(db, command.task_id)
-
-    def _authority(self, db, task, *, coding=False, allow_hold=False):
-        if not db.execute("SELECT 1 FROM grants WHERE repository=? AND task_id=?",
-                          (task["repository"], task["task_id"])).fetchone():
-            raise Rejected("Task does not own repository admission")
-        if not task["eligible"] or (task["phase"] == "held" and not allow_hold):
-            raise Rejected("Task authorization is held")
-        if not task["dependencies_ready"]:
-            attempt = db.execute("SELECT coding_started FROM attempts WHERE attempt_id=?", (task["current_attempt"],)).fetchone()
-            if dependency_admission_applies(attempt):
-                raise Rejected("Prerequisites are unresolved")
 
     def _new_attempt(self, db, task, spec, now, *, initial=False, kind="normal"):
         if not isinstance(spec, TaskSpec) or spec.content_revision != task["content_revision"]:
@@ -406,7 +496,8 @@ class Controller:
                 raise Rejected("Repository already has an active task")
             db.execute("INSERT INTO grants VALUES (?,?)", (task["repository"], task["task_id"]))
         else:
-            self._authority(db, task, allow_hold=True)
+            from .authority import admission
+            admission(db, task, allow_hold=True)
         ordinal = db.execute("SELECT COALESCE(MAX(ordinal),0)+1 FROM attempts WHERE task_id=?", (task["task_id"],)).fetchone()[0]
         attempt_id = identity(task["task_id"], ordinal)
         db.execute("INSERT INTO attempts(attempt_id,task_id,ordinal,dispatch_status,started_at,attempt_kind,review_cycle) "
@@ -421,7 +512,7 @@ class Controller:
             self._queue_reports(db,task['repository'])
 
     def _start(self, db, task, attempt, command, now):
-        self._authority(db, task)
+        self.authorize(command.task_id, command.attempt_id, command.role, 'start', now=now)
         if not isinstance(command.role, Role) or not re.fullmatch(r"[1-9][0-9]*", command.run_id) or command.run_attempt < 1:
             raise Rejected("Invalid authenticated job identity")
         if attempt["stopped"]:
@@ -475,7 +566,6 @@ class Controller:
         self._update(db, task)
 
     def _assign(self, db, task, attempt, command, now):
-        self._authority(db, task)
         if not isinstance(command.role, Role):
             raise Rejected("Invalid account role")
         if not re.fullmatch(r"(?:cursor:)?[0-9a-f]{64}", command.account_id):
@@ -485,6 +575,7 @@ class Controller:
         replacement = command.role == Role.CODING and data.get("account_failover") and not row["account_id"]
         if not command.role.selector and not replacement:
             raise Rejected("Only authenticated preflight can assign an account")
+        self.authorize(command.task_id, command.attempt_id, command.role, 'bind_account', now=now)
         if not row or not row["selector_started"] or row["agent_started"] and not replacement or row["finished"]:
             raise Rejected("Account preflight is not active")
         if replacement and (command.account_id.startswith("cursor:") or command.account_id in data.get("exhausted_account_ids", [])
@@ -496,8 +587,8 @@ class Controller:
         db.execute("UPDATE sessions SET account_id=?,deadline=? WHERE attempt_id=? AND phase=?",
                    (command.account_id, deadline, command.attempt_id, command.role.phase))
 
-    def _exhaust(self, db, task, attempt, command):
-        self._authority(db, task)
+    def _exhaust(self, db, task, attempt, command, now):
+        self.authorize(command.task_id, command.attempt_id, Role.CODING, 'exhaust_account', now=now)
         row = db.execute("SELECT * FROM sessions WHERE attempt_id=? AND phase='coding'", (command.attempt_id,)).fetchone()
         data = json.loads(row["data"]) if row else {}
         if (not row or not row["agent_started"] or row["finished"] or attempt["stage"] != "coding"
@@ -527,7 +618,7 @@ class Controller:
 
     def _review(self, db, task, attempt, command, now):
         from common.policy import validate_result, redact_review_value
-        self._authority(db, task)
+        self.authorize(command.task_id, command.attempt_id, Role.REVIEW, 'review', now=now)
         session = db.execute("SELECT * FROM sessions WHERE attempt_id=? AND phase='review'", (command.attempt_id,)).fetchone()
         if not session or not session["agent_started"] or session["finished"]:
             raise Rejected("The review job is not accepting a result")
@@ -557,8 +648,8 @@ class Controller:
                 detail += f"\nDecision: {blocker['decision']} Consequence: {blocker['consequence']} Question: {blocker['question']}"
             self._review_attention(db, task, attempt, verdict, detail, now)
 
-    def _progress(self, db, task, attempt, command):
-        self._authority(db, task, coding=True)
+    def _progress(self, db, task, attempt, command, now):
+        self.authorize(command.task_id, command.attempt_id, Role.CODING, 'progress', now=now)
         if command.stage not in {"initializing", "selecting_account", "coding", "testing", "publishing"}:
             raise Rejected("Invalid coding stage")
         session = db.execute("SELECT * FROM sessions WHERE attempt_id=? AND phase='coding'", (command.attempt_id,)).fetchone()
@@ -665,17 +756,23 @@ class Controller:
                 or command.transition['changed_at'] != command.submitted_at
                 or command.submission_id != identity(task['issue_id'], command.transition)):
             raise Rejected('Invalid human submission identity')
+        from .linear_state import intent
+        latest = intent(db, task['issue_id'])
+        if (not task['review_attention'] or not task['eligible'] or task['canceled']
+                or latest and (latest['conflicted'] or latest['withdrawn'] or latest['changed_at'] > command.submitted_at
+                              or command.transition and latest['action_id'] != command.submission_id)):
+            return
         if not db.execute('INSERT OR IGNORE INTO review_submissions VALUES (?,?,?,?)',
                           (command.submission_id, task['task_id'], command.submitted_at,
                            json.dumps(command.transition, sort_keys=True))).rowcount:
-            return
-        if not task['review_attention'] or not task['eligible'] or task['canceled']:
             return
         self._update(db, task, pending_submission_at=command.submitted_at)
         self._accept_resubmission(db, self._task(db, task['task_id']))
 
     def _accept_resubmission(self, db, task):
+        from .linear_state import human_withdrawal
         if (not task['pending_submission_at'] or not task['eligible'] or task['canceled']
+                or human_withdrawal(db, task)
                 or db.execute('SELECT 1 FROM grants WHERE task_id=?', (task['task_id'],)).fetchone()):
             return
         self._update(db, task, phase='queued', reason='Human resubmitted for a new bounded readiness review.',
@@ -803,8 +900,9 @@ class Controller:
             db.execute('UPDATE tasks SET revision=revision+1 WHERE task_id=?',(row[0],))
             self._report(db,row[0])
 
-    @staticmethod
-    def _report(db, task_id):
+    def _report(self, db, task_id):
+        from .linear_state import ensure_projection
+        ensure_projection(db, self._task(db, task_id))
         revision = db.execute("SELECT revision FROM tasks WHERE task_id=?", (task_id,)).fetchone()[0]
         db.execute("INSERT OR IGNORE INTO effects(effect_id,task_id,kind,payload) VALUES(?,?,?,?)",
                    (identity(task_id, "report", revision), task_id, "report", json.dumps({"revision": revision})))

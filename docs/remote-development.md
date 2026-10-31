@@ -54,7 +54,11 @@ Missing, denied, inaccessible, unsupported, oversized, timed-out or incomplete
 sources are explicit failures; neither Done nor a PR title proves an unread
 contract. Sources are required by default. `required:false` is for exploratory
 reads that the conclusion does not depend on; required failures or unread pages
-cannot pass readiness. Failures and successful reads are cached within the attempt.
+cannot pass readiness. Successful reads and definitive missing/denied receipts
+are cached within the attempt. Temporary transport/service failures retain a
+retryable receipt, preserving required-read obligations without permanently
+caching the source as missing. A successful retry replaces only that receipt;
+approved source snapshots remain immutable.
 
 The controller stores private snapshots and seals their evidence revision with
 approval. The coding job can read the same snapshots and commits after review,
@@ -67,8 +71,14 @@ unrelated upstream branch movement do not invalidate their own context. New
 coding reads within an approved PR's pinned repository commit are permitted;
 new issues or PR evidence set `approval_required` and require fresh readiness
 before publication. Agents must stop relying on conflicting evidence. Revalidation
-failures hold the task under the existing readiness/resubmission rules; they do
-not create a new retry loop.
+failures that prove material change or lost source access hold the task under
+the existing readiness/resubmission rules. A timeout or temporary service failure instead
+returns HTTP 503 without changing approval, phase or review/repair budgets.
+Malformed responses do not establish material drift. The worker retries only
+repeatable `start`, checkout, publication-token, context-read and progress calls
+with five bounded delays (2, 4, 5, 5, 5 seconds) and one request identity; 403
+denials and ambiguous credential/review mutations are not retried. Exhaustion
+uses the existing job-failure policy; no new unattended review cycle is created.
 
 Repository access requires both a current controller mapping and GitHub App
 installation access. The controller issues only repository-scoped contents/PR

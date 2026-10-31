@@ -28,6 +28,12 @@ class RequestError(RuntimeError):
         # Never include response bodies, request headers, or credential values.
         super().__init__(f"remote request failed (HTTP {status or 'unavailable'})")
 
+    @property
+    def retryable(self):
+        from common.policy import review_failure_class
+        return (self.status in {408, 429, 500, 502, 503, 504}
+                or review_failure_class(getattr(self, 'clusterfork_failure', {})).startswith('temporary_'))
+
 
 CONTEXT_READ = ContextVar("context_read", default=None)
 

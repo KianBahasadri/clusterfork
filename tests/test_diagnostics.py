@@ -36,6 +36,7 @@ class DiagnosticsTests(unittest.TestCase):
 
     def test_timeout_keeps_action_run_stage_request_and_elapsed_without_secrets(self):
         broker = self.broker()
+        broker.retry_delays = ()  # Isolate diagnostics from the bounded operation-retry policy.
         error = TimeoutError("SECRET remote exception text")
         with patch.dict(os.environ, {"GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "2"}), \
              patch.object(worker, "urlopen", side_effect=error) as transport, \

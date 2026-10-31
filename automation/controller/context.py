@@ -159,14 +159,21 @@ class Context:
         key = digest(request)
         with self.database.transaction() as db:
             current = rows(db, view.attempt["attempt_id"])
-            if len(current) >= MAX_SOURCES or sum(len(r["content"].encode()) for r in current) + len(encoded) > MAX_TASK_BYTES:
+            previous = next((row for row in current if row['source_key'] == key), None)
+            if previous and previous['status'] != 'temporary_unavailable':
+                raise Rejected('An immutable context snapshot cannot be replaced')
+            size = sum(len(r['content'].encode()) for r in current) - (len(previous['content'].encode()) if previous else 0)
+            if (not previous and len(current) >= MAX_SOURCES) or size + len(encoded) > MAX_TASK_BYTES:
                 raise ContextError("budget_exceeded")
             material = self.material(view, request, content) if status == "ok" else digest([status])
             # Version records the snapshot actually read, including comment
             # versions and source updatedAt; material excludes reporting noise.
             version = digest(content)
             db.execute("INSERT INTO context_sources(attempt_id,source_key,request,content,status,version,material,required) "
-                       "VALUES (?,?,?,?,?,?,?,?)", (view.attempt["attempt_id"], key, json.dumps(request), encoded, status, version, material, required))
+                       "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(attempt_id,source_key) DO UPDATE SET "
+                       "content=excluded.content,status=excluded.status,version=excluded.version,material=excluded.material,"
+                       "required=MAX(context_sources.required,excluded.required),read_until=0,reviewed=0",
+                       (view.attempt["attempt_id"], key, json.dumps(request), encoded, status, version, material, required))
         return self.lookup(view, request)
 
     def lookup(self, view, request):
@@ -178,9 +185,9 @@ class Context:
     def root(self, view, check):
         request = {"operation": "issue", "target": view.issue_id}
         row = self.lookup(view, request)
-        if row:
+        if row and row['status'] != 'temporary_unavailable':
             return row
-        return self.fetch(view, request, check)
+        return self.fetch(view, request, check, required=True)
 
     def graph(self, view):
         issues, pulls = {view.issue_id, view.identifier}, set()
@@ -197,7 +204,7 @@ class Context:
             raise ContextError("denied")
         return Repository(self.github, repo, check), number
 
-    def fetch(self, view, request, check, repositories=()):
+    def fetch(self, view, request, check, repositories=(), *, required=False):
         try:
             op = request["operation"]
             secrets = ()
@@ -225,6 +232,12 @@ class Context:
             check()
             return self.store(view, request, content, secrets=secrets)
         except (RequestError, ContextError, KeyError, TypeError, ValueError, AttributeError) as exc:
+            if isinstance(exc, RequestError) and exc.retryable:
+                check()
+                # Preserve the required-read obligation while permitting the
+                # same operation to recover. Approval cannot ignore the outage.
+                self.store(view, request, {'error': 'temporary_unavailable'}, 'temporary_unavailable', required=required)
+                raise
             # No exception message, request headers, tokens or raw responses.
             status = exc.status if isinstance(exc, ContextError) else (
                 "missing" if getattr(exc, "status", None) == 404 else
@@ -300,9 +313,12 @@ class Context:
                             raise ContextError("denied")
                         if op != "pull":
                             pin_request = {"operation": "pull", "target": url}
-                            if not self.lookup(view, pin_request):
-                                self.fetch(view, pin_request, check, repositories)
-                    row = self.lookup(view, request) or self.fetch(view, request, check, repositories)
+                            pin = self.lookup(view, pin_request)
+                            if not pin or pin['status'] == 'temporary_unavailable':
+                                self.fetch(view, pin_request, check, repositories, required=value.get('required', True))
+                    row = self.lookup(view, request)
+                    if not row or row['status'] == 'temporary_unavailable':
+                        row = self.fetch(view, request, check, repositories, required=value.get('required', True))
                     if row["status"] != "ok":
                         if value.get("required", True):
                             self.require(view, row)
@@ -345,6 +361,8 @@ class Context:
                     request = json.loads(row["request"])
                     if row["status"] != "ok":
                         if row["required"]:
+                            if row['status'] == 'temporary_unavailable':
+                                raise RequestError(503)
                             raise ContextError("required_source_unavailable")
                         continue
                     if request["operation"] == "issue":

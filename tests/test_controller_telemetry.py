@@ -93,7 +93,7 @@ class ControllerTelemetryTests(unittest.TestCase):
         self.assertEqual(Controller(self.database).inspect(view.task_id), view)
         telemetry.Telemetry(self.database, Mock(), CONFIG, "b" * 40, clock=lambda: 2000, send=self.sender)
         self.assertEqual([e["EventType"] for e in self.events()], ["controller_started"])
-        self.assertEqual(self.database.connection.execute("PRAGMA user_version").fetchone()[0], 10)
+        self.assertEqual(self.database.connection.execute("PRAGMA user_version").fetchone()[0], 11)
 
     def test_no_callback_or_missing_conclusion_does_not_invent_an_agent_outcome(self):
         view = self.fixture.admit()

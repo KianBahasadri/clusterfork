@@ -9,9 +9,8 @@ from types import SimpleNamespace
 
 from .authorization import release_ref
 from .model import (Admit, ContextObserved, DispatchObserved, EffectUpdated, ExternalObserved,
-                    Hold, InboxDone, IssueObserved, Rejected, Retry, TaskSpec, identity, ReportConfirmed, Resubmit)
+                    Hold, InboxDone, IssueObserved, Rejected, Retry, TaskSpec, identity, ReportConfirmed, Resubmit, ProjectionUpdated)
 from .images import Images
-from .linear_state import may_project_attention, submission_snapshot
 from .workflows import ENGINE, WORKFLOW
 from .reporting import attempt_reports,execution_status,repair_terminal,repair_report,review_report
 from common.routing import DispatchError, dependency_status, eligibility
@@ -61,7 +60,7 @@ class Driver:
                     known.review_resubmission_pending or known.phase == 'queued'):
                 route = self.registry.routes.get(known.project_id)
                 if route and route.linear_states:
-                    issue, submission_current = submission_snapshot(
+                    issue, submission_current = self.controller.submission_snapshot(
                         self.linear.issue_history(known.issue_id), known.review_submission, route.linear_states.blocked)
         generation = (known.generation if known and known.phase not in {'completed', 'canceled', 'skipped'}
                       else self.registry.generation)
@@ -85,10 +84,16 @@ class Driver:
             if known:
                 return self.observe_issue(None, known=known)
             return None
-        denied=known and known.review_attention
-        extra = (mapped.linear_states.in_progress, mapped.linear_states.blocked) if known and known.active and not denied and mapped.linear_states else ()
-        route, reason = eligibility(issue, self.registry, additional_state_ids=extra)
+        # Structural facts and raw workflow state cross the Controller seam.
+        # The adapter does not decide whether a state is our own status echo.
+        route, reason = eligibility(issue, self.registry, additional_state_ids=(issue.get('state', {}).get('id'),))
         if route != mapped and (known is None or known.task_id!=identity(generation,mapped.project_id,issue['id'])):
+            return known
+        workflow = {'state': issue['state']['id'], 'type': issue['state'].get('type', ''),
+                    'ready': list(mapped.ready_state_ids),
+                    **({name: getattr(mapped.linear_states, name) for name in ('in_progress', 'blocked', 'done')}
+                       if mapped.linear_states else {'in_progress': '', 'blocked': '', 'done': ''})}
+        if not self.controller.observes_workflow(known, workflow):
             return known
         try:
             _, dependency_reason = dependency_status(self.linear.issue_dependencies(issue["id"]))
@@ -99,7 +104,7 @@ class Driver:
                                        not dependency_reason, issue.get("priority", 0) or 0,
                                        float(issue.get("sortOrder", 0) or 0), issue_revision(issue),
                                        dependency_reason or ("" if route else reason), issue.get("state",{}).get("type")=="canceled",
-                                       submission_current))
+                                       submission_current, workflow))
 
     def refresh(self, view):
         issue = self.linear.issue(view.issue_id)
@@ -150,8 +155,11 @@ class Driver:
                                      known.review_submission.get('changed_at', 0)) < submission['changed_at'] <= self.clock())
                     valid = False
                     if fresh:
-                        issue, valid = submission_snapshot(self.linear.issue_history(event['id']), submission,
+                        issue, valid = self.controller.submission_snapshot(self.linear.issue_history(event['id']), submission,
                                                            route.linear_states.blocked)
+                    elif submission and known and route and route.linear_states and submission['to_state'] not in route.ready_state_ids:
+                        issue, _ = self.controller.submission_snapshot(self.linear.issue_history(event['id']), submission,
+                                                       route.linear_states.blocked)
                     current = self.observe_issue(issue, known=known, submission_current=(
                         valid and (not known.review_resubmission_pending or known.review_submission == submission)
                         if fresh else None))
@@ -301,6 +309,7 @@ class Driver:
         return body
 
     def report(self):
+        snapshots = {}
         pending = {}
         for effect in self.controller.effects("report"):
             pending.setdefault(effect["task_id"], []).append(effect)
@@ -309,6 +318,7 @@ class Driver:
                 view = self.controller.inspect(task_id)
                 route = self.route(view)
                 issue=self.linear.issue(view.issue_id)
+                snapshots[task_id] = issue
                 project=(issue or {}).get('project') or {}
                 if not issue or project.get('id')!=view.project_id or issue.get('archivedAt') or project.get('archivedAt'):
                     continue
@@ -336,58 +346,48 @@ class Driver:
                     if issue and (issue.get("project") or {}).get("id") == view.project_id:
                         if self.linear.status_comment(view.issue_id,comment_id(task_id,"controller-status"),body) is False:
                             raise RuntimeError('Linear status was not acknowledged')
-                        denied = bool(view.review_attention)
                         self.linear.set_label(view.issue_id,AUTO_REPAIR_LABEL,
                                               view.attempt.get('attempt_kind')=='repair' and not repair_terminal(view))
-                        enrolled=any(label.get('name')==self.registry.enrollment_label for label in project.get('labels',{}).get('nodes',[]))
-                        if enrolled and route.linear_states and issue.get("state",{}).get("id") in {*route.ready_state_ids,route.linear_states.in_progress,route.linear_states.blocked}:
-                            desired = (route.linear_states.done if view.phase=="completed" else
-                                       route.linear_states.blocked if view.phase=="held" and not view.attempt.get("retry_kind") else
-                                       route.linear_states.in_progress if view.phase in {"executing","published"} or (
-                                           view.attempt.get("attempt_kind")=="repair" and view.attempt.get('retry_kind')!='capacity') else
-                                       route.ready_state_ids[0])
-                            if view.phase != "canceled" and not view.review_resubmission_pending:
-                                if denied and desired == route.linear_states.blocked:
-                                    self.project_attention(view, route, issue)
-                                elif (issue['state']['id'] != desired and not (
-                                        view.review_submission and desired in route.ready_state_ids)):
-                                    if self.linear.set_state(view.issue_id,desired) is False:
-                                        raise RuntimeError('Linear state was not acknowledged')
                     self.apply(ReportConfirmed('task:'+task_id,signature))
                 for effect in effects:
                     self.apply(EffectUpdated(task_id,effect["effect_id"],"done"))
             except Exception as exc:
                 logging.warning("Controller reporting deferred for %s (%s)",task_id[:12],type(exc).__name__)
+        self.project_states(snapshots)
 
-    def project_attention(self, view, route, issue):
-        # Cleanup/comment/label revisions are not a new authorization to move a
-        # human-managed state. Keep this receipt independent of report signatures.
-        key = f'review-state:{view.task_id}:{view.review_cycle}'
-        signature = identity(view.review_attention_at, route.linear_states.blocked)
-        if self.controller.report_signature(key) == signature:
-            return
-        desired = route.linear_states.blocked
-        if issue['state']['id'] != desired:
-            snapshot = self.linear.issue_history(view.issue_id)
-            current = self.controller.inspect(view.task_id)
-            if (current.review_cycle != view.review_cycle or current.review_attention_at != view.review_attention_at
-                    or current.review_resubmission_pending or not current.review_attention):
-                return
-            project = snapshot.get('project') or {}
-            if ((project.get('id') != view.project_id or snapshot.get('archivedAt') or project.get('archivedAt'))
-                    or not any(label.get('name') == self.registry.enrollment_label
-                               for label in project.get('labels', {}).get('nodes', []))
-                    or snapshot['state'].get('type') == 'canceled'
-                    or snapshot['state']['id'] not in {*route.ready_state_ids, route.linear_states.in_progress, desired}
-                    or not may_project_attention(snapshot, view.review_attention_at, desired)):
-                return
-            if snapshot['state']['id'] != desired:
-                if self.linear.set_state(view.issue_id, desired) is False:
-                    raise RuntimeError('Linear readiness state was not acknowledged')
-            issue = snapshot
-        self.apply(ReportConfirmed(key, signature))
-        self.observe_issue({**issue, 'state': {'id': desired, 'type': 'started'}},
-                           known=self.controller.inspect(view.task_id))
+    def project_states(self, snapshots):
+        for effect in self.controller.effects('linear_state'):
+            task_id, key = effect['task_id'], effect['effect_id']
+            try:
+                view = self.controller.inspect(task_id)
+                route = self.route(view)
+                issue = snapshots.get(task_id) or self.linear.issue(view.issue_id)
+                if not issue:
+                    continue
+                payload = json.loads(effect['payload'])
+                desired = payload['state']
+                if (desired == route.linear_states.blocked and view.review_attention and issue['state']['id'] != desired
+                        and not payload.get('human')):
+                    issue = self.linear.issue_history(view.issue_id)
+                    if not self.controller.may_project_attention(issue, payload['attention_at'], desired):
+                        self.apply(ProjectionUpdated(task_id, key, 'superseded'))
+                        continue
+                mapped, _ = eligibility(issue, self.registry, additional_state_ids=(issue['state']['id'],))
+                observation = {'structural': mapped == route, 'state': issue['state']['id'],
+                               'type': issue['state'].get('type', '')}
+                if not self.apply(ProjectionUpdated(task_id, key, 'claimed', observation)):
+                    continue
+                try:
+                    if issue['state']['id'] != desired:
+                        if self.linear.set_state(view.issue_id, desired) is False:
+                            raise RuntimeError('Linear state was not acknowledged')
+                except Exception:
+                    self.apply(ProjectionUpdated(task_id, key, 'uncertain'))
+                    raise
+                self.apply(ProjectionUpdated(task_id, key, 'confirmed'))
+                snapshots[task_id] = {**issue, 'state': {'id': desired, 'type': 'started'}}
+            except Exception as exc:
+                logging.warning('Controller state projection deferred for %s (%s)', task_id[:12], type(exc).__name__)
 
     def comment(self,issue_id,key,body):
         signature=hashlib.sha256(body.encode()).hexdigest()

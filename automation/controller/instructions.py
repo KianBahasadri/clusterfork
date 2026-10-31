@@ -12,17 +12,7 @@ from .workflows import ENGINE
 from common.publication import comment_id
 from common.routing import uuid_string
 
-OPEN_STAGES={'initializing','selecting_account','coding','testing'}
 DELIVERY_SECONDS=90
-
-
-def accepting(view,now):
-    session=view.session('coding')
-    data=session['data'] if session else {}
-    return bool(view.active and view.eligible and view.phase=='executing' and session and session['agent_started']
-                and not session['finished'] and not view.attempt['stopped'] and session['deadline']>now
-                and data.get('heartbeat_until',0)>now and not data.get('steering_closed')
-                and view.attempt['stage'] in OPEN_STAGES)
 
 
 def binding(view):
@@ -53,7 +43,7 @@ def repair(controller,db,now):
         try:
             view=controller.for_attempt(row['dispatch_key'])
             data=(view.session('coding') or {}).get('data',{})
-            live=accepting(view,now) and bound(row,view)
+            live=controller.accepts_instructions(view,now=now) and bound(row,view)
             if row['state']=='delivering':
                 live=live and all(row.get(key)==data.get(key) for key in ('thread_id','turn_id'))
         except Rejected:
@@ -72,7 +62,7 @@ def apply_request(controller,db,command,now):
     action,data=command.operation,command.data
     if action=='observe':
         issue_id=uuid_string(data['issue_id'])
-        active=[view for view in controller.active() if view.issue_id==issue_id and accepting(view,now)]
+        active=[view for view in controller.active() if view.issue_id==issue_id and controller.accepts_instructions(view,now=now)]
         view=active[0] if len(active)==1 and data['available'] else None
         for comment in sorted(data['comments'],key=lambda item:(item['createdAt'],item['id'])):
             match=re.match(r'^@clusterfork(?:\s+|$)',comment.get('body',''),flags=re.IGNORECASE)
@@ -105,7 +95,7 @@ def apply_request(controller,db,command,now):
     view=controller.for_attempt(data['dispatch_key'])
     if action=='poll':
         repair(controller,db,now)
-        if not accepting(view,now):
+        if not controller.accepts_instructions(view,now=now):
             return {'instruction':None}
         candidates=[row for row in rows(db) if row['issue_id']==view.issue_id and bound(row,view)]
         if any(row['state']=='delivering' for row in candidates):
@@ -201,7 +191,7 @@ class Instructions:
                 logging.warning('Instruction reporting deferred for %s',row['comment_id'])
 
     def reconcile(self):
-        issues={view.issue_id for view in self.controller.active() if accepting(view,self.clock())}
+        issues={view.issue_id for view in self.controller.active() if self.controller.accepts_instructions(view,now=self.clock())}
         with self.controller.database.transaction() as db:
             issues.update(row['issue_id'] for row in rows(db) if row['state'] in {'queued','delivering'})
         for issue in sorted(issues):

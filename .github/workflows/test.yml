@@ -79,3 +79,5 @@ jobs:
         run: python3 automation/check_cursor_sandbox.py
       - name: Verify related context through headless transports without model calls
         run: env -u NO_COLOR python3 -m unittest discover -s tests -p 'test_context_transport.py' -v
+      - name: Verify Symphony policy under adverse event orderings and restarts
+        run: env -u NO_COLOR python3 -m unittest discover -s tests -p 'test_symphony_policy.py' -v

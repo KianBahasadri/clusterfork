@@ -626,7 +626,7 @@ class ReviewDriverRetryTests(unittest.TestCase):
         self.f.linear.set_state.side_effect = lambda *_: False
         with self.assertLogs(level='WARNING'):
             self.driver.report()
-        self.assertTrue(self.f.controller.effects('report'))
+        self.assertTrue(self.f.controller.effects('linear_state'))
         self.fixture.change_state(self.f.issue['id'], {'id': self.f.route.linear_states.blocked, 'type': 'started'})
         self.fixture.human_resubmit()
         self.f.linear.set_state.side_effect = write

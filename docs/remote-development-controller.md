@@ -1,4 +1,4 @@
-# Single controller implementation
+# clusterfork-symphony controller
 
 The Azure VM controller owns task decisions and durable resources; GitHub executes
 the phases. See [runtime policy](remote-development.md), [queues](remote-development-queue.md),
@@ -27,18 +27,28 @@ assignment and execution authorization in one transaction. Failed assignment
 rolls reservation back. Probe claims repeat for the same owner/fence; another
 identity requires verified release. No network request runs inside a transaction.
 
-`broker.py` checks signed phase identity and task authority before credential
-access. `instructions.py` applies typed commands against task views without
-advancing lifecycle. Shared provider, routing, publication, image and reporting
-utilities live in `automation/common/`.
+`Controller.authorize(task_id, attempt_id, role, action, now=...)` is the fresh,
+read-only execution decision for broker operations, context revalidation and
+steering. Its private `authority.py` implementation owns grant, eligibility,
+dependency phase, session/deadline, publication, steering and execution-lease
+checks. Queries create no reports. Startup permits a session to be created;
+credential cleanup remains fenced and available after execution is revoked.
+`broker.py` verifies signed identities, gathers external evidence and issues
+scoped credentials; it does not independently interpret task phase or blockers.
+`instructions.py` uses the same decision for observation and delivery. Shared
+provider, routing, publication, image and reporting utilities live in
+`automation/common/`.
 
 ## Observation and transports
 
 `driver.py` observes Linear/GitHub and submits commands. It claims dispatch intent
 before calling GitHub and discovers uncertain results rather than resending. It
 resolves target context at admission and checks the required runtime before new
-attempts. Linear reporting derives from task views. SQLite `comment_signatures`
-records only confirmed writes; failed/ambiguous writes retry with stable IDs.
+attempts. Linear comments and labels derive from task views. SQLite
+`comment_signatures` records confirmed comment writes. Workflow states use
+independent durable effects. `linear_state.py` privately interprets workflow
+observations and human intent for Controller; [queue policy](remote-development-queue.md#linear-feedback)
+owns state reconciliation and operator intent.
 
 The admitted specification retains repository, branch and merge policy. Mapping
 removal/change revokes new execution access while observation continues against
@@ -55,6 +65,13 @@ enrollment/reclaim. `controller_main.py` assembles adapters, reads managed-ident
 secrets and verifies the expected VM resource identity before serving.
 
 ## Deployment and migration
+
+SQLite schema 11 adds intent/workflow records and indexes without rewriting
+task, attempt, grant, lease or approval history. Startup recovers intent from the
+retained authenticated inbox. Older controller binaries reject schema 11;
+rollback requires a compatible binary or restoration of the pre-upgrade database
+after the normal deployment drain. [Queue policy](remote-development-queue.md#linear-feedback)
+owns adoption of existing Linear projection acknowledgements.
 
 Task history and account/instruction imports are complete; private snapshots and
 SQLite digest receipts retain the audit record. Startup uses SQLite without a
@@ -90,7 +107,11 @@ attempt; an output boolean alone cannot authorize it.
 The [suite](conventions.md#local-validation) exercises real SQLite/HTTP boundaries,
 signed roles, leases, workflow graphs and recovery. Git-backed release/deployment
 tests verify runtime identity, target freshness and drain gates. Unit tests do not
-establish live cutover; dated receipts follow.
+establish live cutover; dated receipts follow. The Python 3.12 runtime CI also
+runs `test_symphony_policy.py`: all ten submission/cleanup/reporting interleavings
+with restart at every cut, later withdrawals, ambiguous writes, cross-operation
+authorization and bounded broker outage recovery. These use fake remote services
+and real SQLite without credentials or model calls.
 
 ## Rebuild baseline
 
