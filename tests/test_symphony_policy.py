@@ -135,6 +135,26 @@ class SymphonyCausalityTests(unittest.TestCase):
         f.call(Role.CODING, 'save', account_id=f.account_b, lease=lease['lease'], auth=lease['auth'], release=True)
         self.assertEqual(f.pool.get(f.account_b)[0]['lease_until'], 0)
 
+    def test_webhook_history_millisecond_timestamp_discrepancy_authorizes_resubmission(self):
+        scenario = self.fixture()
+        f, driver = scenario.f, scenario.driver
+        previous = f.issue['state']['id']
+        target = f.route.ready_state_ids[0]
+        history_at = 1001.033
+        webhook_at = 1001.066
+        driver.clock = lambda: 1001.1
+        f.broker.clock = driver.clock
+        scenario.fixture.change_state(f.issue['id'], {'id': target, 'type': 'unstarted'}, at=history_at)
+        event = {'type': 'Issue', 'id': f.issue['id'], 'webhook_at': webhook_at, 'submission': {
+            'actor_id': scenario.fixture.histories[f.issue['id']][-1]['actor']['id'],
+            'from_state': previous, 'to_state': target, 'changed_at': webhook_at}}
+        scenario.driver.apply(InboxQueued(identity(event), event))
+        scenario.finish_old_review()
+        scenario.driver.events()
+        scenario.driver.report()
+        view = f.controller.inspect(f.view.task_id)
+        self.assertEqual((view.phase, view.review_cycle, view.review_attempts), ('queued', 2, 0))
+
     def test_same_timestamp_conflict_is_held_until_a_new_unambiguous_human_action(self):
         scenario = self.fixture()
         first = self.move(scenario, scenario.f.route.ready_state_ids[0], 1001)
