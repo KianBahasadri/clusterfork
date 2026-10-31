@@ -94,6 +94,10 @@ class IndependentAccountTests(unittest.TestCase):
                 with self.assertRaisesRegex(WorkerError, 'busy'):
                     pool.claim(identity, 'other-worker')
                 pool.save(identity, 'cloud-worker', lease['lease'], login(provider, 'cloud', 1), release=True)
+                quota_lease = pool.claim(identity, 'quota:test-probe')
+                worker_lease = pool.claim(identity, 'cloud-worker')
+                self.assertNotEqual(quota_lease['lease'], worker_lease['lease'])
+                pool.save(identity, 'cloud-worker', worker_lease['lease'], release=True)
                 self.assertEqual(local.read_bytes(), saved_local)
                 self.assertEqual(pool.list(), [identity])
                 self.command('enroll', provider, store, pool)

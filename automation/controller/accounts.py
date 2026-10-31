@@ -96,9 +96,10 @@ class AccountPool:
             except (ValueError,TypeError,KeyError,WorkerError):
                 raise WorkerError('Stored account credentials are invalid') from None
             live=row['lease_until']>self.clock()
-            if live and (not reuse or row['owner']!=owner):
+            preempt = live and row['owner'].startswith('quota:') and not owner.startswith('quota:')
+            if live and not preempt and (not reuse or row['owner']!=owner):
                 raise WorkerError('Account is busy')
-            fence=row['fence'] if live else str(uuid4())
+            fence=row['fence'] if live and not preempt and (reuse or row['owner']==owner) else str(uuid4())
             db.execute('UPDATE accounts SET owner=?,fence=?,lease_until=?,version=version+1 WHERE provider=? AND account_id=?',
                        (owner,fence,self.clock()+LEASE_SECONDS,self.provider,identity))
             return {'auth':auth,'lease':fence}
