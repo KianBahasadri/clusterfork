@@ -173,10 +173,11 @@ facts and human watermark. Cleanup cannot replay confirmed states. Ambiguous
 writes reconcile against the observed state before repeating a mutation.
 Targeted history remains a recovery fallback for delayed/missing transitions and
 unacknowledged attention writes. Signed events and retained projection provenance
-distinguish controller traffic from a later human withdrawal. A controller write
-already in flight may land after a human action; reconciliation restores the
-latest signed human state rather than treating that echo as new intent. SQLite
-does not make remote Linear writes atomic. History reads remain targeted; settled
+distinguish controller traffic from a later human withdrawal. Transitions to
+either the ready states or the active in-progress state preserve execution authorization
+rather than triggering withdrawal. A controller write already in flight may land
+after a human action; reconciliation restores the latest signed human state rather
+than treating that echo as new intent. SQLite does not make remote Linear writes atomic. History reads remain targeted; settled
 historical tasks gain no per-task polling. Upgrading adopts existing acknowledged
 attention effects and live reported execution without resetting grants or budgets.
 Late failure/context feedback keeps the original held-cycle boundary; it cannot

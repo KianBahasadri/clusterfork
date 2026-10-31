@@ -135,6 +135,28 @@ class SymphonyCausalityTests(unittest.TestCase):
         f.call(Role.CODING, 'save', account_id=f.account_b, lease=lease['lease'], auth=lease['auth'], release=True)
         self.assertEqual(f.pool.get(f.account_b)[0]['lease_until'], 0)
 
+    def test_in_progress_state_webhook_does_not_withdraw_coding_task(self):
+        scenario = self.fixture()
+        scenario.finish_old_review()
+        scenario.fixture.human_resubmit()
+        scenario.driver.tick(scan=True)
+        f = scenario.f
+        f.key = f.controller.inspect(f.view.task_id).attempt['attempt_id']
+        f.review()
+        f.preflight(Role.CODING_SELECT, f.account_b)
+        f.call(Role.CODING, 'start', protocol=PROTOCOL)
+        lease = f.call(Role.CODING, 'claim', account_id=f.account_b)
+        f.call(Role.CODING, 'progress', stage='coding', context_sha=f.spec.context_sha)
+        scenario.driver.report()
+        # Linear delivers an update webhook for the in_progress transition
+        event = self.move(scenario, f.route.linear_states.in_progress, 1003, 'started')
+        scenario.driver.apply(InboxQueued(identity(event), event))
+        # Ensure coding authorization is preserved and not withdrawn
+        f.controller.authorize(f.view.task_id, f.key, Role.CODING, 'progress', now=1003)
+        view = f.controller.inspect(f.view.task_id)
+        self.assertTrue(view.eligible)
+        self.assertEqual(view.review_attention, '')
+
     def test_webhook_history_millisecond_timestamp_discrepancy_authorizes_resubmission(self):
         scenario = self.fixture()
         f, driver = scenario.f, scenario.driver

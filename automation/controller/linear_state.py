@@ -46,7 +46,9 @@ def workflow(db, task_id):
 def human_withdrawal(db, task):
     latest, policy = intent(db, task['issue_id']), workflow(db, task['task_id'])
     return bool(latest and policy and latest['changed_at'] >= task['review_submitted_at'] and (
-        latest['conflicted'] or latest['withdrawn'] or latest['transition']['to_state'] not in policy['ready']))
+        latest['conflicted'] or latest['withdrawn'] or (
+            latest['transition']['to_state'] not in policy['ready']
+            and latest['transition']['to_state'] != policy.get('in_progress'))))
 
 
 def observes_workflow(known, policy):
