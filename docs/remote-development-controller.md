@@ -1,239 +1,145 @@
 # Single controller implementation
 
-The controller is live on its Azure VM. Five acceptance tasks have completed
-through the ordinary guarded path, including automatic runtime rollout and
-verified deployment completion before the following task starts. Linear intake,
-account cleanup, onboarding and existing reporting are verified on the live release.
+The Azure VM controller owns task decisions and durable resources; GitHub executes
+the phases. See [runtime policy](remote-development.md), [queues](remote-development-queue.md),
+[accounts](remote-development-accounts.md) and [deployment](remote-development-deployments.md)
+for their operational rules.
 
 ## Task ownership
 
-`automation/controller/core.py` is the replacement task-state writer. `apply`
-accepts the typed commands in `model.py`; `inspect` returns committed task views.
-It owns repository grants, task/attempt identity, queue ordering, readiness
-decisions, coding progression, external stop/publication observations, retry
-authorization, and independent admission holds.
+`automation/controller/core.py` is the sole task-state writer. `apply` accepts
+typed commands from `model.py`; `inspect` returns committed views. It owns grants,
+task/attempt identity, ordering, readiness, coding progression, external stop and
+publication observations, retries, one repair budget and independent holds.
+Account and instruction resources cannot independently advance task lifecycle.
 
-The responsibilities previously spread across lifecycle writers map as follows:
+`store.py` uses local SQLite transactions, foreign keys, state constraints and
+unique repository grants. One process holds an exclusive owner-file lock. This
+protects the database on its host; infrastructure must also restrict the serving
+VM identity and disk. Database files require private permissions and persistent
+storage. Callbacks do not prove GitHub stopped; superseded attempts cannot mutate
+current execution. [Queue release rules](remote-development-queue.md#ownership-and-release)
+require external evidence, including cleanup and PR resolution.
 
-| Existing writer | Replacement responsibility |
-| --- | --- |
-| `dispatch_core.Dispatcher`, `repository_queue.RepositoryQueue` | Controller eligibility, ordering, grants and dispatch intents; driver observations |
-| `readiness.ReadinessGate` | Controller review binding/decisions and broker authorization; native review jobs |
-| `worker_core.WorkerService` task records | Broker commands and controller phase/attempt transitions |
-| `linear_sync.LinearSync` | Driver-observed GitHub/PR facts, controller completion, derived Linear reporting |
-| `auto_repair.AutoRepair` | Controller-owned single repair budget and attempts; existing repair prompt/validation helpers |
+Task grants, account leases and instructions share SQLite. `accounts.py` supplies
+provider-specific fenced records; `account_commands.py` composes reservation,
+assignment and execution authorization in one transaction. Failed assignment
+rolls reservation back. Probe claims repeat for the same owner/fence; another
+identity requires verified release. No network request runs inside a transaction.
 
-Existing fenced accounts and instruction resources retain their own storage;
-they cannot independently advance task lifecycle.
-
-`store.py` uses a real local SQLite database with transactions, foreign keys,
-state constraints, and unique repository grants. One process holds an exclusive
-owner-file lock. The lock protects that database on its host; infrastructure must
-still restrict which VM identity and disk may serve as the controller. Database
-files use private permissions and must live on persistent storage.
-
-Agent callbacks record results without proving GitHub jobs stopped. Repository
-ownership remains through cleanup and PR resolution. Only verified external
-observations can release it. A merged PR remains authoritative even when its
-worker later reports cleanup failure. Superseded attempts cannot mutate current
-execution state. Operator and deployment holds have distinct owners.
-
-Task grants, account leases and instruction records now share this SQLite database.
-`accounts.py` provides provider-specific fenced records; `account_commands.py`
-composes account reservation, assignment and execution authorization in the same
-transaction. No network request runs inside these transactions. A failed assignment
-rolls its account reservation back. Probe claims are repeatable for the same owner
-and fence; a different identity requires verified release first.
-
-`broker.py` verifies signed phase identity and current task authority before
-credential access. `instructions.py` uses typed commands against actual task views;
-instruction delivery cannot advance task lifecycle. Shared routing, publication,
-policy, image, account identity and reporting utilities live in `automation/common/`.
-The retired Functions coordinator and its table adapters are removed.
+`broker.py` checks signed phase identity and task authority before credential
+access. `instructions.py` applies typed commands against task views without
+advancing lifecycle. Shared provider, routing, publication, image and reporting
+utilities live in `automation/common/`.
 
 ## Observation and transports
 
-`driver.py` reads current Linear/GitHub facts and submits typed commands. It claims
-dispatch intent before the external call and discovers an uncertain result instead
-of resending. It resolves the latest target context at admission and checks a
-required-runtime predicate before admitting or retrying work. A deployment-owned
-hold cannot clear an operator hold. Rendering Linear status is derived from task
-views and does not make execution decisions. SQLite `comment_signatures` records
-only confirmed remote writes, preserving deduplication across restarts. Failed or
-ambiguous writes remain retryable using their stable comment IDs.
+`driver.py` observes Linear/GitHub and submits commands. It claims dispatch intent
+before calling GitHub and discovers uncertain results rather than resending. It
+resolves target context at admission and checks the required runtime before new
+attempts. Linear reporting derives from task views. SQLite `comment_signatures`
+records only confirmed writes; failed/ambiguous writes retry with stable IDs.
 
-The admitted specification retains the original repository, branch and merge
-policy. Removing or changing a mapping revokes new execution access while the
-driver continues observing the original run and PR until ownership can be
-released. Archived or moved issues retain pending reports without changing their
-human-managed state.
+The admitted specification retains repository, branch and merge policy. Mapping
+removal/change revokes new execution access while observation continues against
+the original run/PR until ownership can release. Archived or moved issues retain
+pending reports without changing their human-managed state. Project scans ignore
+unseen ineligible issues and preserve terminal identity without new completion
+comments. Hold changes refresh waiting-task reporting intent.
 
-`server.py` exposes authenticated webhook intake, OIDC worker requests, and public
-bounded health metadata. Verified webhook IDs are committed in the local inbox
-before acknowledgement. Operator commands use a local mode-0600 Unix socket;
-they are not public HTTP routes. The separate `/api/accounts` transport verifies
-an allowlisted Azure operator identity for local enrollment and fenced reclaim. `controller_main.py` assembles these adapters,
-reads existing secrets through managed identity, and verifies the expected VM
-resource identity before opening the service. A newly initialized database starts
-with an operator hold; restarting an existing database preserves its current
-holds. Hold changes create fresh reporting intent for waiting tasks. Project scans
-ignore unseen ineligible issues and retain terminal task identity without adding
-new historical completion comments.
-
-`release.py` supplies committed runtime identity. [Deployment](remote-development-deployments.md)
-owns runtime-input selection, rollout, verified draining, direct webhook ingress
-and independent operator/deployment holds.
+`server.py` exposes signed webhook intake, OIDC worker requests and bounded public
+health metadata. Verified webhook IDs enter the durable inbox before acknowledgement.
+Operator commands use a local mode-0600 Unix socket, never public HTTP routes.
+`/api/accounts` separately verifies an allowlisted Azure operator identity for
+enrollment/reclaim. `controller_main.py` assembles adapters, reads managed-identity
+secrets and verifies the expected VM resource identity before serving.
 
 ## Deployment and migration
 
-The terminal history and account/instruction imports are complete. Their private
-snapshots and SQLite digest receipts retain the audit record. Startup uses only
-the controller database; no Table SDK, migration adapter or legacy runtime
-storage is required. The retired Function App relay and table resources are
-removed only after verifying the migrated records and native direct webhook delivery.
+Task history and account/instruction imports are complete; private snapshots and
+SQLite digest receipts retain the audit record. Startup uses SQLite without a
+Table SDK, migration adapter or legacy storage. The retired coordinator and relay
+are removed; their [historical records](README.md#historical-investigations) remain.
+[Deployment](remote-development-deployments.md) owns runtime identity, draining,
+ingress and operator/deployment holds, including initial-install holds.
 
 ## Native execution graph
 
-`automation/controller/workflows.py` generates `clusterfork-task.yml` with two
-fresh hosted VMs: `review`, then `code` only after a successful review. Each job
-checks out its approved runtime and runs one trusted worker process. That process
-probes quota, reserves an account, irreversibly closes initial pool access, obtains
-a scoped target checkout, then executes its phase. Only the review scheduling
-boolean crosses the job boundary. Runtime and target checkouts remain siblings.
+`automation/controller/workflows.py` generates `clusterfork-task.yml`: `review`,
+then `code` after successful review, each on a fresh hosted VM. Each job checks
+out approved runtime and runs one trusted worker: probe quota, reserve an account,
+irreversibly close initial pool access, obtain scoped target checkout, execute.
+Runtime and target checkouts are siblings. Only the review scheduling boolean
+crosses jobs; review and coding have separate account bindings.
 
-The controller reserves the selected lease atomically with assignment and renews
-it through checkout. Starting execution cannot reopen initial selection. Review
-runs in the existing read-only sandbox; coding performs validation and guarded PR
-publication before releasing credentials. The provider and account policy is
-unchanged by the reduction in VM count.
+The assignment transaction reserves the lease; heartbeats renew it through
+checkout. Starting execution cannot reopen initial selection. Review uses the
+read-only sandbox; coding validates and publishes a guarded PR before credential
+release. The controller dispatches at its verified immutable runtime tag.
 
 `authorization.py` binds verified GitHub OIDC claims to the mapped task, immutable
-runtime tag/revision, exact caller workflow, and one reusable job role. The HTTP
-adapter must cryptographically verify the JWT first. Coding requires a successful
-`review / run` job from the exact GitHub attempt; an output boolean alone cannot
-grant permission. Account bindings are separate for review and coding.
-
-The controller dispatches the combined workflow at its verified runtime tag.
-The worker emits the review scheduling output that the native graph consumes.
+runtime tag/revision, exact caller workflow and reusable job role. The HTTP adapter
+cryptographically verifies signature, issuer, audience and expiry, and checks
+hosted-runner type, run/attempt and actual dispatch by `clusterfork[bot]`. The task
+grant authorizes the mapped target, independently of caller repository name.
+Coding also requires successful `review / run` evidence from the exact GitHub
+attempt; an output boolean alone cannot authorize it.
 
 ## Verification
 
-`tests/test_controller.py` exercises the interface against real SQLite files,
-including concurrency, rollback, persistence, stale events, proof validation,
-account assignment, cleanup/publication resolution, and independent holds.
-`test_controller_authorization.py` checks signed roles and actual review-job
-evidence. `test_controller_broker.py` crosses the real controller with the existing
-account implementation to verify probes, cleanup, separate assignments, live
-leases, context checks, and restricted failover. `test_controller_workflows.py`
-parses the shipped YAML and checks job
-dependencies, role separation, checkout order, and inter-job outputs.
-Driver tests exercise sequential target-code freshness, the runtime admission
-barrier, reporting independence, uncertain dispatch discovery, and the one-repair
-budget. HTTP tests use real local sockets to verify authentication and durable
-intake. Instruction tests exercise the existing delivery/acknowledgement protocol
-through controller views. Database upgrades preserve task and attempt ownership.
-Runtime tests check host identity, authentication selection, and hold persistence.
-Release tests use real Git repositories to check runtime identity, target-only
-changes, and exclusion of uncommitted files.
-Deployment tests exercise grant/PR/lease draining and runtime tag identity.
-The once-only migration adapters are retired after their live import receipts
-were verified; historical task identity remains in SQLite.
-
-The VM and persistent disk were provisioned on 2026-10-30. Service installation
-and initial migration are complete. Final compatibility deployment and acceptance
-passed. The dated receipts below establish live cutover; unit tests alone are not
-cutover evidence.
+The [suite](conventions.md#local-validation) exercises real SQLite/HTTP boundaries,
+signed roles, leases, workflow graphs and recovery. Git-backed release/deployment
+tests verify runtime identity, target freshness and drain gates. Unit tests do not
+establish live cutover; dated receipts follow.
 
 ## Rebuild baseline
 
-On 2026-10-30, the existing deployment workflow was verified `disabled_manually`.
-The existing durable deployment record was set to paused with owner
-`operator:single-controller-rebuild`; public health confirmed `deployment_paused`
-and `workers_drained`. There were no active account leases or open GitHub PRs.
-The repository slot was empty. Historical tables included stale readiness records;
-their status alone is not evidence of a live runner.
-
-A private backup of the seven task/control tables was saved under
-`~/.local/state/clusterfork/rebuild/baseline-20261030.json`. It excludes the account
-credential table. Revalidate current external state before migration; these are
-dated baseline observations, not an ongoing health claim.
+On 2026-10-30, deployment was `disabled_manually`, with durable pause owner
+`operator:single-controller-rebuild`. Health showed `deployment_paused` and
+`workers_drained`; no live account leases, open PRs or repository slot remained.
+Stale readiness rows were not live-runner evidence. The private seven-table backup
+is `~/.local/state/clusterfork/rebuild/baseline-20261030.json`, excluding credentials.
+Revalidate external state before any recovery; this is a dated observation.
 
 ## Live acceptance, 2026-10-30
 
-The installed `abc53b7a4665b5193f88577b71ed24d0abdfd8e9` release was verified over
-HTTPS and by its immutable runtime tag. The legacy Function App was stopped before
-the controller started. The persistent disk contains 41 imported historical queue
-records. All four credential rows matched their pre-cutover auth fingerprints.
-Operator holds survived installation and were released explicitly for acceptance.
+Initial release `abc53b7a4665b5193f88577b71ed24d0abdfd8e9` was verified over HTTPS
+and by immutable tag after stopping the Function App. The disk held 41 imported
+history records; four credential fingerprints matched. Installation preserved
+operator holds, explicitly released for acceptance.
 
-KIAN-933 used [run 41130619289](https://github.com/KianBahasadri/clusterfork/actions/runs/41130619289).
-All four jobs and their real post-job cleanup steps passed.
-[PR 41](https://github.com/KianBahasadri/clusterfork/pull/41) merged automatically
-as `0b9f9473f5bdab14e54cb1b56e9a174fba033951`; the controller then marked it Done.
-The review and coding phase assignments both recorded credential release.
+| Task | Run | Merged PR | Evidence |
+| --- | --- | --- | --- |
+| KIAN-933 | [41130619289](https://github.com/KianBahasadri/clusterfork/actions/runs/41130619289) | [41](https://github.com/KianBahasadri/clusterfork/pull/41) | Ordinary guarded completion and both credential releases |
+| KIAN-934 | [41131982035](https://github.com/KianBahasadri/clusterfork/actions/runs/41131982035) | [42](https://github.com/KianBahasadri/clusterfork/pull/42) | Target context exactly matched preceding merge `0b9f947` while runtime stayed pinned |
+| KIAN-935 | [41133214559](https://github.com/KianBahasadri/clusterfork/actions/runs/41133214559) | [43](https://github.com/KianBahasadri/clusterfork/pull/43) | Installer stop fix `9aa974d` rolled out by [41134535439](https://github.com/KianBahasadri/clusterfork/actions/runs/41134535439) |
+| KIAN-936 | [41135013810](https://github.com/KianBahasadri/clusterfork/actions/runs/41135013810) | [44](https://github.com/KianBahasadri/clusterfork/pull/44) | Runtime and target both matched `9aa974d` |
+| KIAN-937 | [41143929662](https://github.com/KianBahasadri/clusterfork/actions/runs/41143929662) | [45](https://github.com/KianBahasadri/clusterfork/pull/45) | Admission followed complete deployment, including ingress verification |
 
-KIAN-934 used [run 41131982035](https://github.com/KianBahasadri/clusterfork/actions/runs/41131982035).
-Its saved target context is exactly KIAN-933's merge commit while its runtime
-remained pinned to the installed release.
-[PR 42](https://github.com/KianBahasadri/clusterfork/pull/42) merged automatically
-as `fb0a8c842bdd1cfd24d30eb0f3c6c11e51fc83a1`; Linear reached Done without manual
-queue advancement.
+These runs passed all four jobs in the **then-current** graph and real post-job
+cleanup, merged automatically and reached Done. For KIAN-937, deployment
+[41143295703](https://github.com/KianBahasadri/clusterfork/actions/runs/41143295703)
+finished at 23:20:45 UTC; admission followed 13 seconds later without manual resume.
+Runtime/target matched `64897b746a2247a2cd474fc8ebe0f609df954033`.
+PR 45 merged as `3a1ac89c1cde43eebc1be35d25a691ceefb91d71`; Done followed at
+23:31:08 UTC with usage comments and execution-label cleanup.
 
-KIAN-935 used [run 41133214559](https://github.com/KianBahasadri/clusterfork/actions/runs/41133214559).
-[PR 43](https://github.com/KianBahasadri/clusterfork/pull/43) merged the installer
-stop-verification fix as `9aa974df9d84ee6fa281cea512fdbea888d6a034`.
-[Deployment 41134535439](https://github.com/KianBahasadri/clusterfork/actions/runs/41134535439)
-automatically installed and verified that runtime.
-
-KIAN-936 used [run 41135013810](https://github.com/KianBahasadri/clusterfork/actions/runs/41135013810).
-Its saved runtime and target context both match `9aa974df9d84ee6fa281cea512fdbea888d6a034`.
-All four jobs passed, [PR 44](https://github.com/KianBahasadri/clusterfork/pull/44)
-merged automatically, and Linear reached Done. This proved active-runtime and
-checkout freshness; the final gate additionally waits for the whole deployment
-workflow, including ingress verification, before admitting the following task.
-
-The final compatibility release is `64897b746a2247a2cd474fc8ebe0f609df954033`.
-[Deployment 41143295703](https://github.com/KianBahasadri/clusterfork/actions/runs/41143295703)
-completed successfully at **23:20:45 UTC**. KIAN-937's
-[run 41143929662](https://github.com/KianBahasadri/clusterfork/actions/runs/41143929662)
-was created automatically at **23:20:58 UTC**, 13 seconds later. Its saved runtime
-and target context both match that verified release. The task was already in Todo
-while earlier ingress verification failed; it remained queued until the complete
-deployment passed, without manual admission or resume.
-
-All four jobs and every real post-job cleanup step passed. Only the historical
-acceptance fixture changed in [PR 45](https://github.com/KianBahasadri/clusterfork/pull/45),
-which passed required CI and merged automatically as
-`3a1ac89c1cde43eebc1be35d25a691ceefb91d71` at 23:30:27 UTC. The controller marked
-KIAN-937 Done at 23:31:08 UTC and removed its execution labels. Separate readiness,
-development-start and development-finish usage comments were present.
-
-Real Linear issue updates produced 17 verified native inbox events by the final
-inspection. The retained Function App exposed exactly `health` and `linear_relay`; its
-old worker RPC returned 404. HTTPS health and the immutable runtime tag identified
-the deployed release. The read-only `onboard.py verify` command passed against the
-live project, runtime, App grants, workflow, CI, labels and protocol. All four
-account rows remained present, with zero live leases after execution.
-The final database inspection confirmed completion, stopped jobs, merged
-publication, released review/coding assignments, no repository grants and no
-admission holds. The service was active under its unprivileged user; the database
-remained on the persistent disk, with mode `0600` for it and the operator socket.
+Final inspection found 17 verified native inbox events, successful read-only
+`onboard.py verify`, four accounts with no live leases, released phase assignments,
+no grants/holds and an active unprivileged service. Database and operator socket
+were mode `0600`; the database was on persistent storage. The [acceptance fixture](archive/controller-acceptance-20261030.md)
+retains sequential checkout observations; relay-era evidence is historical.
 
 ## Resource consolidation, 2026-10-31 UTC
 
-The two-job implementation and SQLite resource migration are deployed. All four
-account records retained their original credential bytes and active/staged state;
-41 imported task-history records remain available. A native signed Linear event
-was committed after the relay was confirmed stopped. The reviewed retirement
-plan then deleted exactly 21 legacy infrastructure resources, with no changes to
-the controller VM, persistent disk, secrets or separate Terraform state account.
-A subsequent Terraform plan reported no changes.
+Two-job execution and SQLite resources were deployed with all four original
+credential records/state and 41 history records preserved. Native signed Linear
+intake worked after stopping the relay. A reviewed retirement deleted 21 legacy
+resources, preserving the VM, disk, secrets and separate state account; the next
+Terraform plan was empty. A fresh dependency environment passed 636 tests, with
+the optional live-image test skipped and no Functions/Table SDKs.
 
-The final dependency set passed 636 tests in a fresh Python environment without
-the Functions or Table SDKs; the existing optional live-image test was skipped.
-
-[KIAN-939’s workflow](https://github.com/KianBahasadri/clusterfork/actions/runs/41153381971)
-passed with exactly `review / run` and `code / run` on different hosted runners,
-including every real post-job cleanup step. It was created after successful
-[deployment 41152900749](https://github.com/KianBahasadri/clusterfork/actions/runs/41152900749).
-The coding phase continued successfully while legacy storage was absent.
+[KIAN-939 run 41153381971](https://github.com/KianBahasadri/clusterfork/actions/runs/41153381971)
+followed [deployment 41152900749](https://github.com/KianBahasadri/clusterfork/actions/runs/41152900749)
+and passed exactly `review / run` and `code / run` on separate hosted runners,
+including post-job cleanup; coding succeeded with legacy storage absent.

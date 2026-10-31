@@ -1,100 +1,69 @@
 # Agent configs
 
-`agents/` contains the shipped JSON/TOML settings and Claude MCP plugins.
-[Installation](installation.md) owns the destination paths and merge rules.
-Agent models are pinned only where the source file specifies one; settings
-preserved by the installer are local runtime state.
+`agents/` holds shipped settings and Claude MCP plugins. [Installation](installation.md)
+owns destinations/merge rules. Models are pinned only where specified below.
 
 ## Claude Code
 
-`agents/claude.json` pins `claude-opus-4-8`, enables the context7 marketplace
-plugin, and disables the three clusterfork skills-directory MCP plugins.
-The installer copies the local plugins; it does not download the context7
-marketplace plugin.
-
-Other settings: dark fullscreen TUI, hold-to-talk voice, prompt suggestions and
-auto-memory off, dangerous-mode permission prompt skipped, agent push
-notifications on, and drafted feedback off. It wires the shared
-[Stop notifier](notifications.md) and [statusline](statusline.md#claude).
+`claude.json` pins `claude-opus-4-8`, enables context7's marketplace plugin and
+ships three local MCP plugins disabled. Installation copies local plugins but
+does not download context7. Settings: dark fullscreen TUI, hold-to-talk voice,
+prompt suggestions/auto-memory/drafted feedback off, dangerous-mode prompt skipped,
+agent push notifications on, shared [Stop hook](notifications.md) and [statusline](statusline.md#claude).
 
 ### Skills-directory MCP plugins
 
-Each `agents/claude-plugins/<name>/` has `.claude-plugin/plugin.json` and
-`.mcp.json`. Installed under Claude's skills directory, it loads as
-`<name>@skills-dir`. The installer rejects missing plugin files or a plugin
-not explicitly set to `false` in `agents/claude.json`'s `enabledPlugins`.
-
-Use `/plugin` or change that setting to enable one for the installed profile;
-reinstalling restores the repo default. Plugin tools have names such as
-`mcp__plugin_<plugin>_<server>__<tool>`, and enabled servers appear under
-Built-in MCPs in `/mcp`. The
-[disable-mechanism investigation](archive/mcp-disable-probes.md) records why
-ordinary user-scope MCP entries were unsuitable for a shipped off-by-default
-setting.
+Each `agents/claude-plugins/<name>/` requires `.claude-plugin/plugin.json` and
+`.mcp.json`; installation rejects missing files or an entry not explicitly `false`
+in `enabledPlugins`. Installed names are `<name>@skills-dir`; tools look like
+`mcp__plugin_<plugin>_<server>__<tool>` and appear in `/mcp` under Built-in MCPs.
+See the [disable-mechanism investigation](archive/mcp-disable-probes.md).
 
 ## OpenCode
 
-`agents/opencode.json` selects the `build` agent and allows tools by default.
-The `plan` agent denies `bash` and `edit`. The `ask-opencode` skill is denied
-at the top level to prevent self-delegation. No model/provider is pinned; use
-OpenCode's own model and auth flows. The separate
-[`occ` launcher](opencode-go.md) configures Claude Code against OpenCode Go.
+`opencode.json` selects `build`, allowing tools by default; `plan` denies `bash`
+and `edit`. Top-level `ask-opencode` denial prevents self-delegation. Model/auth
+remain native choices. [`occ`](opencode-go.md) is the separate Claude Go launcher.
 
 ## Qwen Code
 
-`agents/qwen.json` leaves model/auth selection to Qwen. Usage statistics,
-managed auto-memory, auto-dream, auto-skill, and loading phrases are disabled.
-MCP servers excluded from session discovery are listed in `mcp.excluded`.
+`qwen.json` leaves model/auth native. Usage statistics, managed auto-memory,
+auto-dream, auto-skill and loading phrases are off; `mcp.excluded` controls discovery.
 
 ## Grok
 
-`agents/grok.toml` leaves the main model unpinned and sets the fork secondary
-model to `grok-4.5`. It ships `tokyonight`, `permission_mode = "always-approve"`,
-`yolo = false`, compact mode off, and prompt suggestions off.
-Telemetry is off, the privacy banner is acknowledged, internal auto-updates
-are enabled, and the xAI Official marketplace source is configured.
-
-The Chrome DevTools marketplace plugin is disabled. Grok's own Stop hook uses
-[the shared notifier](notifications.md); `[compat.claude] hooks = false`
-prevents a second bell from importing Claude's Stop hook.
+`grok.toml` leaves the main model unpinned, pins fork model `grok-4.5`, and ships
+`tokyonight`, `permission_mode = "always-approve"`, `yolo = false`, compact mode
+and suggestions off. Telemetry is off, privacy acknowledged, internal updates on,
+xAI Official marketplace configured, Chrome DevTools plugin disabled.
+`[compat.claude] hooks = false` prevents duplicate bells from Claude's Stop hook.
 
 ## Antigravity
 
-`agents/antigravity.json` sets dark colors and disables telemetry and feedback
-surveys without pinning a model. Its initial trusted workspace paths are literal
-`/home/kian/...` paths; the installer does not relocate them to another home.
-Existing trusted workspaces are preserved as described in
-[Installation](installation.md#replacement-and-preservation).
-
-`agents/antigravity-hooks.json` installs the Stop notifier. The event gates and
-workspace-name handling belong to [Notifications](notifications.md).
-MCP entries live separately in `agents/antigravity-mcp.json`.
+`antigravity.json` sets dark colors, telemetry/surveys off and no model pin.
+Initial `/home/kian/...` trusted paths are literal; installation preserves existing
+workspaces without relocating paths. `antigravity-hooks.json` supplies Stop;
+`antigravity-mcp.json` supplies MCP entries.
 
 ## Command Code
 
-`agents/command-code.json` disables telemetry. The separate
-`agents/command-code-settings.json` supplies the Stop notifier, and
-`agents/command-code-mcp.json` supplies MCP servers.
-Model/provider settings are not pinned.
+`command-code.json` disables telemetry; `command-code-settings.json` supplies Stop;
+`command-code-mcp.json` supplies MCP. Model/provider remain unpinned.
 
 ## Codex
 
-`agents/codex.toml` supplies MCP servers and the asynchronous root Stop hook.
-It does not pin a model, effort, approval policy, or project trust level.
-The installer retains unrelated Codex settings and stamps trust for the
-clusterfork Stop hook; see
-[Installation](installation.md#replacement-and-preservation).
-The shell launcher adds the shared [native statusline](statusline.md#codex).
+`codex.toml` supplies MCP and asynchronous root Stop, without model, effort,
+approval or project-trust pins. Installation merges settings and stamps hook trust;
+launchers add the [native statusline](statusline.md#codex).
 
 ## Cursor
 
-`agents/cursor-mcp.json` supplies context7 and ElevenLabs. The statusline is
-wired separately into Cursor's CLI config; see [Statusline](statusline.md#cursor).
+`cursor-mcp.json` supplies context7 and ElevenLabs; CLI [statusline](statusline.md#cursor)
+wiring is separate.
 
 ## MCP roster
 
-These are the shipped enablement settings. `on` does not imply the server's
-credentials, CLI dependencies, or OAuth login are already available.
+`on` still requires credentials, dependencies and any OAuth login.
 
 | Agent | context7 | ElevenLabs | Linear | Chrome DevTools | PixelLab |
 | --- | --- | --- | --- | --- | --- |
@@ -107,102 +76,66 @@ credentials, CLI dependencies, or OAuth login are already available.
 | Codex | on | on | on | off | off |
 | Cursor | on | on | omitted | omitted | omitted |
 
-Context7 uses its remote MCP endpoint except in Cursor, which runs
-`pnpx @upstash/context7-mcp`. Chrome DevTools runs
-`pnpm dlx chrome-devtools-mcp@latest` against the browser on port 9222;
-[the browser helper](shell-modules.md#browser-helper) launches it. Linear and
-PixelLab use their remote HTTP MCP endpoints.
-
-`bin/elevenlabs-mcp` loads `ELEVENLABS_API_KEY` from the installed `.env`
-(or `CLUSTERFORK_ENV_FILE`) and executes `uvx elevenlabs-mcp`.
-It fails if the key is empty. Configs invoke it with `bash -c` so GUI clients
-can find it without clusterfork on `PATH`.
+Context7 uses remote MCP except Cursor's `pnpx @upstash/context7-mcp`.
+Chrome DevTools uses `pnpm dlx chrome-devtools-mcp@latest` and the port-9222
+[browser helper](shell-modules.md#browser-helper). Linear/PixelLab use remote HTTP.
+`bin/elevenlabs-mcp` loads `ELEVENLABS_API_KEY` from installed `.env` (override:
+`CLUSTERFORK_ENV_FILE`), rejects an empty key and executes `uvx elevenlabs-mcp`.
+Configs use `bash -c` so GUI clients need no clusterfork `PATH`.
 
 ### Enabling optional servers
 
-| Agent | Installed configuration control |
+| Agent | Installed control |
 | --- | --- |
 | Claude Code | `enabledPlugins["<name>@skills-dir"]` or `/plugin` |
-| OpenCode, Grok, Codex, Command Code | Per-server `enabled` flag |
-| Antigravity | Per-server `disabled` flag, or `agy mcp enable <name>` |
-| Qwen Code | Remove the exact name from `mcp.excluded` |
-| Cursor | IDE/CLI local state; optional entries are omitted from the template |
+| OpenCode, Grok, Codex, Command Code | Per-server `enabled` |
+| Antigravity | Per-server `disabled`, or `agy mcp enable <name>` |
+| Qwen Code | Remove exact name from `mcp.excluded` |
+| Cursor | IDE/CLI local state; optional entries omitted |
 
-Reinstalling restores repo-owned flags. Keep permanent enablement changes in
-the templates. For Qwen 0.19.2, `qwen mcp list` connection-tested excluded
-servers even though sessions skipped them; see the
-[version-scoped probe notes](archive/mcp-disable-probes.md).
+Reinstallation restores repo flags; edit templates for permanent changes.
+Qwen 0.19.2's list command tested excluded servers while sessions skipped them;
+see [probe notes](archive/mcp-disable-probes.md).
 
 ### Secret resolution
 
-Cursor, Command Code, and Antigravity MCP placeholders are expanded during
-installation. Codex reads `env_http_headers` and `bearer_token_env_var` from
-its launch environment. OpenCode uses `{env:NAME}` references. Claude plugins,
-Grok, and Qwen keep `${NAME}` placeholders for their clients to resolve.
-The shell profile exports the installed `.env`; GUI-launched clients still
-need the environment expected by their native expansion mechanism.
+Installation expands Cursor/Command Code/Antigravity `${ENV}` from installed `.env`.
+Codex uses launch-environment `env_http_headers`/`bearer_token_env_var`; OpenCode uses
+`{env:NAME}`; Claude plugins/Grok/Qwen resolve `${NAME}` natively. The shell profile
+exports installed `.env`; GUI clients using native references must inherit it.
 
 ### Shared Linear API key
 
-`LINEAR_API_KEY` is optional. Set it in the gitignored checkout-root `.env`
-using a plain assignment (optional quotes are supported), then run
-`./install-clusterfork.sh`. The installer copies that file to
-`~/.config/clusterfork/.env`, which is the central installed secret source.
-Use a Linear API key for the workspace and permissions you intend these
-clients to access. Linear supports API keys in the
-[`Authorization: Bearer` header](https://linear.app/docs/mcp#faq).
-
-At installation, a nonempty, non-whitespace `LINEAR_API_KEY` in that file selects
-shared-key authentication for every shipped Linear entry. Ambient environment
-variables do not select this mode. Templates contain only secret references;
-the installer renders them as follows:
+Set optional `LINEAR_API_KEY` in checkout-root `.env` as a plain assignment with
+optional quotes, then run `./install-clusterfork.sh`. Only a non-whitespace value
+in that file selects shared-key mode; ambient variables do not. Installation copies
+it to central `~/.config/clusterfork/.env` and renders all shipped Linear entries:
 
 | Client | Shared-key configuration |
 | --- | --- |
-| Codex | `bearer_token_env_var = "LINEAR_API_KEY"`; [Codex reads the key from its launch environment](https://developers.openai.com/codex/mcp/) |
-| Antigravity, Command Code | An installed `headers.Authorization` bearer value, expanded from the installed `.env`; [Antigravity supports custom headers](https://antigravity.google/docs/mcp?tab=cli) |
-| OpenCode | `headers.Authorization = "Bearer {env:LINEAR_API_KEY}"`, resolved at launch |
-| Claude Linear plugin, Grok, Qwen | `headers.Authorization = "Bearer ${LINEAR_API_KEY}"`, resolved by the client |
+| Codex | `bearer_token_env_var = "LINEAR_API_KEY"` |
+| Antigravity, Command Code | Expanded `headers.Authorization` bearer value |
+| OpenCode | `headers.Authorization = "Bearer {env:LINEAR_API_KEY}"` |
+| Claude plugin, Grok, Qwen | `headers.Authorization = "Bearer ${LINEAR_API_KEY}"` |
 
-The installed `.env` and expanded MCP files have owner-only permissions (`0600`).
-Native environment references remain references in installed configuration;
-Codex's config never receives the key value. Installer output lists destinations
-and server names without printing credentials. Keep expanded configuration out
-of version control and shared logs.
+Templates contain references only; installed `.env` and expanded MCP files are
+`0600`. Codex never receives the key in config. Output excludes credentials;
+keep expanded files out of version control/logs. See [Linear bearer auth](https://linear.app/docs/mcp#faq).
 
-Run `source ~/.config/clusterfork/bash_profile.sh` in the launching shell after
-installation, and start new client sessions. GUI clients that resolve native
-environment references need to inherit the updated environment when restarted.
-Antigravity and Command Code can read their expanded headers without inheriting
-the key. Reload their MCP configuration or restart them after installation.
-Enable Linear where needed using the controls above: Codex still ships on;
-Antigravity and the other optional Linear entries still ship off or excluded.
-Reinstallation restores those enablement defaults.
+After installing or rotating, run `source ~/.config/clusterfork/bash_profile.sh`
+and start new sessions. GUI clients using references need the refreshed environment;
+Antigravity/Command Code can read expanded headers after MCP reload or restart.
+Use optional-server controls above after reinstalling; authentication mode does
+not change enablement defaults.
 
-If the key is absent, empty, or whitespace-only at installation, the installer
-omits the Linear bearer reference/header. Existing OAuth credentials and login
-workflows remain usable, including `codex mcp login linear` and Antigravity's
-MCP authentication flow. OAuth caches are not changed. Adding or removing the key
-requires reinstalling so all clients select the same mode; merely exporting a
-key after a keyless install does not enable shared-key authentication.
-Controller `LINEAR_OAUTH_CLIENT_ID` / `LINEAR_OAUTH_CLIENT_SECRET` selection and
-its app identity remain independent from interactive MCP authentication.
+Absent/empty/whitespace keys omit bearer configuration and preserve OAuth caches
+and login flows (`codex mcp login linear`, Antigravity MCP authentication). Adding,
+removing or rotating a key requires editing checkout `.env` and reinstalling;
+exporting it alone or editing installed `.env` leaves rendered headers unchanged.
+To return to OAuth, remove/empty the checkout value, reinstall, and
+`unset LINEAR_API_KEY` before reloading the profile. Controller OAuth/app identity
+is independent; see [remote setup](remote-development-setup.md#local-configuration).
 
-To rotate the key, replace the value in the checkout `.env`, rerun the installer,
-reload the shell profile, and restart client sessions or reload MCP configuration
-as above. This refreshes Antigravity's and Command Code's expanded headers and
-the launch environment for native references. Editing only the installed `.env`
-does not refresh expanded headers, and a later installation replaces that file
-from the checkout. Rotation needs no separate OAuth login in each application.
-To return to OAuth, remove or empty the value in the checkout `.env`, reinstall,
-and run `unset LINEAR_API_KEY` before reloading the launching shell profile so
-an old exported value does not linger.
-
-For a workspace smoke check, use an already authorized client setup after the
-refresh: in both Codex and Antigravity, read the same known Linear issue and
-confirm its team/workspace matches the key's intended workspace. Re-enable
-Antigravity's Linear entry after reinstalling when necessary. Repeat after
-rotation, then retire the old key once the new sessions work. Automated installer
-tests use fake credentials to cover both modes, rotation, repeat installs,
-preserved client state, and secret-free output; they do not establish live
-workspace access.
+For an authorized smoke check, read the same known issue in Codex and Antigravity
+and confirm the intended workspace/team. Repeat after rotation before retiring
+the old key. Installer tests use fake credentials; they do not prove live access.

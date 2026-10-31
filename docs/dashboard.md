@@ -1,93 +1,66 @@
 # Dashboard (codeview)
 
-`codeview` runs a localhost dashboard for the current git repository as a
-background daemon. It uses Python's standard library, git, and a browser.
-GitHub CI reporting additionally uses an authenticated `gh` CLI.
+`codeview` runs a localhost daemon for the current git repo using Python stdlib,
+git and a browser; GitHub CI badges also need authenticated `gh`.
 
 ## Running
 
 ```text
-codeview                     # same as codeview start
+codeview                     # same as start
 codeview start [--port N] [--max-commits N] [--reindex] [--no-watch] [--no-open]
 codeview stop
 codeview restart [start flags]
-codeview reload               # full git-data rescan in place
+codeview reload               # git-data rescan, no restart
 codeview status
 codeview open
 ```
 
-Commands resolve the repo root through git, including from nested directories
-and worktrees. Each repo tracks its daemon in `.codeview/daemon.json`.
-The default port is a stable path hash in 46000–49999; `--port` overrides it.
-The control CLI requests that port strictly rather than drifting to another.
+Commands resolve roots from nested directories/worktrees. `.codeview/daemon.json`
+tracks each daemon; port defaults to stable path hash 46000–49999, strictly
+overridden by `--port`. Start logs to `.codeview/daemon.log`, waits 30 seconds and
+opens a browser unless `--no-open`; repeat starts open the existing server. A
+responding port counts as running even without bookkeeping. Stop refuses untracked
+servers or tracked processes whose available command line does not match codeview;
+stale bookkeeping is removed. Status exits 1 when stopped, otherwise reports live
+branch/dirty/watch/modules/scan metadata.
 
-`start` detaches a process logging to `.codeview/daemon.log`, waits up to 30
-seconds for the port, then opens a browser unless `--no-open`. Repeated starts
-open the existing dashboard. A responding chosen port is treated as an
-already-running server even without tracked bookkeeping. `stop` refuses to
-kill an untracked server or a tracked process whose available command line
-does not resemble codeview. Stale daemon files are cleaned up.
-
-`status` exits 1 when no daemon is running; a live API also supplies branch,
-dirty state, watch mode, module list, and last-scan time. `reload` rescans and
-persists git data without restarting the server, then bumps the generation so
-browsers refresh. New or changed Python modules need a watcher restart or
-`codeview restart`, rather than a data reload.
-
-The launcher uses the installed package. Reinstall after editing
-`scripts/codeview/`, or set `CLUSTERFORK_DIR` to the checkout to run that copy
-without installing it. [Installation](installation.md) owns the file mapping.
+Reload persists git data and bumps browser generation. Python module changes need
+watcher/server restart. Reinstall after editing `scripts/codeview/`, or set
+`CLUSTERFORK_DIR` to run the checkout instead of installed package.
 
 ## Views
 
 | Tab | Contents |
 | --- | --- |
-| Overview | File/line/commit counts and lines by directory/language |
-| History | Cumulative LOC over at most `--max-commits` (default 1000), inspectable commit graph, directory changes, and recent commits |
-| Churn | Additions plus deletions over the same window, ranked directories and up to 200 files; deleted files remain historical entries |
-| Files | Tracked-file index with source composition, symbols, imports, and estimated complexity; file content and git ownership/history |
-| Deps | Root Cargo/npm/Python/Go manifest summaries and supported lockfile inventories; no dependency-resolution graph |
-| Server logs | In-memory ring of 5000 request, scan, watch, CI, and boot log lines; always the last tab |
+| Overview | File/line/commit counts; directory/language lines |
+| History | Cumulative LOC, commit graph, directory/recent changes over `--max-commits` (default 1000) |
+| Churn | Additions/deletions over that window; directories and up to 200 files, including deleted history |
+| Files | Tracked index, source composition, symbols/imports/estimated complexity, content and ownership/history |
+| Deps | Root Cargo/npm/Python/Go summaries and supported lockfile inventories, not a resolution graph |
+| Server logs | In-memory 5000-line request/scan/watch/CI/boot ring; always last |
 
-The Files pane caps content at 5000 lines/1 MB and identifies binaries. Its
-`/api/file?path=…` endpoint accepts only paths in the cached tracked-file index.
-Python metrics use the standard-library AST when parsing succeeds; other
-language metrics are labeled lexical estimates. Vendor/build directories and
-minified, lock, map, sum, and SVG files are excluded from the index.
-Lockfile entry inventories are capped at 500 and are not available for every
-recognized lockfile format.
+Files caps content at 5000 lines/1 MB and identifies binaries; `/api/file?path=…`
+requires cached tracked paths. Python uses AST when parsable; other metrics are
+lexical estimates. Exclude vendor/build and minified/lock/map/sum/SVG files.
+Lock inventories cap at 500 and do not cover every recognized format.
+Header shows branch/dirty/scan age and HEAD Actions verdict when available. CI
+refreshes on boot, HEAD changes and roughly each watch minute; missing gh/auth/
+GitHub origin/checks hides it. Dates use short months and 12-hour times.
 
-The header shows branch/dirty state, last-scan age, and a GitHub Actions verdict
-for HEAD when available. CI is fetched on boot, on HEAD changes, and roughly
-once a minute while watching. Missing `gh`, auth, GitHub origin, or check runs
-hides the badge. Dates use three-letter months and 12-hour times.
-
-The command palette (`Ctrl+K`, `⌘K`, or `Ctrl+Space`) changes views/theme and
-exports the active view as Markdown or via browser print/PDF. `Alt+1`–`Alt+6`
-select core tabs. URL hashes track the view, such as `#history` or `#m:skills`.
+Palette (`Ctrl+K`, `⌘K`, `Ctrl+Space`) changes view/theme and exports Markdown or
+browser print/PDF. `Alt+1`–`Alt+6` select core tabs; hashes track `#history`, `#m:skills`.
 
 ## Caches and watching
 
-The tool writes `.codeview/.gitignore` for itself, `cache/`, `daemon.json`, and
-`daemon.log`. Drop-in `modules/` remain trackable. Cache JSON is written
-atomically and reused on boot; the scanner schema and scan options participate
-in fingerprints so scanner changes can invalidate old results.
-
-Every three seconds the watcher checks HEAD and the hash of git's porcelain
-status. A changed fingerprint rescans stale data and updates browsers in place.
-Further edits to an already-dirty file can leave porcelain status unchanged;
-use `codeview reload` to force a fresh scan in that case. `--reindex` does the
-same on startup; `--no-watch` disables background updates.
+Generated `.codeview/.gitignore` excludes itself, `cache/`, daemon files/logs;
+`modules/` stays trackable. Atomic JSON caches reuse scanner-schema/options
+fingerprints. Every three seconds, watch checks HEAD and hashed porcelain status;
+changes rescan stale data/update browsers. Edits to already-dirty files may leave
+status unchanged: force `reload` or startup `--reindex`. `--no-watch` disables updates.
 
 ## Clusterfork tabs and extensions
 
-This repository tracks three modules under `.codeview/modules/`:
-
-- `scripts.py`: launchers, rotate wrappers, PATH helpers, scripts, and configs.
-- `skills.py`: shared skills and slash-command inventory.
-- `statusline.py`: Claude/Cursor scripts, usage fetchers, and previews.
-
-For the drop-in API, sandboxed frames, theme handoff, and module reload behavior,
-read [Codeview modules](codeview-modules.md). The
-[add-codeview-module skill](../skills/add-codeview-module/SKILL.md) supplies the
-page template and implementation workflow.
+Tracked `.codeview/modules/` tabs: `scripts.py` for launchers/rotation/PATH/scripts/
+configs, `skills.py` for skills/slash commands, `statusline.py` for scripts/fetchers/
+previews. [Codeview modules](codeview-modules.md) owns API, frames, theme and reload;
+the [add-codeview-module skill](../skills/add-codeview-module/SKILL.md) owns templates/workflow.

@@ -1,118 +1,85 @@
 # Repository queues
 
-The controller is the only admission and completion authority. Its database and
-command boundary are described in [controller implementation](remote-development-controller.md).
-This topic owns queue policy, prerequisites, user feedback and release rules.
-The former table coordinator is a [dated record](archive/remote-development-functions-queue.md).
+The [controller](remote-development-controller.md) owns admission/completion;
+this topic owns queue policy, dependencies, release and feedback.
+[Table-coordinator behavior](archive/remote-development-functions-queue.md) is historical.
 
 ## Ordering and admission
 
-Mapped projects targeting the same case-insensitive GitHub repository share one
-queue and one task grant. Different repositories can advance independently.
-Runnable issues order by Linear priority **Urgent → High → Normal → Low → No priority**
-(values **1 → 2 → 3 → 4 → 0**), then lower `sortOrder`, then committed FIFO sequence.
-Project scans commit candidates in creation-time/UUID order before admission.
-Missing sort values default to zero. Priority/order observations update waiting
-positions without interrupting the active task. An issue that leaves eligibility
-and later rejoins receives a new FIFO position for otherwise equal ordering.
+Mapped projects share one grant/queue per case-insensitive GitHub repository;
+different repositories advance independently. Runnable order is Linear priority
+**Urgent → High → Normal → Low → No priority** (**1 → 2 → 3 → 4 → 0**), then lower
+`sortOrder` (missing means zero), then committed FIFO. Scans commit candidates in
+creation-time/UUID order. Observations reorder waiting tasks without interrupting
+active work; leaving/rejoining eligibility gives a new FIFO tie-break position.
 
-Eligibility uses current Linear facts: explicit project UUID mapping, enrollment
-project label, configured ready status, archive/cancellation state and dependencies.
-An issue label does not enroll a project. Unseen ineligible issues create no task
-or status comment. Known waiting issues that become ineligible are skipped and
-lose their queued marker. Completed identities remain completed for that generation.
+Eligibility requires current explicit project UUID mapping, project enrollment
+label, ready state, unarchived/uncanceled status and satisfied dependencies. Issue
+labels cannot enroll projects. Unseen ineligible issues create no task/comment;
+known ineligible waiters lose queued markers. Completed identities stay complete
+for that generation. Waiting consumes no runner/account.
 
-A transaction checks the runnable queue head, reserves the unique repository
-grant, creates the attempt and records dispatch intent. GitHub dispatch occurs
-outside the transaction. Claimed/uncertain dispatches are discovered by stable
-identity; absence of a run listing does not authorize another dispatch.
-
-Waiting issues use no runner or account. Admission binds a task to the latest
-observed target branch, including the previous task's merge. Runtime selection is
-independent; a required runtime change waits for [automatic deployment](remote-development-deployments.md).
-Operator/deployment holds stop new attempts without revoking active work.
+One transaction checks runnable head, reserves the unique grant and creates
+attempt/dispatch intent; external dispatch follows. Claimed/uncertain outcomes
+require stable-identity discovery; an absent run listing never permits resend.
+Admission binds the latest target branch, including the preceding merge. Runtime
+freshness and operator/deployment holds follow [deployment](remote-development-deployments.md);
+holds prevent new attempts without revoking active work.
 
 ## Ownership and release
 
-The repository grant has no expiry. It spans review, capacity waits, coding,
-validation, publication, PR checks and merge. An urgent arrival or manual reorder
-only changes the next admission. A finish callback or auto-merge request cannot
-release the grant. Expired account/worker heartbeats do not prove GitHub stopped.
+The non-expiring grant spans review, quota waits, coding, validation, publication,
+CI and merge. Reordering affects only next admission. Callbacks, merge requests
+and expired heartbeats cannot prove stop or release ownership. Completion needs
+verified stop for recorded/all matching GitHub attempts plus verified merge, or
+validated no-change success without a PR. Open PRs retain grants, including manual-
+merge projects. Merge remains authoritative after cleanup failure. Stale/duplicate/
+manual reruns cannot inherit another attempt's account/publication grant.
 
-Completion requires authoritative stop evidence for the recorded and all matching
-GitHub attempts plus publication resolution: a verified merge, or successful
-validated work with no changes and no PR. Open PRs retain ownership, including
-manual-merge projects. A merged PR remains authoritative if cleanup later fails.
-Duplicate, stale and manual rerun identities cannot inherit another attempt's
-account or publication grant.
-
-To abandon active work, cancel the Linear issue, stop/cancel GitHub work, and close
-or merge remaining publication. The controller verifies those facts before
-release. Done, archive, enrollment removal or project moves alone do not abandon
-unresolved active work. Missing or incomplete observations retain ownership.
-
-Confirmed startup failure before coding retries after 60 seconds. Temporary review
-failures and account capacity waits retry after 15 minutes. Retries require the
-previous attempts to have stopped and publication to be checked, and retain the
-repository grant and current eligibility checks. Context changes require fresh
-review. A startup/capacity retry before repair coding retains the one repair budget
-and original branch/evidence. Coding failures use the [single repair policy](remote-development.md#single-attempt-auto-repair).
+To abandon work, cancel Linear, stop GitHub execution and close/merge publication;
+the controller verifies all three. Done/archive/enrollment removal/project moves
+alone cannot abandon unresolved work; incomplete observations retain ownership.
+Startup failure before coding retries after 60 seconds; temporary review/capacity
+failures retry after 15 minutes. Retries require stop/publication proof, current
+eligibility and fresh review on context changes, retaining the grant. Repair
+startup/capacity retries retain parent evidence and [one repair budget](remote-development.md#single-attempt-auto-repair).
 
 ## Issue dependencies
 
-Only incoming `blocks` relations count as prerequisites. Their source issues must
-have workflow **type `completed`**, including accessible sources outside mapped
-projects. A label, status name, cancellation, deletion, unavailable source or
-incomplete pagination never establishes completion. Removing a verified blocking
-relation removes that prerequisite.
+Only incoming `blocks` sources count, including accessible unmapped issues, and
+must have workflow **type `completed`**. Labels/status names, cancellation,
+deletion, unavailable sources or incomplete pagination cannot prove completion.
+Verified relation removal removes a prerequisite. Blocked waiters keep priority/
+FIFO/feedback without grants; runnable tasks may pass them and cycles do not block
+unrelated work.
 
-Dependency-held waiting issues keep priority, FIFO position and queued feedback
-without taking a repository grant. The highest-priority runnable issue may pass
-blocked candidates. Cycles remain waiting while unrelated tasks progress.
-
-Dependencies are refreshed at admission and before guarded worker operations. A
-new pre-coding blocker holds authorization; after prior attempts stop and no PR
-exists, the task returns to its queue position and releases the grant. Dependencies
-added after coding begins do not interrupt the current implementation. Events and
-periodic observations discover satisfied or removed prerequisites automatically.
+Refresh dependencies at admission and guarded worker operations. A new pre-coding
+blocker holds authorization; once prior attempts stop without a PR, return to the
+queue position and release the grant. Blockers added after coding starts do not
+interrupt it. Events/periodic observations discover satisfied/removed prerequisites.
 
 ## Linear feedback
 
-Each issue shows at most one Clusterfork execution-status label. The mutually
-exclusive set is `clusterfork: queued`, `clusterfork: selected`,
-`clusterfork: needs clarification`, and the seven stage labels:
-`clusterfork: runner initialization`, `clusterfork: account selection`, `clusterfork: coding`,
-`clusterfork: final testing and review`, `clusterfork: publication`,
-`clusterfork: PR review and CI`, and `clusterfork: waiting for quota`.
+At most one owned execution-status label appears: `clusterfork: queued`,
+`clusterfork: selected`, `clusterfork: needs clarification`, or a stage:
+`clusterfork: runner initialization`, `clusterfork: account selection`,
+`clusterfork: coding`, `clusterfork: final testing and review`,
+`clusterfork: publication`, `clusterfork: PR review and CI`, `clusterfork: waiting for quota`.
 
-The controller derives the indicator from committed state: unresolved
-needs-clarification feedback takes precedence, then the current execution,
-PR-review or quota-wait stage, then selection, then queued. Clarification remains
-through resubmission and temporary review retries until a passing review.
-Completed, canceled and skipped tasks have no execution-status indicator.
-`queued` means received and waiting; `selected` means the controller reserved this
-repository's grant, without asserting a passing review or a running agent. A
-review rejection clears selection while the rejected runner is verified stopped.
-Showing a stage or clarification instead of selection does not change the grant,
-account selection, eligibility, dispatch, retry or completion policy.
+Precedence is unresolved clarification, current execution/PR/quota stage, selected,
+then queued. Clarification survives resubmission/temporary retries until a passing
+review. Terminal/skipped tasks have none. Queued means waiting; selected means
+grant reserved, not review passed/agent running. Rejection clears selection while
+stop is verified. Indicators never change grants, eligibility or retry policy.
+`clusterfork: auto-repair` is an independent attempt-kind label.
 
-Reporting removes conflicting owned indicators before adding the desired one.
-Failed or ambiguous label writes leave reporting pending for an idempotent retry;
-reporting is confirmed only after the desired labels are applied. Pending reports
-reconcile stale combinations even when the status comment has not changed.
-Human assignments, unrelated labels and project enrollment are preserved.
-`clusterfork: auto-repair` identifies the attempt kind and may remain alongside
-the single execution-status indicator.
+Reporting removes conflicting indicators before adding the desired one. Failed/
+ambiguous writes retry idempotently and remain pending until confirmed, even if
+comment text is unchanged. Preserve human assignments, unrelated labels and
+project enrollment. One stable comment explains dependencies, holds, run/PR links
+or the active predecessor; grant changes refresh waiters. Reporting retries retain
+identity/FIFO/dispatch and cannot start work.
 
-The task's stable status comment explains prerequisites, admission holds, current
-run/PR links or which active issue must finish. Grant changes create fresh reporting
-intent for waiting issues so they do not keep naming a completed predecessor.
-Reporting retries preserve task identity, FIFO position and dispatch intent.
-They cannot start another worker.
-
-Webhook intake wakes the controller after committing the event. Background
-observations run every 30 seconds; full project scans run every two minutes.
-External API latency and retries affect feedback, so these are observation
-intervals rather than an end-to-end timing promise. Once terminal reports settle,
-completed tasks need no per-task GitHub/Linear polling. Project scans continue to
-read current lists to recover missed notifications.
+Webhook commit wakes observation; background ticks run every 30 seconds, full
+project scans every two minutes. These are intervals, not feedback latency promises.
+Settled terminal tasks need no per-task polling; project lists recover missed events.

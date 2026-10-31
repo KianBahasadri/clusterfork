@@ -1,207 +1,116 @@
 # Auth Rotation
 
-Several agents support switching between multiple saved accounts without re-logging-in.
+The six `rotate-*` functions call `scripts/rotate_auth.py`, using copy (Claude),
+shared-store symlink (Codex/Cursor/Grok/OpenCode), or GNOME Keyring (Antigravity).
 
-The `rotate-*` shell functions call `scripts/rotate_auth.py`. One implementation,
-three backends: copy (Claude), shared-store symlink (Codex / Cursor / Grok /
-OpenCode), and GNOME Keyring (Antigravity). All six share the same flags:
+| Command | Behavior |
+| --- | --- |
+| `rotate-* --save NAME` | Save/overwrite a named profile |
+| `rotate-* --delete NAME` | Confirm deletion of a detached saved profile |
+| `rotate-* --unhook` | Detach credentials before a new login |
+| `rotate-* --list` | List profiles; `*` marks current |
+| `rotate-*` | Select next profile in sorted order |
+| `rotate-* NAME` | Select a specific profile |
+| `rotate-* --kickoff [names]` | Ping all saved profiles, or the named subset |
 
-- `rotate-* --save NAME` — save the active account as a named profile
-- `rotate-* --delete NAME` — delete a saved profile; detach or switch away from
-  the active profile first
-- `rotate-* --unhook` — detach the active credentials so a new login does not
-  overwrite the current profile
-- `rotate-* --list` — list saved profiles (`*` marks the current one)
-- `rotate-*` — rotate to the next account in sorted order
-- `rotate-* NAME` — switch to a specific account
-- `rotate-* --kickoff [names]` — for every saved profile of
-  that provider, or just the named ones, temporarily install it and send one
-  tiny one-shot message ("hi") via the agent CLI's non-interactive mode to
-  start each account's usage ticker. See the restoration limits below.
+Names allow letters, numbers, dots, underscores and dashes. Deletion prompts
+`delete saved profile 'NAME'? [y/N]`; only case-insensitive `y`/`yes` confirms.
+Other input, EOF or Ctrl+C cancels with exit 1. Active profiles are refused before
+prompting; switch or unhook first, including when deleting the last profile.
+Invalid/unknown names change nothing. Deletion removes the saved file/keyring
+entry and any matching detached `current` marker, preserving unrelated logins.
 
-`--save` overwrites an existing profile of that name. Profile names may only
-contain letters, numbers, dots, underscores, and dashes.
-
-To remove an account, run (for example) `rotate-codex --delete NAME`. It asks
-`delete saved profile 'NAME'? [y/N]` before making changes; only `y` or `yes`
-(case-insensitive) confirms. Enter, any other answer, EOF, or Ctrl+C cancels
-without changing state and exits with status 1. Deleting an active profile is
-refused before prompting; switch to another profile or run
-`rotate-codex --unhook` first. This also permits deleting the
-last saved profile. An unknown or invalid name fails without changing state.
-Deletion removes the saved credential file (or Antigravity keyring entry and
-profile-list entry). It also removes the shared `current` link or Antigravity
-current marker when it names the deleted, detached profile. Other saved
-profiles and an unrelated active login are preserved.
-
-To add an account: `rotate-* --unhook`, log in as the new account, then
-`rotate-* --save NAME`. Shared-store detach refuses a regular-file `auth.json`;
-Claude refuses an unsaved regular-file login, identified by token matching;
-Antigravity requires a saved current profile marker. Save the login first if
-needed. Saved profiles stay put. A later `rotate-* NAME` reattaches a saved
-profile if you abort before logging in. Do not re-run the installer in between:
-it repairs a missing
-agent-side `auth.json` symlink and would hook the previous profile again.
+To add an account, unhook, log in, then `--save NAME`. Shared stores refuse
+unhooking a regular `auth.json`; Claude requires a token-matching saved login;
+Antigravity requires a saved current marker. Save first when necessary. Selecting
+a saved name reattaches it if login is abandoned. Avoid reinstalling while
+unhooked: installer repair can reconnect the previous profile.
 
 ## --kickoff
 
-Pings every saved profile by default, or only the named ones (`--kickoff alice bob`),
-once per profile with a one-shot non-interactive message (`hi`)
-so the provider starts counting usage for each account. Per-agent ping
-commands: `claude -p`, `codex exec --skip-git-repo-check -m gpt-6-luna`, `cursor-agent -p`,
-`grok -p`, `opencode run`, `agy --print`. Each invocation gets a 120s timeout; stdin is
-detached so nothing blocks.
+Kickoff installs and pings profiles sequentially because they share one active
+credential slot; concurrent clients can read the wrong login or overwrite refreshes.
+Each sends `hi` with detached stdin and a 120-second timeout:
 
-The sweep is strictly sequential: install a profile, run its ping to
-completion, then move to the next profile.
+| Provider | Ping |
+| --- | --- |
+| Claude | `claude -p` |
+| Codex | `codex exec --skip-git-repo-check -m gpt-6-luna` |
+| Cursor | `cursor-agent -p` |
+| Grok | `grok -p` |
+| OpenCode | `opencode run` |
+| Antigravity | `agy --print` |
 
-After a normally completed sweep, Claude restores the previous active file's
-bytes if it existed. The shared-store backends restore the previous `current`
-link when one existed and remove a temporary agent link if the account started
-unhooked. Antigravity reinstalls its current saved profile, or clears the active
-item if it started fully unhooked.
+Only Codex pins a small model; others use configured defaults. Unknown/duplicate
+names and dashed arguments fail before pings. Ping failures do not stop the sweep
+but make its final exit code 1. Shared stores refuse regular `auth.json` files;
+Antigravity refuses an active item without a recoverable current profile.
 
-Restoration has limits in the current implementation: Claude with no active
-file and a shared store with no previous `current` remain on the last profile;
-the latter prints a warning. Antigravity treats a current profile omitted from
-an explicitly selected subset as unknown, so it cannot restore that profile.
-An interrupted sweep has no general cleanup guarantee. Use a full sweep when
-the current Antigravity profile must be restored.
-
-Unknown names, duplicate names, and dashed arguments fail before pings run.
-A ping failure is reported and the sweep continues; the final exit code is 1
-if any ping failed. Shared-store kickoff refuses a regular-file `auth.json`;
-Antigravity refuses an active keyring item with no recoverable current profile.
-
-Pings run sequentially because every backend shares one active credential
-slot. Concurrent launches can read the wrong account or overwrite refreshed
-tokens. Per-process config isolation is not supported consistently across all
-clients. Only Codex pins a small model (`gpt-6-luna`); the other pings use each
-CLI's configured default.
+Normal completion restores Claude's previous file bytes, shared stores' previous
+`current` link (removing a temporary agent link if initially unhooked), and
+Antigravity's current saved profile or fully unhooked state. Limits: Claude with
+no previous file and shared stores without `current` remain on the last profile
+(the latter warns). Antigravity cannot restore a current profile omitted from an
+explicit subset; use a full sweep when restoration matters. Interrupted sweeps
+have no general cleanup guarantee.
 
 ## Implementation and directory overrides
 
-All rotation logic lives in `scripts/rotate_auth.py`; shell modules resolve it
-from `BASH_SOURCE`, so the repo and installed wrappers share one
-implementation. Installer auth migration is separate from account selection.
-
-Override directories (empty or unset uses the default, same as bash
-`${VAR:-default}`): `ROTATE_CLAUDE_DIR`, `ROTATE_CODEX_CODEX_DIR`,
-`ROTATE_CODEX_AUTH_STORE_DIR`, `ROTATE_CURSOR_DIR`,
-`ROTATE_CURSOR_AUTH_STORE_DIR`, `ROTATE_GROK_DIR`,
+Shell modules resolve the shared implementation from `BASH_SOURCE`; installation
+migration is separate from selection. Empty/unset overrides use defaults:
+`ROTATE_CLAUDE_DIR`, `ROTATE_CODEX_CODEX_DIR`, `ROTATE_CODEX_AUTH_STORE_DIR`,
+`ROTATE_CURSOR_DIR`, `ROTATE_CURSOR_AUTH_STORE_DIR`, `ROTATE_GROK_DIR`,
 `ROTATE_GROK_AUTH_STORE_DIR`, `ROTATE_OPENCODE_DIR`,
-`ROTATE_OPENCODE_AUTH_STORE_DIR`, `ROTATE_ANTIGRAVITY_STATE_DIR`. Shared-store
-`--save` chmods only the store directory itself (700), never its parent.
+`ROTATE_OPENCODE_AUTH_STORE_DIR`, `ROTATE_ANTIGRAVITY_STATE_DIR`.
+Shared-store save chmods the store itself to `700`, never its parent.
 
 ## rotate-claude
 
-Switches Claude Code accounts stored as `~/.claude/.credentials.json.*` files.
-`--save NAME` copies the active `.credentials.json` onto `.credentials.json.NAME`.
-`--unhook` deletes a regular active file when its `accessToken` matches a saved
-profile; legacy active symlinks can also be detached.
+Profiles are `~/.claude/.credentials.json.NAME`. Save copies the active file;
+selection copies it back because Claude rewrites credentials on refresh. Active
+identity matches `accessToken`. Unhook deletes a matching saved regular-file
+login or detaches a legacy symlink.
 
-Claude Code rewrites `.credentials.json` on every token refresh, so rotation copies the selected file over `.credentials.json` rather than symlinking. The active account is identified by matching the `accessToken` field.
+## Shared-store agents
 
-## rotate-codex
+| Command | Agent auth file | Store under `~/.local/share/clusterfork-auth/` |
+| --- | --- | --- |
+| `rotate-codex` | `~/.codex/auth.json` | `codex/` |
+| `rotate-cursor-cli` | `~/.config/cursor/auth.json` | `cursor/` |
+| `rotate-grok` | `~/.grok/auth.json` | `grok/` |
+| `rotate-opencode` | `~/.local/share/opencode/auth.json` | `opencode/` |
 
-Cloud account ownership and reclaiming remote credentials are described in
-[Remote accounts](remote-development-accounts.md).
-
-Switches Codex accounts stored under
-`~/.local/share/clusterfork-auth/codex/`. `--save NAME` writes the active
-`auth.json` to `auth.json.NAME` and points `current` at it (and will rebuild
-the link chain if a login replaced `auth.json` with a regular file).
-`--unhook` removes the agent-side `auth.json` symlink and leaves the store
-and `current` intact.
-
-The link chain the installer established:
-
-```text
-~/.codex/auth.json
-  → ../.local/share/clusterfork-auth/codex/current
-  → auth.json.SUFFIX
-```
-
-Rotation changes only the shared `current` symlink.
-
-## rotate-cursor-cli
-
-Same pattern as `rotate-codex`, including `--save` and `--unhook`, with profiles stored under
-`~/.local/share/clusterfork-auth/cursor/` and this link chain:
-
-```text
-~/.config/cursor/auth.json
-  → ../../.local/share/clusterfork-auth/cursor/current
-  → auth.json.SUFFIX
-```
-
-## rotate-grok
-
-Same pattern as `rotate-codex`, including `--save` and `--unhook`, with profiles stored under
-`~/.local/share/clusterfork-auth/grok/` and this link chain:
-
-```text
-~/.grok/auth.json
-  → ../.local/share/clusterfork-auth/grok/current
-  → auth.json.SUFFIX
-```
-
-## rotate-opencode
-
-Same pattern as `rotate-codex`, including `--save` and `--unhook`, with profiles stored under
-`~/.local/share/clusterfork-auth/opencode/` and this link chain:
-
-```text
-~/.local/share/opencode/auth.json
-  → ../clusterfork-auth/opencode/current
-  → auth.json.SUFFIX
-```
+Each agent file links relatively to its store's `current`, which links to
+`auth.json.NAME`. Rotation changes only `current`. Save copies the active login,
+selects it and rebuilds the chain even after login replaced the agent link with
+a regular file. Unhook removes only the agent-side symlink, retaining store and
+`current`. [Remote accounts](remote-development-accounts.md) owns cloud reservation
+and reclaim rules for Codex/Cursor.
 
 ## Sharing with a container
 
-Mount `~/.local/share/clusterfork-auth` at the same home-relative path in the
-container. A directory bind mount exposes changes to `current` immediately,
-unlike mounting `auth.json` as a single file, which resolves and pins the
-symlink target at mount time.
-
-The mount can be read-only in the container when the host owns account
-selection and token updates. In that mode, run rotation commands and token
-refreshes on the host; the container follows the updated `current` link
-automatically. A container-side token refresh cannot persist through a
-read-only mount and can fail when the current access token expires.
+Bind-mount `~/.local/share/clusterfork-auth` at the same home-relative path.
+Directory mounts expose `current` changes immediately; mounting an individual
+`auth.json` pins its resolved target. A read-only mount supports host-owned
+rotation/refresh; container refresh cannot persist and may fail after token expiry.
 
 ## rotate-antigravity
 
-Switches Antigravity accounts using `secret-tool` (GNOME Keyring). State is kept in `~/.gemini/antigravity-cli/rotate-auth/`. `--save NAME` copies the active keyring item to `service=rotate-antigravity username=NAME`. `--unhook` backs the active item up to the current profile, then `secret-tool clear`s `service=gemini username=antigravity`.
-
-The active account lives at keyring entry `service=gemini username=antigravity`. Saved profiles live at `service=rotate-antigravity username=NAME`. Before switching, the current keyring item is backed up to the outgoing profile.
+Requires `secret-tool` (GNOME Keyring); state is
+`~/.gemini/antigravity-cli/rotate-auth/`. Active credentials use
+`service=gemini username=antigravity`; saved profiles use
+`service=rotate-antigravity username=NAME`. Save copies the active item; switching
+backs it up to the outgoing profile. Unhook backs it up, then clears the active item.
 
 ## Installer repair
 
-`install-clusterfork.sh` runs `configure_shared_auth` as a best-effort,
-non-fatal step for Codex, Cursor, Grok, and OpenCode. When multi-account profiles
-exist under `~/.local/share/clusterfork-auth/<agent>/`, it:
+`configure_shared_auth` is a best-effort, non-fatal installer step for shared-store
+agents. When suffixed profiles exist, it migrates legacy `auth.json.*`, repairs
+permissions and atomically reconnects `current` and agent links. Grok's
+`auth.json.lock` is excluded and cannot opt a single-account install into migration.
+No profiles means no change; existing profiles plus valid `current` allow repair
+of a missing agent link.
 
-- migrates any leftover `auth.json.*` files still in the agent directory into
-  the shared store
-- ensures permissions on the store and profile files
-- atomically repoints `store/current` and the agent's `auth.json` through the
-  shared link chain
-
-Grok's runtime `~/.grok/auth.json.lock` sidecar is ignored during legacy
-profile discovery. It is not an `auth.json.SUFFIX` account profile and does not
-opt an otherwise single-account Grok installation into shared auth.
-
-It is a no-op when no suffixed profiles exist (plain single-account
-`auth.json`). Re-running the installer repairs a missing agent-side
-`auth.json` symlink as long as the shared store still has profiles and a
-valid `current` link.
-
-If the agent's `auth.json` is a regular file (for example after a login that
-replaced the symlink), repair refuses. Save it as a named profile and restore
-the link chain with `rotate-codex --save NAME`, `rotate-cursor-cli --save NAME`,
-`rotate-grok --save NAME`, or `rotate-opencode --save NAME`. That copies the regular file into the store,
-points `current` at it, and replaces `auth.json` with the shared symlink.
-
-For a new machine importing credentials, `rotate-* --save NAME` performs the
-copy and relink.
+Repair refuses regular-file agent credentials. Use the provider's `--save NAME`
+to copy that login and rebuild the chain, also when importing a new machine's
+credentials. Cloud-reserved legacy handoff recovery belongs to [remote accounts](remote-development-accounts.md#enroll-and-reclaim).
