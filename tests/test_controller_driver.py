@@ -104,6 +104,42 @@ class ControllerDriverTests(unittest.TestCase):
         self.driver.tick()
         self.assertEqual(f.github.dispatch.call_count,2)
 
+    def test_guarded_refresh_keeps_running_coding_and_blocks_queued_admission_on_new_prerequisite(self):
+        f = self.fixture
+        self.driver.tick(scan=True)
+        f.review()
+        f.preflight(Role.CODING_SELECT, f.account_b)
+        f.call(Role.CODING, "start", protocol=PROTOCOL)
+        f.call(Role.CODING, "claim", account_id=f.account_b)
+        f.call(Role.CODING, "progress", stage="coding", context_sha=f.spec.context_sha)
+        f.linear.issue_dependencies.return_value = [{"id": str(UUID(int=300)), "type": "blocks", "issue": {
+            "id": str(UUID(int=301)), "identifier": "KIAN-3", "state": {"type": "unstarted"}, "trashed": False}}]
+        f.broker.refresh = self.driver.refresh
+        f.call(Role.CODING, "github")
+        self.driver.tick()
+        current = f.controller.inspect(f.view.task_id)
+        self.assertEqual(current.phase, "executing")
+        self.assertFalse(current.dependencies_ready or current.review_attention or current.attempt["retry_kind"])
+        self.assertEqual(len(f.controller.attempt_history(current.task_id)), 1)
+        self.assertEqual(f.github.dispatch.call_count, 1)
+        f.call(Role.CODING, "progress", stage="testing")
+        f.call(Role.CODING, "progress", stage="publishing")
+        f.call(Role.CODING, "github")
+        f.call(Role.CODING, "finish", status="completed")
+        self.runs[f.key].update(status="completed", conclusion="success")
+        self.driver.tick()
+        self.assertEqual(f.controller.inspect(current.task_id).phase, "completed")
+        second = next(v for v in f.controller.tasks() if v.issue_id == self.second_issue["id"])
+        self.assertEqual(second.phase, "queued")
+        self.assertFalse(second.active or second.dependencies_ready)
+        self.assertEqual(f.github.dispatch.call_count, 1)
+        f.linear.issue_dependencies.return_value = []
+        self.driver.tick()
+        self.assertTrue(f.controller.inspect(second.task_id).active)
+        self.assertEqual(f.github.dispatch.call_count, 2)
+        self.driver.tick()
+        self.assertEqual(f.github.dispatch.call_count,2)
+
     def test_runtime_change_holds_second_task_until_required_release_is_ready(self):
         self.publish_and_merge_first()
         f=self.fixture

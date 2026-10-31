@@ -72,6 +72,6 @@ def execute(controller,db,view,role,owner,action,data,now):
         if not assigned:
             update(probe_account_id=identity)
         else:
-            update(account_reserved=False)
+            update(account_reserved=False,released_account_id='')
         return result
     raise Rejected('Invalid account operation')

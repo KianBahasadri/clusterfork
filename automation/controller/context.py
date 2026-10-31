@@ -13,7 +13,7 @@ from common.context import (ContextError, FETCH_SECONDS, MAX_REMOTE_CALLS, MAX_S
 from common.context_sources import Repository, linear_issue
 from common.policy import issue_revision, redact_review_text, redact_review_value
 from common.publication import comment_id
-from .model import Rejected
+from .model import Rejected, dependency_admission_applies
 
 
 def source_text(content):
@@ -105,7 +105,7 @@ class Context:
         owned = {c["id"] for c in issue.get("comments", []) if (c.get("user") or {}).get("id") == self._reporting_actor}
         return (ids | migrated) & owned
 
-    def material(self, view, request, content):
+    def material(self, view, request, content, *, original=None):
         if request["operation"] == "issue":
             ignore = self.reporting_ids(content)
             value = {k: content.get(k) for k in ("id", "identifier", "title", "description", "project", "archivedAt", "trashed")}
@@ -113,7 +113,20 @@ class Context:
                 value["state"] = content["state"]
             value["comments"] = [{k: c.get(k) for k in ("id", "body", "parent", "user", "botActor")}
                                  for c in content["comments"] if c["id"] not in ignore]
-            value["dependencies"] = sorted(content["dependencies"], key=lambda r: r["id"])
+            dependencies = content["dependencies"]
+            if original is not None and content["id"] == view.issue_id:
+                # Coding can start while the source is fetched; use its committed
+                # phase, as the broker's authority checks do.
+                with self.database.transaction() as db:
+                    attempt = db.execute("SELECT coding_started FROM attempts WHERE attempt_id=?",
+                                         (view.attempt["attempt_id"],)).fetchone()
+                if not dependency_admission_applies(attempt):
+                    # Added root blockers only govern the next admission. Keep
+                    # checking original edges and every retrieved contract without
+                    # rewriting the immutable snapshot or its approved digest.
+                    known = {r["id"] for r in original["dependencies"]}
+                    dependencies = [r for r in dependencies if r["type"] != "blocks" or r["id"] in known]
+            value["dependencies"] = sorted(dependencies, key=lambda r: r["id"])
             value["attachments"] = sorted(content["attachments"], key=lambda r: r["id"])
         elif request["operation"] == "pull":
             value = {k: v for k, v in content.items() if k != "updated_at"}
@@ -345,7 +358,7 @@ class Context:
                         # Immutable blobs/trees stay in the durable cache. The
                         # owning PR recheck proves identity and continued access.
                         continue
-                    if self.material(view, request, self.sanitize(content)) != row["material"]:
+                    if self.material(view, request, self.sanitize(content), original=json.loads(row["content"])) != row["material"]:
                         raise ContextError("material_evidence_changed")
                 if approved and self.approval_required(view):
                     raise ContextError("new_evidence_requires_review")
