@@ -9,6 +9,7 @@ import math
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
+from datetime import datetime
 from functools import lru_cache
 from threading import Lock
 from urllib.error import HTTPError, URLError
@@ -167,6 +168,76 @@ class Linear:
         query = ("query($id: String!) { issue(id: $id) { " + ISSUE_FIELDS
                  + " project { " + PROJECT_FIELDS + " } } }")
         return self.complete(self.query(query, {"id": issue_id})["issue"])
+
+    def issue_history(self, issue_id):
+        """A complete, targeted causal snapshot; never infer ownership from updatedAt.
+
+        This is used only for readiness projection/submission conflicts, not by
+        routine project scans. Return nothing on partial or changing evidence.
+        """
+        query = ("query($id: String!, $after: String) { issue(id: $id) { " + ISSUE_FIELDS
+                 + " updatedAt project { " + PROJECT_FIELDS + " } " + """
+          history(first: 50, after: $after, orderBy: createdAt, includeArchived: true) {
+            nodes { id createdAt actor { id isMe app } botActor { id }
+                    fromState { id type } toState { id type }
+                    fromProjectId toProjectId archived trashed }
+            pageInfo { hasNextPage endCursor }
+          }
+        } }""")
+        snapshot, entries, cursors, ids, cursor = None, [], set(), set(), None
+        while True:
+            issue = self.query(query, {'id': issue_id, 'after': cursor})['issue']
+            if not isinstance(issue, dict):
+                raise ValueError('Cannot verify issue state history')
+            issue = self.complete(dict(issue))
+            if (issue.get('id') != issue_id or not isinstance(issue.get('state'), dict)
+                    or not isinstance(issue['state'].get('id'), str)
+                    or not isinstance(issue['state'].get('type'), str)):
+                raise ValueError('Incomplete issue state snapshot')
+            updated = datetime.fromisoformat(issue['updatedAt'].replace('Z', '+00:00'))
+            if updated.tzinfo is None:
+                raise ValueError('Issue snapshot has no observation version')
+            history = issue.pop('history')
+            if snapshot is not None and any(issue.get(key) != snapshot.get(key)
+                                            for key in ('state', 'project', 'archivedAt', 'updatedAt')):
+                raise ValueError('Issue changed during history pagination')
+            snapshot = issue
+            nodes, page = history['nodes'], history['pageInfo']
+            if not isinstance(nodes, list) or type(page['hasNextPage']) is not bool:
+                raise ValueError('Incomplete issue state history')
+            for node in nodes:
+                required = {'id', 'createdAt', 'actor', 'botActor', 'fromState', 'toState',
+                            'fromProjectId', 'toProjectId', 'archived', 'trashed'}
+                if (not isinstance(node, dict) or not required <= node.keys()
+                        or not isinstance(node.get('id'), str) or not node['id'] or node['id'] in ids):
+                    raise ValueError('Invalid issue state history identity')
+                actor = node['actor']
+                if actor is not None and (not isinstance(actor, dict) or not isinstance(actor.get('id'), str)
+                        or type(actor.get('isMe')) is not bool or type(actor.get('app')) is not bool):
+                    raise ValueError('Incomplete issue history actor')
+                bot = node['botActor']
+                if bot is not None and (not isinstance(bot, dict) or 'id' not in bot):
+                    raise ValueError('Incomplete issue history bot actor')
+                for state in (node['fromState'], node['toState']):
+                    if state is not None and (not isinstance(state, dict) or not isinstance(state.get('id'), str)
+                                               or not isinstance(state.get('type'), str)):
+                        raise ValueError('Incomplete issue history workflow state')
+                if any(node[key] is not None and type(node[key]) is not bool for key in ('archived', 'trashed')):
+                    raise ValueError('Incomplete issue history eligibility change')
+                if any(node[key] is not None and not isinstance(node[key], str)
+                       for key in ('fromProjectId', 'toProjectId')):
+                    raise ValueError('Incomplete issue history project change')
+                created = datetime.fromisoformat(node['createdAt'].replace('Z', '+00:00'))
+                if created.tzinfo is None:
+                    raise ValueError('Issue state history has no action time')
+                ids.add(node['id'])
+                entries.append({**node, 'changed_at': created.timestamp()})
+            if not page['hasNextPage']:
+                return {**snapshot, 'history': entries}
+            cursor = page['endCursor']
+            if not isinstance(cursor, str) or not cursor or cursor in cursors:
+                raise ValueError('Linear history pagination did not advance')
+            cursors.add(cursor)
 
     def download_image(self, url, *, deadline=None):
         from common.images import download_image

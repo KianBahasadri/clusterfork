@@ -57,6 +57,7 @@ class IssueObserved:
     content_revision: str = ""
     reason: str = ""
     canceled: bool = False
+    submission_current: bool = True
 
     @property
     def task_id(self):
@@ -105,6 +106,7 @@ class Resubmit:
     task_id: str
     submission_id: str  # Identity of a verified human state-change event.
     submitted_at: float
+    transition: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -293,6 +295,9 @@ class TaskView:
     review_attention: str = ""
     review_resubmission_pending: bool = False
     generation: str = ''
+    review_attention_at: float = 0
+    review_submitted_at: float = 0
+    review_submission: dict = field(default_factory=dict)
 
     def session(self, phase):
         return next((dict(s) for s in self.sessions if s["phase"] == phase), None)

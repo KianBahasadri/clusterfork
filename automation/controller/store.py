@@ -2,12 +2,13 @@
 
 from contextlib import contextmanager
 import fcntl
+import json
 import os
 from pathlib import Path
 import sqlite3
 import threading
 
-from .model import Rejected
+from .model import Rejected, identity
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -73,8 +74,10 @@ CREATE TABLE IF NOT EXISTS inbox (
  event_id TEXT PRIMARY KEY, payload TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0 CHECK(done IN (0,1))
 );
 CREATE TABLE IF NOT EXISTS review_submissions (
- submission_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(task_id), submitted_at REAL NOT NULL
+ submission_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(task_id), submitted_at REAL NOT NULL,
+ transition TEXT NOT NULL DEFAULT '{}'
 );
+CREATE INDEX IF NOT EXISTS review_submissions_task_time ON review_submissions(task_id, submitted_at);
 CREATE TABLE IF NOT EXISTS comment_signatures (
  key TEXT PRIMARY KEY, signature TEXT NOT NULL, confirmed_at REAL NOT NULL
 );
@@ -118,7 +121,7 @@ CREATE TABLE IF NOT EXISTS telemetry_outbox (
  event_id TEXT PRIMARY KEY, created_at REAL NOT NULL, payload TEXT NOT NULL,
  tries INTEGER NOT NULL DEFAULT 0, next_at REAL NOT NULL DEFAULT 0
 );
-PRAGMA user_version=9;
+PRAGMA user_version=10;
 """
 
 
@@ -141,7 +144,7 @@ class Database:
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA synchronous=FULL")
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9):
+        if version not in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10):
             self.close()
             raise Rejected("Unsupported task database version")
         if version == 1:
@@ -173,6 +176,21 @@ class Database:
                     for name, definition in fields.items():
                         if name not in columns:
                             db.execute(f'ALTER TABLE {table} ADD COLUMN {name} {definition}')
+        if version and version < 10:
+            with self.transaction() as db:
+                columns = {row['name'] for row in db.execute('PRAGMA table_info(review_submissions)')}
+                if columns and 'transition' not in columns:
+                    db.execute("ALTER TABLE review_submissions ADD COLUMN transition TEXT NOT NULL DEFAULT '{}'")
+                    # v9 kept the signed payload in the inbox even after delivery.
+                    # Recover provenance locally without granting a new budget.
+                    for row in db.execute("SELECT payload FROM inbox").fetchall():
+                        event = json.loads(row['payload'])
+                        submission = event.get('submission')
+                        if event.get('type') == 'Issue' and submission:
+                            db.execute('UPDATE review_submissions SET transition=? WHERE submission_id=? AND submitted_at=? '
+                                       'AND task_id IN (SELECT task_id FROM tasks WHERE issue_id=?)',
+                                       (json.dumps(submission, sort_keys=True), identity(event['id'], submission),
+                                        submission['changed_at'], event['id']))
         self.connection.executescript(SCHEMA)
 
     @contextmanager

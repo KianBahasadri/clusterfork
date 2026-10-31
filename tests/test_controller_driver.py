@@ -19,17 +19,29 @@ from common.reporting import worker_branch
 
 
 class ControllerDriverTests(unittest.TestCase):
+    def change_state(self, issue_id, state, *, at=None, actor_id=None, app=False, own=False):
+        previous = copy.deepcopy(self.issues[issue_id]['state'])
+        self.issues[issue_id]['state'] = copy.deepcopy(state)
+        self.histories[issue_id].append({
+            'id': str(UUID(int=1000+sum(map(len, self.histories.values())))),
+            'changed_at': self.driver.clock() if at is None else at,
+            'actor': {'id': actor_id or str(UUID(int=98)), 'app': app, 'isMe': own}, 'botActor': None,
+            'fromState': previous, 'toState': copy.deepcopy(state),
+            'fromProjectId': None, 'toProjectId': None, 'archived': None, 'trashed': None})
+
     def human_resubmit(self):
         f=self.fixture
         changed_at=self.driver.clock()+1
         self.driver.clock=lambda:changed_at
         f.broker.clock=self.driver.clock
         previous=f.issue['state']['id']
-        f.issue['state']={'id':f.route.ready_state_ids[0],'type':'unstarted'}
+        self.change_state(f.issue['id'], {'id':f.route.ready_state_ids[0],'type':'unstarted'},
+                          at=changed_at, actor_id=str(UUID(int=99)))
         event={'type':'Issue','id':f.issue['id'],'webhook_at':changed_at,
                'submission':{'actor_id':str(UUID(int=99)),'from_state':previous,
                              'to_state':f.route.ready_state_ids[0],'changed_at':changed_at}}
         self.driver.apply(InboxQueued(identity(event),event))
+        return event
 
     def setUp(self):
         # Reuse the credential/issue fixture without inheriting and rerunning its tests.
@@ -43,11 +55,14 @@ class ControllerDriverTests(unittest.TestCase):
         second=copy.deepcopy(f.issue)
         second.update(id=str(UUID(int=2)),identifier="KIAN-2",createdAt="2026-10-30T00:00:01Z")
         self.issues={f.issue["id"]:f.issue,second["id"]:second}
+        self.histories={key: [] for key in self.issues}
         self.second_issue=second
         f.linear.issue.side_effect=lambda key:self.issues.get(key)
         f.linear.project_issues.side_effect=lambda project:list(self.issues.values())
         f.linear.issue_dependencies.return_value=[]
-        f.linear.set_state.side_effect=lambda key,state:self.issues[key].update(state={"id":state,"type":"started"})
+        f.linear.issue_history.side_effect=lambda key:copy.deepcopy({**self.issues[key], 'history': self.histories[key]})
+        f.linear.set_state.side_effect=lambda key,state:self.change_state(
+            key, {'id':state,'type':'started'}, app=True, own=True)
         self.runs={}
         self.counter=122
         def dispatch(route,inputs):

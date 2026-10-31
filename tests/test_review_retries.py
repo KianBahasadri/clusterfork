@@ -11,8 +11,10 @@ from uuid import UUID
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'automation'))
 from controller.core import Controller
+from controller.broker import Broker
+from controller.driver import Driver
 from controller.model import (Admit, Assign, ContextObserved, DispatchObserved, ExternalObserved,
-                              Finish, Hold, InboxQueued, Rejected, Resubmit, Retry, Review, Role, Start, identity)
+                              EvidenceChanged, Finish, Hold, InboxQueued, Rejected, Resubmit, Retry, Review, Role, Start, identity)
 from controller.store import Database
 from common.policy import PROTOCOL
 from call_budget import CallBudget
@@ -235,6 +237,28 @@ class ReviewRetryTests(unittest.TestCase):
         self.assertEqual(fresh.review_attempts, 1)
         self.assertNotEqual(fresh.attempt['attempt_id'], view.attempt['attempt_id'])
 
+    def test_human_readiness_resubmission_does_not_replenish_the_consumed_coding_repair(self):
+        f = self.f
+        view = f.admit()
+        f.coding(view)
+        f.apply(Finish(view.task_id, view.attempt['attempt_id'], 'coding', 'failed'))
+        f.external(view, conclusion='failure', repairable=True)
+        repair = f.apply(Retry(view.task_id, fixtures.SPEC, 'Repair failed coding', 'repair'))
+        self.begin(repair)
+        f.apply(Review(repair.task_id, repair.attempt['attempt_id'], missing_evidence(), fixtures.SPEC))
+        self.stop(repair, conclusion='success')
+        f.now += 1
+        submitted = f.apply(Resubmit(view.task_id, identity('human-after-repair'), f.now))
+        self.assertEqual((submitted.review_cycle, submitted.review_attempts), (2, 0))
+        self.reopen()
+        fresh = f.apply(Admit(view.task_id, fixtures.SPEC))
+        f.coding(fresh)
+        f.apply(Finish(fresh.task_id, fresh.attempt['attempt_id'], 'coding', 'failed'))
+        held = f.external(fresh, conclusion='failure', repairable=True)
+        self.assertEqual(held.attempt['retry_kind'], '')
+        with self.assertRaises(Rejected):
+            f.apply(Retry(fresh.task_id, fixtures.SPEC, 'Another repair', 'repair'))
+
     def test_definite_dispatch_timeout_is_bounded_and_unknown_dispatch_is_never_resent(self):
         view = self.f.admit()
         unknown = self.f.apply(DispatchObserved(view.task_id, view.attempt['attempt_id'], 'unknown', TIMEOUT))
@@ -296,6 +320,45 @@ class ReviewDriverRetryTests(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
         self.f, self.driver = self.fixture.fixture, self.fixture.driver
+
+    def deny_review(self, *, report=True):
+        f = self.f
+        self.fixture.second_issue['state'] = {'id': 'done', 'type': 'completed'}
+        self.driver.tick(scan=True)
+        f.preflight(Role.REVIEW_SELECT, f.account_a)
+        config = f.call(Role.REVIEW, 'start', protocol=PROTOCOL)
+        f.call(Role.REVIEW, 'review', binding=config['binding'], result=missing_evidence())
+        if report:
+            self.driver.report()
+
+    def reopen(self):
+        f, old = self.f, self.driver
+        path = f.database.path
+        f.database.close()
+        f.database = Database(path)
+        self.addCleanup(f.database.close)
+        f.controller = Controller(f.database)
+        f.accounts = f.controller.accounts
+        f.pool = f.accounts.pools['codex']
+        f.broker = Broker(f.controller, f.registry, f.linear, f.github, clock=old.clock)
+        for pool in f.accounts.pools.values():
+            pool.clock = lambda: f.broker.clock()
+        self.driver = self.fixture.driver = Driver(
+            f.controller, old.registry, f.linear, f.github, old.runtime_sha,
+            runtime_ready=old.runtime_ready, clock=old.clock)
+
+    def finish_old_review(self):
+        self.fixture.runs[self.f.key].update(status='completed', conclusion='success')
+        self.driver.observe_execution(self.f.controller.inspect(self.f.view.task_id))
+
+    def assert_one_fresh_cycle(self):
+        self.driver.tick(scan=True)
+        fresh = self.f.controller.inspect(self.f.view.task_id)
+        self.assertEqual((fresh.review_cycle, fresh.review_attempts), (2, 1))
+        self.assertEqual(self.f.github.dispatch.call_count, 2)
+        self.assertNotEqual(fresh.attempt['attempt_id'], self.f.key)
+        self.driver.tick()
+        self.assertEqual(self.f.github.dispatch.call_count, 2)
 
     def test_missing_contract_reporting_failures_do_not_retry_and_safe_release_advances_queue(self):
         f = self.f
@@ -427,6 +490,343 @@ class ReviewDriverRetryTests(unittest.TestCase):
         self.driver.tick(scan=True)
         self.assertEqual(f.controller.inspect(f.view.task_id).review_cycle, 2)
         self.assertEqual(f.github.dispatch.call_count, 2)
+
+    def test_human_resubmission_arriving_after_cleanup_and_reporting_opens_one_cycle(self):
+        f = self.f
+        self.fixture.second_issue['state'] = {'id': 'done', 'type': 'completed'}
+        self.driver.tick(scan=True)
+        f.preflight(Role.REVIEW_SELECT, f.account_a)
+        config = f.call(Role.REVIEW, 'start', protocol=PROTOCOL)
+        f.call(Role.REVIEW, 'review', binding=config['binding'], result=missing_evidence())
+        self.driver.report()
+        self.fixture.human_resubmit()  # Arrives just after the tick drained its inbox.
+        current = f.controller.inspect(f.view.task_id)
+        self.driver.observe_issue(f.issue, known=current)
+        self.fixture.runs[f.key].update(status='completed', conclusion='success')
+        self.driver.observe_execution(current)
+        self.assertFalse(f.controller.inspect(f.view.task_id).active)
+        self.driver.report()  # Cleanup reporting must not erase the queued human intent.
+        self.driver.events()
+        self.driver.tick()
+        fresh = f.controller.inspect(f.view.task_id)
+        self.assertEqual(fresh.review_cycle, 2)
+        self.assertEqual(fresh.review_attempts, 1)
+        self.assertEqual(f.github.dispatch.call_count, 2)
+        self.driver.tick(scan=True)
+        self.assertEqual(f.controller.inspect(f.view.task_id).review_cycle, 2)
+        self.assertEqual(f.github.dispatch.call_count, 2)
+
+    def test_delayed_resubmission_survives_a_restart_on_either_side_of_cleanup(self):
+        self.deny_review()
+        event = self.fixture.human_resubmit()
+        self.reopen()  # Only the durable, unhandled inbox knows the human intent.
+        self.driver.observe_issue(self.f.issue, known=self.f.controller.inspect(self.f.view.task_id))
+        self.finish_old_review()
+        self.driver.report()
+        self.reopen()
+        with CallBudget(self, linear=self.f.linear, github=self.f.github, exact={
+                'linear.issue': 1, 'linear.issue_history': 1, 'linear.issue_dependencies': 1}):
+            self.driver.events()
+        self.assertFalse(self.f.controller.inbox())
+        # Redelivery has a new envelope ID/time, but the same original action.
+        event = {**event, 'webhook_at': self.driver.clock()+10}
+        self.driver.apply(InboxQueued(identity(event), event))
+        self.driver.events()
+        self.assert_one_fresh_cycle()
+
+    def test_pending_resubmission_and_original_transition_survive_restart_before_stop(self):
+        self.deny_review()
+        event = self.fixture.human_resubmit()
+        self.driver.events()
+        before = self.f.controller.inspect(self.f.view.task_id)
+        self.assertTrue(before.review_resubmission_pending)
+        self.assertEqual(before.review_submission, event['submission'])
+        self.reopen()
+        self.assertEqual(self.f.controller.inspect(before.task_id), before)
+        self.driver.report()
+        self.finish_old_review()
+        self.assert_one_fresh_cycle()
+
+    def test_version_nine_upgrade_recovers_original_signed_submission_from_the_durable_inbox(self):
+        self.deny_review()
+        event = self.fixture.human_resubmit()
+        self.driver.events()
+        before = self.f.controller.inspect(self.f.view.task_id)
+        with self.f.database.transaction() as db:
+            db.execute('ALTER TABLE review_submissions DROP COLUMN transition')
+            db.execute('PRAGMA user_version=9')
+        self.reopen()
+        restored = self.f.controller.inspect(before.task_id)
+        self.assertEqual(restored, before)
+        self.assertEqual(restored.review_submission, event['submission'])
+        self.finish_old_review()
+        self.assert_one_fresh_cycle()
+
+    def test_first_attention_projection_cannot_overwrite_a_newer_unhandled_human_submission(self):
+        self.deny_review(report=False)
+        # The human supplied feedback before the delayed first status write.
+        self.fixture.change_state(self.f.issue['id'], {'id': self.f.route.linear_states.blocked, 'type': 'started'})
+        self.fixture.human_resubmit()
+        before = self.f.linear.set_state.call_count
+        self.driver.report()
+        self.assertEqual(self.f.linear.set_state.call_count, before)
+        self.assertEqual(self.f.issue['state']['id'], self.f.route.ready_state_ids[0])
+        self.finish_old_review()
+        self.driver.events()
+        self.assert_one_fresh_cycle()
+
+    def test_late_attention_feedback_cannot_move_the_submission_boundary_past_a_queued_human_event(self):
+        self.deny_review()
+        self.fixture.human_resubmit()
+        self.driver.clock = lambda: 1002
+        self.driver.apply(EvidenceChanged(self.f.view.task_id, self.f.key))
+        self.finish_old_review()
+        self.driver.report()
+        self.driver.events()
+        self.assert_one_fresh_cycle()
+
+    def test_a_signed_resubmission_can_restore_eligibility_in_the_same_human_action(self):
+        self.deny_review()
+        self.fixture.human_resubmit()
+        # Linear records unarchive and Todo in one history entry. Current mapping
+        # and archive eligibility still have to pass along with the signed event.
+        self.fixture.histories[self.f.issue['id']][-1]['archived'] = False
+        self.driver.events()
+        self.assertTrue(self.f.controller.inspect(self.f.view.task_id).review_resubmission_pending)
+        self.finish_old_review()
+        self.assert_one_fresh_cycle()
+
+    def test_a_human_event_arriving_during_the_state_write_survives_its_ambiguous_result(self):
+        self.deny_review(report=False)
+        write = self.f.linear.set_state.side_effect
+        def race(key, state):
+            self.assertFalse(self.f.database.connection.in_transaction)
+            self.fixture.change_state(key, {'id': state, 'type': 'started'})
+            self.fixture.human_resubmit()  # After the projection's last causal read.
+            write(key, state)  # The network request lands after the human action.
+            raise RuntimeError('Lost successful state-write response')
+        self.f.linear.set_state.side_effect = race
+        with self.assertLogs(level='WARNING'):
+            self.driver.report()
+        self.assertEqual(self.f.issue['state']['id'], self.f.route.linear_states.blocked)
+        self.reopen()
+        self.f.linear.set_state.side_effect = write
+        self.driver.report()  # Retry cannot grant submission authority or erase it.
+        self.assertEqual(self.f.controller.inspect(self.f.view.task_id).review_cycle, 1)
+        self.driver.events()
+        pending = self.f.controller.inspect(self.f.view.task_id)
+        self.assertTrue(pending.review_resubmission_pending)
+        self.assertTrue(pending.eligible)
+        self.finish_old_review()
+        self.assert_one_fresh_cycle()
+
+    def test_failed_state_projection_retries_without_losing_an_unhandled_submission(self):
+        self.deny_review(report=False)
+        write = self.f.linear.set_state.side_effect
+        self.f.linear.set_state.side_effect = lambda *_: False
+        with self.assertLogs(level='WARNING'):
+            self.driver.report()
+        self.assertTrue(self.f.controller.effects('report'))
+        self.fixture.change_state(self.f.issue['id'], {'id': self.f.route.linear_states.blocked, 'type': 'started'})
+        self.fixture.human_resubmit()
+        self.f.linear.set_state.side_effect = write
+        before = self.f.linear.set_state.call_count
+        self.driver.report()
+        self.assertEqual(self.f.linear.set_state.call_count, before)
+        self.finish_old_review()
+        self.driver.events()
+        self.assert_one_fresh_cycle()
+
+    def test_unavailable_causal_evidence_defers_the_signed_event_across_restart(self):
+        self.deny_review()
+        self.fixture.human_resubmit()
+        history = self.f.linear.issue_history.side_effect
+        self.f.linear.issue_history.side_effect = RuntimeError('History unavailable')
+        self.finish_old_review()
+        with self.assertLogs(level='WARNING'):
+            self.driver.events()
+        self.assertTrue(self.f.controller.inbox())
+        self.assertEqual(self.f.controller.inspect(self.f.view.task_id).review_cycle, 1)
+        self.reopen()
+        self.f.linear.issue_history.side_effect = history
+        self.driver.events()
+        self.assert_one_fresh_cycle()
+
+    def test_later_human_withdrawal_wins_before_or_after_event_processing(self):
+        for processed in (False, True):
+            with self.subTest(processed=processed):
+                if processed:
+                    self.doCleanups()
+                    self.setUp()
+                self.deny_review()
+                event = self.fixture.human_resubmit()
+                if processed:
+                    self.driver.events()
+                self.fixture.change_state(self.f.issue['id'],
+                                          {'id': self.f.route.linear_states.blocked, 'type': 'started'},
+                                          at=self.driver.clock()+1, actor_id=event['submission']['actor_id'])
+                self.driver.clock = lambda: 1002
+                self.reopen()
+                self.driver.tick(scan=True)
+                self.finish_old_review()
+                self.driver.tick(scan=True)
+                withdrawn = self.f.controller.inspect(self.f.view.task_id)
+                self.assertEqual((withdrawn.review_cycle, withdrawn.review_attempts), (1, 1))
+                self.assertFalse(withdrawn.review_resubmission_pending)
+                self.assertFalse(withdrawn.active)
+                # A bot returning it to Todo, then redelivering the old human event, cannot revive it.
+                self.fixture.change_state(self.f.issue['id'],
+                                          {'id': self.f.route.ready_state_ids[0], 'type': 'unstarted'}, at=1003, app=True)
+                self.driver.clock = lambda: 1003
+                event = {**event, 'webhook_at': 1003}
+                self.driver.apply(InboxQueued(identity(event), event))
+                self.driver.tick(scan=True)
+                self.assertEqual(self.f.github.dispatch.call_count, 1)
+                self.assertEqual(self.f.controller.inspect(withdrawn.task_id).review_cycle, 1)
+
+    def test_later_human_cancellation_wins_even_when_an_inflight_projection_masks_it(self):
+        self.deny_review(report=False)
+        write = self.f.linear.set_state.side_effect
+        def race(key, state):
+            self.fixture.change_state(key, {'id': state, 'type': 'started'})
+            self.fixture.human_resubmit()
+            self.fixture.change_state(key, {'id': 'canceled', 'type': 'canceled'}, at=1002)
+            self.driver.clock = lambda: 1003
+            write(key, state)
+        self.f.linear.set_state.side_effect = race
+        self.driver.report()
+        self.assertEqual(self.f.issue['state']['id'], self.f.route.linear_states.blocked)
+        self.f.linear.set_state.side_effect = write
+        self.driver.events()
+        self.assertTrue(self.f.controller.inspect(self.f.view.task_id).canceled)
+        self.finish_old_review()
+        self.driver.tick(scan=True)
+        canceled = self.f.controller.inspect(self.f.view.task_id)
+        self.assertEqual((canceled.phase, canceled.review_cycle), ('canceled', 1))
+        self.assertFalse(canceled.active)
+        self.assertFalse(canceled.review_resubmission_pending)
+        self.assertEqual(self.f.github.dispatch.call_count, 1)
+
+    def test_archive_project_removal_and_enrollment_removal_withdraw_pending_intent(self):
+        for index, kind in enumerate(('archive', 'project', 'enrollment')):
+            with self.subTest(kind=kind):
+                if index:
+                    self.doCleanups()
+                    self.setUp()
+                self.deny_review()
+                event = self.fixture.human_resubmit()
+                self.driver.events()
+                project = json.loads(json.dumps(self.f.issue['project']))
+                if kind == 'archive':
+                    self.f.issue['archivedAt'] = '2026-10-31T00:00:00Z'
+                elif kind == 'project':
+                    self.f.issue['project'] = None
+                else:
+                    self.f.issue['project']['labels']['nodes'] = []
+                self.driver.tick()
+                withdrawn = self.f.controller.inspect(self.f.view.task_id)
+                self.assertFalse(withdrawn.eligible)
+                self.assertFalse(withdrawn.review_resubmission_pending)
+                self.finish_old_review()
+                self.f.issue['archivedAt'] = None
+                self.f.issue['project'] = project
+                self.driver.apply(InboxQueued(identity('redelivery', event), event))
+                self.driver.tick(scan=True)
+                self.assertEqual(self.f.github.dispatch.call_count, 1)
+                self.assertEqual(self.f.controller.inspect(withdrawn.task_id).review_cycle, 1)
+
+    def test_ineligible_human_event_stays_consumed_after_project_reenrollment(self):
+        self.deny_review()
+        event = self.fixture.human_resubmit()
+        self.f.issue['project']['labels']['nodes'] = []
+        self.driver.events()
+        self.assertFalse(self.f.controller.inbox())
+        self.finish_old_review()
+        self.reopen()
+        self.f.issue['project']['labels']['nodes'] = [{'name': self.f.registry.enrollment_label}]
+        self.driver.apply(InboxQueued(identity('redelivery', event), event))
+        self.driver.tick(scan=True)
+        self.assertEqual(self.f.github.dispatch.call_count, 1)
+        self.assertEqual(self.f.controller.inspect(self.f.view.task_id).review_cycle, 1)
+
+    def test_bot_transitions_and_scanned_todo_never_authorize_a_fresh_cycle(self):
+        self.deny_review()
+        self.finish_old_review()
+        self.fixture.change_state(self.f.issue['id'], {'id': self.f.route.ready_state_ids[0], 'type': 'unstarted'},
+                                  app=True, own=False, at=1001)
+        event = {'type': 'Issue', 'id': self.f.issue['id'], 'webhook_at': 1001}
+        self.driver.apply(InboxQueued(identity(event), event))
+        self.driver.tick(scan=True)
+        held = self.f.controller.inspect(self.f.view.task_id)
+        self.assertEqual((held.review_cycle, held.review_attempts), (1, 1))
+        self.assertFalse(held.review_resubmission_pending)
+        self.assertFalse(held.active)
+        self.assertEqual(self.f.github.dispatch.call_count, 1)
+        with CallBudget(self, linear=self.f.linear, github=self.f.github, exact={
+                'linear.project_issues': len(self.f.registry.routes),
+                'linear.issue_dependencies': len(self.f.registry.routes)}):
+            self.driver.tick(scan=True)
+
+    def test_out_of_order_distinct_human_events_only_authorize_the_latest_submission(self):
+        self.deny_review()
+        older = self.fixture.human_resubmit()
+        self.fixture.change_state(self.f.issue['id'], {'id': self.f.route.linear_states.blocked, 'type': 'started'}, at=1002)
+        self.driver.clock = lambda: 1002
+        latest = self.fixture.human_resubmit()
+        self.driver.events()
+        pending = self.f.controller.inspect(self.f.view.task_id)
+        self.assertEqual(pending.review_submission, latest['submission'])
+        self.assertTrue(pending.review_resubmission_pending)
+        self.finish_old_review()
+        self.driver.apply(InboxQueued(identity('late old event', older), older))
+        self.assert_one_fresh_cycle()
+        self.assertEqual(self.f.controller.inspect(pending.task_id).review_submitted_at, latest['submission']['changed_at'])
+
+    def test_queued_resubmission_withdrawn_during_a_deployment_hold_needs_another_human_event(self):
+        self.deny_review()
+        self.finish_old_review()
+        self.fixture.human_resubmit()
+        self.driver.apply(Hold('deployment:test', 'Deployment is draining.'))
+        self.driver.events()
+        queued = self.f.controller.inspect(self.f.view.task_id)
+        self.assertEqual((queued.review_cycle, queued.review_attempts), (2, 0))
+        self.fixture.change_state(self.f.issue['id'], {'id': self.f.route.linear_states.blocked, 'type': 'started'}, at=1002)
+        self.driver.clock = lambda: 1002
+        self.driver.tick()
+        self.fixture.change_state(self.f.issue['id'], {'id': self.f.route.ready_state_ids[0], 'type': 'unstarted'}, app=True)
+        self.driver.apply(Hold('deployment:test', '', release=True))
+        self.driver.tick(scan=True)
+        self.assertEqual(self.f.github.dispatch.call_count, 1)
+        self.assertEqual(self.f.controller.inspect(queued.task_id).review_cycle, 2)
+        self.fixture.change_state(self.f.issue['id'], {'id': self.f.route.linear_states.blocked, 'type': 'started'}, at=1003)
+        self.driver.clock = lambda: 1003
+        self.fixture.human_resubmit()
+        self.driver.tick()
+        fresh = self.f.controller.inspect(queued.task_id)
+        self.assertEqual((fresh.review_cycle, fresh.review_attempts), (3, 1))
+        self.assertEqual(self.f.github.dispatch.call_count, 2)
+
+    def test_resubmission_does_not_reset_budget_or_overlap_a_live_attempt_or_unresolved_pr(self):
+        self.deny_review()
+        event = self.fixture.human_resubmit()
+        self.driver.events()
+        self.reopen()
+        self.driver.tick()
+        held = self.f.controller.inspect(self.f.view.task_id)
+        self.assertEqual((held.review_cycle, held.review_attempts), (1, 1))
+        self.assertTrue(held.active)
+        self.f.github.worker_pull.return_value = {
+            'url': f'https://github.com/{self.f.route.repository}/pull/1', 'state': 'OPEN', 'merged': False}
+        self.finish_old_review()
+        self.driver.tick()
+        held = self.f.controller.inspect(held.task_id)
+        self.assertEqual((held.review_cycle, held.review_attempts), (1, 1))
+        self.assertTrue(held.active)
+        self.assertEqual(self.f.github.dispatch.call_count, 1)
+        self.assertEqual(self.f.pool.get(self.f.account_a)[0]['owner'], '')
+        self.f.github.worker_pull.return_value['state'] = 'CLOSED'
+        self.driver.apply(InboxQueued(identity('duplicate', event), event))
+        self.assert_one_fresh_cycle()
 
     def test_an_older_run_rerun_blocks_release_and_retry_until_it_stops(self):
         f = self.f

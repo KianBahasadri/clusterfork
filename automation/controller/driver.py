@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import math
 import time
 from types import SimpleNamespace
 
@@ -10,6 +11,7 @@ from .authorization import release_ref
 from .model import (Admit, ContextObserved, DispatchObserved, EffectUpdated, ExternalObserved,
                     Hold, InboxDone, IssueObserved, Rejected, Retry, TaskSpec, identity, ReportConfirmed, Resubmit)
 from .images import Images
+from .linear_state import may_project_attention, submission_snapshot
 from .workflows import ENGINE, WORKFLOW
 from .reporting import attempt_reports,execution_status,repair_terminal,repair_report,review_report
 from common.routing import DispatchError, dependency_status, eligibility
@@ -52,7 +54,15 @@ class Driver:
                                ref=view.spec.target_ref if view.spec.target_repository or not compatible else current.ref,
                                auto_merge=view.spec.auto_merge if view.spec.target_repository or not compatible else current.auto_merge)
 
-    def observe_issue(self, issue, *, known=None):
+    def observe_issue(self, issue, *, known=None, submission_current=None):
+        if submission_current is None:
+            submission_current = True
+            if issue and known and known.review_submission and (
+                    known.review_resubmission_pending or known.phase == 'queued'):
+                route = self.registry.routes.get(known.project_id)
+                if route and route.linear_states:
+                    issue, submission_current = submission_snapshot(
+                        self.linear.issue_history(known.issue_id), known.review_submission, route.linear_states.blocked)
         generation = (known.generation if known and known.phase not in {'completed', 'canceled', 'skipped'}
                       else self.registry.generation)
         if (known and known.phase in {'completed','canceled'}
@@ -88,7 +98,8 @@ class Driver:
                                        generation, issue["identifier"], route == mapped,
                                        not dependency_reason, issue.get("priority", 0) or 0,
                                        float(issue.get("sortOrder", 0) or 0), issue_revision(issue),
-                                       dependency_reason or ("" if route else reason), issue.get("state",{}).get("type")=="canceled"))
+                                       dependency_reason or ("" if route else reason), issue.get("state",{}).get("type")=="canceled",
+                                       submission_current))
 
     def refresh(self, view):
         issue = self.linear.issue(view.issue_id)
@@ -127,12 +138,25 @@ class Driver:
                         scanned = True
                 elif event["type"] == "Issue":
                     known = self.known_issues().get(event['id'])
-                    current = self.observe_issue(self.linear.issue(event["id"]),known=known)
+                    issue = self.linear.issue(event['id'])
                     submission = event.get('submission')
-                    if current and submission and current.eligible:
-                        route = self.route(current)
-                        if submission['to_state'] in route.ready_state_ids and submission['from_state'] not in route.ready_state_ids:
-                            self.apply(Resubmit(current.task_id, identity(event['id'], submission), submission['changed_at']))
+                    route = self.registry.routes.get(known.project_id) if known else None
+                    fresh = (known and known.phase not in {'completed', 'canceled', 'skipped'}
+                             and known.review_attention and submission and route and route.linear_states
+                             and submission['to_state'] in route.ready_state_ids
+                             and submission['from_state'] not in route.ready_state_ids
+                             and type(submission['changed_at']) in (int, float) and math.isfinite(submission['changed_at'])
+                             and max(known.review_attention_at, known.review_submitted_at,
+                                     known.review_submission.get('changed_at', 0)) < submission['changed_at'] <= self.clock())
+                    valid = False
+                    if fresh:
+                        issue, valid = submission_snapshot(self.linear.issue_history(event['id']), submission,
+                                                           route.linear_states.blocked)
+                    current = self.observe_issue(issue, known=known, submission_current=(
+                        valid and (not known.review_resubmission_pending or known.review_submission == submission)
+                        if fresh else None))
+                    if current and fresh and valid and current.phase not in {'completed', 'canceled', 'skipped'}:
+                        self.apply(Resubmit(current.task_id, identity(event['id'], submission), submission['changed_at'], submission))
                 elif event["type"] == "Comment":
                     if self.steering is None:
                         raise Rejected("Instruction transport is unavailable")
@@ -322,15 +346,48 @@ class Driver:
                                        route.linear_states.in_progress if view.phase in {"executing","published"} or (
                                            view.attempt.get("attempt_kind")=="repair" and view.attempt.get('retry_kind')!='capacity') else
                                        route.ready_state_ids[0])
-                            if issue["state"]["id"] != desired and view.phase != "canceled" and not view.review_resubmission_pending:
-                                self.linear.set_state(view.issue_id,desired)
-                                if denied and desired==route.linear_states.blocked:
-                                    self.observe_issue({**issue,'state':{**issue['state'],'id':desired}},known=view)
+                            if view.phase != "canceled" and not view.review_resubmission_pending:
+                                if denied and desired == route.linear_states.blocked:
+                                    self.project_attention(view, route, issue)
+                                elif (issue['state']['id'] != desired and not (
+                                        view.review_submission and desired in route.ready_state_ids)):
+                                    if self.linear.set_state(view.issue_id,desired) is False:
+                                        raise RuntimeError('Linear state was not acknowledged')
                     self.apply(ReportConfirmed('task:'+task_id,signature))
                 for effect in effects:
                     self.apply(EffectUpdated(task_id,effect["effect_id"],"done"))
             except Exception as exc:
                 logging.warning("Controller reporting deferred for %s (%s)",task_id[:12],type(exc).__name__)
+
+    def project_attention(self, view, route, issue):
+        # Cleanup/comment/label revisions are not a new authorization to move a
+        # human-managed state. Keep this receipt independent of report signatures.
+        key = f'review-state:{view.task_id}:{view.review_cycle}'
+        signature = identity(view.review_attention_at, route.linear_states.blocked)
+        if self.controller.report_signature(key) == signature:
+            return
+        desired = route.linear_states.blocked
+        if issue['state']['id'] != desired:
+            snapshot = self.linear.issue_history(view.issue_id)
+            current = self.controller.inspect(view.task_id)
+            if (current.review_cycle != view.review_cycle or current.review_attention_at != view.review_attention_at
+                    or current.review_resubmission_pending or not current.review_attention):
+                return
+            project = snapshot.get('project') or {}
+            if ((project.get('id') != view.project_id or snapshot.get('archivedAt') or project.get('archivedAt'))
+                    or not any(label.get('name') == self.registry.enrollment_label
+                               for label in project.get('labels', {}).get('nodes', []))
+                    or snapshot['state'].get('type') == 'canceled'
+                    or snapshot['state']['id'] not in {*route.ready_state_ids, route.linear_states.in_progress, desired}
+                    or not may_project_attention(snapshot, view.review_attention_at, desired)):
+                return
+            if snapshot['state']['id'] != desired:
+                if self.linear.set_state(view.issue_id, desired) is False:
+                    raise RuntimeError('Linear readiness state was not acknowledged')
+            issue = snapshot
+        self.apply(ReportConfirmed(key, signature))
+        self.observe_issue({**issue, 'state': {'id': desired, 'type': 'started'}},
+                           known=self.controller.inspect(view.task_id))
 
     def comment(self,issue_id,key,body):
         signature=hashlib.sha256(body.encode()).hexdigest()

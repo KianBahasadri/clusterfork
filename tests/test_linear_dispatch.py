@@ -289,6 +289,66 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(row["priority"], 2)
         self.assertEqual(row["sortOrder"], -1.75)
 
+    def history_entry(self, number=1):
+        return {'id': str(number), 'createdAt': '2026-10-31T18:00:00Z',
+                'actor': {'id': OTHER, 'isMe': False, 'app': False}, 'botActor': None,
+                'fromState': {'id': OTHER, 'type': 'started'},
+                'toState': {'id': TODO, 'type': 'unstarted'},
+                'fromProjectId': None, 'toProjectId': None, 'archived': None, 'trashed': None}
+
+    def history_page(self, entries, *, more=False, cursor=None):
+        return {'data': {'issue': {**issue(), 'state': {'id': TODO, 'type': 'unstarted'},
+            'updatedAt': '2026-10-31T18:00:00Z', 'history': {
+            'nodes': entries, 'pageInfo': {'hasNextPage': more, 'endCursor': cursor}}}}}
+
+    def test_targeted_issue_history_reads_every_page_and_keeps_actor_and_action_time(self):
+        calls = []
+        responses = iter([self.history_page([self.history_entry(1)], more=True, cursor='next'),
+                          self.history_page([self.history_entry(2)])])
+        def request(url, **kwargs):
+            query, variables = kwargs['data']['query'], kwargs['data']['variables']
+            self.assertIn('history(first: 50, after: $after, orderBy: createdAt, includeArchived: true)', query)
+            self.assertIn('actor { id isMe app }', query)
+            calls.append(variables)
+            return next(responses)
+        snapshot = Linear('fixture', request).issue_history(ISSUE)
+        self.assertEqual(calls, [{'id': ISSUE, 'after': None}, {'id': ISSUE, 'after': 'next'}])
+        self.assertEqual(snapshot['state']['id'], TODO)
+        self.assertEqual([entry['id'] for entry in snapshot['history']], ['1', '2'])
+        self.assertEqual(snapshot['history'][0]['actor']['id'], OTHER)
+        self.assertEqual(snapshot['history'][0]['changed_at'], 1793469600)
+
+    def test_partial_or_malformed_issue_history_never_becomes_an_empty_causal_window(self):
+        malformed = [None, {}, {'nodes': None, 'pageInfo': {'hasNextPage': False}},
+                     {'nodes': [], 'pageInfo': {}}, {'nodes': [], 'pageInfo': {'hasNextPage': 'false'}}]
+        entry = self.history_entry()
+        for field in ('actor', 'fromState', 'toState', 'archived', 'fromProjectId'):
+            malformed.append({'nodes': [{key: value for key, value in entry.items() if key != field}],
+                              'pageInfo': {'hasNextPage': False}})
+        for change in ({'createdAt': 'invalid'}, {'createdAt': '2026-10-31T18:00:00'},
+                       {'actor': {'id': OTHER}}, {'toState': {'id': TODO}}, {'archived': 'false'}):
+            malformed.append({'nodes': [{**entry, **change}], 'pageInfo': {'hasNextPage': False}})
+        for history in malformed:
+            response = self.history_page([])
+            response['data']['issue']['history'] = history
+            with self.subTest(history=history), self.assertRaises((ValueError, KeyError, TypeError)):
+                Linear('fixture', lambda *a, **kw: response).issue_history(ISSUE)
+
+    def test_issue_history_pagination_rejects_cursor_cycles_errors_and_changing_snapshots(self):
+        for cursors in ([None], [''], ['one', 'one'], ['one', 'two', 'one']):
+            responses = iter(self.history_page([], more=True, cursor=cursor) for cursor in cursors)
+            with self.subTest(cursors=cursors), self.assertRaises(ValueError):
+                Linear('fixture', lambda *a, **kw: next(responses)).issue_history(ISSUE)
+        for second in (self.history_page([self.history_entry()]),
+                       {'errors': [{'message': 'unavailable'}], 'data': {'issue': None}},
+                       self.history_page([])):
+            first = self.history_page([self.history_entry()], more=True, cursor='next')
+            if second.get('data', {}).get('issue') and not second['data']['issue']['history']['nodes']:
+                second['data']['issue']['updatedAt'] = '2026-10-31T18:00:01Z'
+            responses = iter([first, second])
+            with self.subTest(second=second), self.assertRaises((ValueError, RequestError)):
+                Linear('fixture', lambda *a, **kw: next(responses)).issue_history(ISSUE)
+
     def test_all_project_pages_are_scanned(self):
         calls = []
 
