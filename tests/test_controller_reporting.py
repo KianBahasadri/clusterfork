@@ -37,7 +37,7 @@ class ControllerReportingTests(unittest.TestCase):
         self.driver.report()
         starts=[call for call in f.linear.status_comment.call_args_list if 'development started.' in call.args[2]]
         self.assertEqual(len(starts),1)
-        self.assertIn('40% used',starts[0].args[2])
+        self.assertIn('- primary (300-minute): **40% used** / 60% remaining',starts[0].args[2])
         self.assertIn('fixture@example.test',starts[0].args[2])
         f.call(Role.CODING,'heartbeat')
         self.driver.report()
@@ -53,6 +53,7 @@ class ControllerReportingTests(unittest.TestCase):
         finishes=[call for call in f.linear.status_comment.call_args_list if 'development finished.' in call.args[2]]
         self.assertEqual(len(finishes),1)
         self.assertIn('0h 2m 3s',finishes[0].args[2])
+        self.assertIn('- primary (300-minute): 40% used / 60% remaining → **43% used** / 57% remaining',finishes[0].args[2])
         self.assertIn('usage change +3 percentage points',finishes[0].args[2])
         self.assertEqual(len([call for call in f.linear.status_comment.call_args_list if 'development started.' in call.args[2]]),1)
 
@@ -66,10 +67,21 @@ class ControllerReportingTests(unittest.TestCase):
                    'session':{'finished':1,'data':data}}
         reports=dict(attempt_reports(execution,self.f.registry))
         self.assertIn('first@example.test',reports['start'])
+        self.assertIn('- primary (300-minute): **30% used** / 70% remaining',reports['start'])
         self.assertNotIn('second@example.test',reports['start'])
+        self.assertIn('- primary (300-minute): 30% used / 70% remaining → **90% used** / 10% remaining',reports['finish'])
+        self.assertIn('- primary (300-minute): 10% used / 90% remaining → **12% used** / 88% remaining',reports['finish'])
         self.assertIn('usage change +60 percentage points',reports['finish'])
         self.assertIn('usage change +2 percentage points',reports['finish'])
         self.assertIn('Account changes: 1',reports['finish'])
+        del data['usage_segments'][0]['usage_after']
+        missing=dict(attempt_reports(execution,self.f.registry))
+        self.assertEqual(missing['start'],reports['start'])
+        first,second=missing['finish'].split('Account 2:')
+        self.assertIn('final reading unavailable; usage change unavailable.',first)
+        self.assertIn('- primary (300-minute): 30% used / 70% remaining',first)
+        self.assertNotIn('**',first)
+        self.assertIn('10% used / 90% remaining → **12% used** / 88% remaining',second)
 
     def test_old_generation_completed_issue_is_ignored_until_it_becomes_eligible(self):
         f=self.f
