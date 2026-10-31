@@ -45,7 +45,7 @@ def verify_host(expected):
         raise ValueError("Controller host identity does not match configuration")
 
 
-def build(config,manifest,database,credential,*,table_factory=None):
+def build(config,manifest,database,credential):
     registry=Registry.load(Path(__file__).parent/"controller/projects.json")
     vault=config["key_vault"]
     linear=(Linear(None,client_id=config["linear_oauth_client_id"],
@@ -54,8 +54,6 @@ def build(config,manifest,database,credential,*,table_factory=None):
     github=GitHub(config["github_app_id"],secret(credential,vault,"github-app-private-key"))
     controller=Controller(database)
     controller.apply(Initialize(),now=time.time())
-    from controller.migrate_tables import migrate
-    migrate(controller,config,credential,client_factory=table_factory)
     instructions=Instructions(controller,registry,linear,clock=time.time)
     required=RequiredRuntime(github,manifest,deployment_run_id=config.get('deployment_run_id'))
     driver=Driver(controller,registry,linear,github,manifest["revision"],

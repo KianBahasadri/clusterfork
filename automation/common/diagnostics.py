@@ -37,7 +37,7 @@ GRAPHQL_TYPES = {"forbidden", "authentication error", "invalid input", "ratelimi
                  "user error", "graphql error", "lock timeout", "usage limit exceeded"}
 GRAPHQL_REASONS = {"errors", "invalid_response", "unsuccessful_mutation"}
 ERROR_TYPES = {"Exception", "TimeoutError", "HTTPError", "URLError", "ConnectionError", "OSError",
-               "WorkerFailure", "WorkerError", "DeploymentDeferred", "CodexError", "CodexRejected", "RequestError", "DispatchError",
+               "WorkerFailure", "WorkerError", "CodexError", "CodexRejected", "RequestError", "DispatchError",
                "PermissionError", "FileNotFoundError", "KeyError", "TypeError", "ValueError", "RuntimeError",
                "JSONDecodeError", "ServiceRequestError", "ServiceResponseError", "HttpResponseError",
                "ResourceModifiedError", "ResourceNotFoundError", "ClientAuthenticationError"}

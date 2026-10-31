@@ -155,7 +155,7 @@ Prepared files or a healthy broker alone do not establish completed enrollment.
 ## Updating the runtime or repairing setup
 
 Shared implementation changes are published once in the central repository and
-deployed automatically between tasks. The controller and all four jobs use the
+deployed automatically between tasks. The controller and both jobs use the
 same immutable release; the next task waits for required runtime deployment and
 verification. Do not update target worker pins, republish caller workflows, or
 rerun `enroll` for an ordinary runtime update. Operator holds remain independent

@@ -113,12 +113,7 @@ resource "azurerm_virtual_machine_data_disk_attachment" "controller_tasks" {
   lun                = 0
   caching            = "None"
 }
-resource "azurerm_role_assignment" "controller_accounts" {
-  for_each             = toset(["ClusterforkAccounts", "ClusterforkInstructions"])
-  scope                = azurerm_storage_table.runtime[each.key].id
-  role_definition_name = "Storage Table Data Contributor"
-  principal_id         = azurerm_linux_virtual_machine.controller.identity[0].principal_id
-}
+
 resource "azurerm_role_assignment" "controller_secrets" {
   scope                = azurerm_key_vault.runtime.id
   role_definition_name = "Key Vault Secrets User"
@@ -129,7 +124,6 @@ output "controller_hostname" { value = azurerm_public_ip.controller.fqdn }
 output "controller_config" {
   value = {
     vm_resource_id         = azurerm_linux_virtual_machine.controller.id
-    storage_account        = azurerm_storage_account.runtime.name
     key_vault              = azurerm_key_vault.runtime.name
     github_app_id          = "5503155"
     linear_oauth_client_id = "9f7805b369221d513ecad1d2559095ef"

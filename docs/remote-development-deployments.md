@@ -52,29 +52,24 @@ HTTPS health must identify the expected revision/digest. Private verification
 creates or verifies `clusterfork-runtime-<full-sha>` as an exact commit reference
 before dispatch can resume. An automatic installation records its GitHub
 deployment run ID. Admission also requires that exact main revision's deployment
-workflow to complete successfully, including retained-ingress verification.
+workflow to complete successfully, including post-job cleanup.
 Private source/tag verification is independent of that completion gate, so the
 deployment can finish without admitting work early or waiting on itself.
 Only the rollout's hold is cleared. Independent
 operator holds persist across installation, restart and successful deployment.
 CI, drain, infrastructure, install or verification failures retain the holds.
 
-## Existing Linear webhook URL
+## Direct Linear webhook ingress
 
-`automation/webhook_relay` is the retained Function App's stateless ingress package.
-It forwards original signed request bytes to the controller and returns success
-only after the controller accepts the event. Controller unavailability returns a
-retryable failure; event identity deduplicates repeated delivery after acceptance.
-The package contains only HTTP forwarding and metadata health functions, with no
-queue consumer, timer, task database, worker RPC or account access.
+Linear sends signed events directly to
+`https://clusterfork-controller-7604cac329.mexicocentral.cloudapp.azure.com/api/linear`.
+The controller validates the original signature and timestamp and commits the
+minimal inbox event before acknowledging it. Repeated delivery is deduplicated.
+Controller unavailability returns a retryable failure.
 
-The deployment workflow packages only its committed allowlisted files, publishes
-them with the existing Functions action, and verifies the exact ingress revision.
-Package entries are regular Unix files with mode `0644`, including deployment
-metadata, so the unprivileged Functions host can read the mounted archive.
-The legacy lifecycle trigger names remain disabled in Terraform. Keeping the
-existing URL needs no Linear webhook administration. A webhook already pointed
-directly at the controller also uses the same signed intake contract.
+The Function App relay and its packaging, publishing and verification steps are
+removed. Changing a Linear webhook requires an authorized workspace administrator;
+the normal app client-credentials grant cannot administer that setting.
 
 ## Operator commands
 
@@ -94,6 +89,5 @@ The normal workflow handles routine code rollout without a manual resume step.
 
 The initial history cutover is complete and its import remains in SQLite. New
 installations start with an operator hold; routine deployments reuse existing
-state. The transitional account/instruction import runs before the service opens
-its HTTP transports. [Migration](remote-development-controller.md#deployment-and-migration)
+state. The account/instruction import is complete; startup now uses SQLite directly. [Migration](remote-development-controller.md#deployment-and-migration)
 owns that once-only transfer and its private snapshot.

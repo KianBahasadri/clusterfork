@@ -6,18 +6,10 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "automation"))
-from infrastructure import InfrastructureError, check_plan, diagnostics, reference_statuses
+from infrastructure import InfrastructureError, check_plan, diagnostics
 
 
 class InfrastructureTests(unittest.TestCase):
-    def test_key_vault_reference_verification_handles_collection_and_object_responses(self):
-        self.assertEqual(reference_statuses({"value": [
-            {"name": "LINEAR_API_KEY", "properties": {"status": "Resolved"}},
-            {"name": "LINEAR_WEBHOOK_SECRET", "properties": {"status": "AccessToKeyVaultDenied"}},
-        ]}), {"LINEAR_API_KEY": "Resolved", "LINEAR_WEBHOOK_SECRET": "AccessToKeyVaultDenied"})
-        self.assertEqual(reference_statuses({"properties": {"LINEAR_API_KEY": {"status": "Resolved"}}}),
-                         {"LINEAR_API_KEY": "Resolved"})
-
     def test_review_rejects_replacements_and_deletions_before_apply(self):
         for actions in (["delete"], ["create", "delete"], ["delete", "create"]):
             with self.subTest(actions=actions), self.assertRaises(InfrastructureError):

@@ -61,7 +61,7 @@ class CredentialTrackingTests(unittest.TestCase):
                             broker.publication_guard.check(f"{stage}-{key}-credential", static=False)
 
     def test_all_auth_fields_are_retained_across_accounts_refreshes_and_cache_removal(self):
-        broker = worker.Broker("https://clusterfork-dispatch-7604cac329.azurewebsites.net/api/worker", KEY)
+        broker = worker.Broker("https://clusterfork-controller-7604cac329.mexicocentral.cloudapp.azure.com/api/worker", KEY)
         broker.publication_guard = PublicationGuard({})
         broker.call = Mock(side_effect=lambda action, **kw: {"auth": AUTH, "lease": "fixture"})
         for index in range(2):
@@ -99,7 +99,7 @@ class CredentialTrackingTests(unittest.TestCase):
         payload = base64.urlsafe_b64encode(json.dumps({"exp": time.time() + 600}).encode()).decode().rstrip("=")
         oidc = [f"eyJhbGciOiJSUzI1NiJ9.{payload}.{suffix}" for suffix in ("first", "second")]
         with patch.dict(os.environ, environment, clear=True):
-            broker = worker.Broker("https://clusterfork-dispatch-7604cac329.azurewebsites.net/api/worker", KEY)
+            broker = worker.Broker("https://clusterfork-controller-7604cac329.mexicocentral.cloudapp.azure.com/api/worker", KEY)
             with patch.object(worker, "json_request", side_effect=[{"value": oidc[0]}, {"token": CHECKOUT_TOKEN},
                                                                   {"value": oidc[1]}, {"token": PUBLISH_TOKEN}]):
                 broker.call("checkout")

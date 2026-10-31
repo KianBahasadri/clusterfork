@@ -9,7 +9,7 @@ The previous coordinator's instrumentation is a [dated record](archive/remote-de
 ## Following one attempt
 
 Start with the run and PR links in the task's Linear status comment. The combined
-GitHub workflow has separate jobs for review/coding preflight and execution;
+GitHub workflow has one review job and one coding job;
 post-job cleanup is part of each job's result. Task success, worker success and
 PR merge are distinct observations.
 
@@ -70,11 +70,7 @@ exists; release failure after otherwise successful work still fails that worker.
 
 [Azure infrastructure](azure-infrastructure.md) owns the existing Function App's
 Application Insights/Log Analytics resources and retention/cap configuration.
-Those resources now relate to retained HTTP ingress and historical records; the
-VM journal is the controller log destination. The stateless ingress has Warning
-logging and returns bounded acceptance/failure responses. It does not log signed
-bodies, headers, credentials or task content.
-
-Legacy Azure task tables remain preserved for audit, with a private pre-cutover
-snapshot. Their stale statuses do not prove a live runner. Current task ownership
-and execution evidence come from the controller and actual GitHub observations.
+Those resources retain historical records under their existing retention limits.
+The Function App relay is retired; the VM journal is the current log destination.
+Legacy tables were privately exported before runtime-storage removal. Current
+task ownership and execution evidence come from SQLite and actual GitHub observations.

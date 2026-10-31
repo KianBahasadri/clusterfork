@@ -30,7 +30,7 @@ class ControllerRuntimeTests(unittest.TestCase):
     def build(self):
         with patch.object(controller_main,"secret",side_effect=lambda credential,vault,name:"private-fixture-"+name), \
              patch.object(controller_main,"Linear") as linear,patch.object(controller_main,"GitHub"):
-            application=controller_main.build(self.config,self.manifest,self.database,self.credential,table_factory=Mock())
+            application=controller_main.build(self.config,self.manifest,self.database,self.credential)
         return application,linear
 
     def test_first_start_is_halted_and_restart_does_not_recreate_a_cleared_hold(self):

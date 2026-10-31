@@ -179,12 +179,12 @@ An in-memory guard retains every non-empty string `access_token`, `refresh_token
 lease saves, and refreshes. It rereads live caches before each scan and retains
 values after probe homes are deleted. The guard also retains job GitHub/OIDC
 credentials and every checkout, publication, and refreshed broker OIDC token.
-Credentials stay within their job; preflight still never transfers pool auth to
-the agent VM. Exact runtime values block in every file, including `tests/**`,
+Credentials stay within their phase job. Probe homes are removed before
+execution; the agent environment receives only its assigned account. Exact runtime values block in every file, including `tests/**`,
 and in PR metadata.
 
 Static checks share only the PEM private-key and concrete token-prefix/JWT
-patterns from `readiness_policy.py`. They inspect added lines outside `tests/`
+patterns from `common/policy.py`. They inspect added lines outside `tests/`
 and PR metadata. Synthetic fixtures under `tests/**` are exempt from static
 patterns; generic assignments, authorization headers, and URL user/password
 forms do not independently block publication. Checks include the PR title,

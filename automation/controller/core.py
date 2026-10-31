@@ -10,7 +10,7 @@ import re
 from .model import (Admit, Assign, DispatchObserved, ExternalObserved, Finish, Hold,
                     IssueObserved, Phase, Progress, Rejected, Retry, Review, Role,
                     Start, TaskSpec, TaskView, identity, SessionUpdated, EffectUpdated, Authorize, ExhaustAccount,
-                    ContextObserved, InboxQueued, InboxDone, Initialize, LegacyImported, ReportConfirmed, AccountRequest, InstructionRequest)
+                    ContextObserved, InboxQueued, InboxDone, Initialize, ReportConfirmed, AccountRequest, InstructionRequest)
 
 
 class Controller:
@@ -127,10 +127,6 @@ class Controller:
                     for row in rows:
                         db.execute('UPDATE tasks SET revision=revision+1 WHERE task_id=?',(row[0],))
                         self._report(db,row[0])
-                return None
-            if isinstance(command, LegacyImported):
-                from .migration import import_history
-                import_history(db,command)
                 return None
             if isinstance(command, InboxQueued):
                 if not re.fullmatch(r"[0-9a-f]{64}", command.event_id) or len(json.dumps(command.event)) > 3000:

@@ -10,12 +10,11 @@ import shutil
 import subprocess
 import tempfile
 import time
+from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 INFRA = ROOT / "infra"
 PRIVATE = Path.home() / ".local/state/clusterfork/terraform"
-SECRETS = {"LINEAR_API_KEY", "LINEAR_WEBHOOK_SECRET", "GITHUB_APP_PRIVATE_KEY", "LINEAR_OAUTH_CLIENT_SECRET"}
-APP = "/subscriptions/37d24562-0c19-408a-b492-f765921e443a/resourceGroups/rg-clusterfork-automation/providers/Microsoft.Web/sites/clusterfork-dispatch-7604cac329"
 
 
 class InfrastructureError(RuntimeError):
@@ -148,26 +147,13 @@ def bootstrap():
 
 
 
-def reference_statuses(data):
-    if isinstance(data.get("properties"), dict):
-        return {name: value.get("status") for name, value in data["properties"].items()}
-    return {item["name"]: item.get("properties", {}).get("status") for item in data.get("value", [])}
-
-
 def verify():
-    endpoint = f"https://management.azure.com{APP}/config/configreferences/appsettings"
-    run(["az", "rest", "--method", "post", "--url", endpoint + "/refresh?api-version=2022-03-01", "-o", "none", "--only-show-errors"])
-    for attempt in range(30):
-        data = json.loads(run(["az", "rest", "--method", "get", "--url", endpoint + "?api-version=2022-03-01", "-o", "json", "--only-show-errors"]))
-        statuses = reference_statuses(data)
-        unresolved = [name for name in SECRETS if statuses.get(name) != "Resolved"]
-        if not unresolved:
-            print("All runtime Key Vault references resolved.", flush=True)
-            return
-        if attempt == 29:
-            raise InfrastructureError("Unresolved Key Vault references: " + ", ".join(sorted(unresolved)))
-        print("Waiting for Key Vault reference resolution: " + ", ".join(sorted(unresolved)), flush=True)
-        time.sleep(10)
+    hostname=json.loads(terraform(INFRA/'azure','output','-json','controller_hostname'))
+    with urlopen('https://'+hostname+'/api/health',timeout=20) as response:
+        health=json.load(response)
+    if health.get('mode')!='single-controller' or health.get('resource_backend')!='sqlite':
+        raise InfrastructureError('Expected SQLite controller is unavailable')
+    print('Controller HTTPS health verified.',flush=True)
 
 
 def main():

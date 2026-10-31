@@ -51,7 +51,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install dispatcher runtime dependencies
+      - name: Install controller runtime dependencies
         run: python -m pip install -r automation/controller/requirements.txt
       - name: Verify controller runtime imports on the deployed Python version
         run: |
@@ -62,22 +62,6 @@ jobs:
           from azure.identity import ManagedIdentityCredential
           PY
           bash -n automation/controller/host/install.sh
-      - name: Index the stateless webhook ingress
-        run: |
-          python - <<'PY'
-          import importlib.util, inspect, json
-          spec = importlib.util.spec_from_file_location("webhook_ingress", "automation/webhook_relay/function_app.py")
-          module = importlib.util.module_from_spec(spec)
-          spec.loader.exec_module(module)
-          functions = module.app.get_functions()
-          names = {function.get_function_name() for function in functions}
-          assert names == {"linear_relay", "health"}, names
-          for function in functions:
-              bindings = json.loads(function.get_function_json())["bindings"]
-              arguments = {binding["name"] for binding in bindings if binding["direction"].lower() == "in"}
-              assert set(inspect.signature(function.get_user_function()).parameters) == arguments, function.get_function_name()
-          print("Only stateless HTTP ingress functions are registered")
-          PY
       - uses: ./.github/actions/setup-codex
       - uses: ./.github/actions/setup-cursor
       - name: Verify Cursor read-only filesystem boundary without credentials

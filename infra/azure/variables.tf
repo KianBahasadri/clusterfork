@@ -15,16 +15,8 @@ variable "seed_credentials" {
   type        = bool
   default     = false
 }
-variable "adopting_identity" {
-  description = "One-time deferred lookup when importing a Function App without an identity."
-  type        = bool
-  default     = false
-}
-variable "adopt_existing" {
-  description = "Enable the explicit import receipts only during initial adoption."
-  type        = bool
-  default     = false
-}
+
+
 variable "runtime_credentials" {
   type      = map(string)
   sensitive = true

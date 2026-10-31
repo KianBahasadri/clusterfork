@@ -81,20 +81,16 @@ ignore unseen ineligible issues and retain terminal task identity without adding
 new historical completion comments.
 
 `release.py` supplies committed runtime identity. [Deployment](remote-development-deployments.md)
-owns runtime-input selection, rollout, verified draining, stateless webhook ingress
+owns runtime-input selection, rollout, verified draining, direct webhook ingress
 and independent operator/deployment holds.
 
 ## Deployment and migration
 
-The original terminal-history import remains recorded in SQLite. Startup no longer
-replays a legacy snapshot. The transitional `migrate_tables.py` performs one idle
-transfer of existing account and instruction resources. It writes a private
-mode-0600 snapshot on the persistent disk, fences the old credential rows using
-ETags, then imports both resources and a digest receipt in one SQLite transaction.
-Live leases, changed credentials or conflicting local records prevent import.
-Restart after interruption reuses the snapshot; a committed receipt prevents any
-further Table calls. The legacy resources remain until migration and direct webhook
-delivery have both been verified.
+The terminal history and account/instruction imports are complete. Their private
+snapshots and SQLite digest receipts retain the audit record. Startup uses only
+the controller database; no Table SDK, migration adapter or legacy runtime
+storage is required. The retired Function App relay and table resources are
+removed only after verifying the migrated records and native direct webhook delivery.
 
 ## Native execution graph
 
@@ -140,8 +136,8 @@ Runtime tests check host identity, authentication selection, and hold persistenc
 Release tests use real Git repositories to check runtime identity, target-only
 changes, and exclusion of uncommitted files.
 Deployment tests exercise grant/PR/lease draining and runtime tag identity.
-Migration tests reopen real databases and prove completed tasks cannot execute
-again or inherit old credentials.
+The once-only migration adapters are retired after their live import receipts
+were verified; historical task identity remains in SQLite.
 
 The VM and persistent disk were provisioned on 2026-10-30. Service installation
 and initial migration are complete. Final compatibility deployment and acceptance
@@ -222,3 +218,22 @@ The final database inspection confirmed completion, stopped jobs, merged
 publication, released review/coding assignments, no repository grants and no
 admission holds. The service was active under its unprivileged user; the database
 remained on the persistent disk, with mode `0600` for it and the operator socket.
+
+## Resource consolidation, 2026-10-31 UTC
+
+The two-job implementation and SQLite resource migration are deployed. All four
+account records retained their original credential bytes and active/staged state;
+41 imported task-history records remain available. A native signed Linear event
+was committed after the relay was confirmed stopped. The reviewed retirement
+plan then deleted exactly 21 legacy infrastructure resources, with no changes to
+the controller VM, persistent disk, secrets or separate Terraform state account.
+A subsequent Terraform plan reported no changes.
+
+The final dependency set passed 636 tests in a fresh Python environment without
+the Functions or Table SDKs; the existing optional live-image test was skipped.
+
+[KIAN-939’s workflow](https://github.com/KianBahasadri/clusterfork/actions/runs/41153381971)
+passed with exactly `review / run` and `code / run` on different hosted runners,
+including every real post-job cleanup step. It was created after successful
+[deployment 41152900749](https://github.com/KianBahasadri/clusterfork/actions/runs/41152900749).
+The coding phase continued successfully while legacy storage was absent.

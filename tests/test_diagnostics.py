@@ -29,7 +29,7 @@ class DiagnosticsTests(unittest.TestCase):
         diagnostics.CONTEXT.reset(self.token)
 
     def broker(self):
-        broker = worker.Broker("https://clusterfork-dispatch-7604cac329.azurewebsites.net/api/worker", KEY)
+        broker = worker.Broker("https://clusterfork-controller-7604cac329.mexicocentral.cloudapp.azure.com/api/worker", KEY)
         broker.token = "SECRET-credential"
         broker.expires = time.time() + 3600
         return broker

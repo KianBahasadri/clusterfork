@@ -2,28 +2,21 @@
 
 Terraform owns Clusterfork's Azure resources and configuration. Application source
 remains versioned repository content installed by the deployment workflow.
-Account auth caches, queue messages, receipts, leases, and table rows are runtime
-data: Terraform manages their storage resources, not their contents.
+Task state, account auth caches, instructions and leases are runtime data in
+the controller’s private SQLite database. Terraform owns its persistent disk.
 
 ## Stacks and ownership
 
 | Stack | Resources |
 | --- | --- |
 | `infra/bootstrap` | Dedicated state resource group, storage account, private state containers, and state access roles |
-| `infra/azure` | Automation resource group, runtime storage and containers, queues, eight tables, controller VM/network/disk, retained Flex Consumption plan and Function App, monitoring, Key Vault and credential references, deployment identity, federation, and permissions |
+| `infra/azure` | Automation resource group, controller VM/network/disk, retained historical telemetry, Key Vault and credential references, deployment identity, federation, and permissions |
 
-The runtime stack adopts the original resource names. `imports.tf` records the
-existing Azure resource IDs, including the Azure-created plan, package container,
-and Smart Detection action group. Importing storage metadata does not import or
-replace its contents. The poison queue is provisioned explicitly before it is
-needed. Azure clients open existing tables; application startup no longer creates
-infrastructure.
-
-Terraform CLI and the AzureRM provider are pinned, and each stack commits its
-provider lock file. CI validates both stacks without Azure credentials.
-The helper enables import receipts only during adoption; normal reconciliation
-creates missing infrastructure from its resource declarations rather than trying
-to re-import a deleted resource.
+The runtime stack owns the controller infrastructure and protected secrets. The
+legacy Function App, consumption plan, runtime storage, containers, queues, tables
+and their obsolete role assignments are retired. Historical Application Insights
+and its capped Log Analytics workspace retain their existing records; they do
+not host a controller or receive new Function App traffic.
 
 ## State and deletion protection
 
@@ -41,21 +34,20 @@ bootstrap state. Bootstrap changes require the operator's Azure permissions.
 Terraform state can contain storage credentials even when secret values use
 write-only arguments; treat state and saved plans as private.
 
-Stateful resources use `prevent_destroy`. The checked-in plan gate also rejects
-every proposed deletion or replacement before applying the reviewed saved plan.
-Changing this policy requires an explicit code change and separate review.
+Stateful resources use `prevent_destroy`. Routine deployments reject every
+proposed deletion or replacement before applying the saved plan. The once-only
+legacy retirement used a separately inspected operator plan restricted to the
+known relay, runtime storage and obsolete role assignments; the routine gate
+remains unchanged.
 
 ## Credentials and identity
 
 Runtime Linear credentials and the GitHub App private key are Key Vault secrets.
-The Function App uses a system-assigned managed identity with Key Vault Secrets
-User access. Its app settings contain versionless Key Vault references. Public
-application identifiers, storage connections, monitoring linkage, runtime, sizing,
-and other settings are declared in Terraform.
+The controller's managed identity reads them directly. Public application IDs,
+host configuration, sizing and role assignments are declared in Terraform.
 
-Terraform already declares the `Clusterfork` app's `LINEAR_OAUTH_CLIENT_ID` and
-the `LINEAR_OAUTH_CLIENT_SECRET` Key Vault reference, alongside the fallback
-`LINEAR_API_KEY` reference. Configure or rotate these through this workflow;
+Terraform declares the `Clusterfork` app’s public client ID and protected OAuth
+secret, alongside the fallback API key. Configure or rotate these through this workflow;
 `common/configuration.py` only reads local values. [Remote setup](remote-development-setup.md#local-configuration)
 owns OAuth `client_credentials` selection and token handling.
 
@@ -65,18 +57,16 @@ the input in the Terraform plan or state. Later runs read the current values wit
 ephemeral Key Vault resources and retain the declared secret versions. Runtime
 credentials are not copied into GitHub secrets or exposed to coding jobs.
 The write-only value is excluded from value comparisons; its declared version
-controls updates. Provider-managed storage connection settings are derived from
-`storage_access_key` rather than duplicated in the generic app-setting map.
+controls updates.
 
 To rotate a credential, increment its entry in `credential_versions`, provide
 `TF_VAR_runtime_credentials` as a private JSON map for all declared credentials,
 and set `TF_VAR_seed_credentials=true` for the operator's plan/apply. Never commit
 credential inputs. Keep the version increment in the reviewed configuration change.
-Reference verification refreshes the runtime cache and waits for every reference
-to resolve; this is an operational cache refresh, not a configuration writer.
 
 The existing `clusterfork-github-deploy` identity retains its GitHub
-`azure-production` federation and original deployment/control-table grants.
+`azure-production` federation. Obsolete website and control-table grants are
+removed.
 Terraform also declares Contributor and Role Based Access Control Administrator
 on the automation resource group so the pipeline can reconcile its resources and
 role assignments. Key Vault Secrets User permits ephemeral reads during plans.
@@ -98,13 +88,9 @@ private local socket. An existing operator public SSH key satisfies Azure VM
 creation; no SSH port is exposed. Terraform outputs contain public configuration
 and resource identity, not runtime secrets.
 
-The VM's system-assigned identity has Key Vault Secrets User. Transitional Table
-Data Contributor grants on the account and instruction tables support their
-once-only resource migration. It cannot write
-legacy task tables through those grants. The application verifies the configured
-VM resource identity before opening its service. Legacy Function triggers are
-declared disabled; initial cutover also stops the old Function App. Protected
-legacy resources and their runtime data remain available for audit.
+The VM's system-assigned identity has Key Vault Secrets User. It has no Table
+Data Contributor grant. The service verifies the configured VM identity before
+opening its HTTP transports.
 
 The host/disk are provisioned and the controller is active. Cutover and live
 acceptance evidence are tracked in [controller implementation](remote-development-controller.md).
@@ -119,8 +105,7 @@ python3 automation/infrastructure.py bootstrap
 ```
 
 The original resource adoption is complete. Its old pause, shared-key snapshot
-and import CLI are retired with the coordinator. Protected Terraform import
-receipts remain historical infrastructure metadata. Routine runs use `plan` and
+and import CLI are retired with the coordinator. The obsolete conditional import receipts have been removed. Routine runs use `plan` and
 `apply`, with no credential-file argument.
 
 The state account is separate from the retired runtime account. Private recovery
@@ -141,7 +126,7 @@ python3 automation/infrastructure.py apply
 The helper prints resource addresses, action counts, changed field names, and safe
 diagnostic summaries. It withholds raw values and Terraform expression context.
 Saved plans use private temporary directories and are removed after use. An apply
-uses the reviewed plan and verifies Key Vault references afterwards.
+uses the reviewed plan and verifies the controller’s HTTPS health afterwards.
 
 The enabled controller deployment workflow handles main pushes
 that change runtime inputs and manual deployments. It waits for exact-revision

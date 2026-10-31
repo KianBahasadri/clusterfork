@@ -249,17 +249,9 @@ class InstructionRequest:
     data: dict = field(default_factory=dict,repr=False)
 
 
-@dataclass(frozen=True)
-class LegacyImported:
-    generation: str
-    records: tuple[dict, ...]
-    source_digest: str
-    operator_holds: tuple[tuple[str,str], ...] = ()
-
-
 Command = (IssueObserved | Admit | DispatchObserved | Start | Assign | Review | Progress |
            Finish | ExternalObserved | Retry | Hold | SessionUpdated | EffectUpdated | Authorize |
-           ExhaustAccount | ContextObserved | InboxQueued | InboxDone | Initialize | LegacyImported | ReportConfirmed | AccountRequest | InstructionRequest)
+           ExhaustAccount | ContextObserved | InboxQueued | InboxDone | Initialize | ReportConfirmed | AccountRequest | InstructionRequest)
 
 
 @dataclass(frozen=True)
