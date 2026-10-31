@@ -3,6 +3,8 @@
 Use the topic that owns the behavior you are changing. Installation describes
 where files go; skill-specific instructions stay in each `skills/<name>/SKILL.md`.
 
+Complete documentation before this prune: parent commit [`f5642f9103c7772775231612b0e0a8cceff08fc4`](https://github.com/KianBahasadri/clusterfork/tree/f5642f9103c7772775231612b0e0a8cceff08fc4/docs).
+
 ## Setup and daily use
 
 - [Installation](installation.md) — requirements, file mapping, and preservation rules
@@ -25,25 +27,23 @@ where files go; skill-specific instructions stay in each `skills/<name>/SKILL.md
 
 ## Remote development
 
-- [Controller implementation](remote-development-controller.md) — live single-owner task database, combined GitHub workflow and acceptance evidence
+- [Controller implementation](remote-development-controller.md) — SQLite ownership, two-job GitHub workflow and signed roles
 - [Runtime](remote-development.md) — routing, quota selection, publication, lifecycle, and retries
-- [Deployment pauses and recovery](remote-development-deployments.md) — worker draining, startup deferral, resume, and status-reporting recovery
+- [Controller deployment](remote-development-deployments.md) — runtime freshness, draining, holds and direct Linear ingress
 - [Issue description images](remote-development-images.md) — visual inputs, download limits, approval binding, and validation
 - [Repository queues](remote-development-queue.md) — dependency waits, priority/FIFO admission, slot release, and queue reporting
 - [Agent steering](remote-development-steering.md) — addressed Linear comments, authorization, delivery, and acknowledgements
-- [Setup](remote-development-setup.md) — project mappings, GitHub App, Azure, Linear, and local validation
-- [Azure infrastructure](azure-infrastructure.md) — Terraform ownership, imports, remote state, credentials, and reconciliation
+- [Setup](remote-development-setup.md) — project mappings, GitHub App, Azure, Linear and webhook administration
+- [Azure infrastructure](azure-infrastructure.md) — Terraform ownership, bootstrap, remote state, credentials and reconciliation
 - [Accounts](remote-development-accounts.md) — enrollment, reclaim, leases, and worker credential boundary
 - [Diagnostics](remote-development-observability.md) — correlated logs, failure explanations, and bounded Azure monitoring
 
 ## Historical investigations
 
-- [Retired repair binding](archive/remote-development-repair-binding.md) — previous child-issue recovery tool
-
+- [Retired repair binding](archive/remote-development-repair-binding.md) — child-issue recovery tool
 - Retired Functions coordinator: [runtime](archive/remote-development-functions-runtime.md), [lifecycle](archive/remote-development-functions-lifecycle.md), [queues](archive/remote-development-functions-queue.md), [deployment](archive/remote-development-functions-deployments.md), [diagnostics](archive/remote-development-functions-observability.md)
 
-These records are dated evidence and decisions, not current service or client
-compatibility claims. Recheck upstream behavior before adopting an old workaround.
+Dated records establish neither current health nor compatibility; recheck upstream behavior.
 
 - [OpenCode Go catalog](archive/opencode-go-catalog.md) — August 2026 route/tool-loop results
 - [OpenCode Go effort](archive/opencode-go-effort.md) — measured controls and findings; [raw high-cap log](archive/opencode-go-effort-highcap-2026-08-07.log)
@@ -56,26 +56,10 @@ compatibility claims. Recheck upstream behavior before adopting an old workaroun
 - [Retired integrations](archive/retired-integrations.md) — removed Aerolink and Pioneer gateways
 - [Remote live validation](archive/remote-development-validation.md) — 2026-10-28 routing, coding, merge, and lifecycle receipts
 - [Controller acceptance, 2026-10-30](archive/controller-acceptance-20261030.md) — sequential checkout fixture
+- [Controller cutover receipts](remote-development-controller.md#live-acceptance-2026-10-30) and [resource consolidation](remote-development-controller.md#resource-consolidation-2026-10-31-utc) — runs, PRs and deployment evidence
+- [Cursor validation, 2026-10-30](archive/cursor-validation-20261030.md) — retired staged-account probe
+- [Webhook administration, 2026-10-31](remote-development-setup.md#url-administration-investigation-kian-938-2026-10-31) — KIAN-938 permission findings
 
-_Generated from commit `ebc53a9` on 2026-10-28._
-
-## Notes
-
-These docs are AI-generated as an after-the-fact record of how things actually
-work — not a spec for how they should work. They describe what was done and
-learned, not what was planned. Treat them as accurate to the implementation,
-not necessarily correct in a business or design sense. They may drift from
-intent over time, so don't assume something is right just because a doc says
-it is.
-
-Information in these docs should not be repeated anywhere else. Each topic
-lives in exactly one file.
-
-If something was tried but not shipped — an experiment, a dead-end approach,
-a feature that was reverted — it should still get its own doc file here. The
-goal is a complete record, not just a catalog of what survived.
-
-Keep each doc file under ~400 lines. Agents open only the topic files they
-need, so a file too large to open cheaply gets skipped or eats the context
-budget. Past that size, split by sub-topic and list each part in the index
-above.
+Current topics describe implemented behavior, not a proposed specification.
+Keep each fact in one owning topic, each file under about 400 lines, and dated
+investigations accessible here. Detailed skill rules stay in their `SKILL.md`.

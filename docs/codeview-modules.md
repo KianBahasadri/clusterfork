@@ -1,14 +1,12 @@
 # Codeview modules
 
-A `*.py` file in `<repo>/.codeview/modules/` becomes a dashboard tab.
-Modules execute as ordinary Python from the repository; only run modules you
-trust to run with the server's permissions. Dashboard usage and this repo's
-shipped tabs are listed in [Dashboard](dashboard.md).
+Trusted `<repo>/.codeview/modules/*.py` files become [dashboard](dashboard.md) tabs.
+They execute with server permissions; browser framing does not sandbox Python.
 
 ## API contract
 
 ```python
-NAME = "my-tab"          # optional; defaults to filename stem
+NAME = "my-tab"          # optional; filename stem by default
 DESCRIPTION = "tooltip"  # optional
 
 def register(reg):
@@ -17,49 +15,31 @@ def register(reg):
     reg.add_route("GET", "", page)       # /m/my-tab/
 ```
 
-Names must match `^[a-z0-9][a-z0-9-]*$`. Modules load in filename order;
-choose unique names. Routes are forced under `/m/<NAME>/`, and `""` and
-`"/"` identify the same main page. Supported registration verbs are GET,
-POST, PUT, DELETE, and PATCH. Paths use URL-safe segments without escaping
-the namespace; duplicate routes within a registry are rejected.
-
-A handler returns `(status, body, content_type)`. A `dict` body is JSON;
-strings and bytes are sent with the supplied content type. The request has
-`.method`, `.path` (including query), `.query` (last value per key),
-`.headers`, `.json()`, and `.text()`. Read the body once: both accessors
-consume the input stream.
-
-An import or registration failure becomes a broken tab with its traceback
-rather than preventing the dashboard from starting. The module namespace
-owns its page and HTTP routes; no frontend framework is required.
+Unique names match `^[a-z0-9][a-z0-9-]*$`; loading follows filename order. Routes
+stay under `/m/<NAME>/`; `""` and `"/"` share the main page. Verbs: GET/POST/PUT/
+DELETE/PATCH. URL-safe segments cannot escape the namespace; duplicates fail.
+Handlers return `(status, body, content_type)`; dicts become JSON, strings/bytes
+use supplied type. Requests expose `.method`, `.path` (with query), `.query`
+(last value/key), `.headers`, `.json()`, `.text()`. Read body once: accessors consume
+its stream. Import/registration failure yields a broken tab/traceback without
+preventing startup. Modules own routes/pages; no frontend framework is required.
 
 ## Frames and theme
 
-The host frames module documents with `sandbox="allow-scripts allow-forms"`
-and without `allow-same-origin`. The frame has an opaque origin: stored
-browser state and the parent document are not directly accessible. Guard
-`localStorage` access and clipboard writes against rejection.
-
-The host supplies the current theme as `?theme=dark` or `?theme=light` for
-first paint and sends `{type: "codeview-theme", theme}` messages on toggles.
-Read the query value, then listen for messages from `window.parent`.
-A directly opened module page can fall back to guarded storage and the OS
-color-scheme preference. A module that ignores the handoff still renders,
-but does not follow the host's theme.
-
-The [add-codeview-module skill](../skills/add-codeview-module/SKILL.md) owns
-the full page template, theme bootstrap, host CSS vocabulary, and build
-workflow. Follow a target repository's existing modules where available.
+Frames use `sandbox="allow-scripts allow-forms"` without `allow-same-origin`:
+opaque origin, no direct parent/storage access. Guard storage/clipboard rejection.
+Read initial `?theme=dark|light`, then `{type: "codeview-theme", theme}` messages
+from `window.parent`. Direct pages may fall back to guarded storage/OS preference;
+ignoring handoff leaves rendering functional but theme unsynchronized.
+The [skill](../skills/add-codeview-module/SKILL.md) owns full templates, bootstrap,
+CSS vocabulary and workflow; follow existing target modules when available.
 
 ## Reloading and validation
 
-The watcher fingerprints module filenames/mtimes. After roughly five seconds
-without further module changes, it restarts the server while holding the
-listening port; a 30-second minimum restart interval limits repeated restarts.
-Browsers reload after the new process starts. With watching disabled, use
-`codeview restart`. `codeview reload` only refreshes git data.
+Watcher filename/mtime changes trigger restart after about five quiet seconds,
+with listening port retained and a 30-second minimum restart interval. Browsers
+reload on startup. Without watch, use `codeview restart`; `reload` scans only git data.
 
-The core `test_codeview_modules.py` and `test_codeview_router.py` exercise
-registration and HTTP dispatch. `test_codeview_custom_modules.py` covers
-this repository's modules and `test_codeview_wrapper.py` covers daemon
-control. Use the [normal suite command](conventions.md#local-validation).
+Normal [suite](conventions.md#local-validation): `test_codeview_modules.py` and
+`test_codeview_router.py` cover registration/dispatch, `test_codeview_custom_modules.py`
+covers shipped tabs, and `test_codeview_wrapper.py` covers daemon control.

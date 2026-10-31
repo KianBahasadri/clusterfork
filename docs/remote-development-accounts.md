@@ -1,27 +1,19 @@
 # Remote account ownership
 
-Saved Codex and Cursor CLI profiles come from
-`~/.local/share/clusterfork-auth/{codex,cursor}/auth.json.*`. Enrollment includes
-**all saved profiles by default, including the currently active account**, and
-deduplicates aliases by provider account identity. Existing cloud credentials
-are retained when enrollment runs again, so stale local copies cannot overwrite
-refreshed cloud tokens.
-
-The provider's local `remote-profiles.json` manifest records cloud ownership. Both
-providers keep reserved profiles at `auth.json.<name>`, visible in their normal
-`rotate-codex --list` or `rotate-cursor-cli --list` output with a reservation notice.
-The manifest blocks explicit local selection, overwrite, deletion and named
-kickoff; automatic rotation and default kickoff skip reserved profiles. Enrollment
-preserves the current symlink and local credential files; it does not stop or
-lease an already running local session. Remote leases coordinate cloud jobs only.
-Simultaneous local and cloud OAuth refreshes are not synchronized and can still conflict;
-reclaim a profile before starting further local use of its credentials.
+Enrollment reads `~/.local/share/clusterfork-auth/{codex,cursor}/auth.json.*`,
+including the active profile by default, and deduplicates aliases by provider
+identity. Existing cloud credentials win over stale local copies on re-enrollment.
+`remote-profiles.json` records cloud ownership. Reserved saved files stay visible
+in `rotate-codex --list`/`rotate-cursor-cli --list`, but cannot be selected,
+overwritten, deleted or explicitly kicked off locally; automatic sweeps skip them.
+Enrollment retains links/files and does not stop or lease an existing local
+session. Cloud leases cannot synchronize local OAuth refreshes: reclaim before
+further local use.
 
 ## Enroll and reclaim
 
-Run these commands from the checkout on the writable auth-store host, with
-the existing Azure CLI operator login. Transfers use the authenticated controller
-endpoint; no storage key or new login is needed. Use the installed Python environment:
+Use the writable auth-store host and existing Azure CLI operator login. Transfers
+use the authenticated controller, without storage keys or new login:
 
 ```bash
 python3 -m venv ~/.config/clusterfork/automation/venv
@@ -29,179 +21,117 @@ python3 -m venv ~/.config/clusterfork/automation/venv
 ~/.config/clusterfork/automation/venv/bin/python automation/accounts.py enroll
 ```
 
-Use `--profile NAME` to enroll particular profiles, including the active one.
-Codex remains the default; add `--provider cursor` for Cursor enrollment, listing,
-or reclaim. `list` reports reserved aliases and stable account IDs, without tokens.
-Reclaim a profile before using it locally again:
+`--profile NAME` selects profiles, including active ones. Codex is default; add
+`--provider cursor` to enroll/list/reclaim Cursor. `list` reports aliases and
+stable IDs without tokens. Reclaim refuses busy accounts or changed local
+credentials, saves the latest cloud login locally, then removes cloud ownership.
+Normal enrollment requires no file moves, staging, probe or unblocking command.
+
+Reclaim before local reuse:
 
 ```bash
 ~/.config/clusterfork/automation/venv/bin/python automation/accounts.py reclaim --profile NAME
 ```
 
-Reclaim refuses busy accounts or changed local credentials, persists the latest
-cloud credentials locally, then removes cloud ownership. Codex and Cursor use
-the same enrollment and reclaim lifecycle; Cursor only adds `--provider cursor`.
-Neither provider requires moving files, staging credentials, a validation probe,
-or a separate unblocking command for normal enrollment/reservation.
-
-Reinstalling `install-clusterfork.sh` updates the installed rotator for both
-providers and automatically restores legacy local handoffs such as Cursor
-`21kb60`. Normal account commands and rotators perform the same recovery, including
-when listing. Both old `local_backup` and `backup_path` metadata are understood.
-Recovery copies a backup within the provider's store back to `auth.json.<name>`,
-checks its recorded source SHA-256 when present, and normalizes the reservation to
-the ordinary account ID and source hash. The backup may remain as an unused copy;
-subsequent enrollment and reclaim use the normal saved file. Recovery refuses
-changed credentials, replaced destinations and paths outside the store. It is
-repeatable after interruption, leaves active links and cloud ownership intact,
-and never contacts Azure, claims/deletes an account, or uploads the backup.
-Existing cloud credentials always win over stale local copies during enrollment;
-only normal reclaim writes the latest cloud login back to the local profile.
+Installer/rotator/account commands, including list, recover legacy local handoffs
+such as Cursor `21kb60`. Recovery accepts `local_backup`/`backup_path`, copies only
+within the provider store to `auth.json.<name>`, checks any source SHA-256 and
+normalizes the reservation's ID/hash. It refuses changed credentials, replaced
+destinations or outside paths. It is repeatable after interruption and preserves
+active links/cloud ownership; it neither contacts Azure nor uploads the backup.
+The unused backup may remain. Only reclaim replaces local credentials with cloud
+refreshes. [Local rotation/container mounts](auth-rotation.md) have separate rules.
 
 ## Leases and refresh
 
-The controller's private SQLite `accounts` table holds auth caches. Each provider
-account has one 120-second lease with a random fencing token. SQL updates check
-owner, fence and expiry atomically. Jobs renew every 20 seconds and save refreshed
-auth during execution and on exit. A lost lease stops the agent. A crash between
-OAuth refresh and persistence can require re-login if the new token was never saved.
+Private SQLite `accounts` rows hold auth caches. Each account has one 120-second
+lease with random fence; SQL atomically checks owner/fence/expiry. Jobs renew every
+20 seconds and save refreshes during execution/exit. Lease loss stops the agent;
+a crash before persisting a refreshed token can require login again.
 
-Codex keeps its existing `codex` provider and account references. Cursor uses
-the `cursor` provider, `cursor-cli-auth-v1` login JSON (`accessToken` and
-`refreshToken`), and SHA-256 of the access JWT's stable `sub` as its stable account ID.
-Broker references qualify Cursor IDs with `cursor:` to prevent identity collisions
-between providers. Decoding the subject establishes identity, not authentication;
-live provider authentication and profile/quota checks remain required. Normal
-selection excludes staged records. Every refresh save checks the same provider
-identity and the current fencing token. The pinned Cursor CLI has no unattended
-saved-login OAuth renewal path: expired/revoked logins fail visibly; the worker
-does not invent a refresh endpoint or replace the cloud login with a local copy.
+Codex retains its `codex` identities. Cursor uses provider `cursor`, login format
+`cursor-cli-auth-v1` (`accessToken`, `refreshToken`), and SHA-256 of access JWT `sub`
+as stable ID, prefixed `cursor:` in broker references. Decoding establishes identity,
+not authentication. Every refresh save checks provider identity and fence;
+selection excludes staged records. The pinned Cursor CLI has no unattended saved-login
+renewal path; expired/revoked logins fail without invented endpoints or local fallback.
 
 ## Worker credential boundary
 
-The App private key stays in Azure. The broker verifies GitHub's OIDC signature,
-issuer, audience, expiry, pinned central workflow/release, hosted-runner type and
-run/attempt, then checks actual GitHub dispatch by `clusterfork[bot]`. The mapped
-target is authorized through the task grant, not the caller repository name.
-[The native graph](remote-development-controller.md#native-execution-graph) owns
-its distinct signed phase roles and workflow paths.
+The App private key stays in Azure. [Signed job roles](remote-development-controller.md#native-execution-graph)
+authorize each phase. Review/coding select independently before target checkout.
+Private probe homes are saved/released; atomic assignment reserves the chosen
+lease and closes pool access. Heartbeats preserve it through checkout; execution
+claims that same fence. Selection cannot execute target code, validate or publish.
 
-Review and coding each select their own account on their fresh phase VM before
-obtaining target checkout credentials. The trusted worker probes eligible accounts
-in private temporary homes, saves refreshed credentials and releases each probe.
-Binding reserves the selected lease and closes pool access in one transaction.
-The job heartbeat preserves that reservation through checkout; execution claims
-the same fenced lease. Selection cannot publish, validate or execute target code.
+After binding, listing returns only that account and unrelated claims/saves fail.
+Agent start rechecks live quota. Release/repeated start cannot reset the binding;
+manual/partial reruns cannot inherit it. Saves/releases retain original task/run/
+phase authority after edits or mapping revocation so cleanup remains possible.
+The [review deadline](remote-development.md#worker-execution) cannot be extended
+by repeated starts. Runtime/target isolation follows the native graph.
 
-Agent jobs require their phase binding and recheck the assigned account's live
-quota. After binding, listing returns that identity only; other claims/saves are
-denied. Review credentials cannot authorize coding, and coding has its own
-assignment. Releasing a lease or repeating start does not clear the binding.
-Codex coding can replace an account only through the controlled failover below.
-Manual or partial GitHub reruns cannot inherit an earlier attempt's assignment;
-new execution attempts must be authorized by the controller's normal task policy.
-
-Verified saves and releases retain the original task/run/phase binding even if
-the issue or its repository mapping changes. Revocation prevents new access
-without stranding the already leased credentials during cleanup.
-
-The review deadline starts on its first agent start and cannot be extended by
-repeated starts or heartbeats. The controller and both jobs use the same tested
-central runtime. Target repositories need no copied worker or per-repository pin.
-Deployment owns version selection and draining.
-
-Cursor gets a fresh private home containing only its assigned CLI login, with
-private config/data paths and no inherited provider keys or job tokens. It never
-receives Codex logins. Likewise, a Codex agent VM cannot probe or claim Cursor
-credentials. Each new
-run/attempt independently applies the provider policy in the
-[runtime profile section](remote-development.md#agent-profiles).
+Provider homes contain only assigned auth, private config/data and no inherited
+keys/job tokens. A Codex phase cannot probe Cursor credentials or vice versa.
+Each attempt independently applies [provider/quota policy](remote-development.md#agent-profiles).
 
 ### Coding account failover
 
-Development uses persistent app-server threads, without `ephemeral: true`.
-Only a failed coding turn explicitly classified as `usageLimitExceeded` permits
-account rotation. Generic HTTP 429s, transient rate limits, authentication errors,
-transport errors, interruptions, timeouts, and lease loss stop normally.
+Codex development uses persistent app-server threads, without `ephemeral: true`.
+Only a coding-turn `usageLimitExceeded` permits rotation. Generic 429s, transient
+limits, auth/transport errors, interruptions, timeouts and lease loss stop normally.
 
-The worker stops the old app-server, retains its thread ID, and copies only
-`sessions/**/rollout-*.jsonl` into a private task session directory outside every
-temporary `CODEX_HOME`. It saves refreshed credentials with `release=True` and
-deletes the old home, including `auth.json`, before requesting `exhaust_account`.
-The broker requires that successful fenced release, the active coding stage,
-and the original thread ID. It records `exhausted_account_ids` on the
-controller coding session and unlocks replacement access for that attempt.
-Neither a repeated start nor preflight can clear or use this failover authority.
+Stop the old app-server, retain its thread ID and copy only
+`sessions/**/rollout-*.jsonl` to a private runner directory outside temporary
+`CODEX_HOME`s. Save auth with `release=True`, delete the old home/auth, then request
+`exhaust_account`. The broker requires verified fenced release, active coding and
+the original thread. It records `exhausted_account_ids` and permits replacement;
+start/preflight cannot create or consume that authority.
 
-Replacement probes are fenced one identity at a time, including an ambiguous
-claim response. Each probe releases its lease and deletes its auth home before
-the next; binding waits until the probe is released. Initial and replacement
-selection share the [runtime quota policy](remote-development.md#agent-profiles).
-The selected replacement is leased and rechecked before restoring the retained
-rollout files into its fresh `CODEX_HOME/sessions/`. No account caches or
-credentials accompany session transfer, and session symlinks are rejected.
-The publication guard retains tokens from every probed or leased account.
+Probe replacements one fenced identity at a time, including ambiguous claims;
+release/delete each home before the next probe or binding. Lease/recheck the
+selection before restoring rollouts into fresh `CODEX_HOME/sessions/`; reject
+symlinks and transfer no caches/credentials. Publication guards retain all observed
+tokens. `thread/resume` keeps the thread; `turn/start` creates a new turn and
+steering may update only its turn ID. Runner, checkout, edits and original deadline
+remain. Exhausted identities cannot recur in that attempt.
 
-Conversation resume remains within Codex. Replacement access cannot claim Cursor
-or transfer conversation data across providers. If no Codex replacement qualifies,
-the attempt reports quota unavailability; a later independently admitted attempt
-can select Cursor on a fresh VM. A running Cursor session continues on its assigned
-identity when Codex capacity returns.
+No qualified replacement yields explicit quota unavailability and normal capacity
+retry, without indefinite waiting. Resume stays within Codex; a later independently
+admitted attempt may choose Cursor on a fresh VM. Rollouts remain runner-local;
+guarded [WIP preservation](remote-development.md#retries-and-validation) can retain
+unfinished repository edits. Running Cursor sessions do not switch providers.
 
-The worker calls `thread/resume` with the same thread ID, then `turn/start` to
-continue the original task with a new turn ID. The broker updates steering's
-turn ID only within that same thread. The runner, checkout, and existing edits
-stay in place; the original coding deadline also covers replacement selection
-and resumed turns. Exhausted identities cannot be selected again in that attempt.
-If no replacement qualifies, it finishes with explicit quota unavailability and
-the normal capacity retry; it does not wait or rotate indefinitely. Conversation
-rollouts remain local to the runner. Guarded
-[WIP preservation](remote-development.md#retries-and-validation) can retain
-unfinished repository changes on failure.
-
-Publication tokens are scoped to one repository with Contents and Pull requests
-write permission, plus Workflows write when the installation currently grants it.
-The broker checks that grant at worker start and again before issuing publication
-credentials; checkout tokens stay read-only. Tokens are issued again before
-publication and never passed in workflow inputs. Account caches and agent
-transcripts are not uploaded as artifacts.
+Publication credentials are repository-scoped Contents/Pull requests write, plus
+Workflows write when the installation grants it. The broker checks that grant at
+start and before publication credentials. Checkout stays read-only; publication
+tokens are reissued before publishing, kept in the trusted worker parent, never
+workflow inputs. Auth caches/transcripts are not uploaded as artifacts.
 
 ### Publication credential checks
 
-Before committing staged work and immediately before pushing, the worker scans
-the staged diff and the full committed `origin/<base>...HEAD` diff, respectively.
-Recovered branches and existing PRs pass the same checks before publication or
-an auto-merge request. Binary changes are read as text for matching; external
-diff helpers and text conversions cannot hide changed content.
+Before commit, scan staged changes; before push, scan full committed
+`origin/<base>...HEAD`. Recovered branches/PRs pass the same guard before publish
+or auto-merge. Binary changes are matched as text; external diff/textconv cannot
+hide content.
 
-An in-memory guard retains every non-empty string `access_token`, `refresh_token`,
-`account_id`, `id_token`, `accessToken`, and `refreshToken` seen in leased auth caches, including quota probes,
-lease saves, and refreshes. It rereads live caches before each scan and retains
-values after probe homes are deleted. The guard also retains job GitHub/OIDC
-credentials and every checkout, publication, and refreshed broker OIDC token.
-Credentials stay within their phase job. Probe homes are removed before
-execution; the agent environment receives only its assigned account. Exact runtime values block in every file, including `tests/**`,
-and in PR metadata.
+The in-memory guard retains nonempty `access_token`, `refresh_token`, `account_id`,
+`id_token`, `accessToken`, `refreshToken` from every probe/lease/save/refresh, plus
+job GitHub/OIDC, checkout, publication and refreshed broker tokens. It rereads live
+caches before scans and retains values after deleting homes. Exact values block
+in every file, including `tests/**`, and PR metadata. Agents receive only assigned
+auth; credentials stay within their phase.
 
-Static checks share only the PEM private-key and concrete token-prefix/JWT
-patterns from `common/policy.py`. They inspect added lines outside `tests/`
-and PR metadata. Synthetic fixtures under `tests/**` are exempt from static
-patterns; generic assignments, authorization headers, and URL user/password
-forms do not independently block publication. Checks include the PR title,
-generated body, full untruncated agent summary and issue title, and the current
-title/body of any existing PR. A match or unreadable auth cache aborts before
-push or PR creation with a bounded diagnostic reason, without matched values,
-file contents, or credential-bearing paths.
-
-The storage resource is currently named in `automation/accounts.py`; see
-[remote setup](remote-development-setup.md#deployment-and-identity) before relocating it.
-Local rotation commands and container mounts are covered by
-[Auth Rotation](auth-rotation.md).
+Static PEM/token-prefix/JWT patterns from `common/policy.py` apply to added lines
+outside `tests/` and PR metadata; synthetic test fixtures are exempt only from
+static patterns. Generic assignments, auth headers and URL user/password forms
+do not independently block. Scan new/existing PR title/body, full untruncated agent
+summary and issue title. Matches or unreadable auth abort before push/creation
+with bounded reasons excluding values, contents and credential-bearing paths.
 
 ## KIAN-922 post-deployment validation
 
-The former once-only Cursor `21kb60` probe is a [historical record](archive/cursor-validation-20261030.md).
-Its smoke workflow is disabled and is not part of controller deployment or task
-admission. Cutover preserves existing staged/active account metadata and refreshed
-credentials; it neither activates staged accounts nor changes local profile
-visibility. Normal reservations and local restore/reclaim behavior remain separate.
+The [once-only Cursor probe](archive/cursor-validation-20261030.md) is historical;
+its disabled smoke workflow is outside deployment/admission. Migration preserved
+staged/active metadata and refreshes without activating staged profiles or changing
+local visibility. Reservations and restore/reclaim remain separate operations.
