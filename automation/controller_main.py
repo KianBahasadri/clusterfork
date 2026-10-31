@@ -83,7 +83,7 @@ def serve(args):
     with Database(args.database) as database:
         application=build(config,manifest,database,ManagedIdentityCredential())
         usage=UsageCollector(application.controller.accounts,application.broker.registry,
-                             enabled=lambda:not application.controller.holds())
+                             enabled=lambda:not application.controller.holds() and not application.controller.active())
         http=HTTPServer(("127.0.0.1",args.port),http_handler(application),telemetry=application.telemetry)
         operator=OperatorServer(args.socket,application)
         def loop():

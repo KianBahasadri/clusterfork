@@ -241,7 +241,9 @@ renewal path; expired/revoked logins fail without invented endpoints or local fa
 The App private key stays in Azure. [Signed job roles](remote-development-controller.md#native-execution-graph)
 authorize each phase. Review/coding select independently before target checkout.
 Private probe homes are saved/released; atomic assignment reserves the chosen
-lease and closes pool access. Heartbeats preserve it through checkout; execution
+lease and closes pool access. Execution worker leases preempt background usage-collector
+(`quota:*`) probes, while background collection pauses while tasks are active.
+Heartbeats preserve the lease through checkout; execution
 claims that same fence. Selection cannot execute target code, validate or publish.
 
 After binding, listing returns only that account and unrelated claims/saves fail.

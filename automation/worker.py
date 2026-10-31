@@ -320,7 +320,15 @@ def select_account_for_run(broker, config, heartbeat):
     if selected is None:
         broker.call("finish", status="waiting_for_quota", quota_wait=config.get("quota_wait", {}))
         return False
-    broker.call("bind_account", account_id=selected.account_id)
+    for delay in (1, 2, 3):
+        try:
+            broker.call("bind_account", account_id=selected.account_id)
+            break
+        except HTTPError as exc:
+            if exc.code == 409 and delay < 3:
+                time.sleep(delay)
+                continue
+            raise
     return True
 
 
