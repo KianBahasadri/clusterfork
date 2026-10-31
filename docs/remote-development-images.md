@@ -1,12 +1,19 @@
 # Linear issue description images
 
-`automation/azure/issue_images.py` discovers Markdown inline and reference images
+`automation/common/images.py` discovers Markdown inline and reference images
 and HTML `<img>` tags in issue descriptions. Code examples and escaped image
 syntax are excluded. The full description stays intact; numbered visual inputs
 follow description order, with an explicit map of image alt text and titles so
 surrounding captions and references remain usable. Repeated references download
 once per snapshot but attach at each occurrence. Comment images are outside this
 feature's scope.
+
+The private SQLite `image_snapshots` cache stores a validated snapshot per issue
+revision. Intermediate broker operations verify the cached digest against the
+admitted specification without downloading the binaries again. Phase startup,
+review submission, publication authorization and publishing revalidate current
+bytes. Queued and active issue revisions retain their cache; terminal snapshots
+are pruned.
 
 ## Retrieval and supported inputs
 
@@ -31,7 +38,7 @@ unsupported.
 
 SVG, GIF, animated images, data URLs, and corrupt files are rejected. The broker
 uses pinned `markdown-it-py` and Pillow dependencies from
-`automation/azure/requirements.txt`; the runner's image handling uses the Python
+`automation/requirements.txt`; the runner's image handling uses the Python
 standard library.
 
 If any image is inaccessible, unsupported, oversized, or cannot be decoded, a

@@ -25,7 +25,7 @@ The operator socket is private. Inspection includes task state, admitted context
 attempt identity, sessions and publication evidence. Private failure output can
 be present in these records; publish only the bounded explanation and links.
 
-`automation/azure/diagnostics.py` retains the shared `Clusterfork: ` JSON format.
+`automation/common/diagnostics.py` retains the shared `Clusterfork: ` JSON format.
 Worker requests carry a generated request ID. The HTTP adapter scopes logging to
 verified GitHub run/attempt claims and a validated dispatch/request identity;
 client-provided run IDs cannot replace the authenticated ones. Context is cleared

@@ -78,7 +78,7 @@ python3 automation/onboard.py configure --checkout /path/to/target \
   --required-check 'Repository tests'
 ```
 
-Use `--apply` to write the previewed central `automation/azure/projects.json`
+Use `--apply` to write the previewed central `automation/controller/projects.json`
 mapping and optional validation CI. Existing required check names accumulate;
 other mappings, the registry generation, model/quota policy, and unrelated files
 are preserved. Existing target worker workflows are left intact. Validation

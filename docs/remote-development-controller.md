@@ -38,17 +38,18 @@ observations can release it. A merged PR remains authoritative even when its
 worker later reports cleanup failure. Superseded attempts cannot mutate current
 execution state. Operator and deployment holds have distinct owners.
 
-Account credentials and leases remain in their existing Azure storage. The task
-database does not supply cross-store transactions or another credential cache.
+Task grants, account leases and instruction records now share this SQLite database.
+`accounts.py` provides provider-specific fenced records; `account_commands.py`
+composes account reservation, assignment and execution authorization in the same
+transaction. No network request runs inside these transactions. A failed assignment
+rolls its account reservation back. Probe claims are repeatable for the same owner
+and fence; a different identity requires verified release first.
 
-`broker.py` applies the task grant before scoped worker operations and reuses the
-existing fenced account resources. Probe identities are recorded before returning
-credentials, then cleared only after verified release. Review/coding assignments
-are independent. Codex replacement access requires release of the exhausted
-account and the same registered coding thread; it cannot switch providers.
-`instructions.py` reuses the existing instruction resource protocol with read-only
-task/attempt views. Instruction writes cannot advance task lifecycle. The broker
-retains thread/turn registration, phase guards, and instruction acknowledgements.
+`broker.py` verifies signed phase identity and current task authority before
+credential access. `instructions.py` uses typed commands against actual task views;
+instruction delivery cannot advance task lifecycle. Shared routing, publication,
+policy, image, account identity and reporting utilities live in `automation/common/`.
+The retired Functions coordinator and its table adapters are removed.
 
 ## Observation and transports
 
@@ -57,7 +58,9 @@ dispatch intent before the external call and discovers an uncertain result inste
 of resending. It resolves the latest target context at admission and checks a
 required-runtime predicate before admitting or retrying work. A deployment-owned
 hold cannot clear an operator hold. Rendering Linear status is derived from task
-views and does not make execution decisions.
+views and does not make execution decisions. SQLite `comment_signatures` records
+only confirmed remote writes, preserving deduplication across restarts. Failed or
+ambiguous writes remain retryable using their stable comment IDs.
 
 The admitted specification retains the original repository, branch and merge
 policy. Removing or changing a mapping revokes new execution access while the
@@ -68,7 +71,8 @@ human-managed state.
 `server.py` exposes authenticated webhook intake, OIDC worker requests, and public
 bounded health metadata. Verified webhook IDs are committed in the local inbox
 before acknowledgement. Operator commands use a local mode-0600 Unix socket;
-they are not public HTTP routes. `controller_main.py` assembles these adapters,
+they are not public HTTP routes. The separate `/api/accounts` transport verifies
+an allowlisted Azure operator identity for local enrollment and fenced reclaim. `controller_main.py` assembles these adapters,
 reads existing secrets through managed identity, and verifies the expected VM
 resource identity before opening the service. A newly initialized database starts
 with an operator hold; restarting an existing database preserves its current
@@ -82,35 +86,30 @@ and independent operator/deployment holds.
 
 ## Deployment and migration
 
-`migration.py` imports verified idle terminal queue history through a controller
-command. It proves each legacy generation/key binding, retains branch/publication
-references for audit, and preserves completion identity without inheriting old
-runner authority. Imports require the initial halt and no new attempts, are atomic
-and repeatable, and reject unresolved work or a changed source after import.
-Credentials are excluded. Initial deployment additionally verifies the durable
-legacy halt, account leases, idle queue snapshot and actual GitHub attempts, then
-stops the legacy Function App before starting the new service. Raw historical
-tables remain preserved.
+The original terminal-history import remains recorded in SQLite. Startup no longer
+replays a legacy snapshot. The transitional `migrate_tables.py` performs one idle
+transfer of existing account and instruction resources. It writes a private
+mode-0600 snapshot on the persistent disk, fences the old credential rows using
+ETags, then imports both resources and a digest receipt in one SQLite transaction.
+Live leases, changed credentials or conflicting local records prevent import.
+Restart after interruption reuses the snapshot; a committed receipt prevents any
+further Table calls. The legacy resources remain until migration and direct webhook
+delivery have both been verified.
 
 ## Native execution graph
 
-`automation/controller/workflows.py` generates `clusterfork-task.yml` and four
-reusable workflow files with distinct authenticated roles:
+`automation/controller/workflows.py` generates `clusterfork-task.yml` with two
+fresh hosted VMs: `review`, then `code` only after a successful review. Each job
+checks out its approved runtime and runs one trusted worker process. That process
+probes quota, reserves an account, irreversibly closes initial pool access, obtains
+a scoped target checkout, then executes its phase. Only the review scheduling
+boolean crosses the job boundary. Runtime and target checkouts remain siblings.
 
-| Role | Workflow | Access |
-| --- | --- | --- |
-| Review preflight | `clusterfork-review-account.yml` | Review account selection |
-| Reviewer | `clusterfork-review.yml` | Assigned account and read-only review |
-| Coding preflight | `clusterfork-coding-account.yml` | Independent coding account selection |
-| Coding agent | `clusterfork-code.yml` | Assigned account, validation, guarded publication |
-
-Native `needs` edges sequence these jobs in one run. Only selected preflights and
-a passing review enable their downstream jobs. Each job gets a fresh VM. Runtime
-and target checkouts are siblings, preserving local-action manifests through
-post-job cleanup. `controller_bootstrap.py` verifies the runtime/job revision and
-obtains broker authorization. Only agent jobs request scoped target checkout
-tokens. Quota preflights operate in empty workspaces and cannot request repository
-tokens or execute repository code.
+The controller reserves the selected lease atomically with assignment and renews
+it through checkout. Starting execution cannot reopen initial selection. Review
+runs in the existing read-only sandbox; coding performs validation and guarded PR
+publication before releasing credentials. The provider and account policy is
+unchanged by the reduction in VM count.
 
 `authorization.py` binds verified GitHub OIDC claims to the mapped task, immutable
 runtime tag/revision, exact caller workflow, and one reusable job role. The HTTP

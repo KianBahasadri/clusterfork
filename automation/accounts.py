@@ -7,27 +7,20 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import subprocess
 import sys
 
-sys.path.insert(0, str(Path(__file__).parent / "azure"))
+sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from codex_runtime import write_private
 from rotate_auth import REMOTE_MANIFEST, load_remote_profiles
-from worker_core import Accounts, WorkerError, account_identity
-from worker_store import AzureTable
+from common.accounts import WorkerError, account_identity
+from account_client import AccountClient
 
 MANIFEST = REMOTE_MANIFEST
 
 
 def connect(provider="codex"):
-    result = subprocess.run(
-        ["az", "storage", "account", "show-connection-string", "--name", "cfdispatch7604cac329",
-         "--resource-group", "rg-clusterfork-automation", "--query", "connectionString",
-         "-o", "tsv", "--only-show-errors"], capture_output=True, text=True)
-    if result.returncode:
-        raise WorkerError("Unable to read cloud account storage configuration")
-    return AzureTable(result.stdout.strip(), "ClusterforkAccounts", provider)
+    return AccountClient(provider)
 
 
 def digest(path):
@@ -52,8 +45,7 @@ def main():
         for name, record in sorted(manifest.items()):
             print(f"{name}: {record['account_id']}")
         return
-    table = connect(args.provider)
-    accounts = Accounts(table, provider=args.provider)
+    accounts = connect(args.provider)
     profiles = {p.name[len("auth.json."):]: p for p in args.store.glob("auth.json.*")
                 if p.is_file() and p.name != "auth.json.lock"}
     names = args.profile or sorted(profiles if args.action == "enroll" else manifest)
@@ -73,7 +65,7 @@ def main():
                 # An existing/staged cloud record owns the latest refresh token.
                 # Validate identity without ever copying the stale local login.
                 identity = account_identity(auth, args.provider)
-                existing, _ = table.get(identity)
+                existing, _ = accounts.get(identity)
                 if account_identity(json.loads(existing["auth"]), args.provider) != identity:
                     raise WorkerError("Cloud credentials do not match this account") from None
             for alias, alias_path in profiles.items():
@@ -95,10 +87,10 @@ def main():
             try:
                 for alias in aliases:
                     write_private(destinations[alias], leased["auth"])
-                row, etag = table.get(record["account_id"])
+                row, _ = accounts.get(record["account_id"])
                 if row["fence"] != leased["lease"]:
                     raise WorkerError("Reclaim lease was lost")
-                table.delete(record["account_id"], etag)
+                accounts.delete(record["account_id"], leased['lease'])
             except Exception:
                 # Keep the local profile reserved until ownership transfer finishes.
                 for alias in aliases:

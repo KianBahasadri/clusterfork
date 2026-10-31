@@ -1,7 +1,7 @@
 """Worker trust boundaries, credential fencing, and real Git publication behavior."""
 
 import copy
-from collections import Counter, defaultdict, deque
+from collections import Counter, deque
 from contextlib import contextmanager, nullcontext, redirect_stdout
 import importlib.util
 import io
@@ -17,24 +17,24 @@ import threading
 import time
 import unittest
 from types import SimpleNamespace
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
+sys.path[:0] = [str(ROOT / "automation")]
 import worker
 import agent_session
 import accounts as account_cli
 from codex_runtime import CodexError, quota_snapshot
-from dispatch_clients import GitHub as GitHubClient
-from dispatch_core import Registry
-from deployment_control import DeploymentControl
-from quota_selection import select_account
-from worker_core import Accounts, WorkerError, WorkerService, authorize_claims
-from repository_queue import RepositoryQueue
-from readiness_policy import POLICY, PROTOCOL, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS, digest
-from auto_repair import repair_instructions
-from call_budget import CallBudget, record_api_calls
+from common.clients import GitHub as GitHubClient
+from common.routing import Registry
+from common.selection import select_account
+from common.accounts import WorkerError
+from controller_fixtures import account_pool, records, coding_fixture, execution_row
+from controller.model import Rejected, Role
+from test_controller_authorization import claims as job_claims
+from common.policy import POLICY, PROTOCOL, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS, digest
+from common.repair import repair_instructions
 
 PROJECT = "374f597c-89f5-4e40-9798-07533f57bfba"
 ISSUE = "66547614-8ed4-4928-834e-aac76f01afd2"
@@ -90,25 +90,8 @@ class MemoryTable:
                 self.rows[row["RowKey"]] = (copy.deepcopy(row), 1 if etag is None else etag + 1)
 
 
-class ApprovedReadiness:
-    """Isolate pre-existing queue/lease tests; readiness tests use the real gate."""
-    def ensure(self, issue, route):
-        return {"status": "ready"}
-
-    def require(self, issue, route):
-        return {}
-
-    def images(self, issue):
-        return []
-
-    def prework_stopped(self, issue_id, route):
-        return True
 
 
-def repository_queue(registry, receipts, runs, linear, github, clock=lambda: NOW):
-    tables = defaultdict(MemoryTable)
-    return RepositoryQueue(registry, receipts, runs, tables.__getitem__, linear, github,
-                           ApprovedReadiness(), clock=clock)
 
 
 def auth(identity="account-a", token="access-a"):
@@ -145,10 +128,13 @@ def validate_fake_turns(validate, summary):
 class WorkerAdmissionTests(unittest.TestCase):
     def run_worker(self, config):
         broker = Mock()
+        config={"runtime_sha":"b"*40,**config}
         broker.call.return_value = config
         with patch.dict(os.environ, {"CLUSTERFORK_BROKER_URL": "https://broker.example/worker",
-                                     "DISPATCH_KEY": KEY}, clear=True), \
+                                     "DISPATCH_KEY": KEY,"WORKER_REVISION":"b"*40}, clear=True), \
              patch.object(worker, "Broker", return_value=broker), \
+             patch.object(worker, "prepare_checkout"), \
+             patch.object(worker,"select_account_for_run",return_value=False), \
              patch.object(worker, "execute", return_value=("completed", None)) as execute, \
              patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()):
             result = worker.main()
@@ -183,7 +169,7 @@ class WorkerAdmissionTests(unittest.TestCase):
         broker.call.assert_called_with("finish", status="failed", failure=ANY)
 
     def test_unbound_accounts_and_wrong_job_roles_cannot_start_agent_execution(self):
-        for extra in ({}, {"account_selection": True, "account_id": "a" * 64},
+        for extra in ({},
                       {"account_selection": False}, {"account_selection": False, "account_id": "invalid"}):
             with self.subTest(extra=extra):
                 result, _, execute = self.run_worker({"serial_admission": True, "protocol": worker.PROTOCOL,
@@ -192,76 +178,12 @@ class WorkerAdmissionTests(unittest.TestCase):
                 execute.assert_not_called()
 
 
-class BrokerCutoverTests(unittest.TestCase):
-    def setUp(self):
-        self.sleep = Mock()
-        self.broker = worker.Broker("https://clusterfork-dispatch-7604cac329.azurewebsites.net/api/worker",
-                                    KEY, sleep=self.sleep)
-        self.broker.token, self.broker.expires = "test-oidc-token", time.time() + 3600
-
-    def test_start_retries_draining_instances_with_the_same_request_until_current_broker_responds(self):
-        response = {"protocol": PROTOCOL, "phase": "development", "serial_admission": True}
-        error = HTTPError(self.broker.url, 503, "draining", {}, None)
-        with patch.object(worker, "json_request", side_effect=[error, error, response]) as request:
-            self.assertEqual(self.broker.call("start", protocol=PROTOCOL), response)
-        self.assertEqual(request.call_count, 3)
-        self.assertEqual(request.call_args_list, [request.call_args] * 3)
-        self.assertEqual([call.args[0] for call in self.sleep.call_args_list], [2, 4])
-
-    def test_start_retries_url_and_timeout_transport_failures(self):
-        for error in (URLError("connection reset"), TimeoutError("timed out")):
-            with self.subTest(error=type(error).__name__):
-                self.sleep.reset_mock()
-                with patch.object(worker, "json_request", side_effect=[error, {"serial_admission": True}]) as request:
-                    self.assertEqual(self.broker.call("start", protocol=PROTOCOL), {"serial_admission": True})
-                self.assertEqual(request.call_count, 2)
-                self.sleep.assert_called_once_with(2)
-
-    def test_start_cutover_retries_are_bounded_and_preserve_final_failure(self):
-        error = HTTPError(self.broker.url, 503, "draining", {}, None)
-        with patch.object(worker, "json_request", side_effect=error) as request, \
-             self.assertRaises(HTTPError) as caught:
-            self.broker.call("start", protocol=PROTOCOL)
-        self.assertIs(caught.exception, error)
-        self.assertEqual(caught.exception.clusterfork_action, "start")
-        self.assertEqual(request.call_count, 6)
-        self.assertEqual([call.args[0] for call in self.sleep.call_args_list], [2, 4, 5, 5, 5])
-
-    def test_authorization_conflicts_and_non_start_requests_are_not_retried(self):
-        requests = [("start", HTTPError(self.broker.url, status, "rejected", {}, None))
-                    for status in (400, 401, 403, 409, 500)]
-        requests += [(action, error) for action in ("review", "finish", "claim")
-                     for error in (HTTPError(self.broker.url, 503, "draining", {}, None), URLError("reset"))]
-        for action, error in requests:
-            with self.subTest(action=action, error=error), \
-                 patch.object(worker, "json_request", side_effect=error) as request, \
-                 self.assertRaises(type(error)):
-                self.broker.call(action)
-            request.assert_called_once()
-        self.sleep.assert_not_called()
-
-    def test_deferred_start_after_cutover_retry_exits_successfully_without_execution(self):
-        deferred = {"status": "deployment_deferred", "reason_code": "deployment_paused", "serial_admission": True}
-        error = HTTPError(self.broker.url, 503, "draining", {}, None)
-        with patch.dict(os.environ, {"CLUSTERFORK_BROKER_URL": self.broker.url, "DISPATCH_KEY": KEY}, clear=True), \
-             patch.object(worker, "Broker", return_value=self.broker), \
-             patch.object(worker, "json_request", side_effect=[error, deferred]) as request, \
-             patch.object(worker, "execute") as execute, \
-             patch.object(worker, "select_account_for_run") as select, \
-             redirect_stdout(io.StringIO()):
-            self.assertEqual(worker.main(), 0)
-        self.assertTrue(self.broker.deployment_deferred)
-        self.assertEqual(request.call_count, 2)
-        self.sleep.assert_called_once_with(2)
-        execute.assert_not_called()
-        select.assert_not_called()
 
 
 class AccountLeaseTests(unittest.TestCase):
     def setUp(self):
         self.now = NOW
-        self.table = MemoryTable()
-        self.accounts = Accounts(self.table, clock=lambda: self.now)
+        self.accounts = account_pool(self, clock=lambda: self.now)
         self.identity = self.accounts.enroll(auth())
 
     def test_aliases_cannot_enroll_the_same_provider_account_twice(self):
@@ -295,14 +217,6 @@ class AccountLeaseTests(unittest.TestCase):
         self.now += 100
         self.accounts.save(self.identity, "worker", leased["lease"], release=True)
         self.assertEqual(self.accounts.claim(self.identity, "next")["auth"]["tokens"]["access_token"], "refreshed")
-
-    def test_compare_and_swap_rejects_lost_updates(self):
-        row, version = self.table.get(self.identity)
-        other, other_version = self.table.get(self.identity)
-        other["owner"] = "new-owner"
-        self.table.replace(other, other_version)
-        with self.assertRaises(WorkerError):
-            self.table.replace(row, version)
 
     def test_revoked_login_releases_lease_without_masking_authentication_failure(self):
         class Broker:
@@ -338,11 +252,11 @@ class AccountEnrollmentTests(unittest.TestCase):
             (store / "auth.json.other").write_text(json.dumps(auth("other-account")))
             (store / "current").symlink_to(active.name)
             original = active.read_bytes()
-            table = MemoryTable()
+            table = account_pool(self)
             output = self.enroll(store, table)
             manifest = json.loads((store / account_cli.MANIFEST).read_text())
             self.assertEqual(set(manifest), {"active", "alias", "other"})
-            self.assertEqual(len(table.rows), 2)
+            self.assertEqual(len(records(table)), 2)
             self.assertEqual(manifest["active"]["account_id"], manifest["alias"]["account_id"])
             self.assertEqual((store / "current").resolve(), active)
             self.assertEqual(active.read_bytes(), original)
@@ -354,9 +268,9 @@ class AccountEnrollmentTests(unittest.TestCase):
             active = store / "auth.json.active"
             active.write_text(json.dumps(auth("active-account")))
             (store / "current").symlink_to(active.name)
-            table = MemoryTable()
+            table = account_pool(self)
             self.enroll(store, table, "--profile", "active")
-            pool = Accounts(table)
+            pool = table
             identity = pool.list()[0]
             leased = pool.claim(identity, "worker")
             pool.save(identity, "worker", leased["lease"], auth("active-account", "cloud-refreshed"), release=True)
@@ -365,162 +279,6 @@ class AccountEnrollmentTests(unittest.TestCase):
             self.assertEqual(pool.claim(identity, "check")["auth"]["tokens"]["access_token"], "cloud-refreshed")
 
 
-class WorkerAuthorizationTests(unittest.TestCase):
-    def setUp(self):
-        self.registry = Registry.load(ROOT / "automation/azure/projects.json")
-
-    def test_only_the_enrolled_main_branch_worker_can_get_credentials(self):
-        self.assertEqual(authorize_claims(claims(), self.registry, receipt()).repository,
-                         "KianBahasadri/clusterfork")
-        for field, value in [("repository", "attacker/clusterfork"), ("ref", "refs/heads/other"),
-                             ("event_name", "pull_request"), ("runner_environment", "self-hosted"),
-                             ("workflow_ref", "KianBahasadri/clusterfork/.github/workflows/test.yml@refs/heads/main"),
-                             ("job_workflow_ref", "attacker/repo/.github/workflows/job.yml@refs/heads/main"),
-                             ("run_id", "../other"), ("sha", "untrusted")]:
-            bad = {**claims(), field: value}
-            with self.subTest(field=field), self.assertRaises(WorkerError):
-                authorize_claims(bad, self.registry, receipt())
-
-    def test_unmapped_receipt_cannot_authorize_a_job(self):
-        with self.assertRaises(WorkerError):
-            authorize_claims(claims(), self.registry, {**receipt(), "repository": "other/repo"})
-
-    def test_resumed_stale_broker_returns_cutover_503_before_protocol_or_worker_side_effects(self):
-        service, github, _ = self.service()
-        service.queue.control = DeploymentControl(MemoryTable())
-        service.queue.control.pause("new-deployment", "c" * 40)
-        service.queue.control.resume("new-deployment", "c" * 40)
-        for action in ("start", "accounts", "heartbeat", "finish", "save", "validation_start"):
-            for protocol in (PROTOCOL, "readiness-v1:" + "f" * 64):
-                with self.subTest(action=action, protocol=protocol), \
-                     patch("deployment_control.build_metadata", return_value={"revision": "b" * 40}), \
-                     CallBudget(self, linear=service.linear, github=github, receipts=service.receipts, runs=service.runs), \
-                     self.assertRaises(WorkerError) as caught:
-                    service.handle(action, claims(), {"dispatch_key": KEY, "protocol": protocol})
-                self.assertEqual(caught.exception.status, 503)
-                self.assertEqual(caught.exception.reason_code, "deployment_cutover")
-        self.assertEqual(service.runs.list(), [])
-
-    def service(self):
-        receipts, runs = MemoryTable(), MemoryTable()
-        receipts.create(receipt())
-        issue = {"id": ISSUE, "identifier": "KIAN-891", "title": "Test", "description": "",
-                 "url": "https://linear.app/test", "archivedAt": None,
-                 "project": {"id": PROJECT, "archivedAt": None, "labels": {"nodes": [{"name": "clusterfork-symphony"}]}},
-                 "state": {"id": "ace01594-2daf-44bb-9690-cb0dccc11795"}}
-        class Linear:
-            def issue(self, identifier):
-                return copy.deepcopy(issue)
-            def issue_dependencies(self, identifier):
-                return []
-        class GitHub:
-            permissions = None
-            workflows = False
-            def verify_worker_run(self, *args):
-                return None
-            def workflow_changes_allowed(self, repository):
-                return self.workflows
-            def installation_token(self, repository, *, permissions):
-                self.permissions = permissions
-                return "temporary-token"
-            def worker_result(self, *args):
-                return {"status": "in_progress"}
-        linear, github = record_api_calls(Linear()), record_api_calls(GitHub())
-        service = WorkerService(self.registry, receipts, runs, Accounts(MemoryTable()), linear, github,
-                                repository_queue(self.registry, receipts, runs, linear, github),
-                                clock=lambda: NOW)
-        return service, github, issue
-
-    def test_publication_token_has_only_contents_and_pull_requests_permissions(self):
-        service, github, _ = self.service()
-        config = service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
-        self.assertEqual((config["model"], config["effort"]), ("gpt-6.1-sol", "max"))
-        self.assertTrue(config["auto_merge"])
-        self.assertEqual(config["agent_timeout_minutes"], 300)
-        self.assertIs(config["serial_admission"], True)
-        self.assertIs(config["workflow_changes_allowed"], False)
-        service.handle("github", claims(), {"dispatch_key": KEY})
-        self.assertEqual(github.permissions, {"contents": "write", "pull_requests": "write"})
-
-    def test_workflow_grant_is_reported_at_start_and_rechecked_for_publication(self):
-        service, github, _ = self.service()
-        github.workflows = True
-        config = service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
-        self.assertIs(config["workflow_changes_allowed"], True)
-        service.handle("github", claims(), {"dispatch_key": KEY})
-        self.assertEqual(github.permissions, {"contents": "write", "pull_requests": "write", "workflows": "write"})
-        service.handle("checkout", claims(), {"dispatch_key": KEY})
-        self.assertEqual(github.permissions, {"contents": "read", "pull_requests": "read"})
-        github.workflows = False
-        service.handle("github", claims(), {"dispatch_key": KEY})
-        self.assertEqual(github.permissions, {"contents": "write", "pull_requests": "write"})
-
-    def test_removing_project_enrollment_prevents_publication(self):
-        service, _, issue = self.service()
-        service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
-        issue["project"]["labels"]["nodes"] = []
-        with self.assertRaises(WorkerError):
-            service.handle("github", claims(), {"dispatch_key": KEY})
-
-    def test_failed_finish_persists_bounded_wip_identity_and_scrubbed_output(self):
-        for repair in (False, True):
-            with self.subTest(repair=repair):
-                service, _, _ = self.service()
-                service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
-                identifier, target_key = "KIAN-891", KEY
-                if repair:
-                    row, etag = service.receipts.get(KEY)
-                    identifier, target_key = "KIAN-925", "c" * 64
-                    row.update(target_identifier=identifier, target_dispatch_key=target_key,
-                               is_auto_repair=True, repair_parent_key=target_key)
-                    service.receipts.replace(row, etag)
-                branch = f"clusterfork-wip/{identifier.lower()}-{target_key[:8]}"
-                service.handle("finish", claims(), {"dispatch_key": KEY, "status": "failed",
-                    "wip_branch": branch, "wip_commit_sha": "b" * 40,
-                    "failure": {"operation": "validation/1", "kind": "command_failed", "exit_code": 1,
-                                "failure_output": "Traceback ghp_synthetic", "run_id": "999"}})
-                saved = service.runs.get(KEY)[0]
-                self.assertEqual((saved["wip_branch"], saved["wip_commit_sha"]), (branch, "b" * 40))
-                diagnostic = json.loads(saved["failure"])
-                self.assertEqual(diagnostic["failure_output"], "Traceback [REDACTED]")
-                self.assertEqual(diagnostic["run_id"], "123")
-
-    def test_normal_worker_still_requires_the_reviewed_coding_context(self):
-        service, _, _ = self.service()
-        service.queue.readiness.require = Mock(return_value={"review_key": "approved", "context_sha": "a" * 40})
-        service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
-        with self.assertRaisesRegex(WorkerError, "reviewed repository context"):
-            service.handle("progress", claims(), {"dispatch_key": KEY, "stage": "coding", "context_sha": "b" * 40})
-
-    def test_failed_finish_rejects_foreign_or_incomplete_wip_identity(self):
-        valid = {"wip_branch": "clusterfork/kian-891-aaaaaaaa", "wip_commit_sha": "b" * 40}
-        for extra in ({"wip_branch": "main"}, {"wip_branch": "clusterfork/other-aaaaaaaa"},
-                      {"wip_commit_sha": "not-a-sha"}, {"wip_commit_sha": None},
-                      {"wip_branch": []}, {"status": "completed"}):
-            with self.subTest(extra=extra):
-                service, _, _ = self.service()
-                service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
-                with self.assertRaises(WorkerError):
-                    service.handle("finish", claims(), {"dispatch_key": KEY, "status": "failed", **valid, **extra})
-
-    def test_competing_run_cannot_take_an_active_worker_lease(self):
-        service, _, _ = self.service()
-        service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
-        with self.assertRaises(WorkerError):
-            service.handle("start", {**claims(), "run_id": "456"}, {"dispatch_key": KEY, "protocol": PROTOCOL})
-
-    def test_completed_issues_cannot_be_executed_again(self):
-        service, _, _ = self.service()
-        service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
-        service.handle("finish", claims(), {"dispatch_key": KEY, "status": "completed"})
-        with self.assertRaises(WorkerError):
-            service.handle("start", {**claims(), "run_attempt": "2"}, {"dispatch_key": KEY, "protocol": PROTOCOL})
-
-    def test_depleted_accounts_schedule_reconciliation_retry(self):
-        service, _, _ = self.service()
-        service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
-        service.handle("finish", claims(), {"dispatch_key": KEY, "status": "waiting_for_quota"})
-        self.assertEqual(service.receipts.get(KEY)[0]["retry_after"], NOW + 900)
 
 
 class GitHubPermissionTests(unittest.TestCase):
@@ -579,7 +337,7 @@ class LiveQuotaShapeTests(unittest.TestCase):
                 worker.choose_account(Broker(), config, Heartbeat(), preflight=True)
 
     def test_short_and_weekly_limits_both_constrain_headroom(self):
-        config = Registry.load(ROOT / "automation/azure/projects.json")
+        config = Registry.load(ROOT / "automation/controller/projects.json")
         snapshot = quota_snapshot("account", "gpt-6.1-sol", {"rateLimitsByLimitId": {"codex": {
             "primary": {"usedPercent": 1, "resetsAt": time.time() + 1000},
             "secondary": {"usedPercent": 95, "resetsAt": time.time() + 10000}}}})
@@ -591,7 +349,7 @@ class LiveQuotaShapeTests(unittest.TestCase):
                 "unrelated": {"normalModelSlug": "other-model", "primary": {"usedPercent": 0}}}})
 
     def test_denied_usage_and_unknown_windows_fail_closed(self):
-        config = Registry.load(ROOT / "automation/azure/projects.json")
+        config = Registry.load(ROOT / "automation/controller/projects.json")
         with self.assertRaises(CodexError):
             quota_snapshot("a", "gpt-6.1-sol", {"ordinaryUsageAllowed": False})
         snapshot = quota_snapshot("a", "gpt-6.1-sol", {"rateLimits": {"primary": {"resetsAt": time.time() + 60}}})
@@ -1150,18 +908,7 @@ class ValidationRecoveryTests(unittest.TestCase):
     @contextmanager
     def scenario(self, *, fix_on_turn=2, open_pr=False, dirty_file=None, turn_error=False,
                  validation=None, turn_hook=None, workflows_allowed=False):
-        self.registry = Registry.load(ROOT / "automation/azure/projects.json")
-        service, github, issue = WorkerAuthorizationTests.service(self)
-        github.workflows = workflows_allowed
-        service.accounts.clock = lambda: NOW
-        service.sync_linear = Mock()
-        service.sync_steering = Mock()
-        service.steering = Mock()
-        service.steering.poll.return_value = {"instruction": None}
-        identity = service.accounts.enroll(auth("worker-account", "opaque-leased-login"))
-        service.handle("start", selector_claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
-        service.handle("bind_account", selector_claims(), {"dispatch_key": KEY, "account_id": identity})
-        branch = "clusterfork/kian-891-aaaaaaaa"
+        self.registry = Registry.load(ROOT / "automation/controller/projects.json")
         calls, servers, prompts, validation_liveness = [], [], [], []
         test = self
         with tempfile.TemporaryDirectory() as directory:
@@ -1179,6 +926,16 @@ class ValidationRecoveryTests(unittest.TestCase):
             git("commit", "-m", "initial")
             git("push", "origin", "main")
             base = git("rev-parse", "HEAD")
+            f = coding_fixture(self, NOW, context_sha=base, identifier="KIAN-891")
+            service, github, issue = f.broker, f.github, f.issue
+            github.workflow_changes_allowed.return_value = workflows_allowed
+            github.installation_token.return_value = "synthetic-scoped-token"
+            service.steering = Mock()
+            service.steering.handle.return_value = {"instruction": None}
+            identity = f.pool.enroll(auth("worker-account", "opaque-leased-login"))
+            service.handle("start", job_claims(Role.CODING), {"dispatch_key": f.key, "protocol": PROTOCOL})
+            service.handle("bind_account", job_claims(Role.CODING), {"dispatch_key": f.key, "account_id": identity})
+            branch = worker.worker_branch(issue["identifier"], f.view.task_id)
             if open_pr:
                 git("checkout", "-b", branch)
                 (checkout / "prior.txt").write_text("previous attempt\n")
@@ -1191,7 +948,7 @@ class ValidationRecoveryTests(unittest.TestCase):
             url = "https://github.com/KianBahasadri/clusterfork/pull/1"
             pull = {"html_url": url, "state": "open", "merged": False, "title": "Previous work",
                     "user": {"login": "clusterfork[bot]"}, "base": {"ref": "main"},
-                    "body": f"<!-- clusterfork-dispatch:{KEY} -->",
+                    "body": f"<!-- clusterfork-dispatch:{f.view.task_id} -->",
                     "head": {"repo": {"full_name": "KianBahasadri/clusterfork"}, "ref": branch,
                              "sha": prior_head.split()[0] if prior_head else base}}
             checks = validation or [[sys.executable, "-c",
@@ -1199,7 +956,7 @@ class ValidationRecoveryTests(unittest.TestCase):
                 "'traceback-marker opaque-leased-login ghp_synthetic Bearer opaque-header api_key=opaque-key'"]]
 
             class Broker:
-                key, stage = KEY, "initializing"
+                key, stage = f.key, "initializing"
                 publication_guard = worker.PublicationGuard({})
                 def call(inner, action, **data):
                     calls.append((action, data))
@@ -1207,13 +964,13 @@ class ValidationRecoveryTests(unittest.TestCase):
                         inner.stage = data["stage"]
                         worker.CONTEXT.set({**worker.CONTEXT.get(), "stage": inner.stage})
                     try:
-                        result = service.handle(action, claims(), {"dispatch_key": KEY, **data})
-                    except WorkerError as exc:
-                        raise HTTPError("https://broker/" + action, exc.status, "rejected", {}, None) from None
+                        result = service.handle(action, job_claims(Role.CODING), {"dispatch_key": f.key, **data})
+                    except (WorkerError, Rejected) as exc:
+                        raise HTTPError("https://broker/" + action, getattr(exc, "status", 403), "rejected", {}, None) from None
                     if action == "start":
                         result.update(validation_commands=checks, auto_merge=False)
                         if open_pr:
-                            result["repair"] = {"target_dispatch_key": KEY, "target_identifier": issue["identifier"],
+                            result["repair"] = {"target_dispatch_key": f.view.task_id, "target_identifier": issue["identifier"],
                                                 "target_branch": branch,
                                                 "instructions": repair_instructions("main")}
                     return result
@@ -1273,7 +1030,7 @@ class ValidationRecoveryTests(unittest.TestCase):
                      patch.object(worker, "request_auto_merge") as merge, \
                      redirect_stdout(io.StringIO()) as output:
                     config = broker.call("start", protocol=PROTOCOL)
-                    yield SimpleNamespace(root=root, git=git, broker=broker, service=service, config=config,
+                    yield SimpleNamespace(root=root, git=git, broker=broker, service=service, config=config, fixture=f, key=f.key,
                         heartbeat=SimpleNamespace(failed=threading.Event()), branch=branch, base=base,
                         prior_head=prior_head, calls=calls, servers=servers, prompts=prompts, request=request,
                         merge=merge, output=output, validation_liveness=validation_liveness)
@@ -1320,7 +1077,8 @@ class ValidationRecoveryTests(unittest.TestCase):
                  self.assertLogs(level="ERROR") as logs, tempfile.TemporaryDirectory() as directory:
                 summary = Path(directory) / "summary"
                 with patch.object(worker, "Broker", return_value=run.broker), \
-                     patch.dict(os.environ, {"CLUSTERFORK_BROKER_URL": "unused", "DISPATCH_KEY": KEY,
+                     patch.object(worker, "prepare_checkout"), \
+                     patch.dict(os.environ, {"CLUSTERFORK_BROKER_URL": "unused", "DISPATCH_KEY": run.key, "WORKER_REVISION": run.config["runtime_sha"],
                                              "GITHUB_STEP_SUMMARY": str(summary)}), patch("sys.stderr", io.StringIO()) as stderr:
                     self.assertEqual(worker.main(), 1)
                 finish = [data for action, data in run.calls if action == "finish"][-1]
@@ -1333,7 +1091,7 @@ class ValidationRecoveryTests(unittest.TestCase):
                                  "clusterfork[bot] <clusterfork[bot]@users.noreply.github.com>")
                 if open_pr:
                     self.assertEqual(run.git("ls-remote", "origin", f"refs/heads/{run.branch}"), run.prior_head)
-                saved = run.service.runs.get(KEY)[0]
+                saved = execution_row(run.fixture)
                 self.assertEqual(saved["wip_branch"], destination)
                 tail = json.loads(saved["failure"])["failure_output"]
                 self.assertIn("AssertionError", tail)
@@ -1401,7 +1159,7 @@ class ValidationRecoveryTests(unittest.TestCase):
         for check in ("integrity", "workflow", "publication"):
             def change(git, checkout, turn):
                 if check == "integrity":
-                    git("branch", "-m", "unexpected" if turn == 1 else "clusterfork/kian-891-aaaaaaaa")
+                    git("branch", "-m", "unexpected" if turn == 1 else run.branch)
                 else:
                     path = checkout / (".github/workflows/generated.yml" if check == "workflow" else "generated.txt")
                     if turn == 1:
@@ -1451,13 +1209,17 @@ class ValidationRecoveryTests(unittest.TestCase):
 
     def test_unpushed_revert_is_preserved_even_when_its_tree_matches_main(self):
         with self.scenario(open_pr=True) as run:
+            identity=run.config['account_id']
+            run.broker.call('claim',account_id=identity)
+            from test_worker_reporting import usage
+            run.broker.call('progress',stage='coding',context_sha=run.base,account_id=identity,usage_before=usage())
             run.git("checkout", "-b", run.branch, "origin/" + run.branch)
             run.git("rm", "prior.txt")
             run.git("commit", "-m", "revert previous attempt")
             head = run.git("rev-parse", "HEAD")
             self.assertFalse(run.git("diff", "--name-only", "main...HEAD"))
             with worker.command_context(publication_guard=run.broker.publication_guard):
-                preserved = worker.preserve_wip(run.broker, run.config, run.root, run.branch, head, KEY)
+                preserved = worker.preserve_wip(run.broker, run.config, run.root, run.branch, head, run.fixture.view.task_id)
             destination = run.branch.replace("clusterfork/", "clusterfork-wip/", 1)
             self.assertEqual(preserved, {"wip_branch": destination, "wip_commit_sha": head})
             self.assertEqual(run.git("ls-remote", "origin", f"refs/heads/{destination}").split()[0], head)
@@ -1552,7 +1314,7 @@ class AutoMergeTests(unittest.TestCase):
             self.assertIsNone(worker.find_pr(self.config, "token", self.branch))
 
     def test_registry_defaults_to_auto_merge_and_rejects_non_boolean_override(self):
-        config = json.loads((ROOT / "automation/azure/projects.json").read_text())
+        config = json.loads((ROOT / "automation/controller/projects.json").read_text())
         config["projects"][0].pop("auto_merge", None)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "registry.json"
@@ -1567,7 +1329,7 @@ class AutoMergeTests(unittest.TestCase):
                 Registry.load(path)
 
     def test_project_timeout_defaults_and_bounds_leave_time_for_publication(self):
-        config = json.loads((ROOT / "automation/azure/projects.json").read_text())
+        config = json.loads((ROOT / "automation/controller/projects.json").read_text())
         config["projects"][0].pop("agent_timeout_minutes", None)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "registry.json"
@@ -1584,7 +1346,7 @@ class AutoMergeTests(unittest.TestCase):
                     Registry.load(path)
 
     def test_hosted_job_budget_covers_the_longest_allowed_agent_attempt(self):
-        workflow = (ROOT / ".github/workflows/clusterfork-develop.yml").read_text()
+        workflow = (ROOT / ".github/workflows/clusterfork-code.yml").read_text()
         timeout = int(re.search(r"timeout-minutes:\s*(\d+)", workflow)[1])
         self.assertLessEqual(timeout, 360)
         self.assertGreaterEqual(timeout - 330, 30)

@@ -12,10 +12,8 @@ import sys
 import time
 from urllib.request import urlopen
 
-sys.path[:0]=[str(Path(__file__).parent),str(Path(__file__).parent/'azure')]
+sys.path.insert(0,str(Path(__file__).parent))
 from controller.release import local_manifest,tree_digest
-from controller.migration import validate,collect
-from controller.model import LegacyImported
 from controller.workflows import ENGINE
 import infrastructure
 
@@ -83,59 +81,20 @@ PY
     return response['result']
 
 
-def install_script(config,manifest,history=None):
+def install_script(config,manifest):
     script=(ROOT/'automation/controller/host/install.sh').read_text()
     for placeholder,value in [('REVISION',manifest['revision']),
                               ('CONFIG_B64',base64.b64encode(json.dumps(config).encode()).decode()),
-                              ('MANIFEST_B64',base64.b64encode(json.dumps(manifest).encode()).decode()),
-                              ('MIGRATION_B64',base64.b64encode(json.dumps(history).encode()).decode() if history is not None else '')]:
+                              ('MANIFEST_B64',base64.b64encode(json.dumps(manifest).encode()).decode())]:
         script=script.replace('__'+placeholder+'__',value)
     # The child shell owns errexit and logging. Its success marker is outside the
     # child's redirected log; no command output or credentials are relayed.
     return "#!/bin/sh\nif /bin/bash <<'CF_INSTALL_SCRIPT'\n"+script+"\nCF_INSTALL_SCRIPT\nthen\n echo CF_INSTALL_OK\nelse\n echo CF_INSTALL_FAILED\n exit 1\nfi\n"
 
 
-def initial_boundary(history):
-    # Initial migration is an operator operation. Shared-key access remains in
-    # memory, as in the existing account tooling; it never enters the release.
-    from accounts import connect
-    from azure.data.tables import TableClient
-    from deployment_control import DeploymentControl
-    from dispatch_core import Registry
-    from worker_store import AzureTable
-    base=connect().table
-    endpoint=base.url.removesuffix('/ClusterforkAccounts')
-    def table(name):
-        return TableClient(endpoint,name,credential=base.credential)
-    control=DeploymentControl(AzureTable.with_client(table('ClusterforkOperations'),'control'))
-    state=control.state()[0]
-    if state.get('paused') is not True:
-        raise RuntimeError('The legacy operator halt is required')
-    if state.get('owner','').startswith('operator:') and state['owner'] not in dict(history.get('operator_holds',())):
-        raise RuntimeError('The legacy operator halt must be preserved by migration')
-    if any(row.get('lease_until',0)>time.time() for row in base.list_entities()):
-        raise RuntimeError('A legacy credential lease is still active')
-    current=collect({'ClusterforkRepositoryQueue':list(table('ClusterforkRepositoryQueue').list_entities())},
-                    Registry.load(ROOT/'automation/azure/projects.json'),
-                    legacy_generations=tuple({row['generation'] for row in history['records']}),
-                    operator_holds=history.get('operator_holds',()))
-    if current['source_digest']!=history['source_digest']:
-        raise RuntimeError('The idle migration history has changed; refresh the private snapshot')
-    for workflow in ('clusterfork-worker.yml','clusterfork-cursor-smoke.yml','clusterfork-task.yml'):
-        page=1
-        while True:
-            data=github(f'actions/workflows/{workflow}/runs?per_page=100&page={page}')
-            runs=data['workflow_runs']
-            if any(run['status']!='completed' for run in runs):
-                raise RuntimeError('A GitHub worker attempt has not stopped')
-            if len(runs)<100:
-                if (page-1)*100+len(runs)<data['total_count']:
-                    raise RuntimeError('GitHub attempt listing is incomplete')
-                break
-            page+=1
 
 
-def deploy(revision,*,initialize=False,history=None):
+def deploy(revision,*,initialize=False):
     manifest=local_manifest(ROOT,revision)
     deadline=time.monotonic()+330*60
     while ci_state(revision)=='pending':
@@ -152,14 +111,9 @@ def deploy(revision,*,initialize=False,history=None):
         print('A newer runtime superseded this release.')
         return
     if initialize:
-        if history is None:
-            raise ValueError('Initial installation requires verified idle migration history')
-        validate(LegacyImported(history['generation'],tuple(history['records']),history['source_digest'],
-                                tuple(tuple(h) for h in history.get('operator_holds',()))))
         marker=run_host('#!/bin/sh\nif test ! -e /opt/clusterfork/current && ! systemctl is-active --quiet clusterfork-controller; then echo CF_FIRST_INSTALL; fi\n')
         if 'CF_FIRST_INSTALL' not in marker:
             raise RuntimeError('Initial installation cannot bypass an existing controller drain')
-        initial_boundary(history)
     else:
         operator('pause',owner=HOLD,reason='Automatic deployment is waiting for existing work to drain.')
         while not operator('deployment-status')['drained']:
@@ -179,14 +133,7 @@ def deploy(revision,*,initialize=False,history=None):
     if not still_required(manifest):
         print('A newer runtime superseded this release before installation.')
         return
-    if initialize:
-        command(['az','functionapp','stop','--resource-group',GROUP,'--name','clusterfork-dispatch-7604cac329','--only-show-errors'])
-        state=command(['az','resource','show','--resource-group',GROUP,'--resource-type','Microsoft.Web/sites',
-                       '--name','clusterfork-dispatch-7604cac329','--api-version','2024-04-01',
-                       '--query','properties.state','--output','tsv','--only-show-errors']).strip()
-        if state!='Stopped':
-            raise RuntimeError('Legacy lifecycle writers have not stopped')
-    output=run_host(install_script(config,manifest,history))
+    output=run_host(install_script(config,manifest))
     if 'CF_INSTALL_OK' not in output or 'CF_INSTALL_FAILED' in output:
         raise RuntimeError('Controller install failed; inspect its private host log')
     deadline=time.monotonic()+300
@@ -217,15 +164,11 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--revision',required=True)
     parser.add_argument('--initialize',action='store_true',help='First installation only; starts with an operator hold.')
-    parser.add_argument('--migration-file',type=Path)
     args=parser.parse_args()
     if not re.fullmatch('[0-9a-f]{40}',args.revision):
         parser.error('A full source revision is required')
     os.umask(0o077)
-    if args.initialize!=bool(args.migration_file):
-        parser.error('Initial installation requires --migration-file; routine deployment preserves existing history')
-    verified=deploy(args.revision,initialize=args.initialize,
-                    history=json.loads(args.migration_file.read_text()) if args.migration_file else None)
+    verified=deploy(args.revision,initialize=args.initialize)
     if os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'],'a') as output:
             output.write('proceed='+str(bool(verified)).lower()+'\n')

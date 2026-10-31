@@ -2,10 +2,10 @@
 
 import json
 
-from diagnostics import failure_summary
-from readiness_policy import redact_review_text
-from worker_core import account_provider
-from worker_reporting import attempt_comment
+from common.diagnostics import failure_summary
+from common.policy import redact_review_text
+from common.accounts import account_provider
+from common.reporting import attempt_comment
 
 from .workflows import ENGINE
 

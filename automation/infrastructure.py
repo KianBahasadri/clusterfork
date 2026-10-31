@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bootstrap, adopt, plan and apply the checked-in Azure Terraform stacks."""
+"""Bootstrap, plan and apply the checked-in Azure Terraform stacks."""
 
 import argparse
 from collections import Counter
@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 
@@ -145,57 +144,8 @@ def bootstrap():
     migrate(directory, "bootstrap")
 
 
-def adopt(credentials_file, *, apply=True):
-    directory = workspace("azure")
-    if (directory / "remote.ready").exists() or backend_exists("azure"):
-        raise InfrastructureError("Azure resources were already adopted; use plan or apply")
-    values = json.loads(credentials_file.read_text())
-    if isinstance(values, list):
-        values = {item["name"]: item["value"] for item in values}
-    secrets = {name: values[name] for name in SECRETS}
-    if any(not isinstance(value, str) or not value or value.startswith("@Microsoft.KeyVault(") for value in secrets.values()):
-        raise InfrastructureError("Adoption requires the existing runtime credential values")
-    state_path = directory / "terraform.tfstate"
-    state = json.loads(state_path.read_text()) if state_path.exists() else {}
-    identities = [instance.get("attributes", {}).get("identity", []) for resource in state.get("resources", [])
-                  if resource.get("type") == "azurerm_function_app_flex_consumption"
-                  for instance in resource.get("instances", [])]
-    adopting_identity = not any(identity and identity[0].get("principal_id") for identity in identities)
-    env = {**os.environ, "TF_VAR_seed_credentials": "true", "TF_VAR_adopt_existing": "true", "TF_VAR_runtime_credentials": json.dumps(secrets),
-           "TF_VAR_adopting_identity": str(adopting_identity).lower()}
-    terraform(directory, "init", "-input=false", "-lockfile=readonly", env=env)
-    control, pause_revision = pause_adoption() if apply else (None, None)
-    plan(directory, env=env, apply=apply)
-    if not apply:
-        return
-    verify()
-    migrate(directory, "azure", env=env)
-    if pause_revision is not None:
-        control.resume("terraform-adoption", pause_revision)
-        print("Adoption verified; its deployment pause was released.", flush=True)
 
 
-def pause_adoption():
-    # This is runtime admission control, not infrastructure provisioning.
-    sys.path.insert(0, str(ROOT / "automation/azure"))
-    from deployment_control import DeploymentControl
-    from worker_store import AzureTable
-
-    connection = run(["az", "storage", "account", "show-connection-string", "-g", "rg-clusterfork-automation",
-                      "-n", "cfdispatch7604cac329", "--query", "connectionString", "-o", "tsv", "--only-show-errors"]).strip()
-    control = DeploymentControl(AzureTable(connection, "ClusterforkOperations", "control"))
-    state, _ = control.state()
-    revision = None
-    if not state.get("paused"):
-        revision = run(["git", "rev-parse", "HEAD"], cwd=ROOT).strip()
-        control.pause("terraform-adoption", revision)
-    elif state.get("owner") == "terraform-adoption":
-        revision = state["revision"]
-    active = run(["gh", "api", "repos/KianBahasadri/clusterfork/actions/workflows/clusterfork-worker.yml/runs?per_page=100",
-                  "--paginate", "--jq", '.workflow_runs[] | select(.status != "completed") | .id']).strip()
-    if active:
-        raise InfrastructureError("Active coding/readiness runs must stop before adoption; dispatch remains paused")
-    return control, revision
 
 
 def reference_statuses(data):
@@ -222,18 +172,12 @@ def verify():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["bootstrap", "adopt", "plan", "apply", "verify"])
-    parser.add_argument("--credentials-file", type=Path)
-    parser.add_argument("--plan-only", action="store_true")
+    parser.add_argument("action", choices=["bootstrap", "plan", "apply", "verify"])
     args = parser.parse_args()
     os.umask(0o077)
     os.environ["TF_IN_AUTOMATION"] = "true"
     if args.action == "bootstrap":
         bootstrap()
-    elif args.action == "adopt":
-        if not args.credentials_file:
-            parser.error("adopt requires --credentials-file with the existing private credential snapshot")
-        adopt(args.credentials_file, apply=not args.plan_only)
     elif args.action == "verify":
         verify()
     else:

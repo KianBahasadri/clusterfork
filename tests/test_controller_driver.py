@@ -5,18 +5,17 @@ from dataclasses import replace
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import Mock
 from uuid import UUID
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
+sys.path[:0] = [str(ROOT / "automation")]
 from controller.driver import Driver
 from controller.model import Phase, Role, Hold
-from dispatch_core import DispatchError
-from readiness_policy import PROTOCOL
+from common.routing import DispatchError
+from common.policy import PROTOCOL
 import test_controller_broker as fixtures
 from test_controller_authorization import claims
-from worker_reporting import worker_branch
+from common.reporting import worker_branch
 
 
 class ControllerDriverTests(unittest.TestCase):

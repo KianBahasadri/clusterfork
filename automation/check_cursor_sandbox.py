@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tempfile
 
-sys.path.insert(0, str(Path(__file__).parent / "azure"))
+sys.path.insert(0, str(Path(__file__).parent))
 from cursor_runtime import environment, read_only_command
 
 

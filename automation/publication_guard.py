@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import threading
 
-from readiness_policy import PRIVATE_KEY_PATTERN, TOKEN_PATTERN, redact_review_text
+from common.policy import PRIVATE_KEY_PATTERN, TOKEN_PATTERN, redact_review_text
 
 
 class PublicationBlocked(RuntimeError):

@@ -12,20 +12,21 @@ from urllib.parse import parse_qs,urlsplit
 
 from .model import Hold, InboxQueued, Rejected, identity
 from .deployment import verify_release
-from dispatch_core import WebhookError, webhook_event
-from worker_core import WorkerError
-from worker_store import verify_oidc
-from diagnostics import context,operation
+from common.routing import WebhookError, webhook_event
+from common.accounts import WorkerError
+from common.identity import verify_oidc
+from common.diagnostics import context,operation
 
 
 class Application:
     def __init__(self, controller, broker, driver, *, webhook_secret, metadata, verify=verify_oidc, clock=time.time,
-                 resources_idle=lambda: True,capabilities=None,setup=None):
+                 resources_idle=lambda: True,capabilities=None,setup=None,account_operator=None):
         self.controller, self.broker, self.driver = controller, broker, driver
         self.webhook_secret, self.metadata = webhook_secret, metadata
         self.verify, self.clock = verify, clock
         self.resources_idle = resources_idle
         self.capabilities,self.setup=capabilities or {},setup
+        self.account_operator=account_operator
         self.wakeup = threading.Event()
 
     def drained(self):
@@ -49,6 +50,17 @@ class Application:
             return 200,result
         if method != "POST":
             return 404,{"error":"Unknown operation"}
+        if path=='/api/accounts':
+            if self.account_operator is None:
+                raise WorkerError('Account operator access is unavailable',401)
+            operator=self.account_operator(headers.get('Authorization',''))
+            from .account_operator import execute
+            data=json.loads(body)
+            if not isinstance(data,dict):
+                return 400,{'error':'Invalid account request'}
+            result=execute(self.controller,operator,data)
+            self.wakeup.set()
+            return 200,result
         if path == "/api/linear":
             event = webhook_event(body, headers, self.webhook_secret, now=self.clock())
             if event:

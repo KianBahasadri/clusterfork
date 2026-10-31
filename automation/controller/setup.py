@@ -5,7 +5,7 @@ import hashlib
 
 from .authorization import release_ref
 from .workflows import ENGINE,WORKFLOW,render
-from dispatch_core import uuid_string
+from common.routing import uuid_string
 
 
 def evidence(registry,github,manifest,project_id):

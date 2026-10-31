@@ -14,8 +14,8 @@ from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from codex_runtime import AppServer, CodexError, write_private
-from quota_selection import AccountQuota, QuotaWindow, finite_number
-from worker_core import account_identity
+from common.selection import AccountQuota, QuotaWindow, finite_number
+from common.accounts import account_identity
 
 VERSION = "2026.10.22-27dcf5f"
 MODEL = "grok-4.7-high"
@@ -25,7 +25,7 @@ API = "https://api2.cursor.sh/aiserver.v1.DashboardService"
 
 class CursorError(CodexError):
     def __init__(self, reason="cursor_execution_failed"):
-        from diagnostics import FAILURE_REASONS
+        from common.diagnostics import FAILURE_REASONS
         self.reason_code = reason
         self.clusterfork_failure = {"operation": "worker/agent", "kind": "worker_error", "reason_code": reason}
         super().__init__(FAILURE_REASONS[reason])

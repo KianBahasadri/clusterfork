@@ -229,6 +229,27 @@ class Initialize:
 
 
 @dataclass(frozen=True)
+class ReportConfirmed:
+    key: str
+    signature: str
+
+
+@dataclass(frozen=True)
+class AccountRequest:
+    task_id: str
+    attempt_id: str
+    role: Role
+    operation: str
+    data: dict = field(default_factory=dict,repr=False)
+
+
+@dataclass(frozen=True)
+class InstructionRequest:
+    operation: str
+    data: dict = field(default_factory=dict,repr=False)
+
+
+@dataclass(frozen=True)
 class LegacyImported:
     generation: str
     records: tuple[dict, ...]
@@ -238,7 +259,7 @@ class LegacyImported:
 
 Command = (IssueObserved | Admit | DispatchObserved | Start | Assign | Review | Progress |
            Finish | ExternalObserved | Retry | Hold | SessionUpdated | EffectUpdated | Authorize |
-           ExhaustAccount | ContextObserved | InboxQueued | InboxDone | Initialize | LegacyImported)
+           ExhaustAccount | ContextObserved | InboxQueued | InboxDone | Initialize | LegacyImported | ReportConfirmed | AccountRequest | InstructionRequest)
 
 
 @dataclass(frozen=True)
@@ -258,6 +279,7 @@ class TaskView:
     attempt: dict = field(default_factory=dict)
     sessions: tuple[dict, ...] = ()
     canceled: bool = False
+    content_revision: str = ""
 
     def session(self, phase):
         return next((dict(s) for s in self.sessions if s["phase"] == phase), None)

@@ -13,12 +13,12 @@ from unittest.mock import Mock, patch
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
+sys.path[:0] = [str(ROOT / "automation")]
 
 from agent_session import run_agent
 from call_budget import CallBudget
-from dispatch_clients import Linear
-from issue_images import (ImageContextError, MAX_IMAGE_BYTES, MAX_IMAGES, MAX_PIXELS,
+from common.clients import Linear
+from common.images import (ImageContextError, MAX_IMAGE_BYTES, MAX_IMAGES, MAX_PIXELS,
                           capture_images, discover_images, download_image, image_digest,
                           image_prompt, materialize_images, public_address, validate_image)
 
@@ -95,7 +95,7 @@ class ImageContextTests(unittest.TestCase):
                            linear.download_image)
         linear.download_image.return_value = b"x" * MAX_IMAGE_BYTES, "image/png"
         linear.download_image.side_effect = None
-        with patch("issue_images.validate_image"), \
+        with patch("common.images.validate_image"), \
              CallBudget(self, linear=linear, exact={"linear.download_image": 3}), \
              self.assertRaisesRegex(ImageContextError, "12 MiB"):
             capture_images("\n".join(f"![Screen](https://example.com/{i})" for i in range(3)), linear.download_image)
@@ -184,8 +184,8 @@ class DownloadTests(unittest.TestCase):
         for connection, response in zip(connections, responses):
             connection.getresponse.return_value = response
         auth = Mock(return_value="lin_api_private")
-        with patch("issue_images.HTTPSConnection", side_effect=connections) as factory, \
-             patch("issue_images.public_address", return_value="93.184.216.34"):
+        with patch("common.images.HTTPSConnection", side_effect=connections) as factory, \
+             patch("common.images.public_address", return_value="93.184.216.34"):
             result = download_image(url, auth)
         return result, connections, factory, auth
 
@@ -199,7 +199,7 @@ class DownloadTests(unittest.TestCase):
         self.assertEqual(connections[0].request.call_args.kwargs["headers"]["Authorization"], "lin_api_private")
         self.assertNotIn("Authorization", connections[1].request.call_args.kwargs["headers"])
         self.assertTrue(all(connection.close.called for connection in connections))
-        with patch("issue_images.socket.create_connection") as connect:
+        with patch("common.images.socket.create_connection") as connect:
             connections[0]._create_connection(("untrusted-dns", 443), 3)
             connect.assert_called_once_with(("93.184.216.34", 443), 3, None)
 
@@ -210,7 +210,7 @@ class DownloadTests(unittest.TestCase):
     def test_private_destinations_and_mixed_dns_answers_are_rejected(self):
         for addresses in (["127.0.0.1"], ["169.254.169.254"], ["::1"], ["10.0.0.1"],
                           ["93.184.216.34", "192.168.0.1"]):
-            with self.subTest(addresses=addresses), patch("issue_images.socket.getaddrinfo", return_value=[
+            with self.subTest(addresses=addresses), patch("common.images.socket.getaddrinfo", return_value=[
                 (socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 443)) for address in addresses]), \
                  self.assertRaisesRegex(ImageContextError, "non-public"):
                 public_address("example.com")
@@ -231,14 +231,14 @@ class DownloadTests(unittest.TestCase):
         response = self.response(body=b"x" * (MAX_IMAGE_BYTES + 1))
         with self.assertRaisesRegex(ImageContextError, "oversized"):
             self.fetch([response])
-        with patch("issue_images.time.monotonic", side_effect=[0, 13]), \
-             patch("issue_images.public_address", return_value="93.184.216.34"), \
+        with patch("common.images.time.monotonic", side_effect=[0, 13]), \
+             patch("common.images.public_address", return_value="93.184.216.34"), \
              self.assertRaisesRegex(ImageContextError, "timed out"):
             download_image("https://example.com/image", Mock())
 
     def test_linear_download_uses_existing_broker_authorization(self):
         linear = Linear(token="lin_api_private")
-        with patch("issue_images.download_image", return_value=(b"pixels", "image/png")) as download:
+        with patch("common.images.download_image", return_value=(b"pixels", "image/png")) as download:
             linear.download_image("https://uploads.linear.app/image", deadline=123)
         self.assertEqual(download.call_args.args[1](), "lin_api_private")
         self.assertEqual(download.call_args.kwargs, {"deadline": 123})

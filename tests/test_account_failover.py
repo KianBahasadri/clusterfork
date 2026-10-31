@@ -15,32 +15,33 @@ from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
+sys.path[:0] = [str(ROOT / "automation")]
 import agent_session
 import worker
 from codex_runtime import CodexError, copy_sessions
-from dispatch_core import Registry
-from readiness_policy import PROTOCOL
-from worker_core import WorkerError
-from worker_reporting import attempt_comment
+from common.routing import Registry
+from common.policy import PROTOCOL
+from common.accounts import WorkerError
+from controller.model import Rejected, Role
+from test_controller_authorization import claims
+from controller_fixtures import coding_fixture, execution_row
+from common.reporting import attempt_comment
 import test_remote_worker as fixtures
 from test_worker_reporting import limits, usage
 
 
 class AccountFailoverTests(unittest.TestCase):
     def setUp(self):
-        self.registry = Registry.load(ROOT / "automation/azure/projects.json")
-        self.service, _, _ = fixtures.WorkerAuthorizationTests.service(self)
-        self.service.clock = self.service.accounts.clock = lambda: fixtures.NOW
-        self.service.sync_linear = Mock()
-        self.service.sync_steering = Mock()
-        self.service.steering = Mock()
-        self.service.steering.poll.return_value = None
-        self.identities = [self.service.accounts.enroll(fixtures.auth(f"account-{name}", f"access-{name}"))
+        self.registry = Registry.load(ROOT / "automation/controller/projects.json")
+        self.f = coding_fixture(self, fixtures.NOW)
+        self.service = self.f.broker
+        self.identities = [self.f.pool.enroll(fixtures.auth(f"account-{name}", f"access-{name}"))
                            for name in ("a", "b", "c")]
-        self.call("start", identity=fixtures.selector_claims())
-        self.call("bind_account", identity=fixtures.selector_claims(), account_id=self.identities[0])
-        self.config = self.call("start")
+        self.service.steering = Mock()
+        self.service.steering.handle.return_value = {"accepting": True, "instruction": None}
+        self.call("start")
+        self.call("bind_account", account_id=self.identities[0])
+        self.config = {**self.call("start"), "checkout_sha": self.f.spec.context_sha}
         self.homes, self.servers, self.calls, self.deadlines = [], [], [], []
         self.error_info, self.error_status = "usageLimitExceeded", "failed"
         self.error_in_turn, self.error_retry = False, False
@@ -52,23 +53,23 @@ class AccountFailoverTests(unittest.TestCase):
         self.turn_hook = lambda: None
         self.keep_history = True
         self.limit_on_correction = False
-        self.broker = SimpleNamespace(key=fixtures.KEY, call=self.broker_call,
+        self.broker = SimpleNamespace(key=self.f.key, call=self.broker_call,
                                       publication_guard=worker.PublicationGuard({}))
         self.heartbeat = SimpleNamespace(failed=threading.Event())
 
     def call(self, action, *, identity=None, **data):
-        return self.service.handle(action, identity or fixtures.claims(),
-                                   {"dispatch_key": fixtures.KEY, "protocol": PROTOCOL, **data})
+        return self.service.handle(action, identity or claims(Role.CODING),
+                                   {"dispatch_key": self.f.key, "protocol": PROTOCOL, **data})
 
     def broker_call(self, action, **data):
         self.calls.append((action, data))
         if action in {"claim", "exhaust_account"}:
             self.assertTrue(all(not path.exists() for path in self.homes))
-            self.assertFalse(any(row["owner"] == "123:1" for row in self.service.accounts.table.list()))
+            self.assertFalse(any(row["owner"] == "123:1" for row in self.f.pool.records()))
         try:
             return self.call(action, **data)
-        except WorkerError as exc:
-            error = HTTPError("https://broker/" + action, exc.status, "rejected", {}, None)
+        except (WorkerError, Rejected) as exc:
+            error = HTTPError("https://broker/" + action, getattr(exc, "status", 403), "rejected", {}, None)
             error.clusterfork_action = action
             raise error from None
 
@@ -183,7 +184,7 @@ class AccountFailoverTests(unittest.TestCase):
         self.assertEqual(len(self.servers), 2)
         self.assertTrue(all(server.closed for server in self.servers))
         self.assertEqual(self.deadlines, [18000, 18000])
-        row = self.service.runs.get(fixtures.KEY)[0]
+        row = execution_row(self.f)
         self.assertEqual(row["thread_id"], "thread-one")
         self.assertEqual(row["turn_id"], "turn-2")
         self.assertEqual(json.loads(row["exhausted_account_ids"]), [self.identities[0]])
@@ -211,14 +212,14 @@ class AccountFailoverTests(unittest.TestCase):
         with self.execution() as (root, _), patch.object(worker, "inspect_account", side_effect=quotas):
             with worker.run_codex(self.broker, self.config, self.heartbeat, root):
                 pass
-        segments = json.loads(self.service.runs.get(fixtures.KEY)[0]["usage_segments"])
+        segments = json.loads(execution_row(self.f)["usage_segments"])
         self.assertEqual(segments[-1]["account_id"], self.identities[1])
 
     def test_successful_resume_still_validates_before_publication(self):
         events = []
-        head = ["b" * 40]
+        head = [self.f.spec.context_sha]
         config = {**self.config, "auto_merge": False, "validation_commands": [["verify-edits"]]}
-        branch = worker.worker_branch(config["issue"]["identifier"], fixtures.KEY)
+        branch = worker.worker_branch(config["issue"]["identifier"], self.f.view.task_id)
 
         def command(args, **kwargs):
             if args == ["verify-edits"]:
@@ -228,7 +229,7 @@ class AccountFailoverTests(unittest.TestCase):
                 self.assertEqual(Path("work.txt").read_text(), "existing edits\nfinished\n")
                 events.append("validation")
             elif args[:2] == ["git", "rev-parse"]:
-                return head[0] if args[2] == "HEAD" else "b" * 40
+                return head[0] if args[2] == "HEAD" else self.f.spec.context_sha
             elif args[:2] == ["git", "branch"]:
                 return branch
             elif args[:2] == ["git", "status"]:
@@ -280,23 +281,12 @@ class AccountFailoverTests(unittest.TestCase):
         self.assertIn("Fix validation/1", turns[1]["input"][0]["text"])
         resumed = [params for method, params in self.servers[1].methods if method == "thread/resume"]
         self.assertEqual(resumed[0]["threadId"], "thread-one")
-        self.assertEqual(json.loads(self.service.runs.get(fixtures.KEY)[0]["exhausted_account_ids"]), [self.identities[0]])
+        self.assertEqual(json.loads(execution_row(self.f)["exhausted_account_ids"]), [self.identities[0]])
 
-    def test_initial_preflight_uses_the_weekly_preference(self):
-        # A new attempt still delegates initial pool selection to preflight.
-        other = {**fixtures.claims(), "run_attempt": "2"}
+    def test_manual_partial_rerun_cannot_inherit_an_old_phase_assignment(self):
         self.call("finish", status="failed")
-        self.service.github.worker_result = Mock(return_value={"status": "completed"})
-        self.config = self.call("start", identity=fixtures.selector_claims(other))
-        self.broker.call = lambda action, **data: self.call(action, identity=fixtures.selector_claims(other), **data)
-        inspect = self.inspect
-        def quotas(home, model, effort):
-            details, result = inspect(home, model, effort)
-            identity = json.loads((home / "auth.json").read_text())["tokens"]["account_id"]
-            return details, limits(65, 10) if identity == "account-a" else result
-        with self.execution(), patch.object(worker, "inspect_account", side_effect=quotas):
-            self.assertTrue(worker.select_account_for_run(self.broker, self.config, self.heartbeat))
-        self.assertEqual(self.call("start", identity=other)["account_id"], self.identities[0])
+        with self.assertRaisesRegex(Rejected, "another GitHub attempt"):
+            self.call("start", identity={**claims(Role.CODING), "run_attempt": "2"})
 
     def test_missing_exhausted_usage_is_reported_separately_from_replacement_usage(self):
         final_usage = self.final_usage
@@ -308,7 +298,7 @@ class AccountFailoverTests(unittest.TestCase):
             with worker.run_codex(self.broker, self.config, self.heartbeat, root):
                 pass
         self.call("finish", status="completed")
-        row = self.service.runs.get(fixtures.KEY)[0]
+        row = execution_row(self.f)
         segments = json.loads(row["usage_segments"])
         self.assertNotIn("usage_after", segments[0])
         self.assertIn("usage_after", segments[1])
@@ -331,7 +321,7 @@ class AccountFailoverTests(unittest.TestCase):
                 pass
         self.assertEqual(len(self.servers), 2)
         self.assertEqual(attempts[0], attempts[1])
-        self.assertEqual(self.service.runs.get(fixtures.KEY)[0]["thread_id"], "thread-one")
+        self.assertEqual(execution_row(self.f)["thread_id"], "thread-one")
 
     def test_unrelated_errors_and_interruption_never_rotate_accounts(self):
         for info, status in (("rateLimitExceeded", "failed"), ("contextWindowExceeded", "failed"),
@@ -367,11 +357,11 @@ class AccountFailoverTests(unittest.TestCase):
             with worker.run_codex(self.broker, self.config, self.heartbeat, root) as summary:
                 self.assertIsNone(summary)
             self.call("finish", status="waiting_for_quota")
-        row = self.service.runs.get(fixtures.KEY)[0]
+        row = execution_row(self.f)
         self.assertEqual(len(self.servers), 3)
         self.assertEqual(set(json.loads(row["exhausted_account_ids"])), set(self.identities))
         self.assertIn("no eligible replacement account", attempt_comment(row, self.config["repository"], finished=True))
-        self.assertTrue(all(not account["owner"] for account in self.service.accounts.table.list()))
+        self.assertTrue(all(not account["owner"] for account in self.f.pool.records()))
 
     def test_ineligible_replacements_end_without_starting_another_turn(self):
         self.replacement_usage = self.other_usage = (95, 10)
@@ -416,7 +406,7 @@ class AccountFailoverTests(unittest.TestCase):
     def coding_account(self):
         first = self.identities[0]
         leased = self.call("claim", account_id=first)
-        self.call("progress", stage="coding", account_id=first, usage_before=usage())
+        self.call("progress", stage="coding", context_sha=self.f.spec.context_sha, account_id=first, usage_before=usage())
         self.call("steering_open", thread_id="thread-one", turn_id="turn-1")
         return leased
 
@@ -429,60 +419,57 @@ class AccountFailoverTests(unittest.TestCase):
     def test_broker_requires_successful_release_and_the_original_coding_thread(self):
         first = self.identities[0]
         leased = self.coding_account()
-        with self.assertRaises(WorkerError):
+        with self.assertRaises((WorkerError, Rejected)):
             self.call("exhaust_account", account_id=first, thread_id="thread-one")
         # Direct expiry/release is insufficient: the worker's fenced save must succeed.
-        self.service.accounts.save(first, "123:1", leased["lease"], release=True)
-        with self.assertRaises(WorkerError):
+        self.service.accounts.save(first, f"{self.f.key}:123:1:coding", leased["lease"], release=True)
+        with self.assertRaises((WorkerError, Rejected)):
             self.call("exhaust_account", account_id=first, thread_id="thread-one")
         leased = self.call("claim", account_id=first)
         self.call("save", account_id=first, lease=leased["lease"], release=True)
-        with self.assertRaises(WorkerError):
+        with self.assertRaises((WorkerError, Rejected)):
             self.call("exhaust_account", account_id=first, thread_id="another-thread")
         self.call("exhaust_account", account_id=first, thread_id="thread-one")
         self.assertEqual(self.call("accounts")["accounts"], self.identities[1:])
-        for action in ("accounts", "claim", "bind_account", "exhaust_account"):
-            with self.subTest(action=action), self.assertRaises(WorkerError):
-                self.call(action, identity=fixtures.selector_claims(), account_id=first, thread_id="thread-one")
+        # A forged old selector workflow never reopens the pool.
+        with self.assertRaises(Rejected):
+            self.call("accounts", identity=fixtures.selector_claims())
 
     def test_broker_fences_one_probe_and_rejects_exhausted_accounts(self):
         self.exhaust()
         first, second, third = self.identities
         leased = self.call("claim", account_id=second)
         for action, identity in (("claim", third), ("claim", first), ("bind_account", third), ("save", third)):
-            with self.subTest(action=action, identity=identity), self.assertRaises(WorkerError):
+            with self.subTest(action=action, identity=identity), self.assertRaises((WorkerError, Rejected)):
                 self.call(action, account_id=identity, lease=leased["lease"], release=True)
         self.call("save", account_id=second, lease=leased["lease"], release=True)
         self.call("bind_account", account_id=second)
         leased = self.call("claim", account_id=second)
-        with self.assertRaises(WorkerError):
+        with self.assertRaises((WorkerError, Rejected)):
             self.call("bind_account", account_id=third)
         self.call("progress", stage="coding", account_id=second, usage_before=usage(20, 30))
-        with self.assertRaises(WorkerError):
+        with self.assertRaises((WorkerError, Rejected)):
             self.call("progress", usage_account_id=first, usage_after=usage(100, 27))
         self.call("save", account_id=second, lease=leased["lease"], release=True)
         self.assertEqual(self.call("start")["account_id"], second)
-        self.assertEqual(json.loads(self.service.runs.get(fixtures.KEY)[0]["exhausted_account_ids"]), [first])
+        self.assertEqual(json.loads(execution_row(self.f)["exhausted_account_ids"]), [first])
 
-    def test_lost_probe_claim_response_does_not_expose_another_account(self):
+    def test_lost_probe_reply_reuses_its_fence_and_blocks_another_identity(self):
         self.exhaust()
-        original = self.service.accounts.claim
-        def lost_response(identity, owner):
-            original(identity, owner)
-            raise OSError("claim response lost after leasing")
-        with patch.object(self.service.accounts, "claim", side_effect=lost_response), self.assertRaises(OSError):
-            self.call("claim", account_id=self.identities[1])
+        first = self.call("claim", account_id=self.identities[1])
+        repeated = self.call("claim", account_id=self.identities[1])
+        self.assertEqual(first["lease"], repeated["lease"])
         for action in ("claim", "bind_account"):
-            with self.subTest(action=action), self.assertRaises(WorkerError):
+            with self.subTest(action=action), self.assertRaises((WorkerError, Rejected)):
                 self.call(action, account_id=self.identities[2])
-        self.assertEqual(self.service.runs.get(fixtures.KEY)[0]["probe_account_id"], self.identities[1])
+        self.assertEqual(execution_row(self.f)["probe_account_id"], self.identities[1])
 
     def test_busy_probe_is_released_from_selection_and_another_account_can_resume(self):
         self.service.accounts.claim(self.identities[1], "another-worker")
         with self.execution() as (root, _):
             with worker.run_codex(self.broker, self.config, self.heartbeat, root):
                 pass
-        segments = json.loads(self.service.runs.get(fixtures.KEY)[0]["usage_segments"])
+        segments = json.loads(execution_row(self.f)["usage_segments"])
         self.assertEqual(segments[-1]["account_id"], self.identities[2])
 
     def test_failed_release_cleans_auth_and_stops_before_pool_access(self):

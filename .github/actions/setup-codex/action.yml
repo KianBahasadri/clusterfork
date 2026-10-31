@@ -10,7 +10,7 @@ runs:
       shell: bash
       env:
         CLUSTERFORK_ACTION_PATH: ${{ github.action_path }}
-      run: python3 -m pip install -r "$CLUSTERFORK_ACTION_PATH/../../../automation/azure/requirements.txt"
+      run: python3 -m pip install -r "$CLUSTERFORK_ACTION_PATH/../../../automation/requirements.txt"
     - uses: actions/setup-node@v4
       with:
         node-version: "22"

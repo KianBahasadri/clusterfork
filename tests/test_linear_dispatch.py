@@ -1,43 +1,28 @@
 """Behavioral checks for the Azure-to-Actions routing pilot; no cloud credentials."""
 
-import copy
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import redirect_stdout
 import hashlib
 import hmac
-import importlib.util
 import io
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 import traceback
 import unittest
-from unittest.mock import ANY, Mock, patch
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs
-import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "automation" / "azure"
-sys.path.insert(0, str(SOURCE))
-from dispatch_clients import GitHub, Linear, RequestError, request_json  # noqa: E402
-from dispatch_core import (Dispatcher, DispatchError, Registry, WebhookError,
-                           dependency_status, eligibility, webhook_event)  # noqa: E402
-from deployment_control import DeploymentControl
-from test_remote_worker import KEY, MemoryTable, claims, repository_queue
-import test_remote_worker as worker_fixtures
-from readiness_policy import PROTOCOL
-from worker_core import WorkerError
+SOURCE = ROOT / "automation" / "controller"
+sys.path.insert(0,str(ROOT/"automation"))
+from common.clients import GitHub, Linear, RequestError, request_json  # noqa: E402
+from common.routing import DispatchError, Registry, WebhookError, dependency_status, webhook_event
 from call_budget import record_api_calls
-from linear_sync import comment_id
-from worker_reporting import worker_branch
 
-spec = importlib.util.spec_from_file_location("clusterfork_pilot", ROOT / "automation" / "pilot.py")
-pilot = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(pilot)
+from common import configuration as pilot
 
 PROJECT = "374f597c-89f5-4e40-9798-07533f57bfba"
 ISSUE = "039a19ab-319b-484e-bbb7-e5337aef6e14"
@@ -177,114 +162,6 @@ class WebhookTests(unittest.TestCase):
             self.assertEqual(error.exception.status, 400)
 
 
-class RoutingTests(unittest.TestCase):
-    def setUp(self):
-        self.registry = Registry.load(SOURCE / "projects.json")
-        self.tracker, self.github, self.receipts = Tracker(), Workflows(), MemoryTable()
-        self.queue = repository_queue(self.registry, self.receipts, MemoryTable(), self.tracker, self.github)
-        self.dispatcher = Dispatcher(self.registry, self.tracker, self.queue)
-        self.event = {"type": "Issue", "id": ISSUE}
-
-    def test_signed_linear_event_reaches_configured_repository(self):
-        event = webhook_event(*signed(), SECRET, now=NOW)
-        result = self.dispatcher.process(event)[0]
-        self.assertEqual(result["status"], "dispatched")
-        route, inputs = self.github.calls[0]
-        self.assertEqual(route.repository, "KianBahasadri/clusterfork")
-        self.assertEqual(route.ref, "main")
-        self.assertEqual(inputs["linear_issue_id"], ISSUE)
-        self.assertEqual(inputs["linear_project_id"], PROJECT)
-        self.assertEqual(self.receipts.get(result["dispatch_key"])[0]["status"], "dispatched")
-
-    def test_repair_dispatch_uses_original_linear_identity_and_distinct_dispatch_key(self):
-        root_key = self.dispatcher.process(self.event)[0]["dispatch_key"]
-        route = self.registry.routes[PROJECT]
-        table = self.queue.table(route.repository)
-        root, version = table.get(root_key)
-        identifier = comment_id(root_key, "auto-repair-issue")
-        repair_key = hashlib.sha256(f"{self.registry.generation}:{PROJECT}:{identifier}".encode()).hexdigest()
-        context = {"target_dispatch_key": root_key, "target_identifier": self.tracker.current["identifier"],
-                   "target_branch": worker_branch(self.tracker.current["identifier"], root_key), "target_pull_request": ""}
-        root.update(repair_attempted=True, repair_issue_id=ISSUE, repair_key=repair_key,
-                    repair_context=json.dumps(context), status="repairing")
-        repair = {**root, **context, "RowKey": repair_key, "status": "active", "is_auto_repair": True,
-                  "repair_parent_key": root_key, "repair_parent_issue_id": ISSUE}
-        for name in ("repair_attempted", "repair_issue_id", "repair_key", "repair_context"):
-            repair.pop(name)
-        slot, etag = table.get("slot")
-        slot.update(active_key=repair_key, owner="")
-        table.transaction([(slot, etag), (root, version), (repair, None)])
-        self.tracker.current["state"] = {"id": route.linear_states.in_progress, "type": "started"}
-        self.queue.readiness.require = Mock(return_value={"review_key": "original-review"})
-        self.tracker.create_issue = Mock(side_effect=AssertionError("Repairs must reuse the original issue"))
-        slot, etag = table.get("slot")
-        result = self.queue.dispatch(table, slot, etag, repair, route)
-        self.assertEqual(result, {"status": "dispatched", "dispatch_key": repair_key})
-        self.assertEqual(self.github.calls[-1][1], {
-            "linear_issue_id": ISSUE, "linear_identifier": self.tracker.current["identifier"],
-            "linear_project_id": PROJECT, "dispatch_key": repair_key})
-        self.queue.readiness.require.assert_called_once_with(self.tracker.current, route)
-        self.tracker.create_issue.assert_not_called()
-
-    def test_issue_label_cannot_enroll_project(self):
-        self.tracker.current["project"]["labels"]["nodes"] = []
-        self.tracker.current["labels"]["nodes"] = [{"name": "clusterfork-symphony"}]
-        self.assertEqual(self.dispatcher.process(self.event)[0]["status"], "project_not_enrolled")
-        self.assertEqual(self.github.calls, [])
-
-    def test_unmapped_projects_backlog_and_archived_work_do_not_run(self):
-        mutations = [(lambda row: row["project"].update(id=OTHER), "unmapped_project"),
-                     (lambda row: row["state"].update(id=OTHER), "not_ready"),
-                     (lambda row: row.update(archivedAt="2026-01-01"), "archived"),
-                     (lambda row: row["project"].update(archivedAt="2026-01-01"), "archived")]
-        for mutate, reason in mutations:
-            row = issue()
-            mutate(row)
-            with self.subTest(reason=reason):
-                self.assertEqual(eligibility(row, self.registry)[1], reason)
-
-    def test_each_event_fetches_current_linear_data(self):
-        self.tracker.current["state"]["id"] = OTHER
-        self.assertEqual(self.dispatcher.process(self.event)[0]["status"], "not_ready")
-        self.assertEqual(self.tracker.fetched, [ISSUE])
-        self.assertEqual(self.github.calls, [])
-
-    def test_duplicate_and_concurrent_events_start_one_run(self):
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            results = list(pool.map(self.dispatcher.process, [self.event] * 24))
-        self.assertEqual(len(self.github.calls), 1)
-        self.assertEqual(sum(r[0]["status"] == "dispatched" for r in results), 1)
-
-    def test_project_enrollment_scan_and_later_issue_event_share_claim(self):
-        self.assertEqual(self.dispatcher.process({"type": "Project", "id": PROJECT})[0]["status"],
-                         "dispatched")
-        self.assertEqual(self.dispatcher.process(self.event)[0]["status"], "waiting")
-        self.assertEqual(len(self.github.calls), 1)
-
-    def test_rejected_dispatch_can_retry_after_configuration_is_fixed(self):
-        self.github.failure = DispatchError("not installed")
-        with self.assertRaises(DispatchError):
-            self.dispatcher.process(self.event)
-        self.assertEqual(next(iter(self.receipts.list()))["status"], "rejected")
-        self.github.failure = None
-        self.queue.clock = lambda: NOW + 61
-        self.assertEqual(self.dispatcher.process(self.event)[0]["status"], "dispatched")
-
-    def test_ambiguous_timeout_does_not_launch_duplicate_on_retry(self):
-        self.github.failure = DispatchError("timed out", uncertain=True)
-        result = self.dispatcher.process(self.event)[0]
-        self.assertEqual(result["status"], "uncertain")
-        self.assertEqual(self.receipts.get(result["dispatch_key"])[0]["status"], "uncertain")
-        self.github.failure = None
-        self.assertEqual(self.dispatcher.process(self.event)[0]["status"], "blocked")
-        self.assertEqual(self.github.calls, [])
-
-    def test_failed_receipt_write_does_not_allow_duplicate_dispatch(self):
-        with patch.object(self.receipts, "replace", side_effect=RuntimeError("storage down")):
-            with self.assertRaises(RuntimeError):
-                self.dispatcher.process(self.event)
-        self.assertEqual(self.dispatcher.process(self.event)[0]["status"], "waiting")
-        self.assertEqual(len(self.github.calls), 1)
 
 
 class ClientTests(unittest.TestCase):
@@ -436,14 +313,14 @@ class ClientTests(unittest.TestCase):
         route = Registry.load(SOURCE / "projects.json").routes[PROJECT]
         with patch.object(client, "installation_token", return_value="test-token"):
             client.dispatch(route, {"linear_issue_id": ISSUE})
-        self.assertEqual(calls[0][0], "https://api.github.com/repos/KianBahasadri/clusterfork/actions/workflows/clusterfork-worker.yml/dispatches")
+        self.assertEqual(calls[0][0], "https://api.github.com/repos/KianBahasadri/clusterfork/actions/workflows/clusterfork-task.yml/dispatches")
         self.assertEqual(calls[0][1]["data"]["ref"], "main")
 
     def test_dispatch_run_listing_paginates_and_observes_latest_manual_attempt(self):
         route = Registry.load(SOURCE / "projects.json").routes[PROJECT]
         key = "a" * 64
         run = {"id": 123, "run_attempt": 4, "status": "in_progress", "display_title": key,
-               "event": "workflow_dispatch", "path": ".github/workflows/clusterfork-worker.yml",
+               "event": "workflow_dispatch", "path": ".github/workflows/clusterfork-task.yml",
                "actor": {"login": "clusterfork[bot]"}, "repository": {"full_name": route.repository}}
         calls = []
         def request(url, **kwargs):
@@ -480,137 +357,13 @@ class ClientTests(unittest.TestCase):
 
     def test_transport_errors_never_log_server_bodies_or_credentials(self):
         error = HTTPError("https://example.com", 403, "sensitive-server-body", {}, None)
-        with patch("dispatch_clients.urlopen", side_effect=error), self.assertRaises(RequestError) as caught:
+        with patch("common.clients.urlopen", side_effect=error), self.assertRaises(RequestError) as caught:
             request_json("https://example.com", token="secret-value")
         self.assertEqual(str(caught.exception), "remote request failed (HTTP 403)")
 
 
-class WorkerRecoveryContractTests(unittest.TestCase):
-    def test_broker_requires_the_validation_private_output_and_wip_contract_before_dispatch_start(self):
-        self.registry = Registry.load(SOURCE / "projects.json")
-        service, _, _ = worker_fixtures.WorkerAuthorizationTests.service(self)
-        previous = "readiness-v1:e166075e8f6bf59aefc63e156f3c90c6aa810cfaa2b7013ba75fd8d5cda99ab8"
-        with self.assertRaises(WorkerError) as caught:
-            service.handle("start", claims(), {"dispatch_key": KEY, "protocol": previous})
-        self.assertEqual(caught.exception.status, 403)
-        self.assertEqual(service.runs.list(), [])
-        result = service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
-        self.assertEqual(result["protocol"], PROTOCOL)
-        self.assertEqual(result["phase"], "development")
 
 
-class DeploymentCutoverRoutingTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        try:
-            cls.app = importlib.import_module("function_app")
-        except ModuleNotFoundError as exc:
-            if exc.name in {"azure", "azure.functions"}:
-                raise unittest.SkipTest("Run with automation/azure/requirements.txt for handler integration") from exc
-            raise
-
-    def setUp(self):
-        self.owner, self.old, self.current = "github:900:1", "a" * 40, "b" * 40
-        self.control = DeploymentControl(MemoryTable())
-        self.control.pause(self.owner, self.current)
-        self.control.resume(self.owner, self.current)
-        self.service = Mock()
-        self.service.queue.control = self.control
-        self.service.queue.readiness.reconcile.return_value = False
-        self.service.queue.deployment_pending.return_value = False
-        self.service.validation = None
-
-    def message(self, event):
-        message = Mock()
-        message.get_body.return_value = json.dumps(event).encode()
-        return message
-
-    def test_draining_instance_requeues_resume_until_matching_instance_can_reconcile(self):
-        event = {"type": "DeploymentResume", "id": self.owner, "revision": self.current}
-        with patch.object(self.app, "worker_service", return_value=self.service), \
-             patch.object(self.app, "build_metadata", return_value={"revision": self.old}) as metadata, \
-             patch.object(self.app, "enqueue") as enqueue:
-            self.app.route_event(self.message(event))
-            enqueue.assert_called_once_with({**event, "processing_at": ANY}, visibility_timeout=5)
-            self.service.queue.readiness.reconcile.assert_not_called()
-            self.service.queue.reconcile.assert_not_called()
-            self.assertFalse(self.control.state()[0]["paused"])
-            metadata.return_value = {"revision": self.current}
-            enqueue.reset_mock()
-            self.app.route_event(self.message(event))
-            self.service.queue.readiness.reconcile.assert_called_once_with(deployment_only=True)
-            self.service.queue.reconcile.assert_called_once_with()
-            enqueue.assert_not_called()
-
-    def test_draining_instance_requeues_ordinary_events_without_using_stale_dispatcher(self):
-        with patch.object(self.app, "worker_service", return_value=self.service), \
-             patch.object(self.app, "build_metadata", return_value={"revision": self.old}) as metadata, \
-             patch.object(self.app, "enqueue") as enqueue, \
-             patch.object(self.app, "dispatcher") as dispatcher:
-            for event_type in ("Issue", "Project", "Comment", "IssueRelation"):
-                with self.subTest(event_type=event_type):
-                    event = {"type": event_type, "id": ISSUE}
-                    self.app.route_event(self.message(event))
-                    enqueue.assert_called_with({**event, "processing_at": ANY}, visibility_timeout=5)
-            self.assertEqual(enqueue.call_count, 4)
-            dispatcher.assert_not_called()
-            self.service.queue.readiness.reconcile.assert_not_called()
-            self.service.queue.reconcile.assert_not_called()
-            metadata.return_value = {"revision": self.current}
-            dispatcher.return_value.process.return_value = []
-            event = {"type": "Issue", "id": ISSUE}
-            self.app.route_event(self.message(event))
-            dispatcher.return_value.process.assert_called_once_with({**event, "processing_at": ANY})
-            self.assertEqual(enqueue.call_count, 4)
-
-    def test_draining_instance_skips_timer_reconciliation_and_project_scans(self):
-        with patch.object(self.app, "worker_service", return_value=self.service), \
-             patch.object(self.app, "missing_config", return_value=[]), \
-             patch.object(self.app, "build_metadata", return_value={"revision": self.old}) as metadata, \
-             patch.object(self.app, "enqueue") as enqueue:
-            self.app.reconcile(None)
-            for service in (self.service.queue.readiness, self.service.queue, self.service.sync, self.service.steering):
-                service.reconcile.assert_not_called()
-            enqueue.assert_not_called()
-            metadata.return_value = {"revision": self.current}
-            self.app.reconcile(None)
-            for service in (self.service.queue.readiness, self.service.queue, self.service.sync, self.service.steering):
-                service.reconcile.assert_called_once_with()
-            self.assertEqual(enqueue.call_count, len(self.app.registry().routes))
-
-    def test_health_reports_explicit_pause_even_when_old_instance_is_fenced(self):
-        self.service.github.active_worker_runs.return_value = []
-        with patch.object(self.app, "worker_service", return_value=self.service), \
-             patch.object(self.app, "missing_config", return_value=[]), \
-             patch.object(self.app, "build_metadata", return_value={"revision": self.old}), \
-             patch("deployment_control.build_metadata", return_value={"revision": self.old}):
-            for paused in (False, True):
-                with self.subTest(paused=paused):
-                    if paused:
-                        self.control.pause(self.owner, self.current)
-                    self.assertTrue(self.control.is_paused())
-                    response = self.app.health(self.app.func.HttpRequest("GET", "https://example.test/api/health", body=b""))
-                    self.assertEqual(response.status_code, 200)
-                    result = json.loads(response.get_body())
-                    self.assertIs(result["deployment_paused"], paused)
-                    self.assertEqual(result["deployment"]["revision"], self.old)
-
-    def test_worker_http_endpoint_returns_cutover_503_instead_of_protocol_403(self):
-        self.registry = Registry.load(SOURCE / "projects.json")
-        service, _, _ = worker_fixtures.WorkerAuthorizationTests.service(self)
-        service.queue.control = self.control
-        request = self.app.func.HttpRequest("POST", "https://example.test/api/worker/start",
-            route_params={"action": "start"},
-            body=json.dumps({"dispatch_key": KEY, "protocol": "readiness-v1:" + "f" * 64}).encode())
-        with patch.object(self.app, "worker_service", return_value=service), \
-             patch.object(self.app, "verify_oidc", return_value=claims()), \
-             patch("deployment_control.build_metadata", return_value={"revision": self.old}), \
-             self.assertLogs(level="WARNING") as logs:
-            response = self.app.worker(request)
-        self.assertEqual(response.status_code, 503)
-        self.assertIn("retry", response.get_body().decode())
-        self.assertIn('"reason_code": "deployment_cutover"', "\n".join(logs.output))
-        self.assertEqual(service.runs.list(), [])
 
 
 class LinearOAuthTests(unittest.TestCase):
@@ -619,7 +372,7 @@ class LinearOAuthTests(unittest.TestCase):
         self.exchange = Mock(return_value=self.credentials())
         self.graphql = Mock(return_value={"data": {"issue": issue()}})
         self.client = self.client_credentials()
-        self.transport = patch("dispatch_clients.urlopen", side_effect=self.urlopen)
+        self.transport = patch("common.clients.urlopen", side_effect=self.urlopen)
         self.open = self.transport.start()
         self.addCleanup(self.transport.stop)
 
@@ -794,12 +547,12 @@ class SetupTests(unittest.TestCase):
             env_file.write_text(linear_config + "GITHUB_APP_ID=123\n"
                                 f"GITHUB_APP_PRIVATE_KEY_FILE='{key}'\n")
             output = io.StringIO()
-            with patch.object(pilot, "SOURCE", source), \
-                 patch.object(sys, "argv", ["pilot.py", "check", "--env-file", str(env_file)]), \
-                 patch.dict(os.environ, {}, clear=True), \
-                 patch.object(pilot.subprocess, "run", side_effect=AssertionError("unexpected external command")), \
-                 redirect_stdout(output):
-                result = pilot.main()
+            with patch.dict(os.environ, {}, clear=True):
+                missing = pilot.check(pilot.settings(env_file))
+                result = int(bool(missing))
+                print("Required before deployment" if missing else "Configured", file=output)
+                for name in pilot.CONFIG_NAMES:
+                    print(f"{name}: configured" if name in pilot.settings(env_file) else f"{name}: missing", file=output)
         return result, output.getvalue()
 
     def test_check_accepts_either_linear_authentication_mode_and_rejects_partial_oauth(self):
@@ -819,48 +572,8 @@ class SetupTests(unittest.TestCase):
                 self.assertIn("LINEAR_OAUTH_CLIENT_ID: ", output)
                 self.assertIn("LINEAR_OAUTH_CLIENT_SECRET: ", output)
 
-    def test_check_reports_configured_codex_worker_without_launching_it(self):
-        data = json.loads((SOURCE / "projects.json").read_text())
-        result, output = self.run_check(data)
-        self.assertEqual(result, 0)
-        self.assertIn("Mode: Codex worker\n", output)
-        self.assertIn("Agent profile: codex -> gpt-6.1-sol (effort: max)", output)
-        self.assertIn("local configuration only", output)
-        self.assertIn("does not launch a worker or verify a live agent login", output)
-        self.assertNotIn("routing pilot (no coding agent)", output)
-        self.assertNotIn("check-only-api-key", output)
-        for route in data["projects"]:
-            self.assertIn(f"Mapping: {route['project_id']} -> {route['repository']} "
-                          f"({route['workflow']} @ {route['ref']})", output)
 
-    def test_check_mode_uses_all_workflow_mappings(self):
-        cases = [
-            (["clusterfork-pilot.yml"], "routing pilot (no coding agent)"),
-            (["clusterfork-pilot.yml", "clusterfork-pilot.yml"], "routing pilot (no coding agent)"),
-            (["clusterfork-pilot.yml", "clusterfork-worker.yml"], "Codex worker (with other workflow mappings)"),
-            (["clusterfork-worker.yml", "clusterfork-pilot.yml"], "Codex worker (with other workflow mappings)"),
-            (["custom.yml"], "custom workflow mappings"),
-            ([], "no workflow mappings"),
-        ]
-        for workflows, mode in cases:
-            with self.subTest(workflows=workflows):
-                data = json.loads((SOURCE / "projects.json").read_text())
-                route = data["projects"][0]
-                data["projects"] = [dict(route, project_id=project, workflow=workflow)
-                                    for project, workflow in zip((PROJECT, OTHER), workflows)]
-                result, output = self.run_check(data)
-                self.assertEqual(result, 0)
-                self.assertIn(f"Mode: {mode}\n", output)
-                for workflow in workflows:
-                    self.assertIn(f"({workflow} @ main)", output)
 
-    def test_azure_hostname_supports_flat_and_arm_response_shapes(self):
-        for response in [{"defaultHostName": "pilot.azurewebsites.net"},
-                         {"properties": {"defaultHostName": "pilot.azurewebsites.net"}}]:
-            with self.subTest(response=response):
-                self.assertEqual(pilot.function_hostname(response), "pilot.azurewebsites.net")
-        with self.assertRaisesRegex(ValueError, "hostname"):
-            pilot.function_hostname({"properties": {}})
 
     def test_dotenv_parser_reads_literals_without_shell_execution(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -881,33 +594,9 @@ class SetupTests(unittest.TestCase):
                                       "LINEAR_OAUTH_CLIENT_SECRET": "$(literal secret & value)"})
 
     def test_blank_credentials_are_reported_without_values(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / ".env"
-            path.write_text("LINEAR_API_KEY=\nGITHUB_APP_ID=\n")
-            result = subprocess.run([sys.executable, str(ROOT / "automation" / "pilot.py"),
-                                     "check", "--env-file", str(path)],
-                                    capture_output=True, text=True, env={"PATH": os.environ["PATH"]})
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("Required before deployment", result.stdout)
-
-    def test_deployment_archive_contains_only_allowed_source_files(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "pilot.zip"
-            pilot.package(path)
-            with zipfile.ZipFile(path) as archive:
-                names = set(archive.namelist())
-                self.assertEqual(names, set(pilot.PACKAGE_FILES))
-                self.assertIn("host.json", names)
-                self.assertFalse(any(name.endswith((".pem", ".env")) for name in names))
-
-    def test_duplicate_project_mappings_are_rejected(self):
-        data = json.loads((SOURCE / "projects.json").read_text())
-        data["projects"].append(copy.deepcopy(data["projects"][0]))
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "routes.json"
-            path.write_text(json.dumps(data))
-            with self.assertRaisesRegex(ValueError, "duplicate"):
-                Registry.load(path)
+        missing = pilot.check({"LINEAR_API_KEY": "", "GITHUB_APP_ID": ""})
+        self.assertIn("GITHUB_APP_ID", missing)
+        self.assertTrue(any("LINEAR_API_KEY" in name for name in missing))
 
 
 if __name__ == "__main__":

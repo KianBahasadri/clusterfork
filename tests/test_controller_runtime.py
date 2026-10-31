@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import Mock,patch
 
 ROOT=Path(__file__).resolve().parents[1]
-sys.path[:0]=[str(ROOT/"automation"),str(ROOT/"automation/azure")]
+sys.path[:0]=[str(ROOT/"automation")]
 import controller_main
 from controller.model import Hold
 from controller.store import Database
@@ -22,7 +22,7 @@ class ControllerRuntimeTests(unittest.TestCase):
         self.path=Path(temporary.name)/"tasks.db"
         self.database=Database(self.path)
         self.addCleanup(self.database.close)
-        self.config={"key_vault":"fixture-vault","github_app_id":"123","storage_account":"fixturestorage",
+        self.config={"key_vault":"fixture-vault","github_app_id":"123",
                      "linear_oauth_client_id":"fixture-oauth-id"}
         self.manifest={"revision":"a"*40,"digest":"b"*64,"format":1}
         self.credential=Mock()

@@ -5,7 +5,6 @@ umask 077
 cf_revision='__REVISION__'
 cf_config_b64='__CONFIG_B64__'
 cf_manifest_b64='__MANIFEST_B64__'
-cf_migration_b64='__MIGRATION_B64__'
 exec 9>/run/clusterfork-install.lock
 flock -n 9
 exec >>/var/log/clusterfork-install.log 2>&1
@@ -70,18 +69,13 @@ assert local_manifest(sys.argv[2],manifest['revision'])==manifest,'Runtime tree 
 PY
     python3 -m venv "$cf_release/.venv"
     "$cf_release/.venv/bin/python" -m pip install --disable-pip-version-check -q -r "$cf_release/automation/controller/requirements.txt"
-    "$cf_release/.venv/bin/python" -c "import sys; sys.path[:0]=['$cf_release/automation','$cf_release/automation/azure']; import controller_main"
+    "$cf_release/.venv/bin/python" -c "import sys; sys.path.insert(0,'$cf_release/automation'); import controller_main"
     touch "$cf_release/.installed"
 fi
 # Installed source is readable by the service, writable only by root.
 chmod -R u=rwX,go=rX "$cf_release"
 printf '%s' "$cf_config_b64" | base64 -d >/etc/clusterfork/controller.json
 chmod 644 /etc/clusterfork/controller.json
-if test -n "$cf_migration_b64"; then
-    printf '%s' "$cf_migration_b64" | base64 -d >/etc/clusterfork/migration.json
-    chown root:clusterfork /etc/clusterfork/migration.json
-    chmod 640 /etc/clusterfork/migration.json
-fi
 
 cat >/etc/systemd/system/clusterfork-controller.service <<'UNIT'
 [Unit]

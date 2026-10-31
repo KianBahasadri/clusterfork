@@ -1,30 +1,31 @@
 """Worker operations use the controller's grant and existing credential resources."""
 
-from dataclasses import asdict
 import json
 import re
 import time
 from uuid import UUID
 from types import SimpleNamespace
 
-from .authorization import authorize_job, verify_review_job
-from .model import Authorize, Assign, ExhaustAccount, Finish, Progress, Rejected, Review, Role, SessionUpdated, Start
+from .authorization import SELECTOR_ACTIONS,authorize_job, verify_review_job
+from .images import Images
+from .model import Authorize, AccountRequest, Finish, Progress, Rejected, Review, Role, SessionUpdated, Start
 from .workflows import ENGINE, WORKFLOW
-from diagnostics import validate_failure
-from issue_images import capture_images, image_digest
-from readiness_policy import PROTOCOL, REVIEW_TIMEOUT_SECONDS, issue_revision, policy_version
-from worker_core import account_provider, execution_profiles, valid_account_id
-from worker_reporting import validate_quota_wait, validate_usage, quota_wait_text
-from worker_reporting import worker_branch
-from auto_repair import repair_instructions
+from common.diagnostics import validate_failure
+from common.images import image_digest
+from common.policy import PROTOCOL, REVIEW_TIMEOUT_SECONDS, issue_revision, policy_version
+from common.accounts import account_provider, execution_profiles
+from common.reporting import validate_quota_wait, validate_usage, quota_wait_text
+from common.reporting import worker_branch
+from common.repair import repair_instructions
 
 
 class Broker:
-    def __init__(self, controller, registry, accounts, linear, github, *, clock=time.time,
+    def __init__(self, controller, registry, linear, github, *, clock=time.time,
                  refresh=None, steering=None):
-        self.controller, self.registry, self.accounts = controller, registry, accounts
+        self.controller, self.registry, self.accounts = controller, registry, controller.accounts
         self.linear, self.github, self.clock = linear, github, clock
         self.refresh, self.steering = refresh, steering
+        self.images=Images(controller.database,linear.download_image,clock=clock)
 
     def apply(self, command):
         return self.controller.apply(command, now=self.clock())
@@ -48,25 +49,21 @@ class Broker:
         identity_route=(SimpleNamespace(project_id=view.project_id,repository=view.repository) if action=='save' else route)
         if identity_route is None:
             raise Rejected("Target project is no longer mapped")
-        role = authorize_job(claims, view, identity_route, action)
+        principal = authorize_job(claims, view, identity_route, action)
+        current_session=view.session(principal.phase)
+        selecting=not current_session or (not current_session['agent_started'] and (
+            not current_session['account_id'] or action=='heartbeat'))
+        role=(Role.REVIEW_SELECT if principal==Role.REVIEW else Role.CODING_SELECT) if selecting else principal
+        if role.selector and action not in SELECTOR_ACTIONS:
+            raise Rejected('Initial account selection must finish before execution access')
         run_id, run_attempt = str(claims["run_id"]), int(claims["run_attempt"])
         if view.attempt["run_id"] and (view.attempt["run_id"], view.attempt["run_attempt"]) != (run_id, run_attempt):
             raise Rejected("Request belongs to another GitHub attempt")
         phase, selector = role.phase, role.selector
-        owner = f"{key}:{run_id}:{run_attempt}:{phase}"
 
         # Fenced cleanup remains possible after task edits and cancellation.
         if action == "save":
-            session = view.session(phase)
-            metadata = session["data"] if session else {}
-            allowed = {session["account_id"] if session else "", metadata.get("probe_account_id", "")}
-            identity = data.get("account_id")
-            if not valid_account_id(identity) or identity not in allowed:
-                raise Rejected("This phase cannot save another account")
-            self.accounts.save(identity, owner, data.get("lease"), data.get("auth"), release=data.get("release") is True)
-            if data.get("release") is True:
-                self.metadata(view, phase, released_account_id=identity, probe_account_id="")
-            return {"saved": True}
+            return self.apply(AccountRequest(view.task_id,key,role,action,data))
 
         if action == "start":
             if data.get("protocol") != PROTOCOL:
@@ -84,7 +81,8 @@ class Broker:
                 raise Rejected("Target context changed; a new readiness review is required")
             if policy_version(self.registry, route) != view.spec.policy_revision:
                 raise Rejected("Task policy does not match its admitted release")
-            images = capture_images(issue.get("description"), self.linear.download_image)
+            images = self.images.snapshot(issue,revalidate=action in {'start','review','github'} or (
+                action=='progress' and data.get('stage')=='publishing'))
             if image_digest(images) != view.spec.images_sha:
                 raise Rejected("Task image context changed")
         else:
@@ -93,7 +91,7 @@ class Broker:
             passed = verify_review_job(self.github, run_id, run_attempt) if phase == "coding" else False
             view = self.apply(Start(view.task_id, key, run_id, run_attempt, role, passed))
             fields = {"heartbeat_until": self.clock()+120}
-            if phase=="coding" and not view.session(phase)["data"].get("steering_started_at"):
+            if phase=="coding" and not role.selector and not view.session(phase)["data"].get("steering_started_at"):
                 fields["steering_started_at"] = self.clock()
                 profile=execution_profiles(self.registry,{'assigned_account_id':view.session(phase)['account_id']})
                 fields.update({key:profile[key] for key in ('provider','model','effort')})
@@ -101,12 +99,10 @@ class Broker:
             return self.config(view, route, role, issue, images)
 
         view = self.apply(Authorize(view.task_id, key, role))
-        session = view.session(phase)
         if action == "heartbeat":
-            self.metadata(view, phase, heartbeat_until=self.clock() + 120)
-            return {"running": True}
+            return self.apply(AccountRequest(view.task_id,key,role,action,data))
         if action in {"accounts", "claim", "bind_account", "exhaust_account"}:
-            return self.account(view, role, owner, action, data)
+            return self.apply(AccountRequest(view.task_id,key,role,action,data))
         if action == "checkout":
             permissions={"contents":"read"}
             if phase=="coding":
@@ -159,6 +155,7 @@ class Broker:
         session = view.session(role.phase)
         identity = session["account_id"]
         result = {"protocol": PROTOCOL, "serial_admission": True, "task_controller": True,
+                  "runtime_sha":view.spec.runtime_sha,
                   "phase": "readiness" if role.phase == "review" else "development",
                   "account_selection": role.selector, "account_id": identity or None,
                   **execution_profiles(self.registry, {"assigned_account_id": identity}),
@@ -187,70 +184,14 @@ class Broker:
             result["repair"].update({k:previous["data"][k] for k in ("wip_branch","wip_commit_sha") if k in previous["data"]})
         return result
 
-    def account(self, view, role, owner, action, data):
-        session = view.session(role.phase)
-        assigned, metadata = session["account_id"], session["data"]
-        if action == "accounts":
-            if assigned:
-                return {"accounts": [assigned]}
-            if role.selector:
-                return {"accounts": self.accounts.list()}
-            if role == Role.CODING and metadata.get("account_failover"):
-                return {"accounts": [i for i in self.accounts.list() if account_provider(i) == "codex"
-                                      and i not in metadata.get("exhausted_account_ids", [])]}
-            raise Rejected("Agent job has no assigned account")
-        identity = data.get("account_id")
-        if not valid_account_id(identity):
-            raise Rejected("Invalid provider account identity")
-        if action == "exhaust_account":
-            if role != Role.CODING:
-                raise Rejected("Only the coding agent may exhaust its account")
-            account, _ = self.accounts.get(identity)
-            if account.get("owner") == owner and account.get("lease_until", 0) > self.clock():
-                raise Rejected("Release the exhausted account before failover")
-            updated = self.apply(ExhaustAccount(view.task_id, view.attempt["attempt_id"], identity, data.get("thread_id")))
-            return {"exhausted_account_ids": updated.session("coding")["data"]["exhausted_account_ids"]}
-        replacement = role == Role.CODING and metadata.get("account_failover")
-        if replacement and (account_provider(identity) != "codex" or identity in metadata.get("exhausted_account_ids", [])):
-            raise Rejected("Cross-provider or exhausted account replacement is forbidden")
-        if (assigned or not role.selector and not replacement) and identity != assigned:
-            raise Rejected("This phase cannot access another account")
-        if action == "bind_account":
-            # Binding is only permitted after a probe released its fenced lease.
-            account, _ = self.accounts.get(identity)
-            if account.get("owner") == owner and account.get("lease_until", 0) > self.clock():
-                raise Rejected("Release the quota probe before binding")
-            self.apply(Assign(view.task_id, view.attempt["attempt_id"], role, identity))
-            self.metadata(view,role.phase,heartbeat_until=self.clock()+(900 if role.selector else 120))
-            return {"account_id": identity}
-        if action == "claim":
-            if metadata.get("probe_account_id"):
-                raise Rejected("Release the previous quota probe before claiming another")
-            probing = not assigned
-            if probing:
-                self.metadata(view, role.phase, probe_account_id=identity)
-            try:
-                result = self.accounts.claim(identity, owner)
-            except Exception:
-                # An ambiguous accepted claim keeps its probe fence. Only a
-                # positively absent/foreign lease can unlock another identity.
-                current, _ = self.accounts.get(identity)
-                if probing and (current.get("owner") != owner or current.get("lease_until", 0) <= self.clock()):
-                    self.metadata(view, role.phase, probe_account_id="")
-                raise
-            try:
-                self.apply(Authorize(view.task_id, view.attempt["attempt_id"], role))
-            except BaseException:
-                self.accounts.save(identity, owner, result["lease"], release=True)
-                raise
-            return result
-        raise Rejected("Invalid account operation")
 
     def progress(self, view, data):
         stage = data.get("stage", view.attempt["stage"])
         fields = {}
         session = view.session("coding")
         if "account_id" in data:
+            if session['data'].get('account_reserved'):
+                raise Rejected('Selected coding account lease is not active for execution until claimed')
             if data["account_id"] != session["account_id"] or stage != "coding":
                 raise Rejected("Coding usage belongs to another assigned account")
             owner = f"{view.attempt['attempt_id']}:{view.attempt['run_id']}:{view.attempt['run_attempt']}:coding"

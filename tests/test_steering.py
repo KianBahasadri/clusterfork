@@ -1,9 +1,7 @@
 """Linear-to-live-agent steering, with durable storage and no cloud/model calls."""
 
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
 import copy
-from dataclasses import replace
 from datetime import datetime, timezone
 import json
 import os
@@ -14,22 +12,23 @@ import threading
 import unittest
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
+sys.path[:0] = [str(ROOT / "automation")]
 
 from agent_session import run_agent
 from codex_runtime import AppServer, CodexError, CodexRejected
-from dispatch_clients import GitHub, Linear, RequestError
-from dispatch_core import Dispatcher, Registry, webhook_event
-from readiness_policy import PROTOCOL
-from pending_writes import WRITE_SECONDS
-from steering import DELIVERY_SECONDS, Steering
+from common.clients import Linear
+from common.routing import Registry, webhook_event
 from test_linear_dispatch import SECRET, signed
-from test_remote_worker import ISSUE, KEY, NOW, MemoryTable, claims, receipt
-from call_budget import CallBudget, record_api_calls
-from worker_core import Accounts, WorkerError, WorkerService
+from test_remote_worker import ISSUE, NOW
+from test_controller_authorization import claims
+from controller.model import Role
+from controller.instructions import Instructions, rows
+from controller_fixtures import coding_fixture
+from test_worker_reporting import usage
+from call_budget import record_api_calls
 import worker
 
 OWNER, TRUSTED, STRANGER = (str(uuid4()) for _ in range(3))
@@ -75,544 +74,38 @@ class Tracker:
             raise OSError("ambiguous tracker response")
 
 
-class SteeringTests(unittest.TestCase):
-    def setUp(self):
-        self.registry = Registry.load(ROOT / "automation/azure/projects.json")
-        self.now = NOW + 10
-        self.receipts, self.runs, self.table = MemoryTable(), MemoryTable(), MemoryTable()
-        self.receipts.create(receipt())
-        self.run = {"RowKey": KEY, "owner": "123:1", "attempt_id": str(uuid4()), "status": "running",
-                    "started_at": NOW, "steering_started_at": NOW + 0.5, "lease_until": NOW + 120,
-                    "stage": "coding", "thread_id": "thread-one", "turn_id": "turn-one"}
-        self.runs.create(self.run)
-        self.linear, self.queue = Tracker(self.registry), Mock()
-        self.queue.control = None
-        self.queue.assert_worker = Mock()
-        self.queue.deployment_paused.return_value = False
-        self.queue.readiness.require.return_value = {}
-        self.queue.approval.return_value = {}
-        self.github = Mock(spec=GitHub)
-        self.service = WorkerService(self.registry, self.receipts, self.runs, Accounts(MemoryTable()),
-                                     self.linear, self.github, self.queue, clock=lambda: self.now)
-        self.steering = Steering(self.registry, self.receipts, self.runs, self.table,
-                                 self.linear, self.queue, clock=lambda: self.now)
-        self.service.steering = self.steering
-        self.session = {field: self.run[field] for field in ("thread_id", "turn_id")}
-
-    def call(self, action, **data):
-        return self.service.handle(action, claims(), {"dispatch_key": KEY, **self.session, **data})
-
-    def row(self, item):
-        return self.table.get(item["id"])[0]
-
-    def change_run(self, **updates):
-        run, etag = self.runs.get(KEY)
-        run.update(updates)
-        self.runs.replace(run, etag)
-        self.run = run
-
-    def acknowledge(self, instruction, status="accepted"):
-        return self.call("instruction_result", comment_id=instruction["comment_id"],
-                         delivery=instruction["delivery"], status=status)
-
-    def budget(self, **limits):
-        return CallBudget(self, linear=self.linear, github=self.github, receipts=self.receipts,
-                          runs=self.runs, instructions=self.table, **limits)
-
-    def settled_history(self, count=12):
-        current, comments = self.linear.current, self.linear.comments
-        try:
-            for number in range(100, 100 + count):
-                issue_id, key = str(UUID(int=number)), f"{number:064x}"
-                self.receipts.create({**receipt(), "RowKey": key, "issue_id": issue_id})
-                self.runs.create({**self.run, "RowKey": key, "status": "completed", "steering_closed": True})
-                self.linear.current = {**current, "id": issue_id,
-                                       "state": {"type": "completed" if number % 2 else "canceled"}}
-                item = comment(author=OWNER if number % 2 else STRANGER)
-                self.linear.comments = [item]
-                self.steering.observe(issue_id)
-                row = self.row(item)
-                self.assertEqual(row["reported_state"], row["state"])
-                self.assertFalse(row["report_pending"])
-        finally:
-            self.linear.current, self.linear.comments = current, comments
-
-    def test_queue_acceptance_order_and_duplicate_results_survive_restart(self):
-        first, second = comment(at=NOW + 1), comment("@clusterfork Then update the references.", at=NOW + 2)
-        self.linear.comments = [second, first]
-        self.steering.comment(second["id"])
-        first_row = self.row(first)
-        self.assertIn("Queued instruction", self.linear.acks[first_row["ack_id"]])
-        self.assertIn("/actions/runs/123/attempts/1", self.linear.acks[first_row["ack_id"]])
-        self.assertNotIn("Agent accepted", self.linear.acks[first_row["ack_id"]])
-        instruction = self.call("instructions")["instruction"]
-        self.assertEqual(instruction["comment_id"], first["id"])
-        self.assertIsNone(self.call("instructions")["instruction"])
-        self.acknowledge(instruction)
-        self.acknowledge(instruction)
-        self.assertIn("Agent accepted", self.linear.acks[first_row["ack_id"]])
-        # A fresh service over the same storage keeps both the receipt and order.
-        self.service.steering = Steering(self.registry, self.receipts, self.runs, self.table,
-                                         self.linear, self.queue, clock=lambda: self.now)
-        self.assertEqual(self.call("instructions")["instruction"]["comment_id"], second["id"])
-        self.assertEqual(len(self.linear.acks), 2)
-
-    def test_concurrent_webhooks_and_polls_accept_each_comment_once(self):
-        self.linear.comments = [comment(at=NOW + i) for i in range(1, 6)]
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            list(pool.map(lambda _: self.steering.comment(self.linear.comments[-1]["id"]), range(12)))
-        rows = [row for row in self.table.list() if row.get("issue_id")]
-        self.assertEqual(len(rows), 5)
-        self.assertEqual(sorted(row["sequence"] for row in rows), [1, 2, 3, 4, 5])
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            results = list(pool.map(lambda _: self.steering.poll(receipt(), self.run), range(8)))
-        self.assertEqual(sum(result["instruction"] is not None for result in results), 1)
-
-    def test_discussion_prefix_lookalikes_bot_and_owned_status_are_ignored(self):
-        self.linear.comments = [comment(text) for text in (
-            "Can @clusterfork handle this?", "@clusterforked change this", "> @clusterfork do it",
-            "```\n@clusterfork example\n```", "    @clusterfork indented code example",
-            "Clusterfork steering: Queued instruction for worker.")]
-        bot = comment()
-        bot["botActor"] = {"id": "integration"}
-        self.linear.comments.append(bot)
-        self.assertIsNone(self.call("instructions")["instruction"])
-        self.assertEqual(self.linear.acks, {})
-
-    def test_only_key_owner_and_explicitly_configured_user_ids_are_authorized(self):
-        owner, trusted, stranger = comment("@Clusterfork Follow this instruction."), comment(author=TRUSTED), comment(author=STRANGER)
-        self.registry = replace(self.registry, steering_user_ids=(TRUSTED,))
-        self.steering.registry = self.registry
-        self.linear.comments = [owner, trusted, stranger]
-        self.steering.observe(ISSUE)
-        self.assertEqual([self.row(item)["state"] for item in (owner, trusted, stranger)],
-                         ["queued", "queued", "rejected"])
-        self.assertIn("not authorized", self.linear.acks[self.row(stranger)["ack_id"]])
-        self.assertEqual(self.row(stranger)["text"], "")
-
-    def test_kian_remains_authorized_when_viewer_is_the_clusterfork_oauth_app(self):
-        kian = comment(author="62a4e98c-29f0-4b6c-8062-ede9c6176c1d")
-        stranger = comment(author=STRANGER, at=NOW + 2)
-        self.linear.comments = [kian, stranger]
-        with patch.object(self.linear, "viewer_id", return_value="a76cf048-2395-425b-ae2b-15779a1de587"):
-            instruction = self.call("instructions")["instruction"]
-        self.assertEqual(instruction["comment_id"], kian["id"])
-        self.assertEqual(self.row(stranger)["state"], "rejected")
-
-    def test_owner_lookup_failure_cannot_authorize_a_comment(self):
-        self.linear.comments = [comment()]
-        with patch.object(self.linear, "viewer_id", side_effect=OSError("unavailable")):
-            with self.assertRaises(OSError):
-                self.steering.observe(ISSUE)
-        self.assertEqual(len(self.table.list()), 1)
-
-    def test_first_observed_addressed_text_is_frozen_and_edit_does_not_resend(self):
-        item = comment()
-        self.linear.comments = [item]
-        self.steering.observe(ISSUE)
-        item["body"] = "@clusterfork Delete all the notes instead."
-        instruction = self.call("instructions")["instruction"]
-        self.assertEqual(instruction["text"], "Move the historical notes out of the setup guide.")
-        self.acknowledge(instruction)
-        self.assertIsNone(self.call("instructions")["instruction"])
-
-    def test_empty_oversized_and_invalid_text_are_rejected(self):
-        self.linear.comments = [comment(text) for text in ("@clusterfork", "@clusterfork " + "界" * 6000, "@clusterfork a\x00b")]
-        self.assertIsNone(self.call("instructions")["instruction"])
-        self.assertEqual({self.row(item)["state"] for item in self.linear.comments}, {"rejected"})
-
-    def test_deleting_a_queued_comment_does_not_discard_accepted_text(self):
-        item = comment()
-        self.linear.comments = [item]
-        self.steering.observe(ISSUE)
-        self.linear.comments = []
-        instruction = self.call("instructions")["instruction"]
-        self.assertEqual(instruction["comment_id"], item["id"])
-        self.assertEqual(instruction["text"], self.row(item)["text"])
-
-    def test_no_active_run_or_completed_agent_explains_without_dispatching_backlog(self):
-        self.change_run(status="completed", steering_closed=True)
-        self.linear.current["state"] = {"id": str(uuid4()), "type": "backlog"}
-        self.linear.comments = [comment()]
-        dispatcher = Dispatcher(self.registry, self.linear, self.queue, steering=self.steering)
-        dispatcher.process({"type": "Comment", "id": self.linear.comments[0]["id"]})
-        body = next(iter(self.linear.acks.values()))
-        self.assertIn("No active development agent", body)
-        self.assertIn("No workflow was started", body)
-        self.queue.enqueue.assert_not_called()
-        self.queue.advance.assert_not_called()
-        self.assertEqual(self.linear.current["state"]["type"], "backlog")
-
-    def test_shared_issue_routes_instruction_only_to_repair_receipt_owning_slot(self):
-        from test_remote_worker import repository_queue
-
-        repair_key = "b" * 64
-        repair_owner = "456:1"
-        root, version = self.receipts.get(KEY)
-        root.update(repair_attempted=True, repair_issue_id=ISSUE, repair_key=repair_key)
-        self.receipts.replace(root, version)
-        self.receipts.create({**receipt(), "RowKey": repair_key, "is_auto_repair": True, "repair_parent_key": KEY})
-        repair = {**self.run, "RowKey": repair_key, "owner": repair_owner, "attempt_id": str(uuid4()),
-                  "thread_id": "repair-thread", "turn_id": "repair-turn"}
-        self.runs.create(repair)
-        # Leave the old root heartbeat accepting. Slot ownership disambiguates
-        # the two live-looking receipts sharing this issue.
-        queue = repository_queue(self.registry, self.receipts, self.runs, self.linear, self.github)
-        slot_table = queue.table(receipt()["repository"])
-        slot, version = slot_table.get("slot")
-        slot.update(active_key=repair_key, owner=repair_owner)
-        slot_table.replace(slot, version)
-        self.steering.queue = queue
-        item = comment(at=NOW + 2)
-        self.linear.comments = [item]
-        self.steering.observe(ISSUE)
-        row = self.row(item)
-        self.assertEqual((row["dispatch_key"], row["owner"], row["attempt_id"]),
-                         (repair_key, repair_owner, repair["attempt_id"]))
-        instruction = self.steering.poll(self.receipts.get(repair_key)[0], repair)["instruction"]
-        self.assertEqual(instruction["comment_id"], item["id"])
-        self.assertIn("actions/runs/456/attempts/1", self.linear.acks[row["ack_id"]])
-        with self.assertRaises(WorkerError):
-            queue.assert_worker(receipt()["repository"], KEY, self.run["owner"])
-
-    def test_comment_predating_replacement_attempt_is_never_delivered(self):
-        self.change_run(owner="456:2", attempt_id=str(uuid4()), steering_started_at=NOW + 5)
-        self.linear.comments = [comment(at=NOW + 2)]
-        self.steering.observe(ISSUE)
-        row = self.row(self.linear.comments[0])
-        self.assertEqual(row["state"], "failed")
-        self.assertIn("predates", row["reason"])
-
-    def test_comment_moved_to_another_issue_is_not_rebound(self):
-        item = comment()
-        self.linear.comments = [item]
-        self.steering.observe(ISSUE)
-        other_id, other_key = str(uuid4()), "c" * 64
-        other_receipt = {**receipt(), "RowKey": other_key, "issue_id": other_id}
-        other_run = {**self.run, "RowKey": other_key, "owner": "456:1", "attempt_id": str(uuid4())}
-        self.receipts.create(other_receipt)
-        self.runs.create(other_run)
-        self.linear.current["id"] = other_id
-        # Linear now presents the same comment on another actively running issue.
-        self.assertIsNone(self.steering.poll(other_receipt, other_run)["instruction"])
-        self.assertEqual(self.row(item)["issue_id"], ISSUE)
-        self.assertEqual(self.row(item)["dispatch_key"], KEY)
-        self.assertEqual(len(self.linear.acks), 1)
-
-    def test_no_worker_record_still_receives_a_clear_acknowledgement(self):
-        self.steering.runs = MemoryTable()
-        self.linear.comments = [comment()]
-        self.steering.observe(ISSUE)
-        self.assertIn("No active development agent", next(iter(self.linear.acks.values())))
-
-    def test_instruction_can_queue_during_initialization_and_deliver_after_session_registration(self):
-        run, etag = self.runs.get(KEY)
-        run.pop("thread_id")
-        run.pop("turn_id")
-        run["stage"] = "initializing"
-        self.runs.replace(run, etag)
-        self.linear.comments = [comment()]
-        self.steering.observe(ISSUE)
-        self.assertEqual(self.row(self.linear.comments[0])["state"], "queued")
-        with self.assertRaises(WorkerError):
-            self.call("instructions")
-        self.call("progress", stage="coding")
-        self.call("steering_open")
-        self.assertIsNotNone(self.call("instructions")["instruction"])
-
-    def test_start_retries_preserve_epoch_and_reruns_create_a_new_epoch(self):
-        config = self.service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
-        self.assertEqual(config["attempt_id"], self.run["attempt_id"])
-        self.linear.comments = [comment()]
-        self.steering.observe(ISSUE)
-        self.change_run(status="failed", lease_until=0)
-        newer = self.service.handle("start", {**claims(), "run_attempt": "2"},
-                                    {"dispatch_key": KEY, "protocol": PROTOCOL})
-        self.assertNotEqual(newer["attempt_id"], config["attempt_id"])
-        self.assertEqual(newer["owner"], "123:2")
-        self.assertEqual(self.row(self.linear.comments[0])["state"], "failed")
-
-    def test_queued_old_attempt_and_inflight_old_attempt_do_not_cross_replacement(self):
-        first, second = comment(), comment(at=NOW + 2)
-        self.linear.comments = [first, second]
-        instruction = self.call("instructions")["instruction"]
-        self.change_run(owner="456:2", attempt_id=str(uuid4()), steering_started_at=NOW + 5)
-        self.steering.repair(ISSUE)
-        self.assertEqual(self.row(first)["state"], "uncertain")
-        self.assertEqual(self.row(second)["state"], "failed")
-        self.assertIsNone(self.steering.poll(receipt(), self.run)["instruction"])
-        with self.assertRaises(WorkerError):
-            self.acknowledge(instruction)
-
-    def test_same_github_owner_with_a_different_attempt_epoch_is_fenced(self):
-        self.linear.comments = [comment()]
-        instruction = self.call("instructions")["instruction"]
-        self.change_run(attempt_id=str(uuid4()))
-        with self.assertRaises(WorkerError):
-            self.acknowledge(instruction)
-        self.assertIsNone(self.call("instructions")["instruction"])
-
-    def test_canceled_moved_or_unenrolled_issue_cannot_receive_queued_instructions(self):
-        for change in ("canceled", "moved", "unenrolled"):
-            with self.subTest(change=change):
-                self.setUp()
-                item = comment()
-                self.linear.comments = [item]
-                self.steering.observe(ISSUE)
-                if change == "canceled":
-                    self.linear.current["state"]["type"] = "canceled"
-                elif change == "moved":
-                    self.linear.current["project"]["id"] = str(uuid4())
-                else:
-                    self.linear.current["project"]["labels"]["nodes"] = []
-                self.assertIsNone(self.call("instructions")["instruction"])
-                self.assertEqual(self.row(item)["state"], "failed")
-
-    def test_close_or_publication_fails_queued_instructions_without_restarting(self):
-        for action, data in (("steering_close", {}), ("progress", {"stage": "publishing"})):
-            with self.subTest(action=action):
-                self.setUp()
-                item = comment()
-                self.linear.comments = [item]
-                self.steering.observe(ISSUE)
-                self.call(action, **data)
-                self.assertEqual(self.row(item)["state"], "failed")
-                with self.assertRaises(WorkerError):
-                    self.call("instructions")
-
-    def test_testing_queues_instructions_for_a_correction_on_the_same_thread(self):
-        item = comment()
-        self.linear.comments = [item]
-        self.call("progress", stage="testing")
-        self.steering.observe(ISSUE)
-        self.assertEqual(self.row(item)["state"], "queued")
-        self.assertFalse(self.runs.get(KEY)[0].get("steering_closed"))
-        with self.assertRaises(WorkerError):
-            self.call("instructions")
-        self.call("progress", stage="coding")
-        with self.assertRaises(WorkerError):
-            self.call("steering_open", thread_id="different-thread", turn_id="correction-turn")
-        self.session["turn_id"] = "correction-turn"
-        self.call("steering_open")
-        instruction = self.call("instructions")["instruction"]
-        self.assertEqual((instruction["thread_id"], instruction["turn_id"]), ("thread-one", "correction-turn"))
-        self.acknowledge(instruction)
-        self.assertEqual(self.row(item)["state"], "accepted")
-        self.call("progress", stage="testing")
-        self.call("progress", stage="publishing")
-        with self.assertRaises(WorkerError):
-            self.call("progress", stage="coding")
-
-    def test_previous_turn_handoff_becomes_uncertain_without_replay_on_correction(self):
-        item = comment()
-        self.linear.comments = [item]
-        self.call("instructions")
-        self.call("progress", stage="testing")
-        self.assertEqual(self.row(item)["state"], "delivering")
-        self.call("progress", stage="coding")
-        self.session["turn_id"] = "correction-turn"
-        self.call("steering_open")
-        self.assertIsNone(self.call("instructions")["instruction"])
-        self.assertEqual(self.row(item)["state"], "uncertain")
-
-    def test_lost_handoff_is_uncertain_and_never_replayed_but_late_confirmation_can_repair(self):
-        item = comment()
-        self.linear.comments = [item]
-        instruction = self.call("instructions")["instruction"]
-        self.now += DELIVERY_SECONDS + 1
-        self.assertIsNone(self.call("instructions")["instruction"])
-        self.assertEqual(self.row(item)["state"], "uncertain")
-        self.assertIn("could not be confirmed", self.linear.acks[self.row(item)["ack_id"]])
-        self.acknowledge(instruction)
-        self.assertEqual(self.row(item)["state"], "accepted")
-
-    def test_delivery_failure_and_uncertainty_do_not_claim_acceptance(self):
-        for outcome in ("failed", "uncertain"):
-            with self.subTest(outcome=outcome):
-                self.setUp()
-                item = comment()
-                self.linear.comments = [item]
-                self.acknowledge(self.call("instructions")["instruction"], outcome)
-                body = self.linear.acks[self.row(item)["ack_id"]]
-                self.assertIn(outcome, body)
-                self.assertNotIn("Agent accepted", body)
-                self.assertIsNone(self.call("instructions")["instruction"])
-
-    def test_acknowledgement_outage_and_ambiguous_write_reuse_one_durable_comment(self):
-        item = comment()
-        self.linear.comments, self.linear.fail_report = [item], True
-        with self.assertLogs(level="ERROR"):
-            instruction = self.call("instructions")["instruction"]
-            self.acknowledge(instruction)
-        self.assertEqual(self.row(item)["reported_state"], "")
-        self.linear.fail_report = False
-        self.steering.reconcile()
-        self.assertEqual(self.row(item)["reported_state"], "accepted")
-        self.assertEqual(len(self.linear.acks), 1)
-        self.assertIn("Agent accepted", next(iter(self.linear.acks.values())))
-
-    def test_stale_acknowledgement_write_is_repaired_to_current_state(self):
-        item = comment()
-        self.linear.comments = [item]
-        self.steering.observe(ISSUE)
-        table = self.table
-        def advance():
-            row, etag = table.get(item["id"])
-            row["state"] = "accepted"
-            table.replace(row, etag)
-        self.linear.after_report = advance
-        self.steering.report(table, item["id"], refresh=True)
-        self.assertIn("Agent accepted", next(iter(self.linear.acks.values())))
-
-    def test_late_acknowledgement_write_retains_pending_intent_across_interruptions(self):
-        for error in (None, RequestError(503), SystemExit()):
-            with self.subTest(error=type(error).__name__):
-                self.setUp()
-                self.settled_history()
-                acknowledgements = len(self.linear.acks) + 1
-                item = comment()
-                self.linear.comments = [item]
-                self.steering.observe(ISSUE)
-                started, resume = threading.Event(), threading.Event()
-                write = self.linear.status_comment
-                delayed = False
-
-                def update(issue_id, ack_id, body):
-                    nonlocal delayed
-                    row = self.row(item)
-                    self.assertTrue(row["report_pending"])
-                    self.assertTrue(row["report_inflight"])
-                    if not delayed:
-                        delayed = True
-                        started.set()
-                        self.assertTrue(resume.wait(5))
-                        write(issue_id, ack_id, body)
-                        if error is not None:
-                            raise error
-                    else:
-                        write(issue_id, ack_id, body)
-
-                with patch.object(self.linear, "status_comment", side_effect=update), \
-                     patch("steering.logging.error"), ThreadPoolExecutor(max_workers=1) as pool:
-                    future = pool.submit(self.steering.report, self.table, item["id"], refresh=True)
-                    try:
-                        self.assertTrue(started.wait(5))
-                        instruction = self.call("instructions")["instruction"]
-                        self.acknowledge(instruction)
-                        row = self.row(item)
-                        self.assertEqual(row["reported_state"], "accepted")
-                        self.assertTrue(row["report_pending"])
-                        self.assertTrue(row["report_inflight"])
-                    finally:
-                        resume.set()
-                    if isinstance(error, SystemExit):
-                        with self.assertRaises(SystemExit):
-                            future.result(timeout=5)
-                    else:
-                        future.result(timeout=5)
-                self.change_run(status="completed", steering_closed=True)
-                repair = ({"linear.issue": 1, "linear.viewer_id": 1, "linear.issue_comments": 1,
-                           "linear.status_comment": 1, "instructions.create": 1, "instructions.replace": 4}
-                          if error is not None else {})
-                with self.budget(exact=repair) as budget:
-                    self.steering.reconcile()
-                self.assertEqual(budget.mutated_rows("instructions"),
-                                 {item["id"], "control:" + ISSUE} if error is not None else set())
-                row = self.row(item)
-                self.assertEqual(row["reported_state"], "accepted")
-                self.assertFalse(row["report_pending"])
-                self.assertNotIn("report_inflight", row)
-                self.assertIn("Agent accepted", self.linear.acks[row["ack_id"]])
-                self.assertEqual(len(self.linear.acks), acknowledgements)
-                self.linear.status_comment.assert_called_with(ISSUE, row["ack_id"], self.linear.acks[row["ack_id"]])
-                for _ in range(3):
-                    with self.budget():
-                        self.steering.reconcile()
-
-    def test_lost_acknowledgement_writer_expires_and_repairs_without_replaying_instruction(self):
-        self.settled_history()
-        acknowledgements = len(self.linear.acks) + 1
-        item = comment()
-        self.linear.comments = [item]
-        self.acknowledge(self.call("instructions")["instruction"])
-        self.change_run(status="completed", steering_closed=True)
-
-        write = self.linear.status_comment
-        def interrupted(*args):
-            self.assertTrue(self.row(item)["report_pending"])
-            self.assertTrue(self.row(item)["report_inflight"])
-            write(*args)
-            raise SystemExit()
-
-        with patch.object(self.linear, "status_comment", side_effect=interrupted), \
-             patch.object(self.steering, "defer_report", side_effect=WorkerError("process lost")), \
-             self.assertRaises(SystemExit):
-            self.steering.report(self.table, item["id"], refresh=True)
-        self.assertTrue(self.row(item)["report_pending"])
-        self.assertTrue(self.row(item)["report_inflight"])
-        self.now += WRITE_SECONDS + 1
-        with self.budget(exact={"linear.issue": 1, "linear.viewer_id": 1,
-                                "linear.issue_comments": 1, "linear.status_comment": 1,
-                                "instructions.create": 1, "instructions.replace": 4}) as budget:
-            self.steering.reconcile()
-        self.assertEqual(budget.mutated_rows("instructions"), {item["id"], "control:" + ISSUE})
-        row = self.row(item)
-        self.assertEqual(row["state"], "accepted")
-        self.assertEqual(row["reported_state"], "accepted")
-        self.assertFalse(row["report_pending"])
-        self.assertNotIn("report_inflight", row)
-        self.assertEqual(len(self.linear.acks), acknowledgements)
-        self.linear.status_comment.assert_called_with(ISSUE, row["ack_id"], self.linear.acks[row["ack_id"]])
-        for _ in range(3):
-            with self.budget():
-                self.steering.reconcile()
-
-    def test_acknowledgement_repair_continues_when_issue_observation_fails(self):
-        item = comment()
-        self.linear.comments = [item]
-        self.acknowledge(self.call("instructions")["instruction"])
-        row, etag = self.table.get(item["id"])
-        row["reported_state"] = "delivering"
-        self.table.replace(row, etag)
-        self.change_run(status="completed", steering_closed=True)
-        with patch.object(self.linear, "issue", side_effect=RequestError(503)), self.assertLogs(level="ERROR"):
-            self.steering.reconcile()
-        self.assertEqual(self.row(item)["reported_state"], "accepted")
-
-    def test_oidc_owner_issue_delivery_token_and_session_are_all_fenced(self):
-        self.linear.comments = [comment()]
-        instruction = self.call("instructions")["instruction"]
-        bad_claims = ({**claims(), "run_attempt": "2"}, {**claims(), "repository": "other/repository"})
-        for identity in bad_claims:
-            with self.assertRaises(WorkerError):
-                self.service.handle("instructions", identity, {"dispatch_key": KEY, **self.session})
-        for action, data in (("steering_open", {"thread_id": "replacement"}),
-                             ("instructions", {"turn_id": "different-turn"}),
-                             ("instruction_result", {"comment_id": instruction["comment_id"],
-                                                      "delivery": "wrong", "status": "accepted"}),
-                             ("instruction_result", {"comment_id": str(uuid4()),
-                                                      "delivery": instruction["delivery"], "status": "accepted"})):
-            with self.subTest(action=action, data=data), self.assertRaises(WorkerError):
-                self.call(action, **data)
-        self.assertEqual(self.row(self.linear.comments[0])["state"], "delivering")
-
-    def test_expired_worker_lease_is_not_evidence_of_delivery(self):
-        self.linear.comments = [comment(), comment(at=NOW + 2)]
-        self.call("instructions")
-        self.change_run(lease_until=self.now - 1)
-        self.steering.repair(ISSUE)
-        self.assertEqual([self.row(item)["state"] for item in self.linear.comments], ["uncertain", "failed"])
 
 
 class LiveSessionTests(unittest.TestCase):
-    setUp = SteeringTests.setUp
-    row = SteeringTests.row
-    call = SteeringTests.call
+    def setUp(self):
+        self.f = coding_fixture(self, NOW)
+        self.service = self.f.broker
+        self.linear = Tracker(self.f.registry)
+        self.service.linear = self.linear
+        self.service.images.download = lambda *args: None
+        # Preserve the admitted content while exercising the real instruction adapter.
+        self.linear.current.update(title=self.f.issue['title'],description=self.f.issue['description'])
+        self.steering = Instructions(self.f.controller,self.f.registry,self.linear,clock=lambda:NOW)
+        self.service.steering = self.steering
+        from test_remote_worker import auth
+        identity = self.f.pool.enroll(auth())
+        self.call('start',protocol=worker.PROTOCOL)
+        self.call('bind_account',account_id=identity)
+        self.run = self.call('start',protocol=worker.PROTOCOL)
+        self.call('claim',account_id=identity)
+        self.call('progress',stage='coding',context_sha=self.f.spec.context_sha,account_id=identity,usage_before=usage())
+
+    def row(self,comment):
+        with self.f.database.transaction() as db:
+            return next(row for row in rows(db) if row['comment_id']==comment['id'])
+
+    def call(self,action,**data):
+        return self.service.handle(action,claims(Role.CODING),{'dispatch_key':self.f.key,**data})
 
     def run_session(self, server, directory, *, broker_failure=None, open_failure=0, open_exception=None):
         service = self.service
         class Broker:
-            key = KEY
+            key = self.f.key
             failures = 0
             open_failures = 0
             def call(inner, action, **data):
@@ -622,7 +115,7 @@ class LiveSessionTests(unittest.TestCase):
                 if action == "instruction_result" and broker_failure and inner.failures < broker_failure:
                     inner.failures += 1
                     raise OSError("response unavailable")
-                return service.handle(action, claims(), {"dispatch_key": KEY, **data})
+                return self.call(action, **data)
         config = {"model": "gpt-6.1-sol", "effort": "max", "issue": {"id": ISSUE},
                   "owner": self.run["owner"], "attempt_id": self.run["attempt_id"]}
         return run_agent(Broker(), config, directory, directory, "Implement the original task", {},
@@ -641,7 +134,7 @@ class LiveSessionTests(unittest.TestCase):
             self.assertEqual(server.methods.count("turn/steer"), 1)
             self.assertTrue(server.closed)
         self.assertEqual(self.row(self.linear.comments[0])["state"], "accepted")
-        self.assertTrue(self.runs.get(KEY)[0]["steering_closed"])
+        self.assertTrue(self.f.controller.inspect(self.f.view.task_id).session("coding")["data"]["steering_closed"])
 
     def test_explicit_rpc_rejection_is_failed_and_transport_loss_is_uncertain(self):
         for error, expected in ((CodexRejected("rejected"), "failed"), (CodexError("timed out"), "uncertain")):
@@ -688,7 +181,7 @@ class LiveSessionTests(unittest.TestCase):
             def unavailable(*args):
                 server.complete()
                 raise OSError("broker unavailable")
-            with patch.object(self.steering, "poll", side_effect=unavailable):
+            with patch.object(self.steering, "handle", side_effect=unavailable):
                 self.run_session(server, Path(directory))
             self.assertIn("Historical investigation notes", (Path(directory) / "setup.md").read_text())
             self.assertEqual(server.methods.count("turn/start"), 1)
@@ -698,12 +191,12 @@ class LiveSessionTests(unittest.TestCase):
         self.linear.comments = [comment()]
         with tempfile.TemporaryDirectory() as directory:
             server = FakeAgent(Path(directory))
-            original = self.steering.poll
+            original = self.steering.handle
             def finish_during_poll(*args):
                 instruction = original(*args)
                 server.complete()
                 return instruction
-            with patch.object(self.steering, "poll", side_effect=finish_during_poll):
+            with patch.object(self.steering, "handle", side_effect=finish_during_poll):
                 self.run_session(server, Path(directory))
             self.assertNotIn("turn/steer", server.methods)
             self.assertEqual(server.methods.count("turn/start"), 1)
@@ -795,7 +288,7 @@ class ProtocolTests(unittest.TestCase):
                          {"type": "Comment", "id": identifier, "webhook_at": NOW})
 
     def test_registry_validates_explicit_trusted_linear_ids(self):
-        data = json.loads((ROOT / "automation/azure/projects.json").read_text())
+        data = json.loads((ROOT / "automation/controller/projects.json").read_text())
         for value in ({"trusted_user_ids": [TRUSTED]}, {"trusted_user_ids": ["user@example.com"]},
                       {"trusted_user_ids": "everyone"}, {"allow_all": True}):
             with self.subTest(value=value), tempfile.TemporaryDirectory() as directory:

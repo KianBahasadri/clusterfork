@@ -18,11 +18,11 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
+sys.path[:0] = [str(ROOT / "automation")]
 import worker
 from agent_session import run_agent
-from dispatch_core import Registry
-from issue_images import capture_images, image_digest, image_prompt, materialize_images
+from common.routing import Registry
+from common.images import capture_images, image_digest, image_prompt, materialize_images
 from test_issue_images import DESCRIPTION, screenshots
 
 
@@ -32,7 +32,7 @@ class NativeVisionTests(unittest.TestCase):
         source = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
         self.assertTrue((source / "auth.json").is_file(), "A current Codex auth cache is required")
         self.assertIn("0.165.0", subprocess.check_output(["codex", "--version"], text=True))
-        profile = Registry.load(ROOT / "automation/azure/projects.json").agent_profiles["codex"]
+        profile = Registry.load(ROOT / "automation/controller/projects.json").agent_profiles["codex"]
         images = capture_images(DESCRIPTION, screenshots().download_image)
         issue = {"id": "fixture", "identifier": "VISUAL-1", "title": "Match the target screenshot",
                  "description": DESCRIPTION + "\nDescribe the visual differences in your summary.",

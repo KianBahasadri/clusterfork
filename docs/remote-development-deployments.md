@@ -92,8 +92,8 @@ Releasing one named hold does not release another. These are private host comman
 public HTTP exposes neither operator actions nor arbitrary state transitions.
 The normal workflow handles routine code rollout without a manual resume step.
 
-Initial cutover additionally requires an explicit operator halt, verified idle
-legacy references, preserved credential storage, proven queue generations and a
-private migration snapshot. It stops old lifecycle writers before starting the
-new service. [Migration](remote-development-controller.md#deployment-and-migration)
-owns that once-only import and its audit history.
+The initial history cutover is complete and its import remains in SQLite. New
+installations start with an operator hold; routine deployments reuse existing
+state. The transitional account/instruction import runs before the service opens
+its HTTP transports. [Migration](remote-development-controller.md#deployment-and-migration)
+owns that once-only transfer and its private snapshot.

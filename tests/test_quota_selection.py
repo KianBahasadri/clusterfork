@@ -6,16 +6,16 @@ import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "automation" / "azure"))
-from dispatch_core import Registry  # noqa: E402
-from quota_selection import AccountQuota, QuotaWindow, select_account  # noqa: E402
+sys.path.insert(0, str(ROOT / "automation"))
+from common.routing import Registry  # noqa: E402
+from common.selection import AccountQuota, QuotaWindow, select_account  # noqa: E402
 
 NOW = 1_800_000_000
 
 
 class QuotaSelectionTests(unittest.TestCase):
     def setUp(self):
-        config = Registry.load(ROOT / "automation" / "azure" / "projects.json")
+        config = Registry.load(ROOT / "automation" / "controller" / "projects.json")
         self.profiles, self.policy = config.agent_profiles, config.agent_selection
 
     def account(self, account_id, agent="codex", used=(10,), **kwargs):

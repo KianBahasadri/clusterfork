@@ -12,13 +12,13 @@ from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
-import diagnostics
+sys.path[:0] = [str(ROOT / "automation")]
+from common import diagnostics as diagnostics
 import worker
-from dispatch_clients import Linear, RequestError, request_json
-import test_worker_reporting as reporting
+from common.clients import Linear, RequestError, request_json
 
 KEY = "a" * 64
+NOW = 1_800_000_000
 
 
 class DiagnosticsTests(unittest.TestCase):
@@ -33,51 +33,6 @@ class DiagnosticsTests(unittest.TestCase):
         broker.token = "SECRET-credential"
         broker.expires = time.time() + 3600
         return broker
-
-    def test_deployment_deferral_is_bounded_and_exits_without_failed_finish_or_agent_work(self):
-        for selector in (False, True):
-            with self.subTest(selector=selector), tempfile.TemporaryDirectory() as directory:
-                broker = self.broker()
-                summary, output = Path(directory) / "summary", Path(directory) / "output"
-                with patch.dict(os.environ, {"CLUSTERFORK_BROKER_URL": broker.url, "DISPATCH_KEY": KEY,
-                                             "GITHUB_OUTPUT": str(output), "GITHUB_STEP_SUMMARY": str(summary)}, clear=True), \
-                     patch.object(worker, "Broker", return_value=broker), \
-                     patch.object(worker, "json_request", return_value={"status": "deployment_deferred",
-                                                                        "reason_code": "deployment_paused"}) as request, \
-                     patch.object(worker, "execute") as execute, patch.object(worker, "review_readiness") as review, \
-                     patch.object(worker, "select_account_for_run") as select, self.assertLogs(level="INFO") as logs:
-                    self.assertEqual(worker.main(select_only=selector), 0)
-                execute.assert_not_called()
-                review.assert_not_called()
-                select.assert_not_called()
-                self.assertEqual(request.call_count, 1)  # Start only; no failed finish callback.
-                self.assertIn("deployment_paused", "\n".join(logs.output))
-                self.assertNotIn("worker_failed", "\n".join(logs.output))
-                self.assertNotIn("SECRET", "\n".join(logs.output) + summary.read_text())
-                self.assertIn("exiting", summary.read_text())
-                if selector:
-                    self.assertEqual(output.read_text(), "selected=false\n")
-
-    def test_deferred_heartbeat_cannot_be_reclassified_as_a_failed_preflight_lease(self):
-        broker = self.broker()
-        def stopped_preflight(*args):
-            try:
-                broker.call("heartbeat")
-            except worker.DeploymentDeferred:
-                raise worker.WorkerFailure("Quota inspection stopped after its heartbeat") from None
-        with tempfile.TemporaryDirectory() as directory, \
-             patch.dict(os.environ, {"CLUSTERFORK_BROKER_URL": broker.url, "DISPATCH_KEY": KEY,
-                                     "GITHUB_OUTPUT": str(Path(directory) / "output")}, clear=True), \
-             patch.object(worker, "Broker", return_value=broker), \
-             patch.object(worker, "select_account_for_run", side_effect=stopped_preflight), \
-             patch.object(worker, "json_request", side_effect=[
-                 {"serial_admission": True, "protocol": worker.PROTOCOL, "phase": "readiness", "account_selection": True},
-                 {"status": "deployment_deferred", "reason_code": "deployment_paused"}]) as request, \
-             self.assertLogs(level="INFO") as logs:
-            self.assertEqual(worker.main(select_only=True), 0)
-            self.assertEqual(Path(directory, "output").read_text(), "selected=false\n")
-        self.assertEqual(request.call_count, 2)
-        self.assertNotIn("worker_failed", "\n".join(logs.output))
 
     def test_timeout_keeps_action_run_stage_request_and_elapsed_without_secrets(self):
         broker = self.broker()
@@ -109,7 +64,7 @@ class DiagnosticsTests(unittest.TestCase):
         error.close()
 
     def test_azure_dependency_logs_name_graphql_operation_and_keep_safe_cause(self):
-        with patch("dispatch_clients.urlopen", side_effect=URLError(TimeoutError("SECRET"))), \
+        with patch("common.clients.urlopen", side_effect=URLError(TimeoutError("SECRET"))), \
              self.assertLogs(level="INFO") as logged, self.assertRaises(RequestError) as caught:
             request_json("https://api.linear.app/graphql?SECRET", token="SECRET", method="POST",
                          data={"query": "mutation($id: String!) { issueAddLabel(id: $id) { success } }",
@@ -125,7 +80,7 @@ class DiagnosticsTests(unittest.TestCase):
             "message": private, "path": ["commentUpdate", private],
             "extensions": {"code": "FORBIDDEN", "type": "forbidden", "userPresentableMessage": private,
                            "credentials": private}}] * 1001}
-        with patch("dispatch_clients.urlopen", return_value=io.BytesIO(json.dumps(response).encode())), \
+        with patch("common.clients.urlopen", return_value=io.BytesIO(json.dumps(response).encode())), \
              self.assertLogs(level="INFO") as logs, self.assertRaises(RequestError) as caught:
             Linear(private).query(query, {"id": private})
         data = diagnostics.failure(caught.exception, "worker/linear_sync")
@@ -224,14 +179,15 @@ class DiagnosticsTests(unittest.TestCase):
 
     def test_main_applies_the_broker_credential_guard_to_readiness_git_failures_too(self):
         broker = self.broker()
-        config = {"serial_admission": True, "protocol": worker.PROTOCOL, "phase": "readiness",
+        config = {"serial_admission": True, "runtime_sha": "b"*40, "protocol": worker.PROTOCOL, "phase": "readiness",
                   "account_selection": False, "account_id": "a" * 64}
         def review(*args):
             broker.publication_guard.remember("opaque-checkout-login")
             worker.command([sys.executable, "-c", "print('private-tail opaque-checkout-login'); raise SystemExit(2)"],
                            diagnostic_operation="command/git")
-        with patch.dict(os.environ, {"CLUSTERFORK_BROKER_URL": broker.url, "DISPATCH_KEY": KEY}), \
+        with patch.dict(os.environ, {"CLUSTERFORK_BROKER_URL": broker.url, "DISPATCH_KEY": KEY, "WORKER_REVISION": "b"*40}), \
              patch.object(worker, "Broker", return_value=broker), \
+             patch.object(worker,"prepare_checkout"), \
              patch.object(worker, "json_request", side_effect=[config, {"status": "failed"}]) as request, \
              patch.object(worker, "review_readiness", side_effect=review), patch("sys.stderr", io.StringIO()), \
              self.assertLogs(level="ERROR") as logs:
@@ -264,7 +220,7 @@ class DiagnosticsTests(unittest.TestCase):
 
     def test_main_saves_readable_failure_in_callback_and_actions_summary(self):
         broker = Mock(stage="publishing")
-        broker.call.return_value = {"serial_admission": True, "protocol": worker.PROTOCOL, "phase": "development",
+        broker.call.return_value = {"serial_admission": True, "runtime_sha": "b"*40, "protocol": worker.PROTOCOL, "phase": "development",
                                    "account_selection": False, "account_id": "a" * 64}
         error = TimeoutError("SECRET")
         error.clusterfork_failure = {"operation": "validation/1", "kind": "timeout", "stage": "publishing",
@@ -272,9 +228,10 @@ class DiagnosticsTests(unittest.TestCase):
         error.clusterfork_wip = {"wip_branch": "clusterfork/kian-891-aaaaaaaa", "wip_commit_sha": "b" * 40}
         with tempfile.TemporaryDirectory() as directory:
             summary = Path(directory) / "summary.md"
-            with patch.dict(os.environ, {"CLUSTERFORK_BROKER_URL": "unused", "DISPATCH_KEY": KEY,
+            with patch.dict(os.environ, {"CLUSTERFORK_BROKER_URL": "unused", "DISPATCH_KEY": KEY, "WORKER_REVISION": "b"*40,
                                          "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_STEP_SUMMARY": str(summary)}), \
-                 patch.object(worker, "Broker", return_value=broker), patch.object(worker, "execute", side_effect=error), \
+                 patch.object(worker, "Broker", return_value=broker), \
+             patch.object(worker,"prepare_checkout"), patch.object(worker, "execute", side_effect=error), \
                  patch("sys.stdout", io.StringIO()) as stdout, patch("sys.stderr", io.StringIO()) as stderr, \
                  self.assertLogs(level="ERROR") as logs:
                 self.assertEqual(worker.main(), 1)
@@ -313,33 +270,35 @@ class DiagnosticsTests(unittest.TestCase):
 
 
 class DurableFailureTests(unittest.TestCase):
-    setUp = reporting.ProgressTests.setUp
-    call = reporting.ProgressTests.call
-    select = reporting.ProgressTests.select
-    comments = reporting.ProgressTests.comments
-
-    def test_failure_is_persisted_and_reconciled_to_linear(self):
-        self.github.worker_pull.return_value = None
-        self.github.worker_pull.side_effect = None
-        self.select()
-        self.call("progress", stage="publishing")
-        diagnostic = {"operation": "command/gh", "kind": "timeout", "stage": "publishing",
-                      "timeout_seconds": 20, "elapsed_ms": 20000, "message": "SECRET",
-                      "failure_output": "Private-traceback ghp_synthetic"}
-        self.linear.status_comment.side_effect = RequestError()
-        with self.assertLogs(level="ERROR"):
-            self.call("finish", status="failed", failure=diagnostic)
-        saved = json.loads(self.runs.get(KEY)[0]["failure"])
-        self.assertNotIn("message", saved)
-        self.assertEqual(saved["failure_output"], "Private-traceback [REDACTED]")
-        self.assertEqual(saved["run_id"], "123")
-        self.linear.status_comment.reset_mock()
-        self.linear.status_comment.side_effect = None
-        self.sync.sync(KEY)
-        comments = [call.args[2] for call in self.linear.status_comment.call_args_list]
-        self.assertTrue(any("publication" in body and "command/gh" in body and "20s" in body for body in comments))
-        self.assertFalse(any("SECRET" in body or "Private-traceback" in body for body in comments))
-        self.assertEqual(self.issue["state"]["id"], self.states.blocked)
+    def test_failure_is_persisted_without_publication_of_private_output(self):
+        from controller_fixtures import coding_fixture, execution_row
+        from test_controller_authorization import claims
+        from controller.model import Role
+        from controller.reporting import attempt_reports
+        from test_remote_worker import auth
+        from test_worker_reporting import usage
+        f = coding_fixture(self, NOW)
+        def call(action, **fields):
+            return f.broker.handle(action,claims(Role.CODING),{'dispatch_key':f.key,**fields})
+        identity=f.pool.enroll(auth())
+        call('start',protocol=worker.PROTOCOL)
+        call('bind_account',account_id=identity)
+        call('start',protocol=worker.PROTOCOL)
+        call('claim',account_id=identity)
+        call('progress',stage='coding',context_sha=f.spec.context_sha,account_id=identity,usage_before=usage())
+        call('progress',stage='publishing')
+        call('finish',status='failed',failure={'operation':'command/gh','kind':'timeout','stage':'publishing',
+             'timeout_seconds':20,'elapsed_ms':20000,'message':'SECRET','failure_output':'Private-traceback ghp_synthetic'})
+        saved=json.loads(execution_row(f)['failure'])
+        self.assertNotIn('message',saved)
+        self.assertEqual(saved['failure_output'],'Private-traceback [REDACTED]')
+        self.assertEqual(saved['run_id'],'123')
+        view=f.controller.inspect(f.view.task_id)
+        body=attempt_reports({'attempt':view.attempt,'session':view.session('coding')},f.registry)[-1][1]
+        self.assertIn('command/gh',body)
+        self.assertIn('20s',body)
+        self.assertNotIn('SECRET',body)
+        self.assertNotIn('Private-traceback',body)
 
 
 if __name__ == "__main__":

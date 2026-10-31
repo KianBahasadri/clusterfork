@@ -7,10 +7,10 @@ import sys
 import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
-sys.path[:0]=[str(ROOT/'automation'),str(ROOT/'automation/azure')]
+sys.path[:0]=[str(ROOT/'automation'),str(ROOT/'automation')]
 from controller.model import Initialize,IssueObserved,Role,Finish,EffectUpdated,ExternalObserved
 from controller.reporting import attempt_reports
-from readiness_policy import PROTOCOL
+from common.policy import PROTOCOL
 from test_readiness import clarification,ready
 from test_controller_authorization import claims
 import test_controller_driver as fixtures

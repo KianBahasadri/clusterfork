@@ -12,21 +12,20 @@ import threading
 import time
 from urllib.request import Request,urlopen
 
-sys.path[:0]=[str(Path(__file__).parent),str(Path(__file__).parent/"azure")]
+sys.path.insert(0,str(Path(__file__).parent))
 from controller.broker import Broker
 from controller.core import Controller
 from controller.driver import Driver
 from controller.instructions import Instructions
-from controller.model import Initialize,LegacyImported
+from controller.model import Initialize
 from controller.release import RequiredRuntime
 from controller.server import Application,HTTPServer,OperatorServer,http_handler
 from controller.setup import evidence
 from controller.store import Database
-from dispatch_clients import GitHub,Linear
-from dispatch_core import Registry
-from worker_core import Accounts,ProviderAccounts
-from worker_store import AzureTable
-from readiness_policy import PROTOCOL,digest
+from common.clients import GitHub,Linear
+from common.routing import Registry
+from common.policy import PROTOCOL,digest
+from common.identity import verify_operator
 
 
 def secret(credential,vault,name):
@@ -46,38 +45,27 @@ def verify_host(expected):
         raise ValueError("Controller host identity does not match configuration")
 
 
-def build(config,manifest,database,credential,*,table_factory=None,history=None):
-    if table_factory is None:
-        from azure.data.tables import TableClient
-        table_factory=TableClient
-    registry=Registry.load(Path(__file__).parent/"azure/projects.json")
+def build(config,manifest,database,credential,*,table_factory=None):
+    registry=Registry.load(Path(__file__).parent/"controller/projects.json")
     vault=config["key_vault"]
     linear=(Linear(None,client_id=config["linear_oauth_client_id"],
                    client_secret=secret(credential,vault,"linear-oauth-client-secret"))
             if config.get("linear_oauth_client_id") else Linear(secret(credential,vault,"linear-api-key")))
     github=GitHub(config["github_app_id"],secret(credential,vault,"github-app-private-key"))
-    def table(name,partition):
-        client=table_factory(f"https://{config['storage_account']}.table.core.windows.net",name,credential=credential)
-        return AzureTable.with_client(client,partition)
-    accounts=ProviderAccounts({provider:Accounts(table("ClusterforkAccounts",provider),provider=provider)
-                               for provider in ("codex","cursor")})
     controller=Controller(database)
     controller.apply(Initialize(),now=time.time())
-    if history is not None:
-        controller.apply(LegacyImported(history['generation'],tuple(history['records']),history['source_digest'],
-                                         tuple(tuple(h) for h in history.get('operator_holds',()))),now=time.time())
-    instructions=Instructions(controller,registry,table("ClusterforkInstructions","instructions"),linear,clock=time.time)
+    from controller.migrate_tables import migrate
+    migrate(controller,config,credential,client_factory=table_factory)
+    instructions=Instructions(controller,registry,linear,clock=time.time)
     required=RequiredRuntime(github,manifest,deployment_run_id=config.get('deployment_run_id'))
     driver=Driver(controller,registry,linear,github,manifest["revision"],
                   runtime_ready=required,runtime_source_ready=required.source_matches,steering=instructions)
-    broker=Broker(controller,registry,accounts,linear,github,refresh=driver.refresh,steering=instructions)
-    def resources_idle():
-        return not any(row.get("lease_until",0)>time.time()
-                       for pool in accounts.pools.values() for row in pool.table.list())
+    broker=Broker(controller,registry,linear,github,refresh=driver.refresh,steering=instructions)
     return Application(controller,broker,driver,webhook_secret=secret(credential,vault,"linear-webhook-secret"),
-                       metadata=manifest,resources_idle=resources_idle,
-                       capabilities={'protocol':PROTOCOL,'registry_digest':digest(json.loads((Path(__file__).parent/'azure/projects.json').read_text())),
-                                     'missing':[]},setup=lambda project:evidence(registry,github,manifest,project))
+                       metadata=manifest,resources_idle=controller.accounts.idle,
+                       capabilities={'protocol':PROTOCOL,'registry_digest':digest(json.loads((Path(__file__).parent/'controller/projects.json').read_text())),
+                                     'missing':[],'resource_backend':'sqlite'},setup=lambda project:evidence(registry,github,manifest,project),
+                       account_operator=lambda authorization:verify_operator(authorization,config.get('azure_tenant_id'),config.get('account_operators',[])))
 
 
 def serve(args):
@@ -87,9 +75,7 @@ def serve(args):
     verify_host(config["vm_resource_id"])
     stop=threading.Event()
     with Database(args.database) as database:
-        history=Path('/etc/clusterfork/migration.json')
-        application=build(config,manifest,database,ManagedIdentityCredential(),
-                          history=json.loads(history.read_text()) if history.exists() else None)
+        application=build(config,manifest,database,ManagedIdentityCredential())
         http=HTTPServer(("127.0.0.1",args.port),http_handler(application))
         operator=OperatorServer(args.socket,application)
         def loop():

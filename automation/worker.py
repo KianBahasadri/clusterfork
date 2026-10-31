@@ -22,20 +22,20 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
-sys.path.insert(0, str(Path(__file__).parent / "azure"))
+sys.path.insert(0, str(Path(__file__).parent))
 from codex_runtime import (CodexError, CodexUsageLimit, copy_sessions, inspect_account,
                            quota_snapshot, read_usage, write_private)
 from agent_session import run_agent
 import cursor_runtime
-from worker_core import account_provider, valid_account_id
-from dispatch_core import AgentProfile
-from quota_selection import SelectionPolicy, select_account
-from worker_reporting import usage_report, worker_branch
-from readiness_policy import (PROTOCOL, RESULT_SCHEMA, review_prompt, workflow_publication_policy,
+from common.accounts import account_provider, valid_account_id
+from common.routing import AgentProfile
+from common.selection import SelectionPolicy, select_account
+from common.reporting import usage_report, worker_branch
+from common.policy import (PROTOCOL, RESULT_SCHEMA, review_prompt, workflow_publication_policy,
                               MAX_CORRECTION_TURNS, MAX_FAILURE_OUTPUT_BYTES, redact_review_text)
 from publication_guard import PublicationBlocked, PublicationGuard, PublicationScanError, changed_lines
-from issue_images import image_prompt, materialize_images
-from diagnostics import (CONTEXT, context, failure, failure_summary, http_operation, identifiers, operation, record,
+from common.images import image_prompt, materialize_images
+from common.diagnostics import (CONTEXT, context, failure, failure_summary, http_operation, identifiers, operation, record,
                          permits_failure_output)
 
 COMMAND_CONTEXT = ContextVar("clusterfork_command_context", default={})
@@ -44,9 +44,6 @@ COMMAND_CONTEXT = ContextVar("clusterfork_command_context", default={})
 class WorkerFailure(RuntimeError):
     pass
 
-
-class DeploymentDeferred(RuntimeError):
-    pass
 
 
 def json_request(url, token, data=None, method=None, *, operation_name=None):
@@ -70,7 +67,6 @@ class Broker:
         self.lock = threading.RLock()
         self.token, self.expires = "", 0
         self.stage = "initializing"
-        self.deployment_deferred = False
         self.publication_guard = PublicationGuard()
         self.sleep, self.retry_delays = sleep, retry_delays
 
@@ -103,12 +99,6 @@ class Broker:
                                     or attempt == len(self.retry_delays)):
                                 raise
                             self.sleep(self.retry_delays[attempt])
-                    if result.get("status") == "deployment_deferred" and result.get("reason_code") == "deployment_paused":
-                        self.deployment_deferred = True
-                        deferred = DeploymentDeferred()
-                        deferred.clusterfork_failure = {"operation": f"broker/{action}", "kind": "worker_error",
-                                                       "reason_code": "deployment_paused"}
-                        raise deferred
                     if action in {"checkout", "github"}:
                         self.publication_guard.remember(result["token"])
                     return result
@@ -133,9 +123,7 @@ class Heartbeat:
                 self.operation()
             except Exception as exc:
                 self.error = exc
-                deferred = isinstance(exc, DeploymentDeferred)
-                record("heartbeat_deferred" if deferred else "heartbeat_failed",
-                       level=logging.INFO if deferred else logging.ERROR, **failure(exc, "worker/heartbeat"))
+                record("heartbeat_failed",level=logging.ERROR,**failure(exc,"worker/heartbeat"))
                 self.failed.set()
                 return
 
@@ -1021,7 +1009,28 @@ def _execute(broker, config, heartbeat, directory):
         raise
 
 
-def main(*, select_only=False):
+def prepare_checkout(broker,config,directory):
+    """Create the target only after the controller closes initial pool access."""
+    repository,ref=config['repository'],config['ref']
+    context_sha=config['binding']['context_sha']
+    if (not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+',repository)
+            or not re.fullmatch(r'[0-9a-f]{40}',context_sha)):
+        raise WorkerFailure('Invalid target checkout identity')
+    target=Path(os.environ.get('GITHUB_WORKSPACE',Path.cwd()))/'.clusterfork-target'
+    target.mkdir(mode=0o700)
+    os.chdir(target)
+    command(['git','init','--quiet'])
+    command(['git','config','core.hooksPath','/dev/null'])
+    command(['git','remote','add','origin','https://github.com/'+repository+'.git'])
+    token=broker.call('checkout')['token']
+    with git_auth(token,directory) as env:
+        command(['git','fetch','--no-tags','origin',f'+refs/heads/{ref}:refs/remotes/origin/{ref}'],env=env)
+    if command(['git','rev-parse',f'origin/{ref}']).strip()!=context_sha:
+        raise WorkerFailure('Target context changed before checkout; a new review is required')
+    command(['git','checkout','--detach',context_sha])
+
+
+def main():
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     CONTEXT.set(identifiers({"dispatch_key": os.environ.get("DISPATCH_KEY", ""),
                              "run_id": os.environ.get("GITHUB_RUN_ID", ""),
@@ -1032,23 +1041,27 @@ def main(*, select_only=False):
         config = broker.call("start", protocol=PROTOCOL)
         started = True
         if config.get("serial_admission") is not True:
-            raise WorkerFailure("Azure dispatcher does not confirm serial repository admission; "
+            raise WorkerFailure("Controller does not confirm serial repository admission; "
                                 "deploy the matching broker before starting workers")
         if config.get("protocol") != PROTOCOL or config.get("phase") not in {"readiness", "development"}:
             raise WorkerFailure("Deploy a compatible readiness worker and broker")
-        if config.get("account_selection") is not select_only:
-            raise WorkerFailure("Broker did not authorize this job's account access role")
-        if not select_only and not valid_account_id(config.get("account_id")):
-            raise WorkerFailure("Account preflight must assign one agent account before execution")
+        if config.get('runtime_sha')!=os.environ.get('WORKER_REVISION'):
+            raise WorkerFailure('Runtime checkout does not match the authorized phase revision')
         CONTEXT.set({**CONTEXT.get(), "phase": config["phase"]})
         with Heartbeat(lambda: broker.call("heartbeat")) as heartbeat, \
              tempfile.TemporaryDirectory(prefix="clusterfork-worker-") as directory, \
              command_context(publication_guard=broker.publication_guard):
-            if select_only:
+            if config.get('account_selection') is True:
                 selected = select_account_for_run(broker, config, heartbeat)
-                with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-                    output.write(f"selected={str(selected).lower()}\n")
-                return 0
+                if not selected:
+                    if os.environ.get('GITHUB_OUTPUT'):
+                        with open(os.environ['GITHUB_OUTPUT'],'a') as output:
+                            output.write('ready=false\n')
+                    return 0
+                config=broker.call('start',protocol=PROTOCOL)
+            if config.get('account_selection') is not False or not valid_account_id(config.get('account_id')):
+                raise WorkerFailure('Controller did not close initial account selection')
+            prepare_checkout(broker,config,Path(directory))
             if config["phase"] == "readiness":
                 status, pull = review_readiness(broker, config, heartbeat, Path(directory)), None
                 # The combined workflow advances through a native needs edge.
@@ -1075,20 +1088,6 @@ def main(*, select_only=False):
                                  if config.get("auto_merge", True) else "manual merge (project override)\n"))
         return 0
     except Exception as exc:
-        if isinstance(exc, DeploymentDeferred) or getattr(broker, "deployment_deferred", False) is True:
-            # A deferred heartbeat can stop a subprocess/quota read with a
-            # generic lease error. Preserve the broker's startup classification.
-            record("worker_deferred", reason_code="deployment_paused")
-            message = ("Azure deployment paused startup. This runner is exiting to allow deployment to drain; "
-                       "work resumes after successful deployment and confirmation that prior GitHub attempts stopped.")
-            print(message)
-            if select_only:
-                with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-                    output.write("selected=false\n")
-            if os.environ.get("GITHUB_STEP_SUMMARY"):
-                with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
-                    stream.write("### Clusterfork deployment wait\n\n" + message + "\n")
-            return 0
         with context(dispatch_key=os.environ.get("DISPATCH_KEY", ""), run_id=os.environ.get("GITHUB_RUN_ID", ""),
                      run_attempt=os.environ.get("GITHUB_RUN_ATTEMPT", ""), stage=getattr(broker, "stage", "initializing")):
             diagnostic = failure(exc)
@@ -1108,8 +1107,4 @@ def main(*, select_only=False):
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--select-account", action="store_true", help="Run quota preflight without an agent")
-    raise SystemExit(main(select_only=parser.parse_args().select_account))
+    raise SystemExit(main())

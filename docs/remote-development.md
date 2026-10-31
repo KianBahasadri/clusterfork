@@ -20,7 +20,7 @@ own their respective contracts. The retired coordinator is preserved in the
 `automation/worker.py` implements review, coding, configured validation, guarded
 publication and credential cleanup. `agent_session.py`, `codex_runtime.py` and
 `cursor_runtime.py` retain the existing provider adapters and conversation
-protocols. `automation/azure/projects.json` supplies project states, repository
+protocols. `automation/controller/projects.json` supplies project states, repository
 branches, validation commands, merge policy, profiles and quota policy.
 
 Readiness assesses the current issue description, complete comment thread,
@@ -41,7 +41,7 @@ A worker's success callback alone never marks the Linear task complete.
 
 ## Agent profiles
 
-`automation/azure/projects.json` pins these profiles:
+`automation/controller/projects.json` pins these profiles:
 
 | Agent | Model ID | Reasoning effort |
 | --- | --- | --- |

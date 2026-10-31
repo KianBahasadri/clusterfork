@@ -39,12 +39,12 @@ Before enrolling a team with the app actor, provision independent team issue
 labels using an existing label operator. The app can apply labels but may lack
 permission to create them. Required names are `clusterfork: queued`,
 `clusterfork: selected`, `clusterfork: needs clarification`, `clusterfork: auto-repair`
-and the seven stage names in `automation/azure/worker_reporting.py`. Keep existing
+and the seven stage names in `automation/common/reporting.py`. Keep existing
 labels and task/repair identity when repairing a missing label.
 
-`python3 automation/pilot.py check` validates local inputs and the registry. It
-does not launch a worker, verify live quota, or provision Azure. Its legacy source
-packager is not the controller deployment path.
+`automation/common/configuration.py` validates local credentials as literal values.
+The onboarding helper validates the registry and deployed controller before enrollment.
+The retired local Functions packager and deployment CLI are removed.
 
 ## GitHub App and mappings
 
@@ -55,12 +55,10 @@ under `.github/workflows/` are permitted. Updated installation grants must be
 approved separately from App registration changes. Administration is not needed
 for the App, and credentials stay outside target repositories.
 
-`automation/azure/projects.json` maps explicit Linear project UUIDs to target
+`automation/controller/projects.json` maps explicit Linear project UUIDs to target
 repositories/default branches, ready/lifecycle states, validation argv arrays and
 merge policy. New central mappings name `clusterfork-task.yml` and required checks;
-the controller chooses its own verified runtime version. Legacy workflow/pin
-fields are tolerated for existing mappings and do not select the new controller's
-execution workflow. A generation change permits eligible issues to run again; it
+the controller chooses its own verified runtime version. The central workflow is the execution entry point. A generation change permits eligible issues to run again; it
 is not a retry mechanism.
 
 The central repository's `CLUSTERFORK_BROKER_URL` Actions variable is

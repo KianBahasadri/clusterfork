@@ -35,9 +35,10 @@ where files go; skill-specific instructions stay in each `skills/<name>/SKILL.md
 - [Azure infrastructure](azure-infrastructure.md) — Terraform ownership, imports, remote state, credentials, and reconciliation
 - [Accounts](remote-development-accounts.md) — enrollment, reclaim, leases, and worker credential boundary
 - [Diagnostics](remote-development-observability.md) — correlated logs, failure explanations, and bounded Azure monitoring
-- [Recovery tools](remote-development-recovery.md) — verified repair-content rebinding with private audit backups
 
 ## Historical investigations
+
+- [Retired repair binding](archive/remote-development-repair-binding.md) — previous child-issue recovery tool
 
 - Retired Functions coordinator: [runtime](archive/remote-development-functions-runtime.md), [lifecycle](archive/remote-development-functions-lifecycle.md), [queues](archive/remote-development-functions-queue.md), [deployment](archive/remote-development-functions-deployments.md), [diagnostics](archive/remote-development-functions-observability.md)
 

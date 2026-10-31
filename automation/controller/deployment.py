@@ -3,7 +3,7 @@
 from .authorization import release_ref
 from .model import Rejected
 from .workflows import ENGINE
-from dispatch_clients import RequestError
+from common.clients import RequestError
 
 
 def verify_release(application,revision):

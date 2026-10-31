@@ -1,6 +1,5 @@
 """External adapters observe and execute; the controller alone changes task policy."""
 
-from dataclasses import replace
 import hashlib
 import json
 import logging
@@ -9,16 +8,17 @@ from types import SimpleNamespace
 
 from .authorization import release_ref
 from .model import (Admit, ContextObserved, DispatchObserved, EffectUpdated, ExternalObserved,
-                    Hold, InboxDone, IssueObserved, Rejected, Retry, TaskSpec, identity)
+                    Hold, InboxDone, IssueObserved, Rejected, Retry, TaskSpec, identity, ReportConfirmed)
+from .images import Images
 from .workflows import ENGINE, WORKFLOW
 from .reporting import attempt_reports,repair_terminal,repair_report,review_report
-from dispatch_core import DispatchError, dependency_status, eligibility
-from issue_images import capture_images, image_digest
-from linear_sync import comment_id, failed_required_checks, pull_outcome
-from readiness_policy import issue_revision, policy_version, redact_review_text
-from worker_reporting import worker_branch
-from worker_reporting import AUTO_REPAIR_LABEL
-from diagnostics import failure_summary
+from common.routing import DispatchError, dependency_status, eligibility
+from common.images import image_digest
+from common.publication import comment_id, failed_required_checks, pull_outcome
+from common.policy import issue_revision, policy_version, redact_review_text
+from common.reporting import worker_branch
+from common.reporting import AUTO_REPAIR_LABEL
+from common.diagnostics import failure_summary
 
 
 class Driver:
@@ -29,8 +29,7 @@ class Driver:
         self.runtime_ready, self.clock = runtime_ready, clock
         self.runtime_source_ready=runtime_source_ready or runtime_ready
         self.steering = steering
-        self._reported = {}
-        self._comment_signatures = {}
+        self.images=Images(controller.database,linear.download_image,clock=clock)
 
     def apply(self, command):
         return self.controller.apply(command, now=self.clock())
@@ -99,7 +98,7 @@ class Driver:
         return issue
 
     def spec(self, issue, route, *, runtime_sha=None):
-        images = capture_images(issue.get("description"), self.linear.download_image)
+        images = self.images.snapshot(issue)
         return TaskSpec(issue_revision(issue), self.github.branch_sha(route), runtime_sha or self.runtime_sha,
                         policy_version(self.registry, route), image_digest(images),route.repository,route.ref,route.auto_merge)
 
@@ -172,6 +171,8 @@ class Driver:
         self.report()
         if self.steering is not None:
             self.steering.reconcile()
+        self.images.prune({revision for view in self.controller.tasks(unsettled=True)
+                           for revision in (view.content_revision,view.spec.content_revision if view.spec else '') if revision})
 
     def dispatch(self):
         for effect in self.controller.effects("dispatch"):
@@ -274,9 +275,10 @@ class Driver:
                                                        view.attempt.get("stage"),view.attempt.get('attempt_id'),
                                                        view.attempt.get('attempt_kind'),view.eligible,
                                                        repair_terminal(view)]).encode()).hexdigest()
-                if self._reported.get(task_id) != signature:
+                if self.controller.report_signature('task:'+task_id) != signature:
                     if issue and (issue.get("project") or {}).get("id") == view.project_id:
-                        self.linear.status_comment(view.issue_id,comment_id(task_id,"controller-status"),body)
+                        if self.linear.status_comment(view.issue_id,comment_id(task_id,"controller-status"),body) is False:
+                            raise RuntimeError('Linear status was not acknowledged')
                         review = json.loads(view.attempt.get("review_result") or "null")
                         denied = review and review.get("verdict") in {"rejected","needs_clarification"}
                         self.linear.set_selected(view.issue_id,view.active and not denied)
@@ -300,7 +302,7 @@ class Driver:
                                 self.linear.set_state(view.issue_id,desired)
                                 if denied and desired==route.linear_states.blocked:
                                     self.observe_issue({**issue,'state':{**issue['state'],'id':desired}},known=view)
-                    self._reported[task_id] = signature
+                    self.apply(ReportConfirmed('task:'+task_id,signature))
                 for effect in effects:
                     self.apply(EffectUpdated(task_id,effect["effect_id"],"done"))
             except Exception as exc:
@@ -308,7 +310,7 @@ class Driver:
 
     def comment(self,issue_id,key,body):
         signature=hashlib.sha256(body.encode()).hexdigest()
-        if self._comment_signatures.get(key)!=signature:
+        if self.controller.report_signature('comment:'+key)!=signature:
             if self.linear.status_comment(issue_id,key,body) is False:
                 raise RuntimeError('Linear report was not acknowledged')
-            self._comment_signatures[key]=signature
+            self.apply(ReportConfirmed('comment:'+key,signature))

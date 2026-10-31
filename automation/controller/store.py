@@ -67,7 +67,23 @@ CREATE TABLE IF NOT EXISTS legacy_history (
 CREATE TABLE IF NOT EXISTS inbox (
  event_id TEXT PRIMARY KEY, payload TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0 CHECK(done IN (0,1))
 );
-PRAGMA user_version=4;
+CREATE TABLE IF NOT EXISTS comment_signatures (
+ key TEXT PRIMARY KEY, signature TEXT NOT NULL, confirmed_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS image_snapshots (
+ revision TEXT PRIMARY KEY, digest TEXT NOT NULL, images TEXT NOT NULL, observed_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS accounts (
+ provider TEXT NOT NULL CHECK(provider IN ('codex','cursor')), account_id TEXT NOT NULL,
+ auth TEXT NOT NULL, state TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '', fence TEXT NOT NULL DEFAULT '',
+ lease_until REAL NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1, metadata TEXT NOT NULL DEFAULT '{}',
+ PRIMARY KEY(provider,account_id)
+);
+CREATE TABLE IF NOT EXISTS instructions (
+ comment_id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, sequence INTEGER NOT NULL,
+ state TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(issue_id,sequence)
+);
+PRAGMA user_version=5;
 """
 
 
@@ -90,7 +106,7 @@ class Database:
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA synchronous=FULL")
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, 3, 4):
+        if version not in (0, 1, 2, 3, 4, 5):
             self.close()
             raise Rejected("Unsupported task database version")
         if version == 1:
@@ -108,6 +124,12 @@ class Database:
     @contextmanager
     def transaction(self):
         with self._lock:
+            if self.connection.in_transaction:
+                # Controller commands may compose local resource operations. The
+                # outer command owns commit/rollback while this reentrant lock
+                # excludes every other request thread.
+                yield self.connection
+                return
             self.connection.execute("BEGIN IMMEDIATE")
             try:
                 yield self.connection

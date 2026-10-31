@@ -1,6 +1,5 @@
 """Signed phase identity, target scope and real review-job evidence contracts."""
 
-from dataclasses import replace
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -8,7 +7,7 @@ import unittest
 from unittest.mock import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
+sys.path[:0] = [str(ROOT / "automation")]
 from controller.authorization import authorize_job, release_ref, verify_review_job
 from controller.model import Rejected, Role
 from controller.workflows import ENGINE, WORKFLOW, ROLE_FILES
@@ -21,7 +20,7 @@ def claims(role):
             "event_name": "workflow_dispatch", "runner_environment": "github-hosted",
             "workflow_ref": f"{ENGINE}/.github/workflows/{WORKFLOW}@{ref}",
             "job_workflow_sha": SPEC.runtime_sha,
-            "job_workflow_ref": f"{ENGINE}/.github/workflows/{ROLE_FILES[role.value]}@{ref}",
+            "job_workflow_ref": f"{ENGINE}/.github/workflows/{ROLE_FILES["review" if role.phase=="review" else "coding"]}@{ref}",
             "run_id": "123", "run_attempt": "1", "repository_id": "12"}
 
 
@@ -30,16 +29,13 @@ class JobAuthorizationTests(unittest.TestCase):
         self.view = SimpleNamespace(spec=SPEC, project_id="project", repository="owner/target")
         self.route = SimpleNamespace(project_id="project", repository="Owner/Target")
 
-    def test_all_four_roles_require_their_own_signed_workflow_identity(self):
-        for role in Role:
+    def test_both_phases_require_their_own_signed_workflow_identity(self):
+        for role in (Role.REVIEW,Role.CODING):
             with self.subTest(role=role):
                 self.assertEqual(authorize_job(claims(role), self.view, self.route, "start"), role)
 
-    def test_reviewer_cannot_publish_and_preflight_cannot_execute(self):
-        for role, action in ((Role.REVIEW, "github"), (Role.REVIEW, "progress"),
-                             (Role.REVIEW_SELECT, "review"), (Role.CODING_SELECT, "progress"),
-                             (Role.REVIEW_SELECT, "checkout"), (Role.CODING_SELECT, "checkout"),
-                             (Role.CODING_SELECT, "github"), (Role.CODING, "review")):
+    def test_reviewer_cannot_publish_or_claim_coding_authority(self):
+        for role, action in ((Role.REVIEW,"github"),(Role.REVIEW,"progress"),(Role.CODING,"review")):
             with self.subTest(role=role, action=action), self.assertRaises(Rejected):
                 authorize_job(claims(role), self.view, self.route, action)
 

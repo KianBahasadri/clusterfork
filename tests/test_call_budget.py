@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 from call_budget import CallBudget, record_api_calls
 from test_remote_worker import MemoryTable
-from worker_core import WorkerError
+from common.accounts import WorkerError
 
 
 class CallBudgetTests(unittest.TestCase):

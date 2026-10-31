@@ -8,17 +8,16 @@ import unittest
 from unittest.mock import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
+sys.path[:0] = [str(ROOT / "automation")]
 from controller.broker import Broker
 from controller.core import Controller
 from controller.model import Admit, IssueObserved, Rejected, Role, TaskSpec
 from controller.store import Database
-from dispatch_core import Registry
-from dispatch_clients import GitHub, Linear
-from readiness_policy import PROTOCOL, issue_revision, policy_version
-from issue_images import image_digest
-from worker_core import Accounts, ProviderAccounts
-from test_remote_worker import MemoryTable, auth
+from common.routing import Registry
+from common.clients import GitHub, Linear
+from common.policy import PROTOCOL, issue_revision, policy_version
+from common.images import image_digest
+from test_remote_worker import auth
 from test_controller import ready
 from test_controller_authorization import claims
 
@@ -30,23 +29,25 @@ class ControllerBrokerTests(unittest.TestCase):
         self.database = Database(Path(directory.name)/"tasks.db")
         self.addCleanup(self.database.close)
         self.controller = Controller(self.database)
-        self.registry = Registry.load(ROOT / "automation/azure/projects.json")
+        self.registry = Registry.load(ROOT / "automation/controller/projects.json")
         self.route = next(iter(self.registry.routes.values()))
         self.issue = {"id": "66547614-8ed4-4928-834e-aac76f01afd2", "title": "Fix the dry-run flag",
-                      "description": "Do not create directories in dry-run mode.", "identifier": "KIAN-1",
+                      "description": "Do not create directories in dry-run mode.", "identifier": getattr(self,"identifier","KIAN-1"),
                       "project": {"id": self.route.project_id}, "url": "https://linear.app/test/issue/KIAN-1"}
         observed = IssueObserved(self.issue["id"], self.route.project_id, self.route.repository,
                                  self.registry.generation, self.issue["identifier"], True, True,
                                  content_revision=issue_revision(self.issue))
-        self.spec = TaskSpec(issue_revision(self.issue), "b"*40, "a"*40, policy_version(self.registry,self.route), image_digest([]),
+        self.spec = TaskSpec(issue_revision(self.issue), getattr(self,"context_sha","b"*40), "a"*40, policy_version(self.registry,self.route), image_digest([]),
                              self.route.repository,self.route.ref,self.route.auto_merge)
         self.controller.apply(observed, now=1000)
         self.view = self.controller.apply(Admit(observed.task_id,self.spec),now=1000)
         self.key = self.view.attempt["attempt_id"]
-        self.pool = Accounts(MemoryTable(),clock=lambda:1000)
+        self.accounts = self.controller.accounts
+        self.pool = self.accounts.pools["codex"]
+        for pool in self.accounts.pools.values():
+            pool.clock=lambda: self.broker.clock()
         self.account_a = self.pool.enroll(auth("a"))
         self.account_b = self.pool.enroll(auth("b"))
-        self.accounts = ProviderAccounts({"codex":self.pool})
         self.linear = Mock(spec=Linear)
         self.linear.issue.return_value = self.issue
         self.linear.issue_comments.return_value = []
@@ -54,7 +55,7 @@ class ControllerBrokerTests(unittest.TestCase):
         self.github.branch_sha.return_value = self.spec.context_sha
         self.github.workflow_changes_allowed.return_value = True
         self.github.request.return_value = {"total_count":1,"jobs":[{"name":"review / run","status":"completed","conclusion":"success"}]}
-        self.broker = Broker(self.controller,self.registry,self.accounts,self.linear,self.github,clock=lambda:1000)
+        self.broker = Broker(self.controller,self.registry,self.linear,self.github,clock=lambda:1000)
 
     def call(self, role, action, **fields):
         return self.broker.handle(action,claims(role),{"dispatch_key":self.key,**fields})
@@ -73,8 +74,8 @@ class ControllerBrokerTests(unittest.TestCase):
 
     def test_probes_save_refresh_and_release_before_binding_without_cross_job_credentials(self):
         self.preflight(Role.REVIEW_SELECT,self.account_a)
-        row,_=self.pool.table.get(self.account_a)
-        self.assertEqual(row["lease_until"],0)
+        row,_=self.pool.get(self.account_a)
+        self.assertGreater(row["lease_until"],1000)
         config=self.call(Role.REVIEW,"start",protocol=PROTOCOL)
         self.assertEqual(config["account_id"],self.account_a)
         self.assertNotIn("auth",config)
@@ -113,7 +114,7 @@ class ControllerBrokerTests(unittest.TestCase):
         self.broker.registry=replace(self.registry,routes={})
         self.assertEqual(self.call(Role.CODING,'save',account_id=self.account_b,lease=leased['lease'],
                                    auth=leased['auth'],release=True),{'saved':True})
-        self.assertEqual(self.pool.table.get(self.account_b)[0]['lease_until'],0)
+        self.assertEqual(self.pool.get(self.account_b)[0]['lease_until'],0)
         with self.assertRaises(Rejected):
             self.call(Role.CODING,'accounts')
 
@@ -150,7 +151,7 @@ class ControllerBrokerTests(unittest.TestCase):
         with self.assertRaisesRegex(Rejected,"content changed"):
             self.call(Role.REVIEW,"checkout")
         self.call(Role.REVIEW,"save",account_id=self.account_a,lease=leased["lease"],release=True)
-        self.assertEqual(self.pool.table.get(self.account_a)[0]["lease_until"],0)
+        self.assertEqual(self.pool.get(self.account_a)[0]["lease_until"],0)
 
     def test_coding_failover_requires_release_same_thread_and_codex_only(self):
         self.review()

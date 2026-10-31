@@ -178,7 +178,7 @@ def read_usage(home):
 
 
 def quota_snapshot(identity, model, limits, *, allow_exhausted=False):
-    from quota_selection import AccountQuota, QuotaWindow
+    from common.selection import AccountQuota, QuotaWindow
     if limits.get("ordinaryUsageAllowed") is False:
         raise CodexError("Codex account usage is unavailable")
     buckets = limits.get("rateLimitsByLimitId") or {"codex": limits.get("rateLimits")}

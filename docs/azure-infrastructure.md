@@ -55,7 +55,7 @@ and other settings are declared in Terraform.
 Terraform already declares the `Clusterfork` app's `LINEAR_OAUTH_CLIENT_ID` and
 the `LINEAR_OAUTH_CLIENT_SECRET` Key Vault reference, alongside the fallback
 `LINEAR_API_KEY` reference. Configure or rotate these through this workflow;
-`pilot.py` only reads local values. [Remote setup](remote-development-setup.md#local-configuration)
+`common/configuration.py` only reads local values. [Remote setup](remote-development-setup.md#local-configuration)
 owns OAuth `client_credentials` selection and token handling.
 
 Initial adoption supplies the existing credential values through an ephemeral
@@ -97,8 +97,9 @@ private local socket. An existing operator public SSH key satisfies Azure VM
 creation; no SSH port is exposed. Terraform outputs contain public configuration
 and resource identity, not runtime secrets.
 
-The VM's system-assigned identity has Key Vault Secrets User plus Table Data
-Contributor on the existing account and instruction tables only. It cannot write
+The VM's system-assigned identity has Key Vault Secrets User. Transitional Table
+Data Contributor grants on the account and instruction tables support their
+once-only resource migration. It cannot write
 legacy task tables through those grants. The application verifies the configured
 VM resource identity before opening its service. Legacy Function triggers are
 declared disabled; initial cutover also stops the old Function App. Protected
@@ -107,35 +108,24 @@ legacy resources and their runtime data remain available for audit.
 The host/disk are provisioned and the controller is active. Cutover and live
 acceptance evidence are tracked in [controller implementation](remote-development-controller.md).
 
-## Bootstrap and adoption
+## Bootstrap and retained import history
 
-Use Terraform 1.15.9 and Azure CLI authenticated to the configured subscription.
-Adoption also uses the Python dependencies in `automation/azure/requirements.txt`.
-The existing GitHub environment variables identify the deployment identity; there
-is no client secret. Authenticate as the operator for bootstrap/adoption, and
-confirm no coding worker is active before an infrastructure change that can
-restart the Function App.
-The adoption helper pauses new admissions and checks all GitHub worker attempts;
-an existing operator pause is preserved, and a failed adoption leaves its pause held.
+Use Terraform 1.15.9 and the existing Azure CLI operator identity. The bootstrap
+command creates the separate state backend when needed:
 
 ```bash
 python3 automation/infrastructure.py bootstrap
-python3 automation/infrastructure.py adopt --credentials-file /private/current-app-settings.json --plan-only
-python3 automation/infrastructure.py adopt --credentials-file /private/current-app-settings.json
 ```
 
-The private snapshot can be a map or the JSON list returned by Azure app-setting
-inspection. It must contain the existing values for the declared credentials.
-Never put it in the repository. Adoption is a one-time migration; routine runs
-use `plan` and `apply`.
+The original resource adoption is complete. Its old pause, shared-key snapshot
+and import CLI are retired with the coordinator. Protected Terraform import
+receipts remain historical infrastructure metadata. Routine runs use `plan` and
+`apply`, with no credential-file argument.
 
-Bootstrap first applies its stack using protected local state because the remote
-backend does not exist yet, then migrates that state into its own Azure container.
-Adoption keeps the initial import private and migrates the updated state after
-credential references resolve. Recovery workspaces live under
-`~/.local/state/clusterfork/terraform/` with restrictive permissions so an
-interrupted migration does not discard state. Backend configuration contains
-resource identifiers only; authentication comes from the current identity.
+The state account is separate from the retired runtime account. Private recovery
+workspaces remain under `~/.local/state/clusterfork/terraform/`. Backend
+configuration contains resource identifiers only; authentication comes from the
+current identity.
 
 ## Routine changes and verification
 
@@ -158,7 +148,7 @@ CI and verified drain, reconciles Terraform through the same plan gate, then
 installs and verifies the controller release. Deployment, migration and hold
 semantics live in [controller deployment](remote-development-deployments.md).
 There are no parallel ARM/CLI provisioning or app-setting mutation helpers.
-`pilot.py` remains a local checker and legacy Functions packager.
+The legacy Functions packager is removed.
 
 After adoption, a normal plan should report no resource changes. Monitoring and
 logging are covered by [remote diagnostics](remote-development-observability.md);

@@ -1,6 +1,5 @@
 """Development stage labels and per-attempt account/usage reporting."""
 
-import copy
 import json
 from pathlib import Path
 import sys
@@ -12,16 +11,12 @@ from unittest.mock import MagicMock, Mock, patch
 from uuid import UUID
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
+sys.path[:0] = [str(ROOT / "automation")]
 import worker
 from codex_runtime import CodexError, inspect_account, quota_snapshot, read_usage
-from dispatch_clients import Linear, RequestError
-from linear_sync import comment_id
-from readiness_policy import PROTOCOL
-from worker_core import Accounts, WorkerError, WorkerService
-from worker_reporting import QUEUED_LABEL, SELECTION_LABEL, STAGE_LABELS, attempt_comment, usage_report, validate_usage
-import test_linear_sync as lifecycle
-from test_remote_worker import KEY, NOW, ISSUE, MemoryTable, auth, claims, selector_claims
+from common.clients import Linear, RequestError
+from common.reporting import QUEUED_LABEL, SELECTION_LABEL, STAGE_LABELS, attempt_comment, usage_report, validate_usage
+from test_remote_worker import NOW, ISSUE
 
 
 def limits(short=10, weekly=20):
@@ -35,189 +30,6 @@ def usage(short=10, weekly=20):
         return usage_report(quota_snapshot("a" * 64, "gpt-6.1-sol", limits(short, weekly)))
 
 
-class ProgressTests(unittest.TestCase):
-    def setUp(self):
-        lifecycle.LifecycleTests.setUp(self)
-        self.runs = self.sync.runs = MemoryTable()
-        self.queue.runs = self.runs
-        self.now = NOW
-        self.accounts = Accounts(MemoryTable(), clock=lambda: self.now)
-        self.identity = self.accounts.enroll(auth())
-        self.service = WorkerService(self.registry, self.receipts, self.runs, self.accounts,
-                                     self.linear, self.github, self.queue, clock=lambda: self.now, sync=self.sync)
-        self.service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
-
-    def call(self, action, **data):
-        return self.service.handle(action, claims(), {"dispatch_key": KEY, "protocol": PROTOCOL, **data})
-
-    def select(self):
-        self.service.handle("bind_account", selector_claims(),
-                            {"dispatch_key": KEY, "account_id": self.identity})
-        self.call("claim", account_id=self.identity)
-        self.call("progress", stage="selecting_account")
-        self.call("progress", stage="coding", account_id=self.identity,
-                  account_email="worker@example.com", account_plan="pro", usage_before=usage())
-
-    def comments(self, kind):
-        identifier = comment_id(KEY, f"123:1:{kind}")
-        return [call.args[2] for call in self.linear.status_comment.call_args_list if call.args[1] == identifier]
-
-    def test_stages_start_finish_and_usage_survive_reconciliation_without_duplicate_comments(self):
-        self.linear.set_stage.assert_called_with(ISSUE, "initializing")
-        self.select()
-        self.linear.set_stage.assert_called_with(ISSUE, "coding")
-        start = self.comments("start")
-        self.assertEqual(len(start), 1)
-        for detail in ("worker@example.com", self.identity, "Codex", "gpt-6.1-sol", "max", "weekly", "20% used / 80% remaining"):
-            self.assertIn(detail, start[0])
-        self.assertEqual(self.comments("finish"), [])
-        self.call("progress", stage="testing")
-        self.linear.set_stage.assert_called_with(ISSUE, "testing")
-        self.call("progress", stage="publishing")
-        self.linear.set_stage.assert_called_with(ISSUE, "publishing")
-        self.call("progress", usage_after=usage(15, 22))
-        for _ in range(61):
-            self.now += 60
-            self.call("heartbeat")
-        self.now += 1
-        self.call("finish", status="completed", pull_request=self.pull["url"])
-        self.linear.set_stage.assert_called_with(ISSUE, "review")
-        finish = self.comments("finish")
-        self.assertEqual(len(finish), 1)
-        for detail in ("worker@example.com", "1h 1m 1s", "10% used / 90% remaining → 15% used / 85% remaining",
-                       "+5 percentage points", "+2 percentage points"):
-            self.assertIn(detail, finish[0])
-        self.sync.sync(KEY)
-        self.assertEqual(len(self.comments("start")), 1)
-        self.assertEqual(len(self.comments("finish")), 1)
-        self.pull.update(state="MERGED", merged=True)
-        self.sync.sync(KEY)
-        self.linear.set_stage.assert_called_with(ISSUE, None)
-        self.assertEqual(self.issue["state"]["id"], self.states.done)
-        self.assertEqual(len(self.comments("finish")), 1)
-
-    def test_start_retry_preserves_account_baseline_and_start_time(self):
-        self.select()
-        before = self.runs.get(KEY)[0]
-        self.now += 30
-        self.call("start")
-        after = self.runs.get(KEY)[0]
-        for field in ("started_at", "stage", "account_id", "usage_before"):
-            self.assertEqual(after[field], before[field])
-        self.assertEqual(len(self.comments("start")), 1)
-
-    def test_account_switch_keeps_start_snapshot_and_reports_separate_usage_deltas(self):
-        self.select()
-        initial_start = self.comments("start")[0]
-        self.service.steering = Mock()
-        self.call("steering_open", thread_id="thread-one", turn_id="turn-one")
-        self.call("progress", usage_account_id=self.identity, usage_after=usage(100, 27))
-        lease = self.accounts.table.get(self.identity)[0]["fence"]
-        self.call("save", account_id=self.identity, lease=lease, release=True)
-        self.call("exhaust_account", account_id=self.identity, thread_id="thread-one")
-        other = self.accounts.enroll(auth("account-b", "access-b"))
-        self.call("bind_account", account_id=other)
-        self.call("claim", account_id=other)
-        self.call("progress", stage="coding", account_id=other, account_email="replacement@example.com",
-                  usage_before=usage(20, 30))
-        self.call("steering_open", thread_id="thread-one", turn_id="turn-two")
-        self.assertEqual(self.comments("start"), [initial_start])
-        self.call("progress", usage_account_id=other, usage_after=usage(25, 32))
-        self.call("finish", status="completed")
-        finish = self.comments("finish")
-        self.assertEqual(len(finish), 1)
-        for text in ("Account changes: 1", "worker@example.com", "replacement@example.com",
-                     "usage change +7 percentage points", "usage change +2 percentage points"):
-            self.assertIn(text, finish[0])
-        self.sync.sync(KEY)
-        self.assertEqual(self.comments("start"), [initial_start])
-        self.assertEqual(self.comments("finish"), finish)
-
-    def test_tracker_failure_replays_both_attempt_comments_with_stable_distinct_uuid4_ids(self):
-        self.linear.status_comment.side_effect = RequestError()
-        with self.assertLogs(level="ERROR"):
-            self.select()
-            self.call("progress", usage_after=usage(12, 21))
-            self.call("finish", status="failed")
-        self.assertEqual(self.runs.get(KEY)[0]["status"], "failed")
-        self.linear.status_comment.side_effect = None
-        self.sync.sync(KEY)
-        identifiers = [comment_id(KEY, f"123:1:{kind}") for kind in ("start", "finish")]
-        self.assertEqual(len(set(identifiers + [comment_id(KEY, "status")])), 3)
-        self.assertTrue(all(UUID(identifier).version == 4 for identifier in identifiers))
-        self.assertIn("usage change +1 percentage points", self.comments("finish")[-1])
-        self.linear.set_stage.assert_called_with(ISSUE, None)
-
-    def test_failed_terminal_attempt_report_does_not_block_done_or_repeat_successful_reports(self):
-        self.select()
-        self.call("progress", usage_after=usage(12, 21))
-        # A merge can precede the worker finish callback. Only the finish report
-        # fails; the lifecycle report and label/state projection can still settle.
-        self.pull.update(state="MERGED", merged=True)
-        finish_id = comment_id(KEY, "123:1:finish")
-
-        def write(issue, identifier, body):
-            if identifier == finish_id:
-                raise RequestError(403)
-
-        self.linear.status_comment.reset_mock()
-        self.linear.status_comment.side_effect = write
-        with self.assertLogs(level="ERROR"):
-            self.call("finish", status="completed", pull_request=self.pull["url"])
-        self.assertEqual(self.issue["state"]["id"], self.states.done)
-        self.linear.set_stage.assert_called_with(ISSUE, None)
-        note = self.notes.get(KEY)[0]
-        self.assertFalse(note["terminal"])
-        self.assertNotIn("finish_signature", note)
-        self.assertIn("signature", note)
-        lifecycle_reports = [call for call in self.linear.status_comment.call_args_list
-                             if call.args[1] == comment_id(KEY, "status")]
-        self.linear.status_comment.side_effect = None
-        self.sync.sync(KEY)
-        self.sync.sync(KEY)
-        self.assertTrue(self.notes.get(KEY)[0]["terminal"])
-        self.assertEqual(len(self.comments("finish")), 2)
-        self.assertEqual([call for call in self.linear.status_comment.call_args_list
-                          if call.args[1] == comment_id(KEY, "status")], lifecycle_reports)
-
-    def test_missing_final_usage_is_explicit_and_rerun_gets_fresh_comments(self):
-        self.select()
-        self.now += 40
-        self.call("finish", status="failed")
-        self.assertIn("final reading unavailable; usage change unavailable", self.comments("finish")[0])
-        self.assertIn("0h 0m 40s", self.comments("finish")[0])
-        other = {**claims(), "run_attempt": "2"}
-        self.service.handle("start", other, {"dispatch_key": KEY, "protocol": PROTOCOL})
-        self.accounts.save(self.identity, "123:1", self.accounts.table.get(self.identity)[0]["fence"], release=True)
-        self.service.handle("bind_account", selector_claims(other),
-                            {"dispatch_key": KEY, "account_id": self.identity})
-        self.service.handle("claim", other, {"dispatch_key": KEY, "account_id": self.identity})
-        self.service.handle("progress", other, {"dispatch_key": KEY, "stage": "coding",
-                                                "account_id": self.identity, "usage_before": usage(12, 21)})
-        identifiers = [call.args[1] for call in self.linear.status_comment.call_args_list]
-        self.assertIn(comment_id(KEY, "123:2:start"), identifiers)
-        self.assertNotEqual(comment_id(KEY, "123:1:start"), comment_id(KEY, "123:2:start"))
-        self.assertEqual(json.loads(self.runs.get(KEY)[0]["usage_before"]), usage(12, 21))
-
-    def test_unleased_accounts_backward_stages_and_unselected_final_usage_are_rejected(self):
-        with self.assertRaises(WorkerError):
-            self.call("progress", stage="coding", account_id=self.identity, usage_before=usage())
-        with self.assertRaises(WorkerError):
-            self.call("progress", usage_after=usage())
-        self.select()
-        with self.assertRaises(WorkerError):
-            self.call("progress", stage="initializing")
-
-    def test_newer_progress_supersedes_a_slow_observation(self):
-        def update(*args):
-            row, etag = self.runs.get(KEY)
-            self.runs.replace({**row, "stage": "testing", "report_version": row["report_version"] + 1}, etag)
-            return copy.deepcopy(self.issue)
-        self.linear.reset_mock()
-        self.linear.issue.side_effect = update
-        self.sync.sync(KEY)
-        self.linear.set_stage.assert_not_called()
-        self.linear.status_comment.assert_not_called()
 
 
 class LabelAdapterTests(unittest.TestCase):

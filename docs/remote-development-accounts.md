@@ -20,12 +20,12 @@ reclaim a profile before starting further local use of its credentials.
 ## Enroll and reclaim
 
 Run these commands from the checkout on the writable auth-store host, with
-Azure CLI authenticated to the configured subscription. Use an isolated Python
-environment with the Azure dependencies:
+the existing Azure CLI operator login. Transfers use the authenticated controller
+endpoint; no storage key or new login is needed. Use the installed Python environment:
 
 ```bash
 python3 -m venv ~/.config/clusterfork/automation/venv
-~/.config/clusterfork/automation/venv/bin/pip install -r automation/azure/requirements.txt
+~/.config/clusterfork/automation/venv/bin/pip install -r automation/requirements.txt
 ~/.config/clusterfork/automation/venv/bin/python automation/accounts.py enroll
 ```
 
@@ -60,15 +60,15 @@ only normal reclaim writes the latest cloud login back to the local profile.
 
 ## Leases and refresh
 
-Private Azure Table `ClusterforkAccounts` holds auth caches. Each provider account
-has one 120-second lease with a random fencing token and ETag updates. Jobs renew
-every 20 seconds and persist refreshed auth during execution and on exit. A lost
-lease stops the agent. A crash between OAuth refresh and persistence can require
-re-login if the refreshed token was never saved.
+The controller's private SQLite `accounts` table holds auth caches. Each provider
+account has one 120-second lease with a random fencing token. SQL updates check
+owner, fence and expiry atomically. Jobs renew every 20 seconds and save refreshed
+auth during execution and on exit. A lost lease stops the agent. A crash between
+OAuth refresh and persistence can require re-login if the new token was never saved.
 
-Codex keeps its existing `codex` partition and account references. Cursor uses
-the `cursor` partition, `cursor-cli-auth-v1` login JSON (`accessToken` and
-`refreshToken`), and SHA-256 of the access JWT's stable `sub` as its row key.
+Codex keeps its existing `codex` provider and account references. Cursor uses
+the `cursor` provider, `cursor-cli-auth-v1` login JSON (`accessToken` and
+`refreshToken`), and SHA-256 of the access JWT's stable `sub` as its stable account ID.
 Broker references qualify Cursor IDs with `cursor:` to prevent identity collisions
 between providers. Decoding the subject establishes identity, not authentication;
 live provider authentication and profile/quota checks remain required. Normal
@@ -86,12 +86,12 @@ target is authorized through the task grant, not the caller repository name.
 [The native graph](remote-development-controller.md#native-execution-graph) owns
 its distinct signed phase roles and workflow paths.
 
-Review and coding each use an independent account preflight on a separate fresh
-VM from their agent. Preflight can inspect/probe the eligible pool but cannot
-obtain target checkout/publication tokens, start an agent turn or run validation.
-It saves refreshed credentials, releases each fenced probe, and binds one account
-to that task, run, attempt and phase. Temporary auth homes disappear on exit;
-only the selection boolean crosses the job boundary.
+Review and coding each select their own account on their fresh phase VM before
+obtaining target checkout credentials. The trusted worker probes eligible accounts
+in private temporary homes, saves refreshed credentials and releases each probe.
+Binding reserves the selected lease and closes pool access in one transaction.
+The job heartbeat preserves that reservation through checkout; execution claims
+the same fenced lease. Selection cannot publish, validate or execute target code.
 
 Agent jobs require their phase binding and recheck the assigned account's live
 quota. After binding, listing returns that identity only; other claims/saves are
@@ -105,21 +105,15 @@ Verified saves and releases retain the original task/run/phase binding even if
 the issue or its repository mapping changes. Revocation prevents new access
 without stranding the already leased credentials during cleanup.
 
-Bindings allow 15 minutes for job handoff. The account itself keeps its ordinary
-120-second fenced lease and is not reserved while another VM queues. A busy,
-depleted or unavailable assignment waits for capacity and the existing retry;
-it does not rotate before coding. A review's deadline starts on its first agent
-start and cannot be extended by repeated starts or heartbeats.
-
-The controller and all four jobs use the same tested central runtime. Target
-repositories need no copied worker sources or per-repository worker pin. Protocol
-compatibility remains mandatory before execution; deployment owns version
-selection and drain rather than asking each repository to update a caller.
+The review deadline starts on its first agent start and cannot be extended by
+repeated starts or heartbeats. The controller and both jobs use the same tested
+central runtime. Target repositories need no copied worker or per-repository pin.
+Deployment owns version selection and draining.
 
 Cursor gets a fresh private home containing only its assigned CLI login, with
 private config/data paths and no inherited provider keys or job tokens. It never
 receives Codex logins. Likewise, a Codex agent VM cannot probe or claim Cursor
-credentials. Preflight exports only the existing selection boolean, and each new
+credentials. Each new
 run/attempt independently applies the provider policy in the
 [runtime profile section](remote-development.md#agent-profiles).
 

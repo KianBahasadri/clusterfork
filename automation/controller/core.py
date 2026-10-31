@@ -10,16 +10,23 @@ import re
 from .model import (Admit, Assign, DispatchObserved, ExternalObserved, Finish, Hold,
                     IssueObserved, Phase, Progress, Rejected, Retry, Review, Role,
                     Start, TaskSpec, TaskView, identity, SessionUpdated, EffectUpdated, Authorize, ExhaustAccount,
-                    ContextObserved, InboxQueued, InboxDone, Initialize, LegacyImported)
+                    ContextObserved, InboxQueued, InboxDone, Initialize, LegacyImported, ReportConfirmed, AccountRequest, InstructionRequest)
 
 
 class Controller:
     def __init__(self, database):
         self.database = database
+        from .accounts import Accounts
+        self.accounts=Accounts(database)
 
     def inspect(self, task_id):
         with self.database.transaction() as db:
             return self._view(db, task_id)
+
+    def report_signature(self,key):
+        with self.database.transaction() as db:
+            row=db.execute('SELECT signature FROM comment_signatures WHERE key=?',(key,)).fetchone()
+            return row[0] if row else None
 
     def for_attempt(self, attempt_id):
         with self.database.transaction() as db:
@@ -99,6 +106,17 @@ class Controller:
         if not isinstance(now, (float, int)) or isinstance(now, bool) or not math.isfinite(now):
             raise ValueError("A finite observation timestamp is required")
         with self.database.transaction() as db:
+            if isinstance(command,InstructionRequest):
+                from .instructions import apply_request
+                return apply_request(self,db,command,now)
+            if isinstance(command, ReportConfirmed):
+                if (not re.fullmatch(r'[a-zA-Z0-9:-]{1,200}',command.key)
+                        or not re.fullmatch(r'[0-9a-f]{64}',command.signature)):
+                    raise Rejected('Invalid reporting acknowledgement')
+                db.execute('INSERT INTO comment_signatures VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET '
+                           'signature=excluded.signature,confirmed_at=excluded.confirmed_at',
+                           (command.key,command.signature,now))
+                return None
             if isinstance(command, Initialize):
                 if db.execute("INSERT OR IGNORE INTO metadata VALUES ('initialized','1')").rowcount:
                     db.execute("INSERT OR IGNORE INTO holds VALUES ('operator:rebuild','Production admission is held for rebuild acceptance.')")
@@ -143,6 +161,14 @@ class Controller:
                 self._issue(db, command)
                 return self._view(db, command.task_id)
             task = self._task(db, command.task_id)
+            if isinstance(command,AccountRequest):
+                attempt=self._attempt(db,task,command.attempt_id)
+                if command.operation!='save':
+                    self.apply(Authorize(command.task_id,command.attempt_id,command.role),now=now)
+                view=self._view(db,command.task_id)
+                owner=f"{command.attempt_id}:{attempt['run_id']}:{attempt['run_attempt']}:{command.role.phase}"
+                from .account_commands import execute
+                return execute(self,db,view,command.role,owner,command.operation,command.data,now)
             if isinstance(command, EffectUpdated):
                 if command.state not in {"claimed", "done"}:
                     raise Rejected("Invalid external effect state")
@@ -194,7 +220,8 @@ class Controller:
                     session = db.execute("SELECT * FROM sessions WHERE attempt_id=? AND phase=?",
                                          (command.attempt_id, command.role.phase)).fetchone()
                     if (not session or session["finished"] or session["deadline"] <= now
-                            or not command.role.selector and not session["agent_started"]):
+                            or not command.role.selector and not session["agent_started"]
+                            or command.role.selector and session['agent_started']):
                         raise Rejected("Execution phase is not active")
                 elif isinstance(command, ExhaustAccount):
                     self._exhaust(db, task, attempt, command)
@@ -355,7 +382,7 @@ class Controller:
                    "usage_before", "usage_after", "usage_segments", "exhausted_account_ids",
                    "account_failover", "probe_account_id", "released_account_id", "heartbeat_until",
                    "repair_validation_passed", "repair_result", "failure", "quota_wait", "wip_branch", "wip_commit_sha",
-                   "original_account_id", "steering_started_at"}
+                   "original_account_id", "steering_started_at", "account_reserved"}
         allowed.update({'provider','model','effort'})
         if command.phase not in {"review", "coding"} or not isinstance(command.fields, dict) or set(command.fields) - allowed:
             raise Rejected("Unsupported execution metadata")
@@ -406,8 +433,20 @@ class Controller:
                    (json.dumps(data), command.attempt_id))
         self._update(db, task)
 
+    def _release_reservation(self,db,task,attempt,phase,now):
+        session=db.execute('SELECT * FROM sessions WHERE attempt_id=? AND phase=?',(attempt['attempt_id'],phase)).fetchone()
+        data=json.loads(session['data']) if session else {}
+        if not data.get('account_reserved') or not session['account_id']:
+            return
+        owner=f"{attempt['attempt_id']}:{attempt['run_id']}:{attempt['run_attempt']}:{phase}"
+        account,_=self.accounts.get(session['account_id'])
+        if account['owner']==owner and account['lease_until']>now:
+            self.accounts.save(session['account_id'],owner,account['fence'],release=True)
+        data.update(account_reserved=False,released_account_id=session['account_id'])
+        db.execute('UPDATE sessions SET data=? WHERE attempt_id=? AND phase=?',(json.dumps(data),attempt['attempt_id'],phase))
+
     def _review(self, db, task, attempt, command, now):
-        from readiness_policy import validate_result, redact_review_value
+        from common.policy import validate_result, redact_review_value
         self._authority(db, task)
         session = db.execute("SELECT * FROM sessions WHERE attempt_id=? AND phase='review'", (command.attempt_id,)).fetchone()
         if not session or not session["agent_started"] or session["finished"]:
@@ -420,6 +459,7 @@ class Controller:
             # Only the validator's bounded diagnostics are retained, never raw output.
             result = {"verdict": "rejected", "summary": "Invalid reviewer result: " + str(exc)[:1500]}
         verdict = result["verdict"]
+        self._release_reservation(db,task,attempt,'review',now)
         db.execute("UPDATE attempts SET review_result=? WHERE attempt_id=?", (json.dumps(result), command.attempt_id))
         db.execute("UPDATE sessions SET finished=1 WHERE attempt_id=? AND phase='review'", (command.attempt_id,))
         if verdict == "retry":
@@ -461,6 +501,8 @@ class Controller:
             raise Rejected("This execution phase already has a result")
         if command.pull_request and not re.fullmatch(re.escape("https://github.com/" + task["repository"] + "/pull/") + r"[1-9][0-9]*", command.pull_request, flags=re.I):
             raise Rejected("Invalid publication reference")
+        self._release_reservation(db,task,attempt,command.phase,now)
+        session=db.execute('SELECT * FROM sessions WHERE attempt_id=? AND phase=?',(command.attempt_id,command.phase)).fetchone()
         # A callback records a result; it never proves the Actions cleanup stopped.
         db.execute("UPDATE sessions SET finished=1 WHERE attempt_id=? AND phase=?", (command.attempt_id, command.phase))
         data={**json.loads(session['data']),'finished_at':now}
@@ -555,4 +597,4 @@ class Controller:
         return TaskView(task_id, row["issue_id"], row["project_id"], row["repository"], row["identifier"], Phase(row["phase"]),
                         row["revision"], bool(db.execute("SELECT 1 FROM grants WHERE task_id=?", (task_id,)).fetchone()),
                         bool(row["eligible"]), bool(row["dependencies_ready"]), row["reason"],
-                        TaskSpec(**json.loads(row["spec"])) if row["spec"] else None, dict(attempt) if attempt else {}, sessions, bool(row["canceled"]))
+                        TaskSpec(**json.loads(row["spec"])) if row["spec"] else None, dict(attempt) if attempt else {}, sessions, bool(row["canceled"]), row["content_revision"])

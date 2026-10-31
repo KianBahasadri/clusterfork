@@ -8,15 +8,15 @@ import unittest
 from unittest.mock import Mock
 
 ROOT=Path(__file__).resolve().parents[1]
-sys.path[:0]=[str(ROOT/'automation'),str(ROOT/'automation/azure')]
+sys.path[:0]=[str(ROOT/'automation'),str(ROOT/'automation')]
 from controller.setup import evidence
 from controller.workflows import ENGINE,WORKFLOW,render
-from dispatch_core import Registry
+from common.routing import Registry
 
 
 class ControllerSetupTests(unittest.TestCase):
     def setUp(self):
-        self.registry=Registry.load(ROOT/'automation/azure/projects.json')
+        self.registry=Registry.load(ROOT/'automation/controller/projects.json')
         self.route=next(iter(self.registry.routes.values()))
         self.manifest={'revision':'a'*40}
         self.github=Mock()

@@ -1,17 +1,16 @@
 """Deployment needs stopped jobs, resolved publication, and released credentials."""
 
-from dataclasses import replace
 from pathlib import Path
 import sys
 import unittest
 from unittest.mock import Mock
 
 ROOT=Path(__file__).resolve().parents[1]
-sys.path[:0]=[str(ROOT/'automation'),str(ROOT/'automation/azure')]
+sys.path[:0]=[str(ROOT/'automation'),str(ROOT/'automation')]
 from controller.deployment import verify_release
 from controller.model import Rejected
 from controller.server import Application
-from dispatch_clients import RequestError
+from common.clients import RequestError
 import test_controller as fixtures
 
 

@@ -12,14 +12,10 @@ from unittest.mock import Mock, patch
 from uuid import UUID
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "automation/azure"))
-from dispatch_clients import GitHub, Linear, RequestError
-from dispatch_core import Registry, eligibility
-from linear_sync import LinearSync, comment_id, pull_outcome
-from readiness_policy import PROTOCOL
-from worker_core import Accounts, WorkerError, WorkerService
-from test_remote_worker import KEY, NOW, PROJECT, ISSUE, MemoryTable, claims, receipt, repository_queue
-from call_budget import CallBudget
+sys.path.insert(0, str(ROOT / "automation"))
+from common.clients import GitHub, Linear, RequestError
+from common.routing import Registry
+from test_remote_worker import KEY, PROJECT, ISSUE, receipt
 
 
 def pr():
@@ -83,411 +79,6 @@ class CommentAPI:
         raise AssertionError("Unexpected comment API operation")
 
 
-class LifecycleTests(unittest.TestCase):
-    def setUp(self):
-        self.registry = Registry.load(ROOT / "automation/azure/projects.json")
-        self.route = self.registry.routes[PROJECT]
-        self.states = self.route.linear_states
-        self.issue = {"id": ISSUE, "identifier": "KIAN-891", "state": {"id": self.route.ready_state_ids[0]},
-                      "project": {"id": PROJECT, "archivedAt": None, "labels": {"nodes": [{"name": "clusterfork-symphony"}]}},
-                      "title": "Test", "description": "", "url": "https://linear.app/test"}
-        self.linear = Mock(spec=Linear)
-        self.linear.issue_dependencies.return_value = []
-        self.linear.issue.side_effect = lambda _: copy.deepcopy(self.issue)
-        self.linear.set_state.side_effect = lambda _, state: self.issue.update(state={"id": state})
-        self.github = Mock(spec=GitHub)
-        self.github.installation_token.return_value = "temporary-token"
-        self.github.worker_result.return_value = {"status": "completed"}
-        self.pull = pr()
-        self.github.worker_pull.side_effect = lambda *args: copy.deepcopy(self.pull)
-        self.receipts, self.runs, self.notes = MemoryTable(), MemoryTable(), MemoryTable()
-        self.receipts.create(receipt())
-        self.run = {"RowKey": KEY, "owner": "123:1", "status": "completed", "lease_until": 0,
-                    "pull_request": self.pull["url"]}
-        self.runs.create(self.run)
-        self.sync = LinearSync(self.registry, self.receipts, self.runs, self.notes,
-                               self.linear, self.github, clock=lambda: NOW)
-        self.queue = repository_queue(self.registry, self.receipts, self.runs, self.linear, self.github)
-
-    def update_run(self, **fields):
-        row, etag = self.runs.get(KEY)
-        self.runs.replace({**row, **fields}, etag)
-
-    def test_queue_owned_parent_and_child_repair_lifecycle_is_never_overwritten(self):
-        for metadata in ({"repair_attempted": True, "repair_issue_id": ISSUE},
-                         {"is_auto_repair": True, "repair_parent_key": "b" * 64}):
-            with self.subTest(metadata=metadata):
-                self.setUp()
-                row, version = self.receipts.get(KEY)
-                self.receipts.replace({**row, **metadata}, version)
-                self.sync.sync(KEY)
-                self.assertFalse(self.linear.mock_calls)
-                self.assertFalse(self.github.mock_calls)
-
-    def test_repair_usage_comments_use_repair_key_on_original_issue_without_owning_status(self):
-        from test_worker_reporting import usage
-
-        repair_key = "b" * 64
-        root, version = self.receipts.get(KEY)
-        root.update(repair_attempted=True, repair_issue_id=ISSUE, repair_key=repair_key)
-        self.receipts.replace(root, version)
-        self.receipts.create({**receipt(), "RowKey": repair_key, "is_auto_repair": True, "repair_parent_key": KEY})
-        self.runs.create({**self.run, "RowKey": repair_key, "owner": "456:1", "status": "running",
-                          "lease_until": NOW + 120,
-                          "started_at": NOW, "account_id": "test-account", "account_email": "worker@example.com",
-                          "model": "gpt-6.1-sol", "effort": "max", "usage_before": json.dumps(usage())})
-        self.sync.reconcile()
-        start_id, finish_id = [comment_id(repair_key, f"456:1:{kind}") for kind in ("start", "finish")]
-        self.assertEqual(self.linear.status_comment.call_count, 1)
-        self.assertEqual(self.linear.status_comment.call_args.args[:2], (ISSUE, start_id))
-        self.assertIn("development started", self.linear.status_comment.call_args.args[2])
-        self.assertIn("actions/runs/456/attempts/1", self.linear.status_comment.call_args.args[2])
-        run, version = self.runs.get(repair_key)
-        run.update(status="completed", finished_at=NOW + 62, usage_after=json.dumps(usage(15, 23)))
-        self.runs.replace(run, version)
-        self.linear.status_comment.side_effect = RequestError()
-        with self.assertRaises(RequestError):
-            self.sync.sync(repair_key)
-        self.linear.status_comment.side_effect = None
-        restarted = LinearSync(self.registry, self.receipts, self.runs, self.notes,
-                               self.linear, self.github, clock=lambda: NOW)
-        restarted.sync(repair_key)
-        args = self.linear.status_comment.call_args.args
-        self.assertEqual(args[:2], (ISSUE, finish_id))
-        self.assertIn("development finished", args[2])
-        self.assertIn("0h 1m 2s", args[2])
-        self.assertIn("percentage points", args[2])
-        self.linear.issue.assert_not_called()
-        self.linear.set_state.assert_not_called()
-        self.linear.set_stage.assert_not_called()
-        self.linear.set_label.assert_not_called()
-        self.assertFalse(self.github.mock_calls)
-        with CallBudget(self, linear=self.linear, github=self.github):
-            restarted.reconcile()
-
-    def sync_state(self):
-        self.sync.sync(KEY)
-        return self.issue["state"]["id"]
-
-    def test_stopped_repair_without_finish_callback_reports_unavailable_final_usage_once(self):
-        from test_worker_reporting import usage
-
-        row, version = self.receipts.get(KEY)
-        self.receipts.replace({**row, "is_auto_repair": True, "repair_parent_key": "b" * 64}, version)
-        self.update_run(status="running", lease_until=NOW - 1, account_id="test-account",
-                        model="gpt-6.1-sol", effort="max", usage_before=json.dumps(usage()), started_at=NOW - 60)
-        self.github.worker_result.return_value = {"status": "completed", "conclusion": "failure"}
-        self.sync.sync(KEY)
-        finish = next(call.args[2] for call in self.linear.status_comment.call_args_list
-                      if call.args[1] == comment_id(KEY, "123:1:finish"))
-        self.assertIn("Total worker time: unavailable", finish)
-        self.assertIn("final reading unavailable", finish)
-        self.assertEqual(self.linear.status_comment.call_count, 2)
-        with CallBudget(self, linear=self.linear, github=self.github):
-            self.sync.reconcile()
-
-    def test_dependency_held_pre_coding_attempt_returns_to_todo_without_failure_state(self):
-        for status in ("running", "failed", "waiting_for_dependencies"):
-            with self.subTest(status=status):
-                self.setUp()
-                self.issue["state"]["id"] = self.states.in_progress
-                self.update_run(status=status, stage="selecting_account", dependency_wait=True,
-                                pull_request="", lease_until=0)
-                self.assertEqual(self.sync_state(), self.route.ready_state_ids[0])
-                self.assertIn("blocked-by issue prerequisites", self.linear.status_comment.call_args.args[2])
-                self.linear.set_stage.assert_called_with(ISSUE, None)
-                self.github.worker_pull.assert_not_called()
-
-    def test_deployment_held_pre_coding_attempt_reports_a_resume_wait_without_failure_state(self):
-        row, version = self.receipts.get(KEY)
-        self.receipts.replace({**row, "deployment_wait_owner": "123:1"}, version)
-        self.update_run(status="running", stage="selecting_account", lease_until=0)
-        self.assertEqual(self.sync_state(), self.route.ready_state_ids[0])
-        self.assertIn("explicit resume", self.linear.status_comment.call_args.args[2])
-        self.linear.set_stage.assert_called_with(ISSUE, None)
-        self.github.worker_result.assert_not_called()
-        self.github.worker_pull.assert_not_called()
-
-    def test_pending_ci_stays_in_progress_and_only_merge_marks_done(self):
-        checks(self.pull)[0].update(status="IN_PROGRESS", conclusion=None)
-        self.assertEqual(self.sync_state(), self.states.in_progress)
-        self.assertIn("Waiting for required CI", self.linear.status_comment.call_args.args[2])
-        self.pull.update(state="MERGED", merged=True)
-        self.assertEqual(self.sync_state(), self.states.done)
-        self.assertIn("Pull request merged", self.linear.status_comment.call_args.args[2])
-        self.github.reset_mock()
-        self.sync.sync(KEY)
-        self.github.worker_pull.assert_not_called()
-
-    def test_conflict_and_failed_required_ci_block_then_recover(self):
-        for failure in ("conflict", "ci"):
-            with self.subTest(failure=failure):
-                self.setUp()
-                if failure == "conflict":
-                    self.pull["mergeable"] = "CONFLICTING"
-                else:
-                    checks(self.pull)[0]["conclusion"] = "FAILURE"
-                self.assertEqual(self.sync_state(), self.states.blocked)
-                body = self.linear.status_comment.call_args.args[2]
-                self.assertIn("conflicts" if failure == "conflict" else "test", body)
-                self.assertIn("[Pull request]", body)
-                self.assertIn("/actions/runs/123/attempts/1", body)
-                first_id = self.linear.status_comment.call_args.args[1]
-                self.pull = pr()
-                checks(self.pull)[0].update(status="IN_PROGRESS", conclusion=None)
-                self.assertEqual(self.sync_state(), self.states.in_progress)
-                self.assertEqual(self.linear.status_comment.call_args.args[1], first_id)
-
-    def test_normal_waits_and_other_merge_blockers(self):
-        cases = [({"state": "CLOSED"}, "blocked"), ({"isDraft": True}, "blocked"),
-                 ({"autoMergeRequest": None}, "blocked"), ({"mergeStateStatus": "BEHIND"}, "blocked"),
-                 ({"mergeStateStatus": "BLOCKED"}, "blocked"), ({"mergeable": "UNKNOWN"}, "in_progress"),
-                 ({"commits": {"nodes": []}}, "in_progress")]
-        for change, expected in cases:
-            with self.subTest(change=change):
-                self.assertEqual(pull_outcome({**pr(), **change}, True)[0], expected)
-        self.assertEqual(pull_outcome({**pr(), "autoMergeRequest": None}, False)[0], "in_progress")
-
-    def test_unrequired_failures_do_not_block_and_running_reruns_are_pending(self):
-        checks(self.pull).append({"__typename": "CheckRun", "name": "extra", "isRequired": False,
-                                  "status": "COMPLETED", "conclusion": "FAILURE"})
-        self.assertEqual(self.sync_state(), self.states.in_progress)
-        checks(self.pull)[0]["conclusion"] = "FAILURE"
-        checks(self.pull).append({"__typename": "CheckRun", "name": "test", "isRequired": True,
-                                  "status": "IN_PROGRESS", "conclusion": None})
-        self.assertEqual(self.sync_state(), self.states.in_progress)
-
-    def test_canceled_ci_and_legacy_commit_status_are_detected(self):
-        checks(self.pull)[0]["conclusion"] = "CANCELLED"
-        self.assertEqual(self.sync_state(), self.states.blocked)
-        checks(self.pull)[:] = [{"__typename": "StatusContext", "context": "legacy", "isRequired": True,
-                                "state": "PENDING"}]
-        self.assertEqual(self.sync_state(), self.states.in_progress)
-        checks(self.pull)[0]["state"] = "ERROR"
-        self.assertEqual(self.sync_state(), self.states.blocked)
-
-    def test_partial_api_results_do_not_change_status(self):
-        self.pull["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["pageInfo"]["hasNextPage"] = True
-        with self.assertRaises(ValueError):
-            self.sync.sync(KEY)
-        self.linear.set_state.assert_not_called()
-        self.assertEqual(self.notes.get(KEY)[0]["lease_until"], 0)
-
-    def test_worker_failure_discovers_a_pr_created_before_the_failure(self):
-        self.update_run(status="failed", pull_request="")
-        self.pull["mergeable"] = "CONFLICTING"
-        self.assertEqual(self.sync_state(), self.states.blocked)
-        self.github.worker_pull.assert_called_once_with(self.route, receipt(), KEY, "")
-        self.pull.update(state="MERGED", merged=True)
-        self.assertEqual(self.sync_state(), self.states.done)
-
-    def test_failed_and_canceled_workers_without_prs_are_blocked(self):
-        self.github.worker_pull.side_effect = lambda *args: None
-        self.update_run(status="failed", pull_request="")
-        self.assertEqual(self.sync_state(), self.states.blocked)
-        self.update_run(status="running", pull_request="", lease_until=NOW-1)
-        self.github.worker_result.return_value = {"status": "completed", "conclusion": "cancelled"}
-        self.assertEqual(self.sync_state(), self.states.blocked)
-        self.github.worker_result.return_value = {"status": "in_progress"}
-        self.assertEqual(self.sync_state(), self.states.in_progress)
-
-    def test_confirmed_pre_coding_failure_returns_to_todo_but_cancellation_stays_blocked(self):
-        for stage in ("initializing", "selecting_account"):
-            with self.subTest(stage=stage):
-                self.setUp()
-                self.github.worker_pull.side_effect = lambda *args: None
-                self.update_run(status="failed", stage=stage, pull_request="")
-                self.assertEqual(self.sync_state(), self.route.ready_state_ids[0])
-                self.assertIn("retry after 60 seconds", self.linear.status_comment.call_args.args[2])
-                self.update_run(status="running", stage=stage, lease_until=NOW-1)
-                self.github.worker_result.return_value = {"status": "completed", "conclusion": "cancelled"}
-                self.assertEqual(self.sync_state(), self.states.blocked)
-
-    def test_no_change_completion_is_done_and_quota_wait_is_ready(self):
-        self.update_run(pull_request="")
-        self.assertEqual(self.sync_state(), self.states.done)
-        self.setUp()
-        self.update_run(status="waiting_for_quota", pull_request="")
-        self.issue["state"]["id"] = self.states.in_progress
-        self.assertEqual(self.sync_state(), self.route.ready_state_ids[0])
-        self.github.worker_pull.assert_not_called()
-
-    def test_repeated_polls_do_not_repeat_comments(self):
-        self.sync.sync(KEY)
-        self.sync.sync(KEY)
-        self.assertEqual(self.linear.status_comment.call_count, 1)
-        self.assertEqual(self.linear.set_state.call_count, 1)
-        self.assertEqual(UUID(self.linear.status_comment.call_args.args[1]).version, 4)
-
-    def test_failed_comment_does_not_advance_state_and_retries(self):
-        self.linear.status_comment.side_effect = [RequestError(), None]
-        with self.assertRaises(RequestError):
-            self.sync.sync(KEY)
-        self.linear.set_state.assert_not_called()
-        self.assertEqual(self.sync_state(), self.states.in_progress)
-
-    def test_merged_legacy_comment_recovers_and_repeated_reconciliation_stays_quiet(self):
-        api = CommentAPI()
-        legacy = comment_id(KEY, "status")
-        original = api.seed(legacy)
-        self.linear.status_comment.side_effect = Linear("test", api.request).status_comment
-        self.issue["state"]["id"] = self.states.in_progress
-        self.pull.update(state="MERGED", merged=True)
-        receipts, runs = copy.deepcopy(self.receipts.rows), copy.deepcopy(self.runs.rows)
-        self.sync.reconcile()
-        self.assertEqual(self.issue["state"]["id"], self.states.done)
-        self.linear.set_stage.assert_called_once_with(ISSUE, None)
-        self.assertEqual(api.comments[legacy], original)
-        self.assertEqual(len(api.writes), 1)
-        self.assertIn("Pull request merged", api.comments[api.writes[0][1]]["body"])
-        self.assertTrue(self.notes.get(KEY)[0]["terminal"])
-        for _ in range(3):
-            with CallBudget(self, linear=self.linear, github=self.github, receipts=self.receipts,
-                            runs=self.runs, notes=self.notes):
-                LinearSync(self.registry, self.receipts, self.runs, self.notes,
-                           self.linear, self.github, clock=lambda: NOW).reconcile()
-        self.assertEqual((self.receipts.rows, self.runs.rows), (receipts, runs))
-
-    def test_merged_issue_finishes_despite_comment_failure_and_repairs_after_restart(self):
-        self.pull.update(state="MERGED", merged=True)
-        self.linear.status_comment.side_effect = RequestError(403)
-        with self.assertLogs(level="ERROR"):
-            self.sync.reconcile()
-        self.assertEqual(self.issue["state"]["id"], self.states.done)
-        self.linear.set_stage.assert_called_with(ISSUE, None)
-        note = self.notes.get(KEY)[0]
-        self.assertFalse(note["terminal"])
-        self.assertEqual(note["completion_owner"], self.run["owner"])
-        self.assertNotIn("signature", note)
-        self.linear.status_comment.side_effect = None
-        recovered = LinearSync(self.registry, self.receipts, self.runs, self.notes,
-                               self.linear, self.github, clock=lambda: NOW)
-        recovered.reconcile()
-        self.assertTrue(self.notes.get(KEY)[0]["terminal"])
-        self.assertEqual(self.linear.set_state.call_count, 1)
-        self.assertEqual(self.linear.status_comment.call_count, 2)
-        self.github.dispatch.assert_not_called()
-
-    def test_terminal_label_failure_cannot_hide_done_and_remains_retryable(self):
-        self.pull.update(state="MERGED", merged=True)
-        self.linear.set_stage.side_effect = [RequestError(503), None]
-        with self.assertLogs(level="ERROR"):
-            self.sync.reconcile()
-        self.assertEqual(self.issue["state"]["id"], self.states.done)
-        self.assertFalse(self.notes.get(KEY)[0]["terminal"])
-        self.sync.reconcile()
-        self.assertTrue(self.notes.get(KEY)[0]["terminal"])
-        self.assertEqual(self.linear.status_comment.call_count, 1)
-        self.assertEqual(self.linear.set_stage.call_count, 2)
-
-    def test_ambiguous_done_response_keeps_completion_report_retryable(self):
-        self.pull.update(state="MERGED", merged=True)
-
-        def state_written_then_response_lost(issue, state):
-            self.issue["state"]["id"] = state
-            raise RequestError(503)
-
-        self.linear.set_state.side_effect = state_written_then_response_lost
-        with self.assertRaises(RequestError):
-            self.sync.sync(KEY)
-        self.assertEqual(self.issue["state"]["id"], self.states.done)
-        self.assertFalse(self.notes.get(KEY)[0]["terminal"])
-        self.sync.sync(KEY)
-        self.assertTrue(self.notes.get(KEY)[0]["terminal"])
-        self.assertEqual(self.linear.set_state.call_count, 1)
-
-    def test_deferred_timer_log_retains_graphql_reason_and_dispatch_identity(self):
-        client = Linear("PRIVATE", lambda *a, **kw: {"errors": [{"message": "PRIVATE",
-                        "path": ["commentUpdate"], "extensions": {"type": "forbidden", "code": "FORBIDDEN"}}]})
-        self.linear.status_comment.side_effect = lambda *a: client.query(
-            "mutation { commentUpdate { success } }", {})
-        with self.assertLogs(level="ERROR") as logs:
-            self.sync.reconcile()
-        records = [json.loads(line.split("Clusterfork: ", 1)[1]) for line in logs.output]
-        deferred = next(row for row in records if row["event"] == "linear_sync_deferred")
-        self.assertEqual(deferred["graphql_code"], "FORBIDDEN")
-        self.assertEqual(deferred["graphql_type"], "forbidden")
-        self.assertEqual(deferred["operation"], "linear/commentUpdate")
-        self.assertEqual((deferred["dispatch_key"], deferred["run_id"], deferred["run_attempt"]), (KEY, "123", "1"))
-        self.assertNotIn("PRIVATE", "\n".join(logs.output))
-
-    def test_crash_after_done_write_repairs_with_durable_completion_intent(self):
-        self.pull.update(state="MERGED", merged=True)
-
-        def interrupted(issue, state):
-            self.issue["state"]["id"] = state
-            raise SystemExit()
-
-        self.linear.set_state.side_effect = interrupted
-        with self.assertRaises(SystemExit):
-            self.sync.sync(KEY)
-        self.assertEqual(self.issue["state"]["id"], self.states.done)
-        self.assertEqual(self.notes.get(KEY)[0]["completion_owner"], self.run["owner"])
-        self.sync.sync(KEY)
-        self.assertTrue(self.notes.get(KEY)[0]["terminal"])
-
-    def test_project_changes_and_manual_terminal_states_are_respected(self):
-        changes = [lambda i: i.update(archivedAt="now"),
-                   lambda i: i["project"].update(id="another-project"),
-                   lambda i: i["project"]["labels"].update(nodes=[]),
-                   lambda i: i["project"].update(archivedAt="now"),
-                   lambda i: i.update(state={"id": self.states.done}),
-                   lambda i: i.update(state={"id": "canceled", "type": "canceled"})]
-        for change in changes:
-            with self.subTest(change=change):
-                self.setUp()
-                change(self.issue)
-                self.sync.sync(KEY)
-                self.linear.set_state.assert_not_called()
-                self.linear.status_comment.assert_not_called()
-
-    def test_newer_worker_attempt_supersedes_an_old_observation(self):
-        def fetch(*args):
-            self.update_run(owner="123:2", status="running")
-            return pr()
-        self.github.worker_pull.side_effect = fetch
-        self.sync.sync(KEY)
-        self.linear.set_state.assert_not_called()
-
-    def test_concurrent_sync_lease_prevents_duplicate_updates(self):
-        self.notes.create({"RowKey": KEY, "lease_until": NOW+120})
-        self.sync.sync(KEY)
-        self.linear.set_state.assert_not_called()
-
-    def test_started_worker_can_publish_after_linear_moves_to_in_progress(self):
-        self.runs = MemoryTable()
-        self.sync.runs = self.runs
-        self.queue.runs = self.runs
-        service = WorkerService(self.registry, self.receipts, self.runs, Accounts(MemoryTable()),
-                                self.linear, self.github, self.queue, clock=lambda: NOW, sync=self.sync)
-        service.handle("start", claims(), {"dispatch_key": KEY, "protocol": PROTOCOL})
-        self.assertEqual(self.issue["state"]["id"], self.states.in_progress)
-        self.assertEqual(eligibility(self.issue, self.registry)[1], "not_ready")
-        self.assertEqual(service.handle("github", claims(), {"dispatch_key": KEY})["token"], "temporary-token")
-        service.handle("finish", claims(), {"dispatch_key": KEY, "status": "waiting_for_quota"})
-        self.assertEqual(self.issue["state"]["id"], self.route.ready_state_ids[0])
-        self.assertEqual(self.receipts.get(KEY)[0]["retry_after"], NOW+900)
-
-    def test_manual_rerun_can_resume_blocked_issue_but_publication_honors_cancellation(self):
-        self.update_run(status="failed", pull_request="")
-        self.issue["state"]["id"] = self.states.blocked
-        service = WorkerService(self.registry, self.receipts, self.runs, Accounts(MemoryTable()),
-                                self.linear, self.github, self.queue, clock=lambda: NOW, sync=self.sync)
-        service.handle("start", {**claims(), "run_attempt": "2"}, {"dispatch_key": KEY, "protocol": PROTOCOL})
-        self.assertEqual(self.issue["state"]["id"], self.states.in_progress)
-        self.issue["state"]["id"] = "canceled"
-        with self.assertRaises(WorkerError):
-            service.handle("github", {**claims(), "run_attempt": "2"}, {"dispatch_key": KEY})
-
-    def test_tracker_failure_does_not_lose_the_worker_result(self):
-        self.update_run(status="running", lease_until=NOW+120)
-        service = WorkerService(self.registry, self.receipts, self.runs, Accounts(MemoryTable()),
-                                self.linear, self.github, self.queue, clock=lambda: NOW, sync=self.sync)
-        self.queue.start_worker(self.route.repository, KEY, "123:1")
-        self.linear.issue.side_effect = RequestError()
-        with self.assertLogs(level="ERROR"):
-            service.handle("finish", claims(), {"dispatch_key": KEY, "status": "failed"})
-        self.assertEqual(self.runs.get(KEY)[0]["status"], "failed")
 
 
 class LifecycleAdapterTests(unittest.TestCase):
@@ -683,7 +274,7 @@ class LifecycleAdapterTests(unittest.TestCase):
         self.assertEqual(api.writes, [("update", ISSUE)])
 
     def test_pr_lookup_requires_the_exact_dispatch_branch_author_and_marker(self):
-        route = Registry.load(ROOT / "automation/azure/projects.json").routes[PROJECT]
+        route = Registry.load(ROOT / "automation/controller/projects.json").routes[PROJECT]
         for change in ({}, {"author": {"login": "someone", "__typename": "User"}},
                        {"body": "unrelated"}, {"headRefName": "another-branch"},
                        {"headRepository": {"nameWithOwner": "attacker/fork"}}):
@@ -699,7 +290,7 @@ class LifecycleAdapterTests(unittest.TestCase):
                 token.assert_called_once_with(route.repository, permissions={"contents": "read", "pull_requests": "read"})
 
     def test_pr_lookup_checks_all_pages_and_prefers_open_pr_over_stored_merged_url(self):
-        route = Registry.load(ROOT / "automation/azure/projects.json").routes[PROJECT]
+        route = Registry.load(ROOT / "automation/controller/projects.json").routes[PROJECT]
         pull = {**pr(), "url": "https://github.com/KianBahasadri/clusterfork/pull/999"}
         request = Mock(side_effect=[
             [{"number": n, "state": "closed", "merged_at": "earlier"} for n in range(1, 101)],
@@ -711,7 +302,7 @@ class LifecycleAdapterTests(unittest.TestCase):
         self.assertEqual(request.call_args.kwargs["data"]["variables"]["number"], 999)
 
     def test_repair_pr_lookup_uses_parent_branch_and_parent_dispatch_marker(self):
-        route = Registry.load(ROOT / "automation/azure/projects.json").routes[PROJECT]
+        route = Registry.load(ROOT / "automation/controller/projects.json").routes[PROJECT]
         child_key = "d" * 64
         fields = {**receipt(), "identifier": "KIAN-1000", "is_auto_repair": True,
                   "target_dispatch_key": KEY, "target_branch": pr()["headRefName"]}
@@ -725,13 +316,14 @@ class LifecycleAdapterTests(unittest.TestCase):
         self.assertIn("detailsUrl", query)
         self.assertIn("targetUrl", query)
 
-    def test_lifecycle_configuration_is_optional_but_complete_and_distinct(self):
-        data = json.loads((ROOT / "automation/azure/projects.json").read_text())
+    def test_lifecycle_configuration_is_required_complete_and_distinct(self):
+        data = json.loads((ROOT / "automation/controller/projects.json").read_text())
         original = data["projects"][0].pop("linear_states")
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "projects.json"
             path.write_text(json.dumps(data))
-            self.assertIsNone(Registry.load(path).routes[PROJECT].linear_states)
+            with self.assertRaises(ValueError):
+                Registry.load(path)
             for invalid in ({"blocked": original["blocked"]}, {**original, "done": original["blocked"]},
                             {**original, "done": data["projects"][0]["ready_state_ids"][0]},
                             {**original, "blocked": "not-a-uuid"}):

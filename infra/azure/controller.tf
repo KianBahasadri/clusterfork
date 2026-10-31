@@ -134,5 +134,7 @@ output "controller_config" {
     github_app_id          = "5503155"
     linear_oauth_client_id = "9f7805b369221d513ecad1d2559095ef"
     hostname               = azurerm_public_ip.controller.fqdn
+    azure_tenant_id        = var.tenant_id
+    account_operators      = [var.operator_object_id]
   }
 }

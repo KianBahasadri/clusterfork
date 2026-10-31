@@ -9,7 +9,7 @@ import unittest
 from uuid import UUID
 
 ROOT=Path(__file__).resolve().parents[1]
-sys.path[:0]=[str(ROOT/'automation'),str(ROOT/'automation/azure')]
+sys.path[:0]=[str(ROOT/'automation'),str(ROOT/'automation')]
 from controller.core import Controller
 from controller.migration import collect
 from controller.model import Admit,Hold,Initialize,IssueObserved,LegacyImported,Rejected

@@ -15,9 +15,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
+sys.path[:0] = [str(ROOT / "automation")]
 import worker
-from diagnostics import failure_summary, validate_failure
+from common.diagnostics import failure_summary, validate_failure
 from publication_guard import PublicationBlocked, PublicationGuard, PublicationScanError
 
 KEY = "a" * 64

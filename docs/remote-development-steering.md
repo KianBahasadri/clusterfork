@@ -12,7 +12,7 @@ owner. The shipped registry explicitly trusts Kian Bahasadri's user UUID
 (`62a4e98c-29f0-4b6c-8062-ede9c6176c1d`) so his instructions remain authorized under
 the app identity. To trust other people, add their Linear user UUIDs to the top-level
 `"steering": {"trusted_user_ids": ["<user UUID>"]}` in
-`automation/azure/projects.json`. Names, email addresses, and issue assignment
+`automation/controller/projects.json`. Names, email addresses, and issue assignment
 do not grant steering permission.
 
 Enable **Issue comments** (`Comment`) alongside Issues/Projects in the existing
@@ -24,7 +24,7 @@ Comment webhooks. Initialization/account selection can queue instructions until
 coding starts. Controller observations run every 30 seconds; they also reconcile
 instruction delivery and reporting independently of task lifecycle.
 
-Azure Table `ClusterforkInstructions` (partition `instructions`) freezes the first
+The controller’s SQLite `instructions` table freezes the first
 observed addressed comment, its issue, dispatch key, exact GitHub run/attempt, and
 worker attempt UUID. Atomic issue sequences preserve observation order; comments
 in one complete paginated scan sort by creation time and UUID. Comment IDs dedupe

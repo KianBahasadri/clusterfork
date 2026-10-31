@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 import copy
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -16,21 +15,19 @@ import sys
 import tempfile
 from urllib.parse import quote
 
-import pilot
-import deploy
-from dispatch_clients import Linear, RequestError
-from dispatch_core import Registry, eligibility, uuid_string
-from readiness_policy import PROTOCOL, digest
-from worker_core import WORKER_REPOSITORY
-from worker_reporting import STAGE_LABELS
-from worker_version import protocol_at_revision
+from common import configuration
+from urllib.request import urlopen
+from common.clients import Linear, RequestError
+from common.routing import Registry, eligibility, uuid_string
+from common.policy import PROTOCOL, digest
+from common.accounts import WORKER_REPOSITORY
+from common.reporting import STAGE_LABELS
 from controller.release import local_manifest,INPUT_ROOTS
 from controller.workflows import WORKFLOW as CONTROLLER_WORKFLOW
 
-WORKFLOW = "clusterfork-worker.yml"
 CI_WORKFLOW = "clusterfork-validation.yml"
 CI_CHECK = "Clusterfork validation"
-REGISTRY = pilot.SOURCE / "projects.json"
+REGISTRY = configuration.REGISTRY
 CONTROLLER_HEALTH='https://clusterfork-controller-7604cac329.mexicocentral.cloudapp.azure.com/api/health'
 
 
@@ -138,28 +135,6 @@ def validate_states(linear, project_id, team_id, states):
         raise SetupError("The blocked lifecycle state cannot be completed")
 
 
-def worker_workflow(revision):
-    if not re.fullmatch(r"[0-9a-f]{40}", revision):
-        raise SetupError("Pin the shared worker to a published full commit SHA")
-    # Use the same entrypoint and dispatch inputs as the broker's existing adapter.
-    original = (pilot.ROOT / ".github/workflows/clusterfork-worker.yml").read_text()
-    header = original[:original.index("jobs:")]
-    jobs = f"""jobs:
-  select-account:
-    uses: {WORKER_REPOSITORY}/.github/workflows/clusterfork-select-account.yml@{revision}
-    with:
-      dispatch_key: ${{{{ inputs.dispatch_key }}}}
-      worker_revision: {revision}
-
-  develop:
-    needs: select-account
-    if: needs.select-account.outputs.selected == 'true'
-    uses: {WORKER_REPOSITORY}/.github/workflows/clusterfork-develop.yml@{revision}
-    with:
-      dispatch_key: ${{{{ inputs.dispatch_key }}}}
-      worker_revision: {revision}
-"""
-    return "# Managed by Clusterfork setup-remote-development.\n" + header + jobs
 
 
 def validation_workflow(commands):
@@ -209,20 +184,18 @@ def mapping(data, project_id):
     return row
 
 
-def prepare_configuration(data, project_id, repo, branch, team_id, states, revision, commands, checks, *, central=True):
+def prepare_configuration(data, project_id, repo, branch, team_id, states, commands, checks):
     result = copy.deepcopy(data)
     validate_registry(result)  # Reject pre-existing duplicate/invalid mappings before editing.
     existing = next((row for row in result["projects"] if row["project_id"] == project_id), None)
     if existing and existing["repository"].lower() != repo.lower():
         raise SetupError("This project UUID already maps to another repository; resolve that mapping explicitly")
     row = existing if existing is not None else {"project_id": uuid_string(project_id), "auto_merge": True}
-    row.update(repository=repo, workflow=WORKFLOW, ref=branch, linear_team_id=uuid_string(team_id),
+    row.update(repository=repo, workflow=CONTROLLER_WORKFLOW, ref=branch, linear_team_id=uuid_string(team_id),
                ready_state_ids=states["ready"], linear_states={k: states[k] for k in ("in_progress", "blocked", "done")},
-               worker_revision=revision, validation_commands=commands,
+               validation_commands=commands,
                required_checks=list(dict.fromkeys([*row.get("required_checks", []), *checks])))
-    if central:
-        row['workflow']=CONTROLLER_WORKFLOW
-        row.pop('worker_revision',None)
+    row.pop('worker_revision',None)
     if existing is None:
         result["projects"].append(row)
     validate_registry(result)
@@ -234,8 +207,7 @@ def configure(checkout, registry_path, data, project_id, updated, *, install_ci=
     previous = next((row for row in data["projects"] if row["project_id"] == project_id), {})
     changes = []
     workflow_dir = checkout / ".github/workflows"
-    files = [] if row['workflow']==CONTROLLER_WORKFLOW else [(WORKFLOW, worker_workflow(row["worker_revision"]),
-              worker_workflow(previous["worker_revision"]) if previous.get("worker_revision") else None)]
+    files = []
     if install_ci:
         files.append((CI_WORKFLOW, validation_workflow(row["validation_commands"]),
                       validation_workflow(previous.get("validation_commands", []))))
@@ -330,11 +302,6 @@ def configure_merge(row, *, apply=False):
     return changes
 
 
-def pinned_protocol(revision):
-    # Import only the pinned contract in a separate process; do not contaminate
-    # this setup process's broker modules or rely on the helper's own version.
-    return protocol_at_revision(revision, lambda sha, name: command(
-        ["git", "show", f"{sha}:automation/azure/{name}"], cwd=pilot.ROOT))
 
 
 def project_labels(linear, project_id):
@@ -361,6 +328,11 @@ def enrollment_label(linear, row, name, label_id=None):
     return choices[0]["id"]
 
 
+def controller_health(project_id):
+    with urlopen(CONTROLLER_HEALTH+'?setup_project_id='+uuid_string(project_id),timeout=15) as response:
+        return json.load(response)
+
+
 def verify(checkout, registry_path, project_id, linear, *, label_id=None):
     data = json.loads(registry_path.read_text())
     registry = Registry.load(registry_path)
@@ -369,23 +341,17 @@ def verify(checkout, registry_path, project_id, linear, *, label_id=None):
     if (repo, branch) != (row["repository"], row["ref"]):
         raise SetupError("The explicit mapping must use this checkout's repository and default branch")
     validate_states(linear, project_id, row["linear_team_id"], {"ready": row["ready_state_ids"], **row["linear_states"]})
-    health = deploy.health(project_id,endpoint=CONTROLLER_HEALTH)
-    central=health.get('mode')=='single-controller'
-    if central:
-        revision=command(['git','rev-parse','HEAD'],cwd=pilot.ROOT)
-        if command(['git','status','--porcelain','--',*INPUT_ROOTS],cwd=pilot.ROOT):
-            raise SetupError('Deploy the committed runtime inputs before enrollment')
-        if (health.get('missing')!=[] or health.get('deployment_paused') is not False
-                or health.get('serial_admission') is not True or health.get('phase_isolation') is not True
-                or health.get('registry_digest')!=digest(data) or health.get('protocol')!=PROTOCOL
-                or health.get('deployment',{}).get('digest')!=local_manifest(pilot.ROOT,revision)['digest']):
-            raise SetupError('Deploy the exact central registry/runtime, verify its protocol, and resume admissions')
-    elif (not row.get('worker_revision') or health.get("missing") != [] or health.get("deployment_paused") is not False
-            or health.get("serial_admission") is not True or health.get("shared_worker_version") != 1
-            or health.get("registry_digest") != digest(data)
-            or health.get("deployment", {}).get("digest") != pilot.source_digest()
-            or health.get("protocol") != pinned_protocol(row["worker_revision"]) or health.get("protocol") != PROTOCOL):
-        raise SetupError("Deploy the exact central registry/source with the existing deployment tooling, verify a compatible worker protocol, and resume admissions")
+    health = controller_health(project_id)
+    if health.get("mode")!="single-controller":
+        raise SetupError("Deploy the central task controller before enrollment")
+    revision=command(['git','rev-parse','HEAD'],cwd=configuration.ROOT)
+    if command(['git','status','--porcelain','--',*INPUT_ROOTS],cwd=configuration.ROOT):
+        raise SetupError('Deploy the committed runtime inputs before enrollment')
+    if (health.get('missing')!=[] or health.get('deployment_paused') is not False
+            or health.get('serial_admission') is not True or health.get('phase_isolation') is not True
+            or health.get('registry_digest')!=digest(data) or health.get('protocol')!=PROTOCOL
+            or health.get('deployment',{}).get('digest')!=local_manifest(configuration.ROOT,revision)['digest']):
+        raise SetupError('Deploy the exact central registry/runtime, verify its protocol, and resume admissions')
     evidence = health.get("repository_setup", {})
     if any(evidence.get(key) != value for key, value in
            (("project_id", project_id), ("repository", repo), ("ref", branch))):
@@ -399,34 +365,17 @@ def verify(checkout, registry_path, project_id, linear, *, label_id=None):
     permissions = gh(f"repos/{repo}/actions/permissions")
     if permissions.get("enabled") is not True:
         raise SetupError("Enable GitHub Actions for the target repository with existing operator access")
-    if not central and permissions.get("allowed_actions") == "selected":
-        policy = gh(f"repos/{repo}/actions/permissions/selected-actions")
-        from fnmatch import fnmatchcase
-        actions = [f"{WORKER_REPOSITORY}/.github/workflows/{name}@{row['worker_revision']}"
-                   for name in ("clusterfork-select-account.yml", "clusterfork-develop.yml")]
-        if not policy.get("github_owned_allowed"):
-            actions += ["actions/checkout@v4", "actions/setup-python@v5", "actions/setup-node@v4"]
-        if any(not any(fnmatchcase(action, pattern) for pattern in policy.get("patterns_allowed", [])) for action in actions):
-            raise SetupError("The repository Actions allowlist must permit the pinned Clusterfork workflows and their setup actions")
     source = gh(f"repos/{WORKER_REPOSITORY}")
     if source.get("private"):
         raise SetupError("The caller's Actions token cannot check out a private central engine; central runtime read access must be resolved without adding target repository secrets")
-    if central:
-        if (evidence.get('workflow_repository')!=WORKER_REPOSITORY or evidence.get('workflow')!=CONTROLLER_WORKFLOW
-                or evidence.get('runtime_sha')!=health.get('deployment',{}).get('revision')
-                or evidence.get('runtime_tag_verified') is not True or evidence.get('workflow_verified') is not True):
-            raise SetupError('Verify the central task workflow and immutable deployed runtime tag')
-        if gh(f'repos/{WORKER_REPOSITORY}/actions/permissions').get('enabled') is not True:
-            raise SetupError('Enable GitHub Actions for the central task engine')
-    elif evidence.get("workflow_digest") != hashlib.sha256(worker_workflow(row["worker_revision"]).encode()).hexdigest():
-        raise SetupError("Publish the expected pinned worker workflow on the configured default branch")
+    if (evidence.get('workflow_repository')!=WORKER_REPOSITORY or evidence.get('workflow')!=CONTROLLER_WORKFLOW
+            or evidence.get('runtime_sha')!=health.get('deployment',{}).get('revision')
+            or evidence.get('runtime_tag_verified') is not True or evidence.get('workflow_verified') is not True):
+        raise SetupError('Verify the central task workflow and immutable deployed runtime tag')
+    if gh(f'repos/{WORKER_REPOSITORY}/actions/permissions').get('enabled') is not True:
+        raise SetupError('Enable GitHub Actions for the central task engine')
     if evidence.get("workflow_active") is not True:
         raise SetupError("The configured worker workflow must be active in GitHub Actions")
-    if not central:
-        if gh(f"repos/{WORKER_REPOSITORY}/commits/{row['worker_revision']}")["sha"] != row["worker_revision"]:
-            raise SetupError("Publish the pinned worker revision in the central repository")
-        for name in ("clusterfork-select-account.yml", "clusterfork-develop.yml"):
-            gh(f"repos/{WORKER_REPOSITORY}/contents/.github/workflows/{name}?ref={row['worker_revision']}")
     info = gh(f"repos/{repo}")
     if not row["auto_merge"] or not info.get("allow_auto_merge") or not info.get("allow_squash_merge"):
         raise SetupError("Configure automatic squash merging without overriding the existing merge policy")
@@ -490,7 +439,7 @@ def enroll(checkout, registry_path, project_id, linear, *, label_id=None):
 
 
 def linear_client(env_file):
-    values = pilot.settings(env_file)
+    values = configuration.settings(env_file)
     if not values.get("LINEAR_API_KEY") and not (values.get("LINEAR_OAUTH_CLIENT_ID") and values.get("LINEAR_OAUTH_CLIENT_SECRET")):
         raise SetupError("An existing central Linear operator credential is required; keep it outside the target repository")
     linear = Linear(values.get("LINEAR_API_KEY"), client_id=values.get("LINEAR_OAUTH_CLIENT_ID"),
@@ -503,11 +452,10 @@ def main():
     parser.add_argument("action", choices=("discover", "configure", "merge", "verify", "enroll"))
     parser.add_argument("--checkout", type=Path, default=Path.cwd())
     parser.add_argument("--registry", type=Path, default=REGISTRY)
-    parser.add_argument("--env-file", type=Path, default=pilot.ROOT / ".env")
+    parser.add_argument("--env-file", type=Path, default=configuration.ROOT / ".env")
     parser.add_argument("--project-id", type=uuid_string)
     parser.add_argument("--team-id", type=uuid_string)
     parser.add_argument("--states-json", type=json.loads)
-    parser.add_argument("--worker-revision")
     parser.add_argument("--validation-commands", type=json.loads)
     parser.add_argument("--required-check", action="append", default=[])
     parser.add_argument("--install-ci", action="store_true")
@@ -544,7 +492,7 @@ def main():
         validate_states(linear, args.project_id, args.team_id, args.states_json)
         data = json.loads(args.registry.read_text())
         updated = prepare_configuration(data, args.project_id, repo, branch, args.team_id, args.states_json,
-                                        args.worker_revision, args.validation_commands, checks)
+                                        args.validation_commands, checks)
         print(json.dumps({"mapping": next(row for row in updated["projects"] if row["project_id"] == args.project_id),
                           "files": configure(args.checkout, args.registry, data, args.project_id, updated,
                                              install_ci=args.install_ci, apply=args.apply),

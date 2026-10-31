@@ -26,28 +26,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  review-account:
-    uses: ./.github/workflows/clusterfork-review-account.yml
-    with:
-      dispatch_key: ${{ inputs.dispatch_key }}
-      worker_revision: ${{ github.sha }}
   review:
-    needs: review-account
-    if: needs.review-account.outputs.selected == 'true'
     uses: ./.github/workflows/clusterfork-review.yml
     with:
       dispatch_key: ${{ inputs.dispatch_key }}
       worker_revision: ${{ github.sha }}
-  coding-account:
+  code:
     needs: review
     if: needs.review.outputs.ready == 'true'
-    uses: ./.github/workflows/clusterfork-coding-account.yml
-    with:
-      dispatch_key: ${{ inputs.dispatch_key }}
-      worker_revision: ${{ github.sha }}
-  code:
-    needs: coding-account
-    if: needs.coding-account.outputs.selected == 'true'
     uses: ./.github/workflows/clusterfork-code.yml
     with:
       dispatch_key: ${{ inputs.dispatch_key }}

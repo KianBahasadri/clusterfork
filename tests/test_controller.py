@@ -10,13 +10,13 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
+sys.path[:0] = [str(ROOT / "automation")]
 from controller.core import Controller
 from controller.model import (Admit, Assign, DispatchObserved, ExternalObserved, Finish, Hold,
                               IssueObserved, Phase, Progress, Rejected, Retry, Review, Role,
                               Start, TaskSpec)
 from controller.store import Database
-from readiness_policy import CRITERIA
+from common.policy import CRITERIA
 
 SPEC = TaskSpec("c" * 64, "b" * 40, "a" * 40, "d" * 64, "e" * 64)
 ACCOUNT_A, ACCOUNT_B = "1" * 64, "cursor:" + "2" * 64
@@ -96,7 +96,7 @@ class ControllerTests(unittest.TestCase):
             self.assertTrue(restored.active)
             self.assertEqual(restored.attempt["attempt_id"],view.attempt["attempt_id"])
             self.assertEqual(restored.attempt["attempt_kind"],"normal")
-            self.assertEqual(upgraded.connection.execute("PRAGMA user_version").fetchone()[0],4)
+            self.assertEqual(upgraded.connection.execute("PRAGMA user_version").fetchone()[0],5)
 
     def test_ineligibility_is_not_cancellation_and_canceled_work_requires_stop_and_pr_resolution(self):
         issue=self.issue()

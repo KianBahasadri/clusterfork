@@ -12,12 +12,13 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure"), str(ROOT / "scripts")]
+sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "scripts")]
 import accounts
 import rotate_auth
-from worker_core import Accounts, WorkerError, account_identity
+from common.accounts import WorkerError, account_identity
+from controller_fixtures import account_pool, records, update_account
 from test_cursor_accounts import auth as cursor_auth
-from test_remote_worker import auth as codex_auth, MemoryTable
+from test_remote_worker import auth as codex_auth
 
 
 class AccountReservationTests(unittest.TestCase):
@@ -68,25 +69,25 @@ class AccountReservationTests(unittest.TestCase):
                 (store / "auth.json.alias").write_bytes(active.read_bytes())
                 originals = {path.name: path.read_bytes() for path in store.glob("auth.json.*")}
                 links = (os.readlink(backend.current), os.readlink(backend.auth))
-                table = MemoryTable()
+                table = account_pool(self, provider)
                 self.command("enroll", provider, store, table)
                 manifest = json.loads((store / accounts.MANIFEST).read_text())
                 self.assertEqual(set(manifest), {"21kb60", "alias", "local-a", "local-b"})
-                self.assertEqual(len(table.rows), 3)
+                self.assertEqual(len(records(table)), 3)
                 self.assertEqual(manifest["21kb60"]["account_id"], manifest["alias"]["account_id"])
                 self.assertTrue(all(set(record) == {"account_id", "source_sha256"}
                                     for record in manifest.values()))
                 self.assertEqual({p.name: p.read_bytes() for p in store.glob("auth.json.*")}, originals)
                 self.assertEqual((os.readlink(backend.current), os.readlink(backend.auth)), links)
                 self.assertFalse((store / "remote-staged").exists())
-                pool = Accounts(table, provider=provider)
+                pool = table
                 identity = manifest["21kb60"]["account_id"]
                 lease = pool.claim(identity, "worker")
                 latest = self.login(provider, "21kb60", "latest-cloud-login")
                 pool.save(identity, "worker", lease["lease"], latest, release=True)
-                cloud = copy.deepcopy(table.rows)
+                cloud = copy.deepcopy(records(table))
                 self.command("enroll", provider, store, table, "21kb60")
-                self.assertEqual(table.rows, cloud)
+                self.assertEqual(records(table), cloud)
                 self.assertEqual(active.read_bytes(), originals[active.name])
 
     def test_visibility_selection_rotation_and_kickoff_match_for_both_providers(self):
@@ -153,21 +154,18 @@ class AccountReservationTests(unittest.TestCase):
                     self.assertIn("1 profiles reserved for remote work", output.getvalue())
                     self.assertEqual((os.readlink(backend.current), os.readlink(backend.auth)), links)
                     backup.unlink()  # Neither normal enrollment nor reclaim depends on the backup now.
-                    table = MemoryTable()
-                    pool = Accounts(table, provider=provider)
+                    table = account_pool(self, provider)
+                    pool = table
                     latest = self.login(provider, "21kb60", "latest-cloud-login")
                     identity = pool.enroll(latest)
-                    row, etag = table.get(identity)
-                    row["state"] = "staged"
-                    table.replace(row, etag)
-                    cloud = copy.deepcopy(table.rows)
+                    update_account(table, identity, state="staged")
+                    cloud = copy.deepcopy(records(table))
                     self.command("enroll", provider, backend.store_dir, table, "21kb60")
-                    self.assertEqual(table.rows, cloud)
-                    table.delete = lambda identity, etag: table.rows.pop(identity)
+                    self.assertEqual(records(table), cloud)
                     self.command("reclaim", provider, backend.store_dir, table, "21kb60")
                     self.assertEqual(json.loads(profile.read_text()), latest)
                     self.assertEqual(json.loads((backend.store_dir / accounts.MANIFEST).read_text()), {})
-                    self.assertEqual(table.rows, {})
+                    self.assertEqual(records(table), {})
                     self.assertEqual((os.readlink(backend.current), os.readlink(backend.auth)), links)
 
     def test_normal_reclaim_refuses_busy_accounts_or_changed_credentials_for_both_providers(self):
@@ -175,18 +173,18 @@ class AccountReservationTests(unittest.TestCase):
             for conflict in ("busy", "changed"):
                 with self.subTest(provider=provider, conflict=conflict), tempfile.TemporaryDirectory() as directory:
                     backend = self.backend(directory, provider)
-                    table = MemoryTable()
+                    table = account_pool(self, provider)
                     self.command("enroll", provider, backend.store_dir, table, "21kb60")
                     if conflict == "busy":
                         identity = account_identity(self.login(provider, "21kb60"), provider)
-                        Accounts(table, provider=provider).claim(identity, "worker")
+                        table.claim(identity, "worker")
                     else:
                         accounts.write_private(backend.store_dir / "auth.json.21kb60",
                                                self.login(provider, "21kb60", "new-local-login"))
-                    cloud = copy.deepcopy(table.rows)
+                    cloud = copy.deepcopy(records(table))
                     with self.assertRaises(WorkerError):
                         self.command("reclaim", provider, backend.store_dir, table, "21kb60")
-                    self.assertEqual(table.rows, cloud)
+                    self.assertEqual(records(table), cloud)
                     self.assertEqual(backend.current_suffix(), "21kb60")
                     self.assertEqual(backend.remote_profiles(), {"21kb60"})
 

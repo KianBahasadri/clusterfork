@@ -5,7 +5,6 @@ from collections import deque
 from contextlib import contextmanager, redirect_stdout
 import io
 import json
-import os
 from pathlib import Path
 import queue
 import sys
@@ -17,16 +16,19 @@ from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "automation"), str(ROOT / "automation/azure")]
+sys.path[:0] = [str(ROOT / "automation")]
 import accounts
 import cursor_runtime as cursor
 import worker
-from dispatch_core import Registry
+from common.routing import Registry
 from publication_guard import PublicationBlocked, PublicationGuard
-from quota_selection import select_account
-from readiness_policy import PROTOCOL
-from worker_core import Accounts, ProviderAccounts, WorkerError, account_identity
-from worker_reporting import attempt_comment
+from common.selection import select_account
+from common.policy import PROTOCOL
+from common.accounts import WorkerError
+from controller_fixtures import account_pool, coding_fixture, execution_row, update_account
+from controller.model import Rejected, Role
+from test_controller_authorization import claims
+from common.reporting import attempt_comment
 import test_remote_worker as fixtures
 from test_worker_reporting import limits
 
@@ -76,7 +78,7 @@ class FakeServer:
 
 class CursorRuntimeTests(unittest.TestCase):
     def test_registry_refuses_substituted_cursor_model_or_effort(self):
-        data = json.loads((ROOT / "automation/azure/projects.json").read_text())
+        data = json.loads((ROOT / "automation/controller/projects.json").read_text())
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "projects.json"
             for profile in ({"model": "grok-4.7", "effort": "high"},
@@ -114,7 +116,7 @@ class CursorRuntimeTests(unittest.TestCase):
                          {**usage(), "autoBucketModels": [cursor.MODEL]}):
                 with self.subTest(data=data), self.assertRaises(cursor.CursorError):
                     cursor.quota_snapshot("cursor:fixture", cursor.MODEL, data)
-            registry = Registry.load(ROOT / "automation/azure/projects.json")
+            registry = Registry.load(ROOT / "automation/controller/projects.json")
             for used in (None, -1, float("nan"), 81, 100):
                 data = usage(used)
                 if used is None or used != used:
@@ -265,8 +267,8 @@ class CursorRuntimeTests(unittest.TestCase):
 
 class CursorAccountTests(unittest.TestCase):
     def test_provider_identity_deduplication_and_fenced_refresh(self):
-        table, now = fixtures.MemoryTable(), [NOW]
-        pool = Accounts(table, lambda: now[0], provider="cursor")
+        now = [NOW]
+        pool = account_pool(self, "cursor", lambda: now[0])
         identity = pool.enroll(auth())
         with self.assertRaises(WorkerError):
             pool.enroll(auth(refresh="new-refresh"))
@@ -281,12 +283,10 @@ class CursorAccountTests(unittest.TestCase):
         self.assertEqual(pool.claim(identity, "three")["auth"]["refreshToken"], "latest-refresh")
 
     def test_staged_accounts_are_not_in_the_production_pool(self):
-        pool = Accounts(fixtures.MemoryTable(), lambda: NOW, provider="cursor")
+        pool = account_pool(self, "cursor", lambda: NOW)
         identity = pool.enroll(auth())
-        row, etag = pool.table.get(identity)
-        row["state"] = "staged"
-        pool.table.replace(row, etag)
-        self.assertEqual(ProviderAccounts({"cursor": pool}).list(), [])
+        update_account(pool, identity, state="staged")
+        self.assertEqual(pool.list(), [])
         with self.assertRaises(WorkerError):
             pool.claim(identity, "normal-worker")
 
@@ -295,14 +295,13 @@ class CursorAccountTests(unittest.TestCase):
             store = Path(directory)
             backup = store / "remote-staged/auth.json.21kb60"
             worker.write_private(backup, auth())
-            pool = Accounts(fixtures.MemoryTable(), provider="cursor")
+            pool = account_pool(self, "cursor")
             identity = pool.enroll(auth())
             lease = pool.claim(identity, "refresh")
             pool.save(identity, "refresh", lease["lease"], auth(refresh="latest-cloud-refresh"), release=True)
             worker.write_private(store / accounts.MANIFEST, {"21kb60": {"account_id": identity,
                 "backup_path": str(backup), "source_sha256": accounts.digest(backup)}})
-            pool.table.delete = lambda key, etag: pool.table.rows.pop(key)
-            with patch.object(accounts, "connect", return_value=pool.table), \
+            with patch.object(accounts, "connect", return_value=pool), \
                  patch.object(sys, "argv", ["accounts.py", "reclaim", "--provider", "cursor", "--store", str(store)]), \
                  redirect_stdout(io.StringIO()):
                 accounts.main()
@@ -317,11 +316,11 @@ class CursorAccountTests(unittest.TestCase):
             backup = store / "remote-staged/auth.json.21kb60"
             worker.write_private(backup, auth())
             worker.write_private(store / "auth.json.alias", auth())
-            pool = Accounts(fixtures.MemoryTable(), provider="cursor")
+            pool = account_pool(self, "cursor")
             identity = pool.enroll(auth(refresh="latest-cloud-login"))
             reservation = {"account_id": identity, "backup_path": "remote-staged/auth.json.21kb60"}
             worker.write_private(store / accounts.MANIFEST, {"21kb60": reservation})
-            with patch.object(accounts, "connect", return_value=pool.table), \
+            with patch.object(accounts, "connect", return_value=pool), \
                  patch.object(sys, "argv", ["accounts.py", "enroll", "--provider", "cursor", "--store", str(store)]), \
                  redirect_stdout(io.StringIO()):
                 accounts.main()
@@ -330,7 +329,7 @@ class CursorAccountTests(unittest.TestCase):
                 "source_sha256": accounts.digest(store / "auth.json.21kb60")})
             self.assertEqual(json.loads((store / "auth.json.21kb60").read_text()), auth())
             self.assertEqual(manifest["alias"]["account_id"], identity)
-            self.assertEqual(json.loads(pool.table.get(identity)[0]["auth"])["refreshToken"], "latest-cloud-login")
+            self.assertEqual(json.loads(pool.get(identity)[0]["auth"])["refreshToken"], "latest-cloud-login")
 
     def test_publication_guard_retains_camelcase_credentials_after_cache_removal(self):
         guard = PublicationGuard({})
@@ -354,28 +353,27 @@ class CursorAccountTests(unittest.TestCase):
 
 class CursorWorkerTests(unittest.TestCase):
     def setUp(self):
-        self.registry = Registry.load(ROOT / "automation/azure/projects.json")
-        self.service, _, self.issue = fixtures.WorkerAuthorizationTests.service(self)
-        self.codex = self.service.accounts
-        self.codex.clock = lambda: NOW
+        self.registry = Registry.load(ROOT / "automation/controller/projects.json")
+        self.f = coding_fixture(self, NOW)
+        self.service, self.issue = self.f.broker, self.f.issue
+        self.codex = self.f.controller.accounts.pools["codex"]
         self.first = self.codex.enroll(fixtures.auth())
         self.second = self.codex.enroll(fixtures.auth("account-b", "access-b"))
-        self.cursor = Accounts(fixtures.MemoryTable(), lambda: NOW, provider="cursor")
+        self.cursor = self.f.controller.accounts.pools["cursor"]
         self.reference = "cursor:" + self.cursor.enroll(auth())
-        self.service.accounts = ProviderAccounts({"codex": self.codex, "cursor": self.cursor})
         self.calls, self.homes, self.used = [], [], 10
         self.selector = True
-        self.broker = SimpleNamespace(key=fixtures.KEY, call=self.call, publication_guard=PublicationGuard({}))
+        self.broker = SimpleNamespace(key=self.f.key, call=self.call, publication_guard=PublicationGuard({}))
         self.heartbeat = SimpleNamespace(failed=threading.Event())
         self.config = self.call("start", protocol=PROTOCOL)
 
     def call(self, action, **data):
         self.calls.append((action, data))
         try:
-            return self.service.handle(action, fixtures.selector_claims() if self.selector else fixtures.claims(),
-                                        {"dispatch_key": fixtures.KEY, **data})
-        except WorkerError as exc:
-            error = HTTPError("https://broker/" + action, exc.status, "rejected", {}, None)
+            return self.service.handle(action, claims(Role.CODING),
+                                        {"dispatch_key": self.f.key, **data})
+        except (WorkerError, Rejected) as exc:
+            error = HTTPError("https://broker/" + action, getattr(exc, "status", 403), "rejected", {}, None)
             error.clusterfork_action = action
             raise error from None
 
@@ -404,7 +402,7 @@ class CursorWorkerTests(unittest.TestCase):
         with self.execution() as inspect_cursor:
             self.assertTrue(worker.select_account_for_run(self.broker, self.config, self.heartbeat))
         inspect_cursor.assert_not_called()
-        self.assertIn(self.service.runs.get(fixtures.KEY)[0]["assigned_account_id"], (self.first, self.second))
+        self.assertIn(execution_row(self.f)["assigned_account_id"], (self.first, self.second))
         self.assertTrue(all(not home.exists() for home in self.homes))
 
     def test_busy_and_exhausted_codex_allow_cursor_without_exposing_other_credentials_to_agent(self):
@@ -413,7 +411,7 @@ class CursorWorkerTests(unittest.TestCase):
         with self.execution(), tempfile.TemporaryDirectory() as directory:
             self.assertTrue(worker.select_account_for_run(self.broker, self.config, self.heartbeat))
             self.selector = False
-            config = self.call("start", protocol=PROTOCOL)
+            config = {**self.call("start", protocol=PROTOCOL), "checkout_sha": self.f.spec.context_sha}
             self.assertEqual((config["account_id"], config["provider"], config["model"], config["effort"]),
                              (self.reference, "cursor", cursor.MODEL, "high"))
             self.calls.clear()
@@ -428,9 +426,9 @@ class CursorWorkerTests(unittest.TestCase):
                 self.call("github")
             self.assertFalse(any(action == "accounts" for action, _ in self.calls))
             self.assertEqual({data["account_id"] for action, data in self.calls if action == "claim"}, {self.reference})
-            self.assertEqual(json.loads(self.cursor.table.get(self.reference.split(":")[1])[0]["auth"])["refreshToken"], "cloud-refreshed")
+            self.assertEqual(json.loads(self.cursor.get(self.reference.split(":")[1])[0]["auth"])["refreshToken"], "cloud-refreshed")
             self.call("finish", status="completed")
-        run = self.service.runs.get(fixtures.KEY)[0]
+        run = execution_row(self.f)
         body = attempt_comment(run, "KianBahasadri/clusterfork", finished=True)
         for value in ("Cursor", "grok-4.7-high", "high", "cursor/api", "15% used", "Weekly usage: unavailable"):
             self.assertIn(value, body)
@@ -438,12 +436,10 @@ class CursorWorkerTests(unittest.TestCase):
         self.assertTrue(all(not home.exists() for home in self.homes))
 
     def test_invalid_codex_auth_and_unsupported_profile_do_not_block_cursor_fallback(self):
-        row, etag = self.codex.table.get(self.first)
-        row["auth"] = "invalid-json"
-        self.codex.table.replace(row, etag)
+        update_account(self.codex, self.first, auth="invalid-json")
         with self.execution(), patch.object(worker, "inspect_account", side_effect=worker.CodexError("Pinned model unavailable")):
             self.assertTrue(worker.select_account_for_run(self.broker, self.config, self.heartbeat))
-        self.assertEqual(self.service.runs.get(fixtures.KEY)[0]["assigned_account_id"], self.reference)
+        self.assertEqual(execution_row(self.f)["assigned_account_id"], self.reference)
 
     def test_unavailable_profile_is_visible_and_neither_pool_starts_duplicate_work(self):
         self.used = 100
@@ -451,11 +447,11 @@ class CursorWorkerTests(unittest.TestCase):
              patch.object(cursor, "run_agent") as run:
             self.assertFalse(worker.select_account_for_run(self.broker, self.config, self.heartbeat))
         run.assert_not_called()
-        row = self.service.runs.get(fixtures.KEY)[0]
+        row = execution_row(self.f)
         self.assertEqual(row["status"], "waiting_for_quota")
         self.assertEqual(json.loads(row["quota_wait"])["cursor_profile_unavailable"], 1)
         self.assertNotIn("assigned_account_id", row)
-        self.assertEqual(self.service.receipts.get(fixtures.KEY)[0]["retry_after"], NOW + 900)
+        self.assertEqual(self.f.controller.inspect(self.f.view.task_id).attempt["retry_at"], NOW + 900)
 
     def test_bound_agent_cannot_access_or_switch_to_another_provider(self):
         self.call("bind_account", account_id=self.first)
@@ -473,10 +469,8 @@ class CursorWorkerTests(unittest.TestCase):
         self.selector = False
         self.call("start", protocol=PROTOCOL)
         lease = self.call("claim", account_id=self.first)
-        self.call("progress", stage="coding", account_id=self.first, usage_before=codex_usage(10, 20))
-        row, etag = self.service.runs.get(fixtures.KEY)
-        row["thread_id"] = "same-thread"
-        self.service.runs.replace(row, etag)
+        self.call("progress", stage="coding", context_sha=self.f.spec.context_sha, account_id=self.first, usage_before=codex_usage(10, 20))
+        self.call("steering_open", thread_id="same-thread", turn_id="turn-one")
         self.call("save", account_id=self.first, lease=lease["lease"], release=True)
         self.call("exhaust_account", account_id=self.first, thread_id="same-thread")
         self.assertEqual(self.call("accounts"), {"accounts": [self.second]})
@@ -485,74 +479,6 @@ class CursorWorkerTests(unittest.TestCase):
                 self.call(action, account_id=self.reference)
 
 
-class CursorReadinessTests(unittest.TestCase):
-    def test_review_calls_cursor_in_read_only_mode_and_submits_the_same_result_contract(self):
-        from test_readiness import ready
-        reference = "cursor:" + "a" * 64
-        selected = SimpleNamespace(account_id=reference, model=cursor.MODEL, effort="high")
-        heartbeat = SimpleNamespace(failed=threading.Event())
-        config = {"account_id": reference, "provider": "cursor", "model": cursor.MODEL, "effort": "high",
-                  "ref": "main", "binding": {"context_sha": "b" * 40}, "review_timeout_seconds": 600,
-                  "issue": {"title": "Fix the documented dry-run flag", "comments": []}}
-        calls = []
-        broker = Mock()
-        def call(action, **data):
-            calls.append((action, data))
-            if action == "checkout":
-                return {"token": "synthetic-read-token"}
-            self.assertEqual(action, "review")
-            self.assertEqual(data["result"], ready())
-            self.assertEqual(data["binding"], config["binding"])
-            return {"status": "passed"}
-        broker.call.side_effect = call
-        with tempfile.TemporaryDirectory() as directory:
-            home = Path(directory)
-            @contextmanager
-            def lease(*args):
-                yield home, heartbeat
-            with patch.object(worker, "choose_account", return_value=([selected], {}, None)), \
-                 patch.object(worker, "select_account", return_value=selected), \
-                 patch.object(worker, "account_lease", side_effect=lease), \
-                 patch.object(cursor, "inspect_account", return_value=({}, usage())), \
-                 patch.object(cursor, "run_agent", return_value=json.dumps(ready())) as run, \
-                 patch.object(cursor.time, "time", return_value=NOW), \
-                 patch.object(worker, "command", side_effect=lambda args, **kw:
-                              "b" * 40 if args[:2] == ["git", "rev-parse"] else "") as command, \
-                 patch.dict(os.environ, {"ACTIONS_ID_TOKEN_REQUEST_TOKEN": "private-oidc", "GH_TOKEN": "private-write"}):
-                self.assertEqual(worker.review_readiness(broker, config, heartbeat, home), "passed")
-        self.assertTrue(run.call_args.kwargs["read_only"])
-        self.assertFalse(run.call_args.kwargs["steering"])
-        self.assertEqual(run.call_args.kwargs["timeout"], 600)
-        self.assertNotIn("GH_TOKEN", run.call_args.args[5])
-        self.assertNotIn("ACTIONS_ID_TOKEN_REQUEST_TOKEN", run.call_args.args[5])
-        self.assertTrue(all(call.args[0][0] == "git" for call in command.call_args_list))
-        self.assertEqual([action for action, _ in calls], ["checkout", "review"])
-
-    def test_cursor_assignment_cannot_bypass_readiness_or_obtain_publication_credentials(self):
-        from test_readiness import ReadinessTests
-        fixture = ReadinessTests()
-        fixture.setUp()
-        self.addCleanup(fixture.doCleanups)
-        pool = Accounts(fixtures.MemoryTable(), lambda: fixture.now, provider="cursor")
-        reference = "cursor:" + pool.enroll(auth())
-        facade = ProviderAccounts({"codex": fixture.accounts, "cursor": pool})
-        fixture.service.accounts = fixture.gate.accounts = facade
-        key, _ = fixture.begin()
-        claims = fixtures.selector_claims(fixture.identity_for(key))
-        fixture.service.handle("bind_account", claims, {"dispatch_key": key, "account_id": reference})
-        config = fixture.call(key, "start")
-        self.assertEqual((config["phase"], config["provider"], config["model"], config["effort"]),
-                         ("readiness", "cursor", cursor.MODEL, "high"))
-        self.assertEqual(fixture.call(key, "accounts"), {"accounts": [reference]})
-        with self.assertRaises(WorkerError):
-            fixture.call(key, "github")
-        with self.assertRaises(WorkerError):
-            fixture.call(key, "claim", account_id=fixture.identity)
-        lease = fixture.call(key, "claim", account_id=reference)
-        fixture.call(key, "save", account_id=reference, lease=lease["lease"],
-                     auth=auth(refresh="updated-in-review"), release=True)
-        self.assertEqual(json.loads(pool.table.get(reference.split(":")[1])[0]["auth"])["refreshToken"], "updated-in-review")
-        self.assertEqual(fixture.receipts.list(), [])  # Coding still needs a passing review.
 
 
 if __name__ == "__main__":

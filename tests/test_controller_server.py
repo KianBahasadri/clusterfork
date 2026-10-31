@@ -1,6 +1,5 @@
 """HTTP authentication and durable intake on real local sockets."""
 
-from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import hmac
 import json
@@ -16,12 +15,12 @@ from urllib.request import Request,urlopen
 from unittest.mock import Mock
 
 ROOT=Path(__file__).resolve().parents[1]
-sys.path[:0]=[str(ROOT/"automation"),str(ROOT/"automation/azure")]
+sys.path[:0]=[str(ROOT/"automation")]
 from controller.core import Controller
 from controller.server import Application,HTTPServer,OperatorServer,http_handler
 from controller.store import Database
-from worker_core import WorkerError
-from diagnostics import CONTEXT
+from common.accounts import WorkerError
+from common.diagnostics import CONTEXT
 
 
 class ControllerServerTests(unittest.TestCase):
