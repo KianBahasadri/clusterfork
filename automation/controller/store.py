@@ -81,6 +81,19 @@ CREATE TABLE IF NOT EXISTS comment_signatures (
 CREATE TABLE IF NOT EXISTS image_snapshots (
  revision TEXT PRIMARY KEY, digest TEXT NOT NULL, images TEXT NOT NULL, observed_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS context_sources (
+ attempt_id TEXT NOT NULL REFERENCES attempts(attempt_id), source_key TEXT NOT NULL,
+ request TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL,
+ version TEXT NOT NULL, material TEXT NOT NULL, required INTEGER NOT NULL DEFAULT 0,
+ read_until INTEGER NOT NULL DEFAULT 0, reviewed INTEGER NOT NULL DEFAULT 0,
+ PRIMARY KEY(attempt_id,source_key)
+);
+CREATE TABLE IF NOT EXISTS context_approvals (
+ attempt_id TEXT PRIMARY KEY REFERENCES attempts(attempt_id), revision TEXT NOT NULL, manifest TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS context_budgets (
+ attempt_id TEXT PRIMARY KEY REFERENCES attempts(attempt_id), calls INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS accounts (
  provider TEXT NOT NULL CHECK(provider IN ('codex','cursor')), account_id TEXT NOT NULL,
  auth TEXT NOT NULL, state TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '', fence TEXT NOT NULL DEFAULT '',
@@ -105,7 +118,7 @@ CREATE TABLE IF NOT EXISTS telemetry_outbox (
  event_id TEXT PRIMARY KEY, created_at REAL NOT NULL, payload TEXT NOT NULL,
  tries INTEGER NOT NULL DEFAULT 0, next_at REAL NOT NULL DEFAULT 0
 );
-PRAGMA user_version=8;
+PRAGMA user_version=9;
 """
 
 
@@ -128,7 +141,7 @@ class Database:
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA synchronous=FULL")
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, 3, 4, 5, 6, 7, 8):
+        if version not in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9):
             self.close()
             raise Rejected("Unsupported task database version")
         if version == 1:

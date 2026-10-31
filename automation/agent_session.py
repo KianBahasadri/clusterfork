@@ -4,6 +4,8 @@ import time
 from urllib.error import HTTPError
 
 from codex_runtime import AppServer, CodexError, CodexRejected, CodexUsageLimit
+from context_transport import agent_context
+from common.context import CONTEXT_PROMPT
 
 POLL_SECONDS = 10
 WORKER_RULES = (
@@ -13,7 +15,7 @@ WORKER_RULES = (
     "the worker publishes the result. Work as one agent without spawning subagents. "
     "Authorized follow-up instructions arrive as user messages from the broker. "
     "Continue this task in its existing workspace and retain the work so far. "
-    "Finish with a concise description of changes and validation."
+    "Finish with a concise description of changes and validation." + CONTEXT_PROMPT
 )
 
 
@@ -21,10 +23,20 @@ def run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), 
               timeout=18_000, server_factory=AppServer, image_paths=(), thread_id=None, deadline=None,
               validate=None):
     deadline = deadline if deadline is not None else time.monotonic() + timeout
+    with agent_context(broker, config, home, failure_signals, deadline=deadline) as bridge:
+        return _run_agent(broker, config, home, workspace, prompt, env, failure_signals,
+                          timeout=timeout, server_factory=server_factory, image_paths=image_paths,
+                          thread_id=thread_id, deadline=deadline, validate=validate, bridge=bridge)
+
+
+def _run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), *,
+               timeout, server_factory, image_paths, thread_id, deadline, validate, bridge):
+    deadline = deadline if deadline is not None else time.monotonic() + timeout
     if time.monotonic() >= deadline:
         raise CodexError("Codex stopped after timeout or loss of its credential lease")
     server = server_factory(home, env=env, cwd=workspace, config=(
-        'cli_auth_credentials_store="file"', f'model_reasoning_effort="{config["effort"]}"'))
+        'cli_auth_credentials_store="file"', f'model_reasoning_effort="{config["effort"]}"',
+        *(bridge.codex_config() if bridge else ())))
     session, pending = {}, None
     registered = False
     completed, summary = None, "Codex completed the issue."

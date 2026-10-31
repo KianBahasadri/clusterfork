@@ -7,6 +7,8 @@ import hashlib
 import logging
 import math
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from threading import Lock
 from urllib.error import HTTPError, URLError
@@ -26,7 +28,23 @@ class RequestError(RuntimeError):
         super().__init__(f"remote request failed (HTTP {status or 'unavailable'})")
 
 
+CONTEXT_READ = ContextVar("context_read", default=None)
+
+
+@contextmanager
+def context_read_scope(check):
+    """Bound context HTTP reads without changing the normal mutation transport."""
+    token = CONTEXT_READ.set(check)
+    try:
+        yield
+    finally:
+        CONTEXT_READ.reset(token)
+
+
 def request_json(url, *, token=None, method="GET", data=None, form=False):
+    check = CONTEXT_READ.get()
+    if check:
+        check()
     headers = {"Accept": "application/json", "User-Agent": "clusterfork",
                "Content-Type": "application/x-www-form-urlencoded" if form else "application/json"}
     if token:
@@ -37,10 +55,18 @@ def request_json(url, *, token=None, method="GET", data=None, form=False):
     request = Request(url, data=body, headers=headers, method=method)
     with operation(http_operation(url, data), timeout_seconds=20):
         try:
-            with urlopen(request, timeout=20) as response:
-                raw = response.read()
+            with urlopen(request, timeout=5 if check else 20) as response:
+                raw = response.read(2_000_001) if check else response.read()
+                if check:
+                    from common.context import ContextError
+                    check()
+                    if len(raw) > 2_000_000:
+                        raise ContextError("oversized")
                 return json.loads(raw) if raw else None
         except (HTTPError, URLError, OSError, ValueError) as exc:
+            from common.context import ContextError
+            if isinstance(exc, ContextError):
+                raise
             error = RequestError(exc.code if isinstance(exc, HTTPError) else None)
             error.clusterfork_failure = failure(exc, http_operation(url, data))
             raise error from None

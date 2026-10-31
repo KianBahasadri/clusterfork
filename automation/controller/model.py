@@ -131,6 +131,7 @@ class Review:
     attempt_id: str
     result: dict
     binding: TaskSpec
+    evidence_revision: str = ""
 
 
 @dataclass(frozen=True)
@@ -222,6 +223,12 @@ class ContextObserved:
 
 
 @dataclass(frozen=True)
+class EvidenceChanged:
+    task_id: str
+    attempt_id: str
+
+
+@dataclass(frozen=True)
 class InboxQueued:
     event_id: str
     event: dict
@@ -260,7 +267,7 @@ class InstructionRequest:
 
 Command = (IssueObserved | Admit | DispatchObserved | Resubmit | Start | Assign | Review | Progress |
            Finish | ExternalObserved | Retry | Hold | SessionUpdated | EffectUpdated | Authorize |
-           ExhaustAccount | ContextObserved | InboxQueued | InboxDone | Initialize | ReportConfirmed | AccountRequest | InstructionRequest)
+           ExhaustAccount | ContextObserved | EvidenceChanged | InboxQueued | InboxDone | Initialize | ReportConfirmed | AccountRequest | InstructionRequest)
 
 
 @dataclass(frozen=True)
