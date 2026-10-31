@@ -5,14 +5,13 @@ import hashlib
 import json
 import re
 
-from common.reporting import SELECTION_PROTOCOL
+from common.reporting import CLARIFICATION_LABEL, SELECTION_PROTOCOL
 from common.images import (IMAGE_PROTOCOL, MAX_IMAGES, MAX_IMAGE_BYTES, MAX_TOTAL_BYTES,
                           MAX_PIXELS, MAX_SIDE, DOWNLOAD_SECONDS, image_prompt)
 
 
 REVIEW_TIMEOUT_SECONDS = 600
 RETRY_SECONDS = 900
-CLARIFICATION_LABEL = "clusterfork: needs clarification"
 CRITERIA = ("outcome", "scope", "completion", "risks")
 POLICY = """Review whether this issue is ready for autonomous development.
 Read AGENTS.md, docs/README.md when present, the relevant project rules, and only

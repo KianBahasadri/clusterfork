@@ -11,7 +11,7 @@ from .model import (Admit, ContextObserved, DispatchObserved, EffectUpdated, Ext
                     Hold, InboxDone, IssueObserved, Rejected, Retry, TaskSpec, identity, ReportConfirmed)
 from .images import Images
 from .workflows import ENGINE, WORKFLOW
-from .reporting import attempt_reports,repair_terminal,repair_report,review_report
+from .reporting import attempt_reports,execution_status,repair_terminal,repair_report,review_report
 from common.routing import DispatchError, dependency_status, eligibility
 from common.images import image_digest
 from common.publication import comment_id, failed_required_checks, pull_outcome
@@ -271,26 +271,22 @@ class Driver:
                     self.comment(view.issue_id,comment_id(task_id,'auto-repair-report'),
                                  repair_report(view,self.controller.repair_parent(task_id),self.registry))
                 body = self.render(view)
+                status = execution_status(view,reviews)
                 signature = hashlib.sha256(json.dumps([body,view.active,view.phase.value,
                                                        view.attempt.get("stage"),view.attempt.get('attempt_id'),
                                                        view.attempt.get('attempt_kind'),view.eligible,
-                                                       repair_terminal(view)]).encode()).hexdigest()
+                                                       repair_terminal(view),status]).encode()).hexdigest()
+                # Reconcile even when only labels drifted since the last report.
+                if self.linear.set_execution_status(view.issue_id,status) is False:
+                    raise RuntimeError('Linear execution status was not acknowledged')
                 if self.controller.report_signature('task:'+task_id) != signature:
                     if issue and (issue.get("project") or {}).get("id") == view.project_id:
                         if self.linear.status_comment(view.issue_id,comment_id(task_id,"controller-status"),body) is False:
                             raise RuntimeError('Linear status was not acknowledged')
                         review = json.loads(view.attempt.get("review_result") or "null")
                         denied = review and review.get("verdict") in {"rejected","needs_clarification"}
-                        self.linear.set_selected(view.issue_id,view.active and not denied)
-                        self.linear.set_queued(view.issue_id,view.phase=="queued" and view.eligible)
-                        clarification=reviews and reviews[-1]['result'].get('verdict')=='needs_clarification'
-                        self.linear.set_clarification(view.issue_id,bool(clarification and view.phase not in {'completed','canceled','skipped'}))
                         self.linear.set_label(view.issue_id,AUTO_REPAIR_LABEL,
                                               view.attempt.get('attempt_kind')=='repair' and not repair_terminal(view))
-                        stage = view.attempt.get("stage") if view.phase=="executing" else "review" if view.phase=="published" else None
-                        if view.phase=='held' and view.attempt.get('retry_kind')=='capacity':
-                            stage='waiting_for_quota'
-                        self.linear.set_stage(view.issue_id,stage)
                         enrolled=any(label.get('name')==self.registry.enrollment_label for label in project.get('labels',{}).get('nodes',[]))
                         if enrolled and route.linear_states and issue.get("state",{}).get("id") in {*route.ready_state_ids,route.linear_states.in_progress,route.linear_states.blocked}:
                             desired = (route.linear_states.done if view.phase=="completed" else

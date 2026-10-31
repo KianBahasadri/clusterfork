@@ -5,9 +5,35 @@ import json
 from common.diagnostics import failure_summary
 from common.policy import redact_review_text
 from common.accounts import account_provider
-from common.reporting import attempt_comment
+from common.reporting import CLARIFICATION_LABEL, QUEUED_LABEL, SELECTION_LABEL, STAGE_LABELS, attempt_comment
 
 from .workflows import ENGINE
+
+
+def execution_status(view, reviews):
+    """Project the single visible indicator without changing execution authority."""
+    if view.phase in {'completed', 'canceled', 'skipped'}:
+        return None
+    # Resubmission and infrastructure retries cannot resolve earlier feedback.
+    for review in reversed(reviews):
+        verdict = review['result']['verdict']
+        if verdict == 'needs_clarification':
+            return CLARIFICATION_LABEL
+        if verdict == 'ready':
+            break
+    if view.phase == 'executing':
+        return STAGE_LABELS[view.attempt['stage']]
+    if view.phase == 'published':
+        return STAGE_LABELS['review']
+    if view.phase == 'held' and view.attempt.get('retry_kind') == 'capacity':
+        return STAGE_LABELS['waiting_for_quota']
+    review = json.loads(view.attempt.get('review_result') or 'null')
+    denied = review and review.get('verdict') in {'rejected', 'needs_clarification'}
+    if view.active and not denied:
+        return SELECTION_LABEL
+    if view.phase == 'queued' and view.eligible:
+        return QUEUED_LABEL
+    return None
 
 
 def review_report(review,registry):

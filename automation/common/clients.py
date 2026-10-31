@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 from uuid import UUID
 
 from common.routing import DispatchError
-from common.reporting import QUEUED_LABEL, SELECTION_LABEL, STAGE_LABELS, worker_branch
+from common.reporting import EXECUTION_STATUS_LABELS, worker_branch
 from common.diagnostics import failure, graphql_failure, http_operation, operation, record
 
 
@@ -257,17 +257,6 @@ class Linear:
             raise RequestError()
 
 
-    def set_clarification(self, issue_id, enabled):
-        from common.policy import CLARIFICATION_LABEL
-
-        self.set_label(issue_id, CLARIFICATION_LABEL, enabled)
-
-    def set_selected(self, issue_id, enabled):
-        self.set_label(issue_id, SELECTION_LABEL, enabled)
-
-    def set_queued(self, issue_id, enabled):
-        self.set_label(issue_id, QUEUED_LABEL, enabled)
-
     def set_label(self, issue_id, name, enabled):
         issue = self.query("""query($id: String!) {
           issue(id: $id) { team { id } labels(first: 100) {
@@ -324,8 +313,10 @@ class Linear:
             return existing
         return identifier
 
-    def set_stage(self, issue_id, stage):
-        name = STAGE_LABELS[stage] if stage is not None else None
+    def set_execution_status(self, issue_id, name):
+        """Replace only owned status indicators, removing conflicts before adding."""
+        if name is not None and name not in EXECUTION_STATUS_LABELS:
+            raise ValueError("Invalid execution status label")
         issue = self.query("""query($id: String!) {
           issue(id: $id) { team { id } labels(first: 100) {
             nodes { id name } pageInfo { hasNextPage }
@@ -334,20 +325,25 @@ class Linear:
         if issue["labels"]["pageInfo"]["hasNextPage"]:
             raise ValueError("Incomplete issue labels")
         labels = issue["labels"]["nodes"]
-        if name and not any(label["name"] == name for label in labels):
+        retained = False
+        for label in labels:
+            if label["name"] not in EXECUTION_STATUS_LABELS:
+                continue
+            if label["name"] == name and not retained:
+                retained = True
+                continue
+            result = self.query("""mutation($id: String!, $label: String!) {
+              issueRemoveLabel(id: $id, labelId: $label) { success }
+            }""", {"id": issue_id, "label": label["id"]})["issueRemoveLabel"]
+            if not result["success"]:
+                raise RequestError()
+        if name and not retained:
             identifier = self.stage_label(issue["team"]["id"], name)
             result = self.query("""mutation($id: String!, $label: String!) {
               issueAddLabel(id: $id, labelId: $label) { success }
             }""", {"id": issue_id, "label": identifier})["issueAddLabel"]
             if not result["success"]:
                 raise RequestError()
-        for label in labels:
-            if label["name"] in STAGE_LABELS.values() and label["name"] != name:
-                result = self.query("""mutation($id: String!, $label: String!) {
-                  issueRemoveLabel(id: $id, labelId: $label) { success }
-                }""", {"id": issue_id, "label": label["id"]})["issueRemoveLabel"]
-                if not result["success"]:
-                    raise RequestError()
 
     def status_comment(self, issue_id, comment_id, body):
         viewer = self.viewer_id()
