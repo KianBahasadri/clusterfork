@@ -32,7 +32,7 @@ class ControllerDeploymentTests(unittest.TestCase):
 
     def test_a_stopped_retry_can_deploy_but_a_live_credential_lease_prevents_it(self):
         view=self.fixture.admit()
-        self.fixture.external(view,conclusion='failure')
+        self.fixture.external(view,conclusion='timed_out')
         self.assertTrue(self.app.drained())
         self.assertTrue(self.fixture.controller.active())
         self.resources_idle.return_value=False

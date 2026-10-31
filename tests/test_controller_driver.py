@@ -10,7 +10,7 @@ from uuid import UUID
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "automation")]
 from controller.driver import Driver
-from controller.model import Phase, Role, Hold
+from controller.model import Phase, Role, Hold, InboxQueued, identity
 from common.routing import DispatchError
 from common.policy import PROTOCOL
 import test_controller_broker as fixtures
@@ -19,6 +19,18 @@ from common.reporting import worker_branch
 
 
 class ControllerDriverTests(unittest.TestCase):
+    def human_resubmit(self):
+        f=self.fixture
+        changed_at=self.driver.clock()+1
+        self.driver.clock=lambda:changed_at
+        f.broker.clock=self.driver.clock
+        previous=f.issue['state']['id']
+        f.issue['state']={'id':f.route.ready_state_ids[0],'type':'unstarted'}
+        event={'type':'Issue','id':f.issue['id'],'webhook_at':changed_at,
+               'submission':{'actor_id':str(UUID(int=99)),'from_state':previous,
+                             'to_state':f.route.ready_state_ids[0],'changed_at':changed_at}}
+        self.driver.apply(InboxQueued(identity(event),event))
+
     def setUp(self):
         # Reuse the credential/issue fixture without inheriting and rerunning its tests.
         self.fixture = fixtures.ControllerBrokerTests(methodName="runTest")

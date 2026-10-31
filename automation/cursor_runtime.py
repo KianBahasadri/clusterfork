@@ -187,6 +187,11 @@ def run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), 
     pending_reported = False
     next_poll = 0
 
+    def stopped():
+        exc = CursorError("cursor_turn_stopped")
+        exc.clusterfork_failure['kind'] = 'lease_lost' if any(event.is_set() for event in failure_signals) else 'timeout'
+        raise exc
+
     def send_prompt(text):
         nonlocal active, summary
         server.sequence += 1
@@ -207,12 +212,12 @@ def run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), 
             if broker.call("steering_open", **session).get("accepting") is not True:
                 raise CursorError()
         if time.monotonic() >= deadline or any(event.is_set() for event in failure_signals):
-            raise CursorError("cursor_turn_stopped")
+            stopped()
         send_prompt(("" if read_only else WORKER_RULES + "\n\n") + prompt
                     + "".join(f"\nAttached issue image: {path}" for path in image_paths))
         while True:
             if time.monotonic() >= deadline or any(event.is_set() for event in failure_signals):
-                raise CursorError("cursor_turn_stopped")
+                stopped()
             # Unlike app-server, ACP's prompt response arrives only at turn end.
             try:
                 event = server.notifications.popleft() if server.notifications else server.messages.get(timeout=0.2)
@@ -255,7 +260,7 @@ def run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), 
                 result = "".join(summary)
                 follow_up = validate(result, deadline=deadline, failure_signals=failure_signals) if validate else None
                 if time.monotonic() >= deadline or any(event.is_set() for event in failure_signals):
-                    raise CursorError("cursor_turn_stopped")
+                    stopped()
                 if follow_up is None:
                     return result
                 pending, pending_reported = None, False
@@ -263,7 +268,7 @@ def run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), 
                 if steering and broker.call("steering_open", **session).get("accepting") is not True:
                     raise CursorError()
                 if time.monotonic() >= deadline or any(event.is_set() for event in failure_signals):
-                    raise CursorError("cursor_turn_stopped")
+                    stopped()
                 send_prompt(follow_up)
                 next_poll = 0
             if steering and time.monotonic() >= next_poll:

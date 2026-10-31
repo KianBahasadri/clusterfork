@@ -11,7 +11,8 @@ from common.images import (IMAGE_PROTOCOL, MAX_IMAGES, MAX_IMAGE_BYTES, MAX_TOTA
 
 
 REVIEW_TIMEOUT_SECONDS = 600
-RETRY_SECONDS = 900
+REVIEW_MAX_ATTEMPTS = 3
+REVIEW_RETRY_DELAYS = (300, 900)
 CRITERIA = ("outcome", "scope", "completion", "risks")
 POLICY = """Review whether this issue is ready for autonomous development.
 Read AGENTS.md, docs/README.md when present, the relevant project rules, and only
@@ -55,9 +56,13 @@ Return ready only when all four criteria are satisfied. Otherwise return
 needs_clarification with one to four concrete missing decisions, each with its
 consequence and a focused, answerable question. Cite relevant repository policy
 paths/rules in policy_references, including defaults that resolve risks. If
-context cannot be read, time is insufficient, or infrastructure prevents a
-reliable assessment, return retry with an unknown criterion and no blockers;
-these failures are not evidence of ambiguity. Passing enables normal coding,
+specific evidence cannot be obtained, return missing_evidence with unknown
+criteria and one to four evidence entries naming the evidence, why it could not
+be obtained, and the concrete next action needed to make it available. Unsupported
+access and unavailable context require intervention, not a product-decision
+question. Never request or authorize a retry: only the trusted controller can
+classify temporary execution failures and authorize bounded retries.
+Passing enables normal coding,
 validation, PR, and merge handling; it is not a security certification.
 """
 
@@ -68,9 +73,9 @@ def text_schema(limit):
 
 RESULT_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["verdict", "summary", "criteria", "blockers", "policy_references"],
+    "required": ["verdict", "summary", "criteria", "blockers", "evidence", "policy_references"],
     "properties": {
-        "verdict": {"type": "string", "enum": ["ready", "needs_clarification", "retry"]},
+        "verdict": {"type": "string", "enum": ["ready", "needs_clarification", "missing_evidence"]},
         "summary": text_schema(2000),
         "criteria": {
             "type": "object", "additionalProperties": False, "required": list(CRITERIA),
@@ -85,6 +90,12 @@ RESULT_SCHEMA = {
             "required": ["criterion", "decision", "consequence", "question"],
             "properties": {"criterion": {"type": "string", "enum": list(CRITERIA)},
                            **{name: text_schema(1500) for name in ("decision", "consequence", "question")}},
+        }},
+        "evidence": {"type": "array", "maxItems": 4, "items": {
+            "type": "object", "additionalProperties": False,
+            "required": ["criterion", "evidence", "reason", "next_action"],
+            "properties": {"criterion": {"type": "string", "enum": list(CRITERIA)},
+                           **{name: text_schema(1500) for name in ("evidence", "reason", "next_action")}},
         }},
         "policy_references": {"type": "array", "maxItems": 8, "items": text_schema(1000)},
     },
@@ -111,7 +122,8 @@ WORKFLOW_PUBLICATION = {
             "Changes under .github/workflows/ cannot be published. Use an implementation within the available "
             "permissions; if workflow edits are required, the missing permission must be resolved first."),
 }
-PROTOCOL = "readiness-v1:" + digest([POLICY, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS,
+PROTOCOL = "readiness-v2:" + digest([POLICY, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS,
+                                    REVIEW_MAX_ATTEMPTS, REVIEW_RETRY_DELAYS,
                                     SELECTION_PROTOCOL, STEERING_PROTOCOL, AUTO_REPAIR_PROTOCOL,
                                     WORKFLOW_PUBLICATION, ACCOUNT_ISOLATION_PROTOCOL,
                                     WORKER_RECOVERY_PROTOCOL, MAX_CORRECTION_TURNS, MAX_FAILURE_OUTPUT_BYTES,
@@ -170,16 +182,19 @@ def validate_result(result):
     blocked = {name for name, row in result["criteria"].items() if row["status"] == "blocked"}
     unknown = {name for name, row in result["criteria"].items() if row["status"] == "unknown"}
     blockers = result["blockers"]
+    evidence = result["evidence"]
     verdict = result["verdict"]
-    if verdict == "ready" and (blocked or unknown or blockers):
+    if verdict == "ready" and (blocked or unknown or blockers or evidence):
         problems = [f"criteria.{name}.status is {result['criteria'][name]['status']}"
                     for name in CRITERIA if name in blocked | unknown]
         if blockers:
             problems.append("blockers is nonempty")
+        if evidence:
+            problems.append("evidence is nonempty")
         raise ValueError("result.verdict: ready requires all criteria satisfied and no blockers; "
                          + "; ".join(problems))
     if verdict == "needs_clarification":
-        if unknown:
+        if unknown or evidence:
             raise ValueError("result.verdict: needs_clarification cannot include unknown criteria: "
                              + ", ".join(sorted(unknown)))
         if not blockers:
@@ -187,9 +202,33 @@ def validate_result(result):
         if blocked != {b["criterion"] for b in blockers}:
             raise ValueError("result.blockers: blocker criteria must exactly match blocked criteria ("
                              + (", ".join(sorted(blocked)) or "none") + ")")
-    if verdict == "retry" and (blockers or blocked or not unknown):
-        raise ValueError("result.verdict: retry requires an unknown criterion, no blocked criteria, and no blockers")
+    if verdict == "missing_evidence":
+        if blockers or blocked or not unknown or unknown != {e["criterion"] for e in evidence}:
+            raise ValueError("result.evidence: missing_evidence requires evidence entries matching unknown criteria, "
+                             "no blocked criteria, and no decision blockers")
     return result
+
+
+def review_failure_class(value):
+    """Only trusted execution diagnostics, never reviewer text, permit a retry."""
+    from common.diagnostics import validate_failure
+
+    if not value:
+        return "unverified_execution"
+    data = validate_failure(value)
+    if data.get('reason_code') == 'cursor_readiness_tool_denied':
+        return 'unsupported_access'
+    if data['kind'] == 'timeout':
+        return 'temporary_timeout'
+    if data['kind'] == 'transport_error' and data.get('error_type') in {'ConnectionError', 'TimeoutError', 'URLError'}:
+        return 'temporary_transport'
+    if data['kind'] == 'http_error' and data.get('http_status') in {408, 429, 500, 502, 503, 504}:
+        return 'temporary_service'
+    if data['kind'] == 'graphql_error' and (data.get('graphql_code') in {
+            'INTERNAL_SERVER_ERROR', 'RATELIMITED', 'RATE_LIMITED'} or data.get('graphql_type') in {
+                'ratelimited', 'internal error', 'lock timeout'}):
+        return 'temporary_service'
+    return 'execution_failed'
 
 
 PRIVATE_KEY_PATTERN = re.compile(

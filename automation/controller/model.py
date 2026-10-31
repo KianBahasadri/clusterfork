@@ -97,6 +97,14 @@ class DispatchObserved:
     task_id: str
     attempt_id: str
     status: str  # accepted/rejected/unknown; never retry an unknown dispatch
+    failure: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Resubmit:
+    task_id: str
+    submission_id: str  # Identity of a verified human state-change event.
+    submitted_at: float
 
 
 @dataclass(frozen=True)
@@ -142,6 +150,7 @@ class Finish:
     outcome: str
     pull_request: str = ""
     reason: str = ""
+    failure: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -249,7 +258,7 @@ class InstructionRequest:
     data: dict = field(default_factory=dict,repr=False)
 
 
-Command = (IssueObserved | Admit | DispatchObserved | Start | Assign | Review | Progress |
+Command = (IssueObserved | Admit | DispatchObserved | Resubmit | Start | Assign | Review | Progress |
            Finish | ExternalObserved | Retry | Hold | SessionUpdated | EffectUpdated | Authorize |
            ExhaustAccount | ContextObserved | InboxQueued | InboxDone | Initialize | ReportConfirmed | AccountRequest | InstructionRequest)
 
@@ -272,6 +281,11 @@ class TaskView:
     sessions: tuple[dict, ...] = ()
     canceled: bool = False
     content_revision: str = ""
+    review_cycle: int = 1
+    review_attempts: int = 0
+    review_attention: str = ""
+    review_resubmission_pending: bool = False
+    generation: str = ''
 
     def session(self, phase):
         return next((dict(s) for s in self.sessions if s["phase"] == phase), None)

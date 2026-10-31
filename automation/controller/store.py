@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS tasks (
  canceled INTEGER NOT NULL DEFAULT 0 CHECK(canceled IN (0,1)),
  revision INTEGER NOT NULL DEFAULT 1, spec TEXT,
  current_attempt TEXT, repair_used INTEGER NOT NULL DEFAULT 0 CHECK(repair_used IN (0,1)),
+ review_cycle INTEGER NOT NULL DEFAULT 1, review_attempts INTEGER NOT NULL DEFAULT 0 CHECK(review_attempts >= 0),
+ review_attention TEXT NOT NULL DEFAULT '', review_attention_at REAL NOT NULL DEFAULT 0,
+ review_submitted_at REAL NOT NULL DEFAULT 0, pending_submission_at REAL NOT NULL DEFAULT 0,
  UNIQUE(generation, project_id, issue_id)
 );
 CREATE TABLE IF NOT EXISTS grants (
@@ -43,6 +46,8 @@ CREATE TABLE IF NOT EXISTS attempts (
  retry_kind TEXT NOT NULL DEFAULT '', retry_at REAL NOT NULL DEFAULT 0,
  started_at REAL NOT NULL DEFAULT 0,
  attempt_kind TEXT NOT NULL DEFAULT 'normal' CHECK(attempt_kind IN ('normal','startup','capacity','context','review','repair')),
+ review_cycle INTEGER NOT NULL DEFAULT 1, review_charged INTEGER NOT NULL DEFAULT 1,
+ failure_class TEXT NOT NULL DEFAULT '', retry_decision TEXT NOT NULL DEFAULT '', review_detail TEXT NOT NULL DEFAULT '',
  UNIQUE(task_id,ordinal), UNIQUE(run_id,run_attempt,attempt_id)
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -66,6 +71,9 @@ CREATE TABLE IF NOT EXISTS legacy_history (
 );
 CREATE TABLE IF NOT EXISTS inbox (
  event_id TEXT PRIMARY KEY, payload TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0 CHECK(done IN (0,1))
+);
+CREATE TABLE IF NOT EXISTS review_submissions (
+ submission_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(task_id), submitted_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS comment_signatures (
  key TEXT PRIMARY KEY, signature TEXT NOT NULL, confirmed_at REAL NOT NULL
@@ -97,7 +105,7 @@ CREATE TABLE IF NOT EXISTS telemetry_outbox (
  event_id TEXT PRIMARY KEY, created_at REAL NOT NULL, payload TEXT NOT NULL,
  tries INTEGER NOT NULL DEFAULT 0, next_at REAL NOT NULL DEFAULT 0
 );
-PRAGMA user_version=7;
+PRAGMA user_version=8;
 """
 
 
@@ -120,7 +128,7 @@ class Database:
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA synchronous=FULL")
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, 3, 4, 5, 6, 7):
+        if version not in (0, 1, 2, 3, 4, 5, 6, 7, 8):
             self.close()
             raise Rejected("Unsupported task database version")
         if version == 1:
@@ -133,6 +141,25 @@ class Database:
             with self.transaction() as db:
                 db.execute("ALTER TABLE tasks ADD COLUMN canceled INTEGER NOT NULL DEFAULT 0 CHECK(canceled IN (0,1))")
                 db.execute("PRAGMA user_version=3")
+        if version and version < 8:
+            with self.transaction() as db:
+                for table, fields in {
+                    'tasks': {'review_cycle': 'INTEGER NOT NULL DEFAULT 1',
+                              'review_attempts': 'INTEGER NOT NULL DEFAULT 0 CHECK(review_attempts >= 0)',
+                              'review_attention': "TEXT NOT NULL DEFAULT ''",
+                              'review_attention_at': 'REAL NOT NULL DEFAULT 0',
+                              'review_submitted_at': 'REAL NOT NULL DEFAULT 0',
+                              'pending_submission_at': 'REAL NOT NULL DEFAULT 0'},
+                    'attempts': {'review_cycle': 'INTEGER NOT NULL DEFAULT 1',
+                                 'review_charged': 'INTEGER NOT NULL DEFAULT 1',
+                                 'failure_class': "TEXT NOT NULL DEFAULT ''",
+                                 'retry_decision': "TEXT NOT NULL DEFAULT ''",
+                                 'review_detail': "TEXT NOT NULL DEFAULT ''"},
+                }.items():
+                    columns = {row['name'] for row in db.execute(f'PRAGMA table_info({table})')}
+                    for name, definition in fields.items():
+                        if name not in columns:
+                            db.execute(f'ALTER TABLE {table} ADD COLUMN {name} {definition}')
         self.connection.executescript(SCHEMA)
 
     @contextmanager

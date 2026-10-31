@@ -179,6 +179,22 @@ def webhook_event(body, headers, secret, *, now=None):
             return None
         event = {"type": payload["type"], "id": uuid_string(payload["data"]["id"]),
                  "webhook_at": timestamp / 1000}
+        # Only signed, explicit human state transitions can resubmit an assessed
+        # issue. Preserve action time, not delivery time, across redeliveries.
+        actor = payload.get('actor') or {}
+        previous = payload.get('updatedFrom') or {}
+        if (payload['type'] == 'Issue' and payload['action'] == 'update'
+                and actor.get('type') == 'user' and actor.get('isBot') is not True
+                and 'stateId' in previous and previous['stateId'] != payload['data'].get('stateId')):
+            try:
+                changed_at = datetime.fromisoformat(payload['createdAt'].replace('Z', '+00:00'))
+                if changed_at.tzinfo is not None:
+                    event['submission'] = {'actor_id': uuid_string(actor['id']),
+                                           'from_state': uuid_string(previous['stateId']),
+                                           'to_state': uuid_string(payload['data']['stateId']),
+                                           'changed_at': changed_at.timestamp()}
+            except (KeyError, ValueError, TypeError, AttributeError, OverflowError):
+                pass  # Incomplete actor/state evidence is only a wake-up hint.
         if payload["type"] == "IssueRelation":
             # Wake-up hints only. Never decide eligibility from a webhook's
             # relation type or prerequisite state, including removal events.
