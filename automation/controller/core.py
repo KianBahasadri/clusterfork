@@ -322,7 +322,7 @@ class Controller:
                 or not math.isfinite(command.sort_order) or not re.fullmatch(
                     r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", command.repository)
                 or type(command.eligible) is not bool or type(command.dependencies_ready) is not bool
-                or type(command.canceled) is not bool):
+                or type(command.canceled) is not bool or type(command.submission_current) is not bool):
             raise Rejected("Invalid issue observation")
         row = db.execute("SELECT * FROM tasks WHERE task_id=?", (command.task_id,)).fetchone()
         if row is None:
@@ -341,10 +341,17 @@ class Controller:
                            priority=command.priority, sort_order=command.sort_order,
                            content_revision=command.content_revision, canceled=command.canceled)
             active = db.execute("SELECT 1 FROM grants WHERE task_id=?", (command.task_id,)).fetchone()
+            withdrawn = not command.eligible or not command.submission_current
+            if task['pending_submission_at'] and withdrawn:
+                changes['pending_submission_at'] = 0
             if not active and task["phase"] in {"queued", "skipped"}:
                 changes.update(phase="queued" if command.eligible else "skipped", reason=command.reason)
                 if task['phase']=='skipped' and command.eligible:
                     changes['sequence']=db.execute('SELECT MAX(sequence)+1 FROM tasks').fetchone()[0]
+                if task['review_cycle'] > 1 and withdrawn:
+                    reason = 'Human readiness resubmission was withdrawn; explicitly move the issue to Todo to resubmit.'
+                    changes.update(phase='held', reason=reason, review_attention=reason,
+                                   review_attention_at=task['review_submitted_at'])
             if active and task["spec"]:
                 changed = json.loads(task["spec"])["content_revision"] != command.content_revision
                 attempt = db.execute('SELECT * FROM attempts WHERE attempt_id=?', (task['current_attempt'],)).fetchone()
@@ -622,7 +629,10 @@ class Controller:
         if attempt:
             db.execute("UPDATE attempts SET retry_kind='',retry_at=0,failure_class=?,retry_decision='attention',review_detail=? WHERE attempt_id=?",
                        (classification, reason, attempt['attempt_id']))
-        self._update(db, task, phase='held', reason=reason, review_attention=reason, review_attention_at=now)
+        # Further feedback in this held cycle is not a new submission boundary.
+        # A late callback must not render a queued human action artificially old.
+        attention_at = task['review_attention_at'] if task['review_attention'] else now
+        self._update(db, task, phase='held', reason=reason, review_attention=reason, review_attention_at=attention_at)
 
     def _schedule_review(self, db, task, attempt, classification, detail, now):
         if task['review_attention'] or attempt['retry_decision'] in {'retry', 'attention'}:
@@ -650,10 +660,16 @@ class Controller:
     def _resubmit(self, db, task, command, now):
         if (not re.fullmatch('[0-9a-f]{64}', command.submission_id)
                 or type(command.submitted_at) not in (float, int) or not math.isfinite(command.submitted_at)
-                or command.submitted_at > now or command.submitted_at <= max(task['review_submitted_at'], task['review_attention_at'])):
+                or command.submitted_at > now or command.submitted_at <= max(
+                    task['review_submitted_at'], task['review_attention_at'], task['pending_submission_at'])):
             return
-        if not db.execute('INSERT OR IGNORE INTO review_submissions VALUES (?,?,?)',
-                          (command.submission_id, task['task_id'], command.submitted_at)).rowcount:
+        if command.transition and (set(command.transition) != {'actor_id', 'from_state', 'to_state', 'changed_at'}
+                or command.transition['changed_at'] != command.submitted_at
+                or command.submission_id != identity(task['issue_id'], command.transition)):
+            raise Rejected('Invalid human submission identity')
+        if not db.execute('INSERT OR IGNORE INTO review_submissions VALUES (?,?,?,?)',
+                          (command.submission_id, task['task_id'], command.submitted_at,
+                           json.dumps(command.transition, sort_keys=True))).rowcount:
             return
         if not task['review_attention'] or not task['eligible'] or task['canceled']:
             return
@@ -799,8 +815,11 @@ class Controller:
         row = self._task(db, task_id)
         attempt = db.execute("SELECT * FROM attempts WHERE attempt_id=?", (row["current_attempt"],)).fetchone()
         sessions = tuple({**dict(s), "data": json.loads(s["data"])} for s in db.execute("SELECT * FROM sessions WHERE attempt_id=? ORDER BY phase", (row["current_attempt"],)))
+        submission = db.execute('SELECT transition FROM review_submissions WHERE task_id=? AND submitted_at=?',
+                                (task_id, row['pending_submission_at'] or row['review_submitted_at'])).fetchone()
         return TaskView(task_id, row["issue_id"], row["project_id"], row["repository"], row["identifier"], Phase(row["phase"]),
                         row["revision"], bool(db.execute("SELECT 1 FROM grants WHERE task_id=?", (task_id,)).fetchone()),
                         bool(row["eligible"]), bool(row["dependencies_ready"]), row["reason"],
                         TaskSpec(**json.loads(row["spec"])) if row["spec"] else None, dict(attempt) if attempt else {}, sessions, bool(row["canceled"]), row["content_revision"],
-                        row["review_cycle"], row["review_attempts"], row["review_attention"], bool(row['pending_submission_at']), row['generation'])
+                        row["review_cycle"], row["review_attempts"], row["review_attention"], bool(row['pending_submission_at']), row['generation'],
+                        row['review_attention_at'], row['review_submitted_at'], json.loads(submission[0]) if submission else {})

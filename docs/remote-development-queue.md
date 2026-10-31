@@ -82,8 +82,22 @@ a non-ready state back to Todo. Only a signed human state-transition event, with
 its original action identity/time and current eligibility, authorizes resubmission.
 Duplicate/redelivered events, scans, bot lifecycle writes, labels, comments, run
 IDs and timestamps alone cannot resubmit. A human submission received before
-cleanup stays pending until safe release; reporting cannot move it back to Needs
-attention while it waits. Human resubmission does not reset the independent
+cleanup stays pending until safe release. The durable inbox protects intent even
+before event processing; SQLite retains the original signed transition with the
+pending/accepted cycle. Upgrades recover existing transition provenance from the
+retained inbox without replenishing budgets.
+
+Submission processing and pending/queued revalidation use complete history for
+that issue to distinguish the controller app's Needs attention projection from a
+later human workflow action. A delayed signed Todo event can remain eligible
+through our own projection, including an in-flight write with a lost response.
+History alone never authorizes a cycle. Missing, inconsistent or ambiguous causal
+evidence defers event acknowledgement or admission while retaining durable intent.
+Current cancellation, archive, project mapping/enrollment and dependencies still
+govern execution.
+A later withdrawal clears pending intent; returning via a scan or bot write
+cannot revive it. An accepted submission withdrawn while queued also needs a
+new human transition. Human resubmission does not reset the independent
 [single coding-repair budget](remote-development.md#single-attempt-auto-repair) or
 transfer unresolved PR ownership.
 
@@ -134,6 +148,16 @@ failure, delay and remaining attempts. Terminal feedback names the exact missing
 decision/evidence or execution failure and next action, preserves current/prior
 run links, and retains the existing user notification for attention-worthy review
 failures. A reporting outage never resets the budget or recreates retry intent.
+Needs attention state projection has its own durable acknowledgement per readiness
+failure, separate from comment/label/report revisions. Cleanup and report retries
+cannot repeat an acknowledged projection over a newer submission. Before a first
+or unacknowledged write, targeted issue history vetoes overwriting newer human
+workflow intent. Signed event processing reconciles an in-flight controller write
+that nevertheless landed later, while preserving a subsequent human withdrawal.
+These history reads are confined to readiness projection and signed/pending/queued
+resubmission checks; settled historical tasks gain no per-task polling.
+Late failure/context feedback keeps the original held-cycle boundary; it cannot
+make an already submitted human transition look older than the failure.
 
 Webhook commit wakes observation; background ticks run every 30 seconds, full
 project scans every two minutes. These are intervals, not feedback latency promises.
