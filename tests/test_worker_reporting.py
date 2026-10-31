@@ -1,5 +1,6 @@
 """Development stage labels and per-attempt account/usage reporting."""
 
+import copy
 import json
 from pathlib import Path
 import sys
@@ -15,7 +16,10 @@ sys.path[:0] = [str(ROOT / "automation")]
 import worker
 from codex_runtime import CodexError, inspect_account, quota_snapshot, read_usage
 from common.clients import Linear, RequestError
-from common.reporting import QUEUED_LABEL, SELECTION_LABEL, STAGE_LABELS, attempt_comment, timestamp, usage_report, validate_usage
+from common.reporting import (AUTO_REPAIR_LABEL, CLARIFICATION_LABEL, EXECUTION_STATUS_LABELS, QUEUED_LABEL,
+                              SELECTION_LABEL, STAGE_LABELS, attempt_comment, timestamp, usage_report, validate_usage)
+from call_budget import CallBudget
+from label_api import LabelAPI
 from test_remote_worker import NOW, ISSUE
 
 
@@ -41,78 +45,107 @@ class LabelAdapterTests(unittest.TestCase):
         client.query = Mock(side_effect=results)
         return client
 
-    def test_stage_updates_only_owned_labels_and_reuses_team_label(self):
-        client = self.client(self.label_issue([{"id": "user", "name": "bug"},
-                                              {"id": "selected", "name": SELECTION_LABEL},
-                                              {"id": "old", "name": STAGE_LABELS["initializing"]}]),
-                             {"issueLabels": {"nodes": [{"id": "coding"}], "pageInfo": {"hasNextPage": False}}},
-                             {"issueAddLabel": {"success": True}}, {"issueRemoveLabel": {"success": True}})
-        client.set_stage(ISSUE, "coding")
-        self.assertEqual(client.query.call_args_list[-2].args[1], {"id": ISSUE, "label": "coding"})
-        self.assertEqual(client.query.call_args_list[-1].args[1], {"id": ISSUE, "label": "old"})
-        self.assertIn("team: {id: {eq: $team}}", client.query.call_args_list[1].args[0])
+    def stateful_client(self, labels):
+        api = LabelAPI()
+        api.add_issue(ISSUE, labels)
+        client = Linear('private-test-token')
+        client.query = Mock(side_effect=api.query)
+        client.api_calls = Mock()
+        client.api_calls.attach_mock(client.query, 'query')
+        return client, api
 
-    def test_stage_cleanup_and_repeated_stage_do_not_replace_other_labels(self):
-        labels = [{"id": "user", "name": "clusterfork: user label"},
-                  {"id": "selected", "name": SELECTION_LABEL}, {"id": "coding", "name": STAGE_LABELS["coding"]}]
-        client = self.client(self.label_issue(labels), self.label_issue(labels), {"issueRemoveLabel": {"success": True}})
-        client.set_stage(ISSUE, "coding")
-        self.assertEqual(client.query.call_count, 1)
-        client.set_stage(ISSUE, None)
-        self.assertEqual(client.query.call_count, 3)
-        self.assertEqual(client.query.call_args.args[1], {"id": ISSUE, "label": "coding"})
+    def test_every_status_and_terminal_cleanup_remove_all_stale_owned_indicators(self):
+        preserved = {'bug', 'clusterfork: user label', 'clusterfork-symphony', AUTO_REPAIR_LABEL}
+        for desired in [*sorted(EXECUTION_STATUS_LABELS), None]:
+            with self.subTest(desired=desired):
+                client, api = self.stateful_client(sorted(preserved | EXECUTION_STATUS_LABELS))
+                original = copy.deepcopy(api.issues[ISSUE])
+                client.set_execution_status(ISSUE, desired)
+                self.assertEqual(set(api.names(ISSUE)), preserved | ({desired} if desired else set()))
+                self.assertTrue(all(operation == 'issueRemoveLabel' for operation, _, _ in api.mutations))
+                for key in ('assignee', 'project', 'team'):
+                    self.assertEqual(api.issues[ISSUE][key], original[key])
+                self.assertTrue(all('issueUpdate' not in call.args[0] for call in client.query.call_args_list))
 
-    def test_selection_add_and_remove_preserve_stage_labels_and_assignments(self):
-        labels = [{"id": "user", "name": "bug"}, {"id": "coding", "name": STAGE_LABELS["coding"]}]
-        client = self.client(self.label_issue(labels),
-                             {"issueLabels": {"nodes": [{"id": "selected"}], "pageInfo": {"hasNextPage": False}}},
-                             {"issueAddLabel": {"success": True}},
-                             self.label_issue(labels + [{"id": "selected", "name": SELECTION_LABEL}]),
-                             {"issueRemoveLabel": {"success": True}})
-        client.set_selected(ISSUE, True)
-        client.set_selected(ISSUE, False)
-        calls = client.query.call_args_list
-        self.assertEqual(calls[2].args[1], {"id": ISSUE, "label": "selected"})
-        self.assertEqual(calls[4].args[1], {"id": ISSUE, "label": "selected"})
-        self.assertIn("issueAddLabel", calls[2].args[0])
-        self.assertIn("issueRemoveLabel", calls[4].args[0])
-        self.assertEqual(calls[1].args[1]["name"], SELECTION_LABEL)
-        self.assertTrue(all("issueUpdate" not in call.args[0] for call in calls))
+    def test_stage_replaces_selected_and_old_stage_before_adding_and_reuses_team_label(self):
+        client, api = self.stateful_client([SELECTION_LABEL, STAGE_LABELS['initializing'], 'bug'])
+        client.set_execution_status(ISSUE, STAGE_LABELS['coding'])
+        self.assertEqual(api.mutations, [('issueRemoveLabel', ISSUE, SELECTION_LABEL),
+                                         ('issueRemoveLabel', ISSUE, STAGE_LABELS['initializing']),
+                                         ('issueAddLabel', ISSUE, STAGE_LABELS['coding'])])
+        lookup = client.query.call_args_list[-2]
+        self.assertIn('team: {id: {eq: $team}}', lookup.args[0])
+        self.assertEqual(lookup.args[1], {'team': 'team', 'name': STAGE_LABELS['coding']})
+        self.assertEqual(set(api.names(ISSUE)), {'bug', STAGE_LABELS['coding']})
 
-    def test_selection_repeated_updates_and_missing_labels_are_idempotent(self):
-        client = self.client(self.label_issue([{"id": "selected", "name": SELECTION_LABEL}]), self.label_issue([]))
-        client.set_selected(ISSUE, True)
-        client.set_selected(ISSUE, False)
-        self.assertEqual(client.query.call_count, 2)
+    def test_queue_selection_clarification_and_each_stage_transition_never_add_overlap(self):
+        client, api = self.stateful_client(['bug', AUTO_REPAIR_LABEL])
+        for desired in [QUEUED_LABEL, SELECTION_LABEL, CLARIFICATION_LABEL, SELECTION_LABEL,
+                        *STAGE_LABELS.values(), None]:
+            client.set_execution_status(ISSUE, desired)
+            self.assertEqual(set(api.names(ISSUE)) & EXECUTION_STATUS_LABELS, {desired} if desired else set())
+        self.assertTrue(all(len(set(names) & EXECUTION_STATUS_LABELS) <= 1 for _, names in api.snapshots))
 
-    def test_queued_label_mutations_preserve_enrollment_stage_and_human_labels(self):
-        labels = [{"id": "user", "name": "bug"}, {"id": "coding", "name": STAGE_LABELS["coding"]},
-                  {"id": "enrollment", "name": "clusterfork-symphony"}]
-        queued = {"id": "queued", "name": QUEUED_LABEL}
-        client = self.client(self.label_issue(labels),
-                             {"issueLabels": {"nodes": [{"id": "queued"}], "pageInfo": {"hasNextPage": False}}},
-                             {"issueAddLabel": {"success": True}}, self.label_issue(labels + [queued]),
-                             self.label_issue(labels + [queued]), {"issueRemoveLabel": {"success": True}},
-                             self.label_issue(labels))
-        for enabled in (True, True, False, False):
-            client.set_queued(ISSUE, enabled)
-        calls = client.query.call_args_list
-        self.assertEqual(len(calls), 7)
-        self.assertEqual(calls[1].args[1], {"team": ISSUE, "name": "clusterfork: queued"})
-        self.assertIn("issueAddLabel", calls[2].args[0])
-        self.assertIn("issueRemoveLabel", calls[5].args[0])
-        self.assertEqual(calls[2].args[1], {"id": ISSUE, "label": "queued"})
-        self.assertEqual(calls[5].args[1], {"id": ISSUE, "label": "queued"})
-        self.assertTrue(all("issueUpdate" not in call.args[0] for call in calls))
+    def test_repeated_status_and_empty_cleanup_are_idempotent(self):
+        client, api = self.stateful_client([SELECTION_LABEL])
+        with CallBudget(self, linear=client, exact={'linear.query': 1}):
+            client.set_execution_status(ISSUE, SELECTION_LABEL)
+        self.assertFalse(api.mutations)
+        with CallBudget(self, linear=client, exact={'linear.query': 2}):
+            client.set_execution_status(ISSUE, None)
+        with CallBudget(self, linear=client, exact={'linear.query': 1}):
+            client.set_execution_status(ISSUE, None)
+        self.assertEqual(api.mutations, [('issueRemoveLabel', ISSUE, SELECTION_LABEL)])
+        self.assertEqual(client.query.call_count, 4)
 
-    def test_selection_incomplete_labels_and_failed_mutations_are_recoverable(self):
-        client = self.client(self.label_issue([], more=True))
-        with self.assertRaises(ValueError):
-            client.set_selected(ISSUE, True)
-        client = self.client(self.label_issue([{"id": "selected", "name": SELECTION_LABEL}]),
-                             {"issueRemoveLabel": {"success": False}})
-        with self.assertRaises(RequestError):
-            client.set_selected(ISSUE, False)
+    def test_duplicate_named_statuses_keep_only_one_indicator(self):
+        client, api = self.stateful_client([SELECTION_LABEL, {'id': 'workspace-selected', 'name': SELECTION_LABEL}])
+        client.set_execution_status(ISSUE, SELECTION_LABEL)
+        self.assertEqual(api.names(ISSUE), [SELECTION_LABEL])
+
+    def test_failed_removal_leaves_replacement_retryable_without_adding(self):
+        for lost_reply in (False, True):
+            with self.subTest(lost_reply=lost_reply):
+                client, api = self.stateful_client([QUEUED_LABEL, SELECTION_LABEL])
+                removals = 0
+                def query(text, variables):
+                    nonlocal removals
+                    if 'issueRemoveLabel(' in text:
+                        removals += 1
+                        if removals == 2:
+                            if lost_reply:
+                                api.query(text, variables)
+                                raise RequestError()
+                            return {'issueRemoveLabel': {'success': False}}
+                    return api.query(text, variables)
+                client.query.side_effect = query
+                with self.assertRaises(RequestError):
+                    client.set_execution_status(ISSUE, STAGE_LABELS['coding'])
+                self.assertFalse(any(operation == 'issueAddLabel' for operation, _, _ in api.mutations))
+                client.set_execution_status(ISSUE, STAGE_LABELS['coding'])
+                self.assertEqual(api.names(ISSUE), [STAGE_LABELS['coding']])
+
+    def test_failed_or_lost_add_reply_is_idempotently_retried(self):
+        for lost_reply in (False, True):
+            with self.subTest(lost_reply=lost_reply):
+                client, api = self.stateful_client([SELECTION_LABEL])
+                failed = False
+                def query(text, variables):
+                    nonlocal failed
+                    if 'issueAddLabel(' in text and not failed:
+                        failed = True
+                        if lost_reply:
+                            api.query(text, variables)
+                            raise RequestError()
+                        return {'issueAddLabel': {'success': False}}
+                    return api.query(text, variables)
+                client.query.side_effect = query
+                with self.assertRaises(RequestError):
+                    client.set_execution_status(ISSUE, STAGE_LABELS['coding'])
+                client.set_execution_status(ISSUE, STAGE_LABELS['coding'])
+                self.assertEqual(api.names(ISSUE), [STAGE_LABELS['coding']])
+                self.assertEqual(sum(operation == 'issueAddLabel' for operation, _, _ in api.mutations), 1)
+                self.assertTrue(all(len(set(names) & EXECUTION_STATUS_LABELS) <= 1 for _, names in api.snapshots))
 
     def test_concurrent_or_ambiguous_label_creation_recovers_the_same_label(self):
         client = self.client({"issueLabels": {"nodes": [], "pageInfo": {"hasNextPage": False}}},
@@ -123,11 +156,18 @@ class LabelAdapterTests(unittest.TestCase):
     def test_incomplete_labels_or_failed_mutations_are_retried(self):
         client = self.client(self.label_issue([], more=True))
         with self.assertRaises(ValueError):
-            client.set_stage(ISSUE, None)
+            client.set_execution_status(ISSUE, None)
+        self.assertEqual(client.query.call_count, 1)
         client = self.client(self.label_issue([{"id": "old", "name": STAGE_LABELS["coding"]}]),
                              {"issueRemoveLabel": {"success": False}})
         with self.assertRaises(RequestError):
-            client.set_stage(ISSUE, None)
+            client.set_execution_status(ISSUE, None)
+
+    def test_invalid_status_cannot_remove_owned_or_unrelated_labels(self):
+        client = self.client()
+        with self.assertRaises(ValueError):
+            client.set_execution_status(ISSUE, AUTO_REPAIR_LABEL)
+        client.query.assert_not_called()
 
 
 class UsageTests(unittest.TestCase):

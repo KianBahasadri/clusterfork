@@ -155,27 +155,30 @@ class ReviewerContractTests(unittest.TestCase):
 
 
 class ReadinessAdapterTests(unittest.TestCase):
-    def test_clarification_label_mutations_preserve_human_and_stage_labels(self):
+    def test_clarification_replaces_stage_without_changing_human_labels(self):
         client = Linear("test")
         issue = {"team": {"id": "team"}, "labels": {"nodes": [
             {"id": "human", "name": "bug"}, {"id": "stage", "name": "clusterfork: coding"},
         ], "pageInfo": {"hasNextPage": False}}}
-        with patch.object(client, "query", side_effect=[{"issue": issue}, {"issueAddLabel": {"success": True}}]) as query, \
+        with patch.object(client, "query", side_effect=[{"issue": issue}, {"issueRemoveLabel": {"success": True}},
+                                                       {"issueAddLabel": {"success": True}}]) as query, \
              patch.object(client, "stage_label", return_value="clarification"):
-            client.set_clarification("issue", True)
+            client.set_execution_status("issue", CLARIFICATION_LABEL)
+        self.assertIn("issueRemoveLabel", query.call_args_list[1].args[0])
+        self.assertEqual(query.call_args_list[1].args[1], {"id": "issue", "label": "stage"})
         self.assertIn("issueAddLabel", query.call_args.args[0])
         self.assertEqual(query.call_args.args[1], {"id": "issue", "label": "clarification"})
-        issue["labels"]["nodes"].append({"id": "clarification", "name": CLARIFICATION_LABEL})
+        issue["labels"]["nodes"][1] = {"id": "clarification", "name": CLARIFICATION_LABEL}
         with patch.object(client, "query", side_effect=[{"issue": issue}, {"issueRemoveLabel": {"success": True}}]) as query:
-            client.set_clarification("issue", False)
+            client.set_execution_status("issue", None)
         self.assertIn("issueRemoveLabel", query.call_args.args[0])
         self.assertEqual(query.call_args.args[1], {"id": "issue", "label": "clarification"})
         with patch.object(client, "query", return_value={"issue": issue}) as query:
-            client.set_clarification("issue", True)
+            client.set_execution_status("issue", CLARIFICATION_LABEL)
         self.assertEqual(query.call_count, 1)
         issue["labels"]["pageInfo"]["hasNextPage"] = True
         with patch.object(client, "query", return_value={"issue": issue}), self.assertRaises(ValueError):
-            client.set_clarification("issue", False)
+            client.set_execution_status("issue", None)
 
     def test_context_version_uses_read_only_credentials_and_requires_a_commit_sha(self):
         route = Registry.load(ROOT / "automation/controller/projects.json").routes[PROJECT]

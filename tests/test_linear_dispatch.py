@@ -68,10 +68,7 @@ class Tracker:
     def status_comment(self, *args):
         pass
 
-    def set_selected(self, issue_id, enabled):
-        pass
-
-    def set_queued(self, issue_id, enabled):
+    def set_execution_status(self, issue_id, name):
         pass
 
 

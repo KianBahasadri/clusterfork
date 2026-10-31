@@ -78,10 +78,31 @@ periodic observations discover satisfied or removed prerequisites automatically.
 
 ## Linear feedback
 
-`clusterfork: queued` means received and waiting; `clusterfork: selected` means the
-controller reserved this repository's grant. Neither asserts a passing review or
-a running agent. Human assignments and unrelated labels are preserved. A review
-rejection clears selection while the rejected runner is being verified stopped.
+Each issue shows at most one Clusterfork execution-status label. The mutually
+exclusive set is `clusterfork: queued`, `clusterfork: selected`,
+`clusterfork: needs clarification`, and the seven stage labels:
+`clusterfork: runner initialization`, `clusterfork: account selection`, `clusterfork: coding`,
+`clusterfork: final testing and review`, `clusterfork: publication`,
+`clusterfork: PR review and CI`, and `clusterfork: waiting for quota`.
+
+The controller derives the indicator from committed state: unresolved
+needs-clarification feedback takes precedence, then the current execution,
+PR-review or quota-wait stage, then selection, then queued. Clarification remains
+through resubmission and temporary review retries until a passing review.
+Completed, canceled and skipped tasks have no execution-status indicator.
+`queued` means received and waiting; `selected` means the controller reserved this
+repository's grant, without asserting a passing review or a running agent. A
+review rejection clears selection while the rejected runner is verified stopped.
+Showing a stage or clarification instead of selection does not change the grant,
+account selection, eligibility, dispatch, retry or completion policy.
+
+Reporting removes conflicting owned indicators before adding the desired one.
+Failed or ambiguous label writes leave reporting pending for an idempotent retry;
+reporting is confirmed only after the desired labels are applied. Pending reports
+reconcile stale combinations even when the status comment has not changed.
+Human assignments, unrelated labels and project enrollment are preserved.
+`clusterfork: auto-repair` identifies the attempt kind and may remain alongside
+the single execution-status indicator.
 
 The task's stable status comment explains prerequisites, admission holds, current
 run/PR links or which active issue must finish. Grant changes create fresh reporting
