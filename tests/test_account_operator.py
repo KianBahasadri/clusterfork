@@ -6,6 +6,7 @@ import sys
 import time
 from types import SimpleNamespace
 import unittest
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -18,6 +19,9 @@ from common.accounts import WorkerError
 from common.identity import verify_operator
 import test_controller_server as server_fixtures
 from test_remote_worker import auth
+from test_independent_accounts import login, usage
+from controller.account_usage import UsageCollector
+from common.accounts import login_fingerprints, login_id
 
 TENANT = "00000000-0000-0000-0000-000000000001"
 OPERATOR = "00000000-0000-0000-0000-000000000002"
@@ -94,6 +98,62 @@ class AccountTransferTests(unittest.TestCase):
             self.f.request("/api/accounts", json.dumps([]).encode())
         self.assertEqual(caught.exception.code, 400)
         caught.exception.close()
+
+    def test_authenticated_snapshot_is_cache_only_and_never_returns_credential_metadata(self):
+        for provider in ('codex', 'cursor'):
+            with self.subTest(provider=provider):
+                pool = self.f.controller.accounts.pools[provider]
+                identity = pool.enroll(login(provider), aliases=['main', 'alias'])
+                reading = usage(provider)
+                reading['observed_at'] = 1000
+                collector = UsageCollector(self.f.controller.accounts, None, clock=lambda: 1000,
+                    probe=lambda *args: reading)
+                collector.collect(pool, identity)
+                before = pool.get(identity)
+                client = self.client()
+                client.provider = provider
+                with patch.object(pool, 'claim', side_effect=AssertionError('GET attempted to claim auth')), \
+                     patch.object(pool, 'get', side_effect=AssertionError('GET read credential cache')):
+                    result = client.snapshot()
+                    with self.f.request('/api/accounts/snapshot?provider=' + provider) as response:
+                        self.assertEqual(response.headers['Cache-Control'], 'no-store')
+                self.assertEqual(pool.get(identity), before)
+                self.assertEqual(result['schema_version'], 1)
+                self.assertEqual(set(result), {'schema_version', 'generated_at', 'provider', 'accounts'})
+                self.assertEqual(set(result['accounts'][0]), {
+                    'provider', 'account_id', 'aliases', 'cloud_available', 'cloud_state', 'usage'})
+                self.assertEqual(set(result['accounts'][0]['usage']), {
+                    'observed_at', 'attempted_at', 'age_seconds', 'max_age_seconds', 'freshness', 'error', 'windows'})
+                self.assertEqual(result['accounts'][0]['aliases'], ['alias', 'main'])
+                self.assertEqual(result['accounts'][0]['usage']['freshness'], 'fresh')
+                encoded = json.dumps(result)
+                for key in ('auth', 'access_token', 'refresh_token', 'accessToken', 'refreshToken', 'cloud_login', 'fingerprints', 'fence'):
+                    self.assertNotIn('"' + key + '"', encoded)
+                self.assertFalse(self.f.app.wakeup.is_set())
+
+    def test_snapshot_rejects_missing_operator_access_and_ambiguous_queries(self):
+        for query in ('', '?provider=codex&provider=cursor', '?provider=other', '?provider=codex&auth=true'):
+            with self.subTest(query=query), self.assertRaises(HTTPError) as caught:
+                self.f.request('/api/accounts/snapshot' + query)
+            self.assertEqual(caught.exception.code, 400)
+            caught.exception.close()
+        self.f.app.account_operator = None
+        with self.assertRaises(WorkerError) as caught:
+            self.client().snapshot()
+        self.assertEqual(caught.exception.status, 401)
+
+    def test_registration_transfers_only_fingerprints_and_cloud_login_remains_fenced(self):
+        for provider in ('codex', 'cursor'):
+            with self.subTest(provider=provider):
+                client = self.client()
+                client.provider = provider
+                identity = client.enroll(login(provider), aliases=['main'])
+                original = client.get(identity)
+                local = login(provider, 'local')
+                client.register_local(identity, login_id(local, provider), login_fingerprints(local, provider))
+                self.assertEqual(client.get(identity)[0]['auth'], original[0]['auth'])
+                with self.assertRaisesRegex(WorkerError, 'cloud token|provider session'):
+                    client.register_local(identity, login_id(login(provider), provider), login_fingerprints(login(provider), provider))
 
 
 if __name__ == "__main__":

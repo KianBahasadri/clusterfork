@@ -37,7 +37,7 @@ class QuotaWindow:
 @dataclass(frozen=True)
 class AccountQuota:
     # Use provider account identity, not a local profile alias: aliases may
-    # represent the same account and share the same allowance and refresh token.
+    # represent the same account and share its allowance across independent logins.
     account_id: str
     agent: str
     model: str

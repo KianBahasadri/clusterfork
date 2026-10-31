@@ -168,8 +168,8 @@ def inspect_account(home, model, effort):
         server.close()
 
 
-def read_usage(home):
-    server = AppServer(home)
+def read_usage(home, *, timeout=30):
+    server = AppServer(home, timeout=timeout)
     try:
         server.call("account/read", {"refreshToken": True})
         return server.call("account/rateLimits/read")

@@ -79,6 +79,12 @@ CREATE TABLE IF NOT EXISTS accounts (
  lease_until REAL NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1, metadata TEXT NOT NULL DEFAULT '{}',
  PRIMARY KEY(provider,account_id)
 );
+CREATE TABLE IF NOT EXISTS account_usage (
+ provider TEXT NOT NULL, account_id TEXT NOT NULL, measurement TEXT,
+ attempted_at REAL NOT NULL, error TEXT,
+ PRIMARY KEY(provider,account_id),
+ FOREIGN KEY(provider,account_id) REFERENCES accounts(provider,account_id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS instructions (
  comment_id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, sequence INTEGER NOT NULL,
  state TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(issue_id,sequence)
@@ -91,7 +97,7 @@ CREATE TABLE IF NOT EXISTS telemetry_outbox (
  event_id TEXT PRIMARY KEY, created_at REAL NOT NULL, payload TEXT NOT NULL,
  tries INTEGER NOT NULL DEFAULT 0, next_at REAL NOT NULL DEFAULT 0
 );
-PRAGMA user_version=6;
+PRAGMA user_version=7;
 """
 
 
@@ -114,7 +120,7 @@ class Database:
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA synchronous=FULL")
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, 3, 4, 5, 6):
+        if version not in (0, 1, 2, 3, 4, 5, 6, 7):
             self.close()
             raise Rejected("Unsupported task database version")
         if version == 1:

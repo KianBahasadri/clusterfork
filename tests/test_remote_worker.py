@@ -259,8 +259,9 @@ class AccountEnrollmentTests(unittest.TestCase):
             self.assertEqual(len(records(table)), 2)
             self.assertEqual(manifest["active"]["account_id"], manifest["alias"]["account_id"])
             self.assertEqual((store / "current").resolve(), active)
-            self.assertEqual(active.read_bytes(), original)
-            self.assertIn("includes the active local account", output)
+            self.assertFalse(active.exists())
+            self.assertEqual((store / "cloud-reserved/active.json").read_bytes(), original)
+            self.assertIn("3 managed aliases", output)
 
     def test_explicit_active_enrollment_is_idempotent_and_retains_refreshed_cloud_tokens(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -357,7 +358,8 @@ class LiveQuotaShapeTests(unittest.TestCase):
 
 
 class LocalRemoteOwnershipTests(unittest.TestCase):
-    def backend(self, directory):
+    def backend(self, directory, provider="codex"):
+        from test_independent_accounts import login
         spec = importlib.util.spec_from_file_location("worker_rotate_auth", ROOT / "scripts/rotate_auth.py")
         rotate = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(rotate)
@@ -367,8 +369,9 @@ class LocalRemoteOwnershipTests(unittest.TestCase):
             default_store=Path(directory) / "store")
         backend.store_dir.mkdir()
         for name in ("local-a", "remote", "local-b"):
-            (backend.store_dir / f"auth.json.{name}").write_text("{}")
-        (backend.store_dir / "remote-profiles.json").write_text(json.dumps({"remote": {"account_id": "test"}}))
+            (backend.store_dir / f"auth.json.{name}").write_text(json.dumps(login(provider, account=name)))
+        identity = account_cli.account_identity(login(provider, account="remote"), provider)
+        (backend.store_dir / "remote-profiles.json").write_text(json.dumps({"remote": {"account_id": identity}}))
         return backend, rotate
 
     def test_local_rotation_skips_cloud_reserved_profiles(self):

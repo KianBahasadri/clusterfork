@@ -20,7 +20,7 @@ PY
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq python3-venv git curl caddy
+apt-get install -y -qq python3-venv git curl caddy nodejs npm
 id clusterfork >/dev/null 2>&1 || useradd --system --home-dir /var/lib/clusterfork --shell /usr/sbin/nologin clusterfork
 
 # Only the dedicated Azure LUN is eligible. Never format a device with signatures
@@ -69,6 +69,9 @@ assert local_manifest(sys.argv[2],manifest['revision'])==manifest,'Runtime tree 
 PY
     python3 -m venv "$cf_release/.venv"
     "$cf_release/.venv/bin/python" -m pip install --disable-pip-version-check -q -r "$cf_release/automation/controller/requirements.txt"
+    # Quota inspection uses the same pinned app-server as workers, without any
+    # target checkout or tools. Cursor quota uses the existing authenticated RPC.
+    npm install --prefix "$cf_release/tooling" --no-audit --no-fund @openai/codex@0.165.0
     "$cf_release/.venv/bin/python" -c "import sys; sys.path.insert(0,'$cf_release/automation'); import controller_main"
     touch "$cf_release/.installed"
 fi
@@ -95,6 +98,7 @@ TimeoutStopSec=90
 RuntimeDirectory=clusterfork
 RuntimeDirectoryMode=0700
 UMask=0077
+Environment="PATH=/opt/clusterfork/current/tooling/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

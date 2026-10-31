@@ -1,9 +1,11 @@
 """Provider account identities, quota profiles and fenced credential leases."""
 
-import base64
-import hashlib
-import json
 import re
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from account_sessions import account_identity as _account_identity, login_fingerprints, login_id
 
 AUDIENCE="clusterfork-worker"
 ISSUER="https://token.actions.githubusercontent.com"
@@ -27,31 +29,10 @@ def valid_account_id(identity):
 
 
 def account_identity(auth, provider="codex"):
-    if provider == "cursor":
-        if (not isinstance(auth, dict) or set(auth) - {"accessToken", "refreshToken"}
-                or not all(isinstance(auth.get(k), str) and auth[k] for k in ("accessToken", "refreshToken"))
-                or len(json.dumps(auth)) > 30_000):
-            raise WorkerError("Incomplete Cursor CLI account credentials", 400)
-        try:
-            payload = auth["accessToken"].split(".")[1]
-            subject = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["sub"]
-            if not isinstance(subject, str) or not subject:
-                raise ValueError()
-        except (ValueError, KeyError, IndexError, TypeError):
-            raise WorkerError("Cursor access token has no stable subject", 400) from None
-        # This decodes identity only. Live provider authentication is still required.
-        return hashlib.sha256(subject.encode()).hexdigest()
-    if provider != "codex":
-        raise WorkerError("Unsupported account provider", 400)
-    if not isinstance(auth, dict) or auth.get("auth_mode") != "chatgpt":
-        raise WorkerError("Only saved ChatGPT Codex accounts are supported", 400)
-    tokens = auth.get("tokens", {})
-    if not all(isinstance(tokens.get(k), str) and tokens[k] for k in
-               ("account_id", "access_token", "refresh_token")):
-        raise WorkerError("Incomplete Codex account credentials", 400)
-    if len(json.dumps(auth)) > 30_000:
-        raise WorkerError("Account credentials are too large", 400)
-    return hashlib.sha256(tokens["account_id"].encode()).hexdigest()
+    try:
+        return _account_identity(auth, provider)
+    except (ValueError, TypeError):
+        raise WorkerError("Invalid or incomplete provider account credentials", 400) from None
 
 
 def execution_profiles(registry, row):
