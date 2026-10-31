@@ -10,6 +10,7 @@ from .authorization import SELECTOR_ACTIONS,authorize_job, verify_review_job
 from .images import Images
 from .model import Authorize, AccountRequest, Finish, Progress, Rejected, Review, Role, SessionUpdated, Start
 from .workflows import ENGINE, WORKFLOW
+from .telemetry import correlate
 from common.diagnostics import validate_failure
 from common.images import image_digest
 from common.policy import PROTOCOL, REVIEW_TIMEOUT_SECONDS, issue_revision, policy_version
@@ -60,6 +61,10 @@ class Broker:
         if view.attempt["run_id"] and (view.attempt["run_id"], view.attempt["run_attempt"]) != (run_id, run_attempt):
             raise Rejected("Request belongs to another GitHub attempt")
         phase, selector = role.phase, role.selector
+        try:
+            correlate(phase)
+        except Exception:
+            pass  # Optional correlation cannot reject an authorized worker operation.
 
         # Fenced cleanup remains possible after task edits and cancellation.
         if action == "save":

@@ -1,0 +1,6 @@
+__EVENTS__
+Events
+| where EventType == 'http_summary'
+| summarize Requests=sum(Count), Failures=sum(Failures)
+    by bin(TimeGenerated, {TimeRange:grain})
+| order by TimeGenerated asc

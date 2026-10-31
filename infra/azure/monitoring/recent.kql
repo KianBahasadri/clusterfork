@@ -1,0 +1,8 @@
+__EVENTS__
+Events
+| where EventType in ('phase_preflight_started', 'phase_started', 'phase_result', 'github_stopped', 'publication_observed')
+| project TimeGenerated, RunId, RunAttempt, Phase, EventType, Outcome,
+    FailureKind=tostring(Failure.kind), FailureOperation=tostring(Failure.operation),
+    ReasonCode=tostring(Failure.reason_code), RequestId, FailureRequestId=tostring(Failure.request_id), ActionsUrl
+| order by TimeGenerated desc, EventType asc
+| take 200

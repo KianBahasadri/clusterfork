@@ -96,7 +96,7 @@ class ControllerTests(unittest.TestCase):
             self.assertTrue(restored.active)
             self.assertEqual(restored.attempt["attempt_id"],view.attempt["attempt_id"])
             self.assertEqual(restored.attempt["attempt_kind"],"normal")
-            self.assertEqual(upgraded.connection.execute("PRAGMA user_version").fetchone()[0],5)
+            self.assertEqual(upgraded.connection.execute("PRAGMA user_version").fetchone()[0],6)
 
     def test_ineligibility_is_not_cancellation_and_canceled_work_requires_stop_and_pr_resolution(self):
         issue=self.issue()

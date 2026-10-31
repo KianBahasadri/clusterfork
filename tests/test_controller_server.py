@@ -19,6 +19,7 @@ sys.path[:0]=[str(ROOT/"automation")]
 from controller.core import Controller
 from controller.server import Application,HTTPServer,OperatorServer,http_handler
 from controller.store import Database
+from controller.telemetry import Telemetry,HTTP_CONTEXT,correlate
 from common.accounts import WorkerError
 from common.diagnostics import CONTEXT
 
@@ -102,6 +103,82 @@ class ControllerServerTests(unittest.TestCase):
         self.assertEqual(result['run_id'],'123')
         self.assertEqual(result['run_attempt'],'1')
         self.assertEqual(CONTEXT.get(),previous)
+
+    def test_http_export_uses_verified_claims_and_clears_failed_request_context(self):
+        telemetry=Telemetry(self.controller.database,Mock(),{
+            'endpoint':'https://fixture.eastus-1.ingest.monitor.azure.com','rule_id':'dcr-'+'a'*32},
+            'a'*40,clock=lambda:1000,send=Mock())
+        measured={200:threading.Event(),401:threading.Event()}
+        record=telemetry.request
+        def record_request(operation,status,*args):
+            record(operation,status,*args)
+            measured[status].set()
+        telemetry.request=record_request
+        self.app.telemetry=telemetry
+        self.verify.side_effect=None
+        self.verify.return_value={'run_id':'123','run_attempt':'2'}
+        def authorized(*_args):
+            correlate('review')
+            return {'ok':True}
+        self.broker.handle.side_effect=authorized
+        body=json.dumps({'dispatch_key':'a'*64,'run_id':'999','run_attempt':'8',
+                         'request_id':'12345678-1234-1234-1234-123456789abc','secret':'PRIVATE BODY'}).encode()
+        with self.request('/api/worker/start',body,{'Authorization':'Bearer PRIVATE HEADER'}):
+            pass
+        self.assertTrue(measured[200].wait(2))
+        self.verify.side_effect=WorkerError('PRIVATE EXCEPTION',401)
+        with self.assertRaises(HTTPError) as caught:
+            self.request('/api/worker/start',body,{'Authorization':'Bearer PRIVATE HEADER'})
+        caught.exception.close()
+        self.assertTrue(measured[401].wait(2))
+        telemetry.flush()
+        events=json.loads(telemetry.send.call_args.args[0])
+        samples=[e for e in events if e['EventType']=='http_request']
+        success=next(e for e in samples if e['Status']==200)
+        failure=next(e for e in samples if e['Status']==401)
+        self.assertEqual((success['RunId'],success['RunAttempt']),('123',2))
+        self.assertEqual(success['Phase'],'review')
+        self.assertEqual(failure['RunId'],'')
+        self.assertEqual(failure['RequestId'],'')
+        self.assertNotIn('PRIVATE',json.dumps(events))
+        self.assertFalse(any(e.get('RunId')=='999' for e in events))
+        self.assertIsNone(HTTP_CONTEXT.get())
+
+    def test_failed_http_measurement_does_not_fail_intake_or_health(self):
+        self.app.telemetry=Mock()
+        self.app.telemetry.request.side_effect=OSError('private telemetry failure')
+        self.test_signed_intake_commits_before_ack_and_deduplicates_delivery()
+        with self.request('/api/health') as response:
+            self.assertEqual(response.status,200)
+
+    def test_saturated_http_server_reports_bounded_503_without_client_identifiers(self):
+        self.server.telemetry=Mock()
+        slots=[]
+        while self.server.slots.acquire(blocking=False):
+            slots.append(1)
+        try:
+            with self.assertRaises(HTTPError) as caught:
+                self.request('/api/private-path-with-SECRET')
+            self.assertEqual(caught.exception.code,503)
+            caught.exception.close()
+            self.server.telemetry.request.assert_called_once_with('controller/overload',503,0)
+        finally:
+            for _ in slots:
+                self.server.slots.release()
+
+    def test_unsupported_http_methods_keep_their_response_and_receive_unknown_metrics(self):
+        measured=threading.Event()
+        self.app.telemetry=Mock()
+        self.app.telemetry.request.side_effect=lambda *_:measured.set()
+        request=Request(self.url+'/api/private-path-with-SECRET',method='DELETE')
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(request,timeout=5)
+        self.assertEqual(caught.exception.code,501)
+        caught.exception.close()
+        self.assertTrue(measured.wait(2))
+        args=self.app.telemetry.request.call_args.args
+        self.assertEqual(args[:2],('controller/unknown',501))
+        self.assertEqual(len(args),3)
 
     def test_operator_commands_use_private_socket_and_cannot_clear_another_hold(self):
         path=self.path/"operator.sock"

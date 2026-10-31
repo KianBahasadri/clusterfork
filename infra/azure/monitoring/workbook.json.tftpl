@@ -1,0 +1,156 @@
+{
+  "version": "Notebook/1.0",
+  "isLocked": true,
+  "fallbackResourceIds": [${jsonencode(workspace_id)}],
+  "items": [
+    {
+      "type": 1,
+      "name": "source-boundary",
+      "content": {"json": "# Clusterfork controller\nCurrent source: the single controller VM. Committed phase evidence, GitHub stop observations, publication observations and task decisions are separate event types. HTTP metrics cover requests reaching the controller; detailed runner logs remain in GitHub Actions. Delivery is bounded and best effort. Empty or missing records do not prove success. No journal or SQLite files are uploaded."}
+    },
+    {
+      "type": 9,
+      "name": "time-range",
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "parameters": [{
+          "id": "592c842c-d1ed-5107-80a8-096e858b5d15",
+          "name": "TimeRange", "type": 4, "isRequired": true,
+          "value": {"durationMs": 86400000},
+          "typeSettings": {"allowCustom": true, "selectableValues": [
+            {"durationMs": 3600000}, {"durationMs": 21600000}, {"durationMs": 86400000},
+            {"durationMs": 604800000}, {"durationMs": 2592000000}
+          ]}
+        }]
+      }
+    },
+    {
+      "type": 3,
+      "name": "coverage",
+      "content": {
+        "version": "KqlItem/1.0", "title": "Telemetry start date and delivery coverage (last 30 days)",
+        "query": ${jsonencode(queries.coverage)},
+        "queryType": 0, "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [${jsonencode(workspace_id)}], "visualization": "table",
+        "timeContext": {"durationMs": 2592000000}
+      }
+    },
+    {
+      "type": 3,
+      "name": "phases",
+      "content": {
+        "version": "KqlItem/1.0", "title": "Review and coding agent starts/results (distinct logical events)",
+        "query": ${jsonencode(queries.phases)}, "timeContextFromParameter": "TimeRange",
+        "queryType": 0, "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [${jsonencode(workspace_id)}], "visualization": "table"
+      }
+    },
+    {
+      "type": 3,
+      "name": "recent",
+      "content": {
+        "version": "KqlItem/1.0", "title": "Recent phases, failures, GitHub stops and publication observations",
+        "query": ${jsonencode(queries.recent)}, "timeContextFromParameter": "TimeRange",
+        "queryType": 0, "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [${jsonencode(workspace_id)}], "visualization": "table",
+        "gridSettings": {"formatters": [{"columnMatch": "ActionsUrl", "formatter": 7,
+          "formatOptions": {"linkTarget": "Url", "linkLabel": "GitHub Actions attempt"}}]}
+      }
+    },
+    {
+      "type": 3,
+      "name": "tasks",
+      "content": {
+        "version": "KqlItem/1.0", "title": "Latest committed task outcomes in range (held/retry decisions may be nonfinal)",
+        "query": ${jsonencode(queries.tasks)}, "timeContextFromParameter": "TimeRange",
+        "queryType": 0, "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [${jsonencode(workspace_id)}], "visualization": "table",
+        "gridSettings": {"formatters": [{"columnMatch": "ActionsUrl", "formatter": 7,
+          "formatOptions": {"linkTarget": "Url", "linkLabel": "GitHub Actions attempt"}}]}
+      }
+    },
+    {
+      "type": 3,
+      "name": "requests",
+      "content": {
+        "version": "KqlItem/1.0", "title": "Controller HTTP requests and failures (4xx and 5xx)",
+        "query": ${jsonencode(queries.requests)}, "timeContextFromParameter": "TimeRange",
+        "queryType": 0, "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [${jsonencode(workspace_id)}], "visualization": "timechart"
+      }
+    },
+    {
+      "type": 3,
+      "name": "latency",
+      "content": {
+        "version": "KqlItem/1.0", "title": "Controller HTTP weighted mean and maximum latency (ms; per request capped at 120 seconds)",
+        "query": ${jsonencode(queries.latency)}, "timeContextFromParameter": "TimeRange",
+        "queryType": 0, "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [${jsonencode(workspace_id)}], "visualization": "timechart"
+      }
+    },
+    {
+      "type": 3,
+      "name": "operations",
+      "content": {
+        "version": "KqlItem/1.0", "title": "Controller HTTP operations (all requests counted; latency in milliseconds)",
+        "query": ${jsonencode(queries.operations)}, "timeContextFromParameter": "TimeRange",
+        "queryType": 0, "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [${jsonencode(workspace_id)}], "visualization": "table"
+      }
+    },
+    {
+      "type": 9,
+      "name": "attempt-selection",
+      "content": {
+        "version": "KqlParameterItem/1.0", "style": "above",
+        "parameters": [
+          {"id": "026464c9-a504-5726-8121-957f4e97cc75", "name": "RunId", "label": "GitHub run ID (* for all)",
+           "type": 1, "isRequired": true, "value": "*",
+           "typeSettings": {"paramValidationRules": [{"match": true, "regExp": "^(\\*|[1-9][0-9]{0,29})$", "message": "Enter a numeric GitHub run ID or *."}]}},
+          {"id": "1b3df9fb-c763-5861-b82b-9d50690e5c54", "name": "Attempt", "label": "GitHub attempt (* for all)",
+           "type": 1, "isRequired": true, "value": "*",
+           "typeSettings": {"paramValidationRules": [{"match": true, "regExp": "^(\\*|[1-9][0-9]{0,9})$", "message": "Enter a numeric GitHub attempt or *."}]}}
+        ]
+      }
+    },
+    {
+      "type": 3,
+      "name": "selection",
+      "content": {
+        "version": "KqlItem/1.0", "title": "Selected attempt coverage (missing results remain unknown)",
+        "query": ${jsonencode(queries.selection)}, "timeContextFromParameter": "TimeRange",
+        "queryType": 0, "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [${jsonencode(workspace_id)}], "visualization": "table"
+      }
+    },
+    {
+      "type": 3,
+      "name": "timeline",
+      "content": {
+        "version": "KqlItem/1.0", "title": "Chronological controller events (first 1,000; narrow the range if needed)",
+        "query": ${jsonencode(queries.timeline)}, "timeContextFromParameter": "TimeRange",
+        "queryType": 0, "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [${jsonencode(workspace_id)}], "visualization": "table",
+        "gridSettings": {"formatters": [{"columnMatch": "ActionsUrl", "formatter": 7,
+          "formatOptions": {"linkTarget": "Url", "linkLabel": "GitHub Actions attempt"}}]}
+      }
+    },
+    {
+      "type": 1,
+      "name": "historical-boundary",
+      "content": {"json": "## Historical retired Function App\nThe following data predates the single-controller telemetry stream. The coordinator and relay are retired and produce no ongoing Function App traffic. This panel is separate from current controller request metrics."}
+    },
+    {
+      "type": 3,
+      "name": "historical-functions",
+      "content": {
+        "version": "KqlItem/1.0", "title": "Historical Function App requests only",
+        "query": "AppRequests\n| where TimeGenerated {TimeRange}\n| where _ResourceId =~ '${insights_id}'\n| summarize HistoricalRequests=sum(ItemCount), HistoricalFailures=sumif(ItemCount, Success == false) by bin(TimeGenerated, {TimeRange:grain})\n| order by TimeGenerated asc",
+        "timeContextFromParameter": "TimeRange", "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [${jsonencode(workspace_id)}], "visualization": "table"
+      }
+    }
+  ]
+}

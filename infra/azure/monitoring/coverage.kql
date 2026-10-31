@@ -1,0 +1,7 @@
+ClusterforkController_CL
+| where TimeGenerated > ago(30d)
+| summarize arg_max(TimeGenerated, *) by EventId
+| summarize Records=count(), TelemetryStarted=min(StreamStartedAt), LastRecord=max(TimeGenerated), DroppedOrOmitted=max(Dropped)
+| extend Coverage=iff(Records == 0,
+    "No controller telemetry is queryable. Check deployment, ingestion and the workspace cap; an empty view is not success.",
+    "Controller telemetry starts at TelemetryStarted (UTC). Earlier journal/SQLite evidence is not backfilled. Check LastRecord for gaps; delivery is best effort.")

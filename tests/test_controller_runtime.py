@@ -49,6 +49,15 @@ class ControllerRuntimeTests(unittest.TestCase):
         _,linear=self.build()
         self.assertEqual(linear.call_args.args,("private-fixture-linear-api-key",))
 
+    def test_telemetry_initialization_failure_does_not_prevent_controller_startup(self):
+        self.config['telemetry']={'endpoint':'unused','rule_id':'unused'}
+        with patch.object(controller_main,'Telemetry',side_effect=OSError('private telemetry error')), \
+             self.assertLogs(level='WARNING') as logs:
+            application,_=self.build()
+        self.assertIsNone(application.telemetry)
+        self.assertIn('operator:rebuild',application.controller.holds())
+        self.assertNotIn('private telemetry error',' '.join(logs.output))
+
     def test_host_identity_cannot_be_reused_by_a_different_vm(self):
         observed={"resourceId":"/subscriptions/fixture/resourceGroups/group/providers/Microsoft.Compute/virtualMachines/controller"}
         def response(_request,**_kwargs):

@@ -1,0 +1,10 @@
+__EVENTS__
+Events
+| where isnotempty(RunId) and ('{RunId:escape}' == '*' or RunId == '{RunId:escape}')
+| where '{Attempt:escape}' == '*' or RunAttempt == tolong('{Attempt:escape}')
+| project TimeGenerated, EvidenceSequence, EventType, RunId, RunAttempt, Phase, Stage, Outcome, TaskFinal, RetryKind,
+    Operation, Status, RequestId, FailureKind=tostring(Failure.kind), FailureOperation=tostring(Failure.operation),
+    ErrorType=tostring(Failure.error_type), ReasonCode=tostring(Failure.reason_code),
+    FailureRequestId=tostring(Failure.request_id), ActionsUrl
+| order by TimeGenerated asc, EvidenceSequence asc, RequestId asc
+| take 1000

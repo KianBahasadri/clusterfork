@@ -1,0 +1,5 @@
+__EVENTS__
+Events
+| where EventType in ('phase_started', 'phase_result')
+| summarize Events=count() by Phase, EventType, Outcome
+| order by Phase asc, EventType asc, Outcome asc

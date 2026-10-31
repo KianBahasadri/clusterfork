@@ -9,6 +9,17 @@ permissions:
   contents: read
 
 jobs:
+  monitoring-queries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet restore tests/monitoring/MonitoringQueries.csproj --locked-mode
+      - name: Validate workbook queries without Azure credentials
+        run: dotnet run --project tests/monitoring/MonitoringQueries.csproj --configuration Release --no-restore
+
   terraform:
     runs-on: ubuntu-latest
     steps:
