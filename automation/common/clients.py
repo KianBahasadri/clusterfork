@@ -593,4 +593,8 @@ class GitHub:
             # A definite client rejection cannot have started a run. Treat rate
             # limits as a rejection too; the queue can retry after its visibility delay.
             uncertain = exc.status is None or exc.status >= 500
-            raise DispatchError(str(exc), uncertain=uncertain) from None
+            error = DispatchError(str(exc), uncertain=uncertain)
+            error.clusterfork_failure = getattr(exc, 'clusterfork_failure', None) or (
+                {'operation': 'github/dispatch', 'kind': 'http_error', 'http_status': exc.status}
+                if exc.status is not None else failure(exc, 'github/dispatch'))
+            raise error from None

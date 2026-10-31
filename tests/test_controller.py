@@ -25,7 +25,7 @@ ACCOUNT_A, ACCOUNT_B = "1" * 64, "cursor:" + "2" * 64
 def ready():
     return {"verdict": "ready", "summary": "Requirements and completion are clear.",
             "criteria": {k: {"status": "satisfied", "reason": "Explicit in issue."} for k in CRITERIA},
-            "blockers": [], "policy_references": []}
+            "blockers": [], "evidence": [], "policy_references": []}
 
 
 class ControllerTests(unittest.TestCase):
@@ -96,12 +96,12 @@ class ControllerTests(unittest.TestCase):
             self.assertTrue(restored.active)
             self.assertEqual(restored.attempt["attempt_id"],view.attempt["attempt_id"])
             self.assertEqual(restored.attempt["attempt_kind"],"normal")
-            self.assertEqual(upgraded.connection.execute("PRAGMA user_version").fetchone()[0],7)
+            self.assertEqual(upgraded.connection.execute("PRAGMA user_version").fetchone()[0],8)
 
     def test_ineligibility_is_not_cancellation_and_canceled_work_requires_stop_and_pr_resolution(self):
         issue=self.issue()
         view=self.apply(Admit(issue.task_id,SPEC))
-        self.start(view,Role.REVIEW_SELECT)
+        self.review(view)
         self.apply(replace(issue,eligible=False))
         held=self.external(view)
         self.assertTrue(held.active)
@@ -245,28 +245,28 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(view.attempt["dispatch_status"], "unknown")
         self.assertTrue(view.active)
 
-    def test_startup_retry_cooldown_is_stable_and_old_attempt_is_fenced(self):
+    def test_verified_startup_timeout_cooldown_is_stable_and_old_attempt_is_fenced(self):
         view = self.admit()
         self.review(view)
         self.start(view, Role.CODING_SELECT, review_job_succeeded=True)
-        view = self.external(view, conclusion="failure")
+        view = self.external(view, conclusion="timed_out")
         retry_at = view.attempt["retry_at"]
         self.now += 10
         self.assertEqual(self.external(view, conclusion="failure").attempt["retry_at"], retry_at)
         with self.assertRaises(Rejected):
             self.apply(Retry(view.task_id, SPEC, "startup failed", "startup"))
         self.now = retry_at
-        retried = self.apply(Retry(view.task_id, SPEC, "startup failed", "startup"))
+        retried = self.apply(Retry(view.task_id, SPEC, "startup timed out", "review"))
         self.assertNotEqual(retried.attempt["attempt_id"], view.attempt["attempt_id"])
         with self.assertRaisesRegex(Rejected, "superseded"):
             self.start(view, Role.REVIEW_SELECT)
 
-    def test_readiness_infrastructure_failure_retains_fifteen_minute_backoff(self):
+    def test_readiness_timeout_uses_first_five_minute_backoff(self):
         view=self.admit()
         self.start(view,Role.REVIEW_SELECT)
-        failed=self.external(view,conclusion="failure")
+        failed=self.external(view,conclusion="timed_out")
         self.assertEqual(failed.attempt["retry_kind"],"review")
-        self.assertEqual(failed.attempt["retry_at"],self.now+900)
+        self.assertEqual(failed.attempt["retry_at"],self.now+300)
 
     def test_retry_before_repair_coding_preserves_repair_mode_parent_and_budget(self):
         view=self.coding(self.admit())
@@ -275,7 +275,7 @@ class ControllerTests(unittest.TestCase):
         repair=self.apply(Retry(view.task_id,SPEC,"coding failed","repair"))
         self.apply(Start(repair.task_id,repair.attempt["attempt_id"],"124",1,Role.REVIEW_SELECT))
         failed_review=self.apply(ExternalObserved(repair.task_id,repair.attempt["attempt_id"],"124",1,
-                                                 True,"failure",True,True,pull_state="absent"))
+                                                 True,"timed_out",True,True,pull_state="absent"))
         self.now=failed_review.attempt["retry_at"]
         retried=self.apply(Retry(view.task_id,SPEC,"review infrastructure failed","review"))
         self.assertEqual(retried.attempt["attempt_kind"],"repair")

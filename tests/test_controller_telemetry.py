@@ -93,7 +93,7 @@ class ControllerTelemetryTests(unittest.TestCase):
         self.assertEqual(Controller(self.database).inspect(view.task_id), view)
         telemetry.Telemetry(self.database, Mock(), CONFIG, "b" * 40, clock=lambda: 2000, send=self.sender)
         self.assertEqual([e["EventType"] for e in self.events()], ["controller_started"])
-        self.assertEqual(self.database.connection.execute("PRAGMA user_version").fetchone()[0], 7)
+        self.assertEqual(self.database.connection.execute("PRAGMA user_version").fetchone()[0], 8)
 
     def test_no_callback_or_missing_conclusion_does_not_invent_an_agent_outcome(self):
         view = self.fixture.admit()
@@ -132,7 +132,7 @@ class ControllerTelemetryTests(unittest.TestCase):
     def test_a_retry_is_a_distinct_attempt_without_recounting_its_parent(self):
         view = self.fixture.admit()
         self.fixture.start(view, fixtures.Role.REVIEW_SELECT)
-        self.fixture.external(view, conclusion="failure")
+        self.fixture.external(view, conclusion="timed_out")
         self.fixture.now += 901
         retry = self.fixture.apply(Retry(view.task_id, fixtures.SPEC, "retry", "review"))
         start = fixtures.Start(retry.task_id, retry.attempt["attempt_id"], "456", 2, fixtures.Role.REVIEW_SELECT)

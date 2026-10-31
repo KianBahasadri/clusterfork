@@ -27,8 +27,7 @@ def execution_status(view, reviews):
         return STAGE_LABELS['review']
     if view.phase == 'held' and view.attempt.get('retry_kind') == 'capacity':
         return STAGE_LABELS['waiting_for_quota']
-    review = json.loads(view.attempt.get('review_result') or 'null')
-    denied = review and review.get('verdict') in {'rejected', 'needs_clarification'}
+    denied = bool(view.review_attention)
     if view.active and not denied:
         return SELECTION_LABEL
     if view.phase == 'queued' and view.eligible:
@@ -39,13 +38,18 @@ def execution_status(view, reviews):
 def review_report(review,registry):
     result=review['result']
     verdict=result['verdict']
-    body='Clusterfork readiness review: '+{'ready':'passed','retry':'waiting for retry'}.get(verdict,verdict.replace('_',' '))+'.\n\n'
-    body+=result['summary']
-    if verdict=='ready':
+    terminal = review.get('retry_decision') == 'attention' or verdict in {
+        'rejected', 'needs_clarification', 'missing_evidence', 'execution_failed', 'retry'}
+    body='Clusterfork readiness review: '+('needs attention' if terminal else {
+        'ready':'passed', 'temporary_failure':'temporary execution failure'}.get(verdict,verdict.replace('_',' ')))+'.\n\n'
+    body+=review.get('review_detail') if terminal and verdict == 'ready' and review.get('review_detail') else result['summary']
+    if verdict=='ready' and not terminal:
         body+='\n\nThis was a read-only assessment. Tests run during development.'
-    if verdict in {'rejected','needs_clarification'}:
+    if terminal:
         for blocker in result.get('blockers',[]):
             body+=f"\n\n{blocker['decision']}\nConsequence: {blocker['consequence']}\nQuestion: {blocker['question']}"
+        for evidence in result.get('evidence', []):
+            body+=f"\n\nEvidence: {evidence['evidence']}\nUnavailable because: {evidence['reason']}\nNext action: {evidence['next_action']}"
         body+='\n\nAddress the feedback, then move the issue back to Todo for a new review.'
         if registry.notify_user_url:
             body+='\n\n'+registry.notify_user_url

@@ -91,6 +91,23 @@ class Workflows:
 
 
 class WebhookTests(unittest.TestCase):
+    def test_only_a_signed_human_state_transition_retains_submission_evidence(self):
+        payload = {'type': 'Issue', 'action': 'update', 'webhookTimestamp': NOW*1000,
+                   'createdAt': '2026-10-31T00:00:01Z', 'actor': {'type': 'user', 'id': OTHER},
+                   'updatedFrom': {'stateId': OTHER}, 'data': {'id': ISSUE, 'stateId': TODO}}
+        event = webhook_event(*signed(payload), SECRET, now=NOW)
+        self.assertEqual(event['submission']['actor_id'], OTHER)
+        self.assertEqual(event['submission']['to_state'], TODO)
+        first = event['submission']
+        payload['webhookTimestamp'] += 1000
+        self.assertEqual(webhook_event(*signed(payload), SECRET, now=NOW)['submission'], first)
+        for change in ({'actor': {'type': 'integration', 'id': OTHER}},
+                       {'actor': None}, {'updatedFrom': {'labelIds': []}},
+                       {'updatedFrom': {'stateId': TODO}}, {'type': 'Comment'},
+                       {'createdAt': 'invalid'}, {'actor': {'type': 'user', 'id': OTHER, 'isBot': True}}):
+            with self.subTest(change=change):
+                self.assertNotIn('submission', webhook_event(*signed({**payload, **change}), SECRET, now=NOW))
+
     def test_dependency_wakeup_events_keep_only_ids_and_always_require_fresh_reads(self):
         event = webhook_event(*signed({"type": "IssueRelation", "action": "remove", "webhookTimestamp": NOW * 1000,
                                        "data": {"id": OTHER, "issueId": ISSUE, "relatedIssueId": TODO,
@@ -351,6 +368,9 @@ class ClientTests(unittest.TestCase):
                  self.assertRaises(DispatchError) as error:
                 client.dispatch(route, {})
             self.assertEqual(error.exception.uncertain, uncertain)
+            if status is not None:
+                self.assertEqual(error.exception.clusterfork_failure['http_status'], status)
+                self.assertEqual(error.exception.clusterfork_failure['kind'], 'http_error')
 
     def test_transport_errors_never_log_server_bodies_or_credentials(self):
         error = HTTPError("https://example.com", 403, "sensitive-server-body", {}, None)

@@ -511,8 +511,9 @@ def review_readiness(broker, config, worker_heartbeat, directory):
         selected = select_account(snapshots, profiles, policy, now=time.time())
         if not selected:
             broker.call("finish", status="waiting_for_quota", quota_wait=config.get("quota_wait", {}))
-            return "readiness_retry"
+            return "waiting_for_quota"
         snapshots = [row for row in snapshots if row.account_id != selected.account_id]
+        assessing = False
         try:
             with account_lease(broker, selected.account_id) as (home, heartbeat):
                 provider = account_provider(selected.account_id)
@@ -524,6 +525,7 @@ def review_readiness(broker, config, worker_heartbeat, directory):
                     continue
                 schema, output = directory / "readiness-schema.json", directory / "readiness-result.json"
                 schema.write_text(json.dumps(RESULT_SCHEMA))
+                assessing = True
                 if provider == "cursor":
                     text = cursor_runtime.run_agent(
                         broker, config, home, Path.cwd(), review_prompt(config["issue"],
@@ -570,10 +572,12 @@ def review_readiness(broker, config, worker_heartbeat, directory):
             return broker.call("review", binding=config["binding"], result=result,
                                result_error=result_error, result_location=result_location)["status"]
         except HTTPError as exc:
-            if exc.code in {404, 409} and getattr(exc, "clusterfork_action", "claim") == "claim":
+            if not assessing and exc.code in {404, 409} and getattr(exc, "clusterfork_action", "claim") == "claim":
                 continue
             raise
         except CodexError:
+            if assessing:
+                raise  # Assessment failures cannot masquerade as account/quota waits.
             continue
 
 

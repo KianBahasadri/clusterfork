@@ -341,13 +341,14 @@ class ControllerReportingTests(unittest.TestCase):
         self.driver.tick()
         self.assert_status(f.issue['id'],CLARIFICATION_LABEL)
         self.assertFalse(f.controller.inspect(f.view.task_id).active)
-        f.issue['state']={'id':f.route.ready_state_ids[0],'type':'unstarted'}
+        self.fixture.human_resubmit()
         self.driver.tick(scan=True)
         current=f.controller.inspect(f.view.task_id)
         self.assertEqual(current.attempt['ordinal'],2)
         self.assertEqual(current.phase,'reviewing')
         self.assert_status(f.issue['id'],CLARIFICATION_LABEL)
-        feedback=[call for call in f.linear.status_comment.call_args_list if 'Who may call the endpoint' in call.args[2]]
+        feedback=[call for call in f.linear.status_comment.call_args_list if call.args[2].startswith('Clusterfork readiness review:')
+                  and 'Who may call the endpoint' in call.args[2]]
         self.assertEqual(len(feedback),1)
         f.key=current.attempt['attempt_id']
         f.call=lambda role,action,**fields:f.broker.handle(action,{**claims(role),'run_id':'124'}, {'dispatch_key':f.key,**fields})
@@ -356,7 +357,8 @@ class ControllerReportingTests(unittest.TestCase):
         f.call(Role.REVIEW,'review',binding=config['binding'],result=ready())
         self.driver.report()
         self.assert_status(f.issue['id'],SELECTION_LABEL)
-        self.assertEqual(len([call for call in f.linear.status_comment.call_args_list if 'Who may call the endpoint' in call.args[2]]),1)
+        self.assertEqual(len([call for call in f.linear.status_comment.call_args_list if call.args[2].startswith('Clusterfork readiness review:')
+                              and 'Who may call the endpoint' in call.args[2]]),1)
 
     def test_temporary_review_retry_does_not_resolve_clarification_feedback(self):
         self.deny_review()
@@ -364,16 +366,13 @@ class ControllerReportingTests(unittest.TestCase):
         self.driver.report()
         self.fixture.runs[f.key].update(status='completed',conclusion='success')
         self.driver.tick()
-        f.issue['state']={'id':f.route.ready_state_ids[0],'type':'unstarted'}
+        self.fixture.human_resubmit()
         self.driver.tick(scan=True)
         f.key=f.controller.inspect(f.view.task_id).attempt['attempt_id']
         f.call=lambda role,action,**fields:f.broker.handle(action,{**claims(role),'run_id':'124'}, {'dispatch_key':f.key,**fields})
         f.preflight(Role.REVIEW_SELECT,f.account_a)
         config=f.call(Role.REVIEW,'start',protocol=PROTOCOL)
-        result=ready()
-        result.update(verdict='retry',summary='Repository context is temporarily unavailable.')
-        result['criteria'][CRITERIA[0]]={'status':'unknown','reason':'Context unavailable.'}
-        f.call(Role.REVIEW,'review',binding=config['binding'],result=result)
+        f.call(Role.REVIEW,'finish',status='failed',failure={'kind':'timeout','operation':'worker/readiness'})
         self.driver.report()
         self.assert_status(f.issue['id'],CLARIFICATION_LABEL)
         held=f.controller.inspect(f.view.task_id)

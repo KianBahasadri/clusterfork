@@ -39,10 +39,58 @@ manual reruns cannot inherit another attempt's account/publication grant.
 To abandon work, cancel Linear, stop GitHub execution and close/merge publication;
 the controller verifies all three. Done/archive/enrollment removal/project moves
 alone cannot abandon unresolved work; incomplete observations retain ownership.
-Startup failure before coding retries after 60 seconds; temporary review/capacity
-failures retry after 15 minutes. Retries require stop/publication proof, current
-eligibility and fresh review on context changes, retaining the grant. Repair
-startup/capacity retries retain parent evidence and [one repair budget](remote-development.md#single-attempt-auto-repair).
+Readiness failure releases admission only after all prior matching external
+attempts (including reruns) are verified stopped, their fenced phase/probe
+credentials are safely released, and publication is verified absent or closed.
+The stopped review then stops blocking unrelated queued tasks. An unresolved PR always retains
+admission. Cancellation and verified merge/no-change completion retain their
+existing evidence requirements.
+
+## Bounded readiness submissions
+
+A reviewer returns `ready`, `needs_clarification` for consequential missing
+decisions, or `missing_evidence` with the specific unavailable evidence, access
+failure and next action. Evidence failures need no invented product-decision
+question. Missing decisions/evidence, unsupported access and malformed results
+enter **Needs attention**, with no timed review. Reviewer prose and the legacy
+generic `retry` verdict cannot authorize another run. The versioned worker/
+controller contract rejects that legacy verdict independently of model hints.
+
+Only structured temporary execution failures observed by the trusted worker or
+controller authorize automatic assessment retries: a timeout, verified transport
+failure, or a temporary service response (408/429/500/502/503/504 or classified
+GraphQL service/rate-limit failure). A generic failed job or command is insufficient.
+Each explicit submission permits **three attempts total**, including failed
+dispatch/startup/execution with no model result: initial attempt, then retries
+after **5 minutes** and **15 minutes**. Dispatch uncertainty still requires stable
+identity discovery and never authorizes a resend. Retries require verified stop,
+credential/publication checks, current eligibility and deployment/operator holds
+to permit new execution; they retain admission while waiting.
+
+SQLite retains the submission cycle, charged attempts, failure class and retry
+decision. Restarts, deployment/runtime/generation changes, new attempt IDs,
+different error wording, context churn and reporting cannot replenish it. Context changes during
+a pending authorized retry use the same budget and latest specification. An
+approval invalidated before coding requires intervention and a fresh assessment;
+it cannot independently schedule a retry. Exhaustion clears automatic retry intent
+and enters Needs attention. Upgrades charge durable existing attempt history and
+stop unresolved legacy loops; imported history without a trustworthy submission
+boundary does not grant a fresh unattended cycle.
+
+To open one fresh cycle, resolve the feedback and explicitly move the issue from
+a non-ready state back to Todo. Only a signed human state-transition event, with
+its original action identity/time and current eligibility, authorizes resubmission.
+Duplicate/redelivered events, scans, bot lifecycle writes, labels, comments, run
+IDs and timestamps alone cannot resubmit. A human submission received before
+cleanup stays pending until safe release; reporting cannot move it back to Needs
+attention while it waits. Human resubmission does not reset the independent
+[single coding-repair budget](remote-development.md#single-attempt-auto-repair) or
+transfer unresolved PR ownership.
+
+Unfinished prerequisites and quota waits are separate from assessment failures.
+A review account-capacity wait, or a prerequisite wait before assessment starts,
+does not spend the assessment budget; capacity retries retain the 15-minute wait.
+Repair startup/review/capacity retries retain repair mode and parent evidence.
 
 ## Issue dependencies
 
@@ -57,6 +105,7 @@ Refresh dependencies at admission and guarded worker operations. A new pre-codin
 blocker holds authorization; once prior attempts stop without a PR, return to the
 queue position and release the grant. Blockers added after coding starts do not
 interrupt it. Events/periodic observations discover satisfied/removed prerequisites.
+Rejoining the runnable queue preserves any pending readiness retry delay and budget.
 
 ## Linear feedback
 
@@ -79,6 +128,12 @@ comment text is unchanged. Preserve human assignments, unrelated labels and
 project enrollment. One stable comment explains dependencies, holds, run/PR links
 or the active predecessor; grant changes refresh waiters. Reporting retries retain
 identity/FIFO/dispatch and cannot start work.
+
+During an authorized readiness retry, the stable comment states the verified
+failure, delay and remaining attempts. Terminal feedback names the exact missing
+decision/evidence or execution failure and next action, preserves current/prior
+run links, and retains the existing user notification for attention-worthy review
+failures. A reporting outage never resets the budget or recreates retry intent.
 
 Webhook commit wakes observation; background ticks run every 30 seconds, full
 project scans every two minutes. These are intervals, not feedback latency promises.

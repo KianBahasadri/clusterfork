@@ -10,7 +10,9 @@ import re
 from .model import (Admit, Assign, DispatchObserved, ExternalObserved, Finish, Hold,
                     IssueObserved, Phase, Progress, Rejected, Retry, Review, Role,
                     Start, TaskSpec, TaskView, identity, SessionUpdated, EffectUpdated, Authorize, ExhaustAccount,
-                    ContextObserved, InboxQueued, InboxDone, Initialize, ReportConfirmed, AccountRequest, InstructionRequest)
+                    ContextObserved, InboxQueued, InboxDone, Initialize, ReportConfirmed, AccountRequest, InstructionRequest,
+                    Resubmit)
+from common.policy import REVIEW_MAX_ATTEMPTS, REVIEW_RETRY_DELAYS, review_failure_class
 
 
 class Controller:
@@ -18,6 +20,49 @@ class Controller:
         self.database = database
         from .accounts import Accounts
         self.accounts=Accounts(database)
+        self._upgrade_readiness()
+
+    def _upgrade_readiness(self):
+        """Charge durable pre-upgrade history; never give old loops a fresh cycle."""
+        with self.database.transaction() as db:
+            if not db.execute("INSERT OR IGNORE INTO metadata VALUES ('readiness:bounded-v2','1')").rowcount:
+                return
+            for row in db.execute('SELECT * FROM tasks').fetchall():
+                task = dict(row)
+                attempts = db.execute('SELECT * FROM attempts WHERE task_id=? ORDER BY ordinal', (task['task_id'],)).fetchall()
+                charged = 0
+                for attempt in attempts:
+                    capacity = attempt['retry_kind'] == 'capacity' and not attempt['review_result']
+                    charged += not capacity
+                    db.execute('UPDATE attempts SET review_charged=? WHERE attempt_id=?',
+                               (not capacity, attempt['attempt_id']))
+                # Imported history has no trustworthy explicit submission boundary.
+                if db.execute('SELECT 1 FROM legacy_history WHERE task_id=?', (task['task_id'],)).fetchone():
+                    charged = max(charged, REVIEW_MAX_ATTEMPTS)
+                db.execute('UPDATE tasks SET review_attempts=?,review_submitted_at=? WHERE task_id=?',
+                           (charged, attempts[0]['started_at'] if attempts else 0, task['task_id']))
+                if task['phase'] in {'completed', 'canceled', 'skipped'}:
+                    continue
+                if not attempts:
+                    if charged:
+                        self._review_attention(db, task, None, 'legacy_unverified',
+                                               'Imported readiness history has no trustworthy explicit submission boundary; inspect the prior failure before resubmitting.', 0)
+                        self._report(db, task['task_id'])
+                    continue
+                attempt = dict(attempts[-1])
+                result = json.loads(attempt['review_result'] or 'null')
+                if not attempt['coding_started'] and (attempt['retry_kind'] in {'review', 'startup', 'context'}
+                        or result and result.get('verdict') in {'retry', 'rejected', 'needs_clarification'}
+                        or charged >= REVIEW_MAX_ATTEMPTS and not result):
+                    detail = (result or {}).get('summary') or 'Previous review execution did not produce a verified assessment.'
+                    self._review_attention(db, task, attempt, 'legacy_unverified',
+                                           'Legacy readiness retry requires intervention. ' + detail, attempt['started_at'])
+                    self._report(db, task['task_id'])
+
+    def attempt_history(self, task_id):
+        with self.database.transaction() as db:
+            return tuple(dict(row) for row in db.execute(
+                'SELECT * FROM attempts WHERE task_id=? ORDER BY ordinal', (task_id,)))
 
     def inspect(self, task_id):
         with self.database.transaction() as db:
@@ -55,9 +100,12 @@ class Controller:
 
     def review_history(self,task_id):
         with self.database.transaction() as db:
-            return tuple({**dict(row),'result':json.loads(row['review_result'])} for row in db.execute(
-                'SELECT attempt_id,run_id,run_attempt,review_result FROM attempts WHERE task_id=? AND review_result IS NOT NULL ORDER BY ordinal',
-                (task_id,)).fetchall())
+            return tuple({**dict(row), 'result': json.loads(row['review_result']) if row['review_result'] else {
+                'verdict': 'execution_failed' if row['retry_decision'] == 'attention' else 'temporary_failure',
+                'summary': row['review_detail'] or row['failure_class'].replace('_', ' ')}}
+                for row in db.execute('SELECT * FROM attempts WHERE task_id=? AND '
+                                      '(review_result IS NOT NULL OR failure_class != \'\') ORDER BY ordinal',
+                                      (task_id,)).fetchall())
 
     def repair_parent(self, task_id):
         with self.database.transaction() as db:
@@ -182,21 +230,25 @@ class Controller:
                 self._new_attempt(db, task, command.spec, now, initial=True)
             elif isinstance(command, Retry):
                 self._retry(db, task, command, now)
+            elif isinstance(command, Resubmit):
+                self._resubmit(db, task, command, now)
             else:
                 attempt = self._attempt(db, task, command.attempt_id)
                 if isinstance(command, DispatchObserved):
                     if command.status not in {"accepted", "rejected", "unknown"}:
                         raise Rejected("Invalid dispatch observation")
                     previous = attempt["dispatch_status"]
+                    if previous == 'rejected':
+                        if command.status != 'rejected':
+                            raise Rejected('Rejected dispatch cannot be replaced')
+                        return self._view(db, command.task_id)
                     if previous == "accepted" and command.status != "accepted":
                         raise Rejected("Accepted dispatch cannot be replaced with uncertainty")
                     db.execute("UPDATE attempts SET dispatch_status=? WHERE attempt_id=?",
                                (command.status, command.attempt_id))
                     if command.status == "rejected":
-                        db.execute("UPDATE attempts SET stopped=1,all_stopped=1,publication_checked=1,"
-                                   "pull_state='absent',retry_kind='startup',retry_at=? WHERE attempt_id=?",
-                                   (now + 60, command.attempt_id))
-                        self._update(db, task, phase="held", reason="GitHub rejected dispatch; startup retry scheduled.")
+                        db.execute("UPDATE attempts SET stopped=1 WHERE attempt_id=?", (command.attempt_id,))
+                        self._review_failure(db, task, attempt, command.failure, now)
                 elif isinstance(command, Start):
                     self._start(db, task, attempt, command, now)
                 elif isinstance(command, Assign):
@@ -222,10 +274,12 @@ class Controller:
                 elif isinstance(command, ExhaustAccount):
                     self._exhaust(db, task, attempt, command)
                 elif isinstance(command, ContextObserved):
-                    if asdict(command.binding) != json.loads(task["spec"]):
+                    if (asdict(command.binding) != json.loads(task["spec"])
+                            and not task['review_attention'] and not attempt['retry_kind']):
                         self._update(db, task, phase="held", reason="Reviewed task context changed; a fresh review is required.")
                         if not attempt["coding_started"] and not attempt["retry_kind"]:
-                            db.execute("UPDATE attempts SET retry_kind='context',retry_at=? WHERE attempt_id=?", (now, command.attempt_id))
+                            self._review_attention(db, task, attempt, 'context_changed',
+                                                   'Reviewed context changed before coding; approval is invalid and a fresh assessment is required.', now)
                 else:
                     raise Rejected("Unsupported controller command")
             # Local projection shares this commit. Export runs on a separate thread,
@@ -269,6 +323,9 @@ class Controller:
             raise Rejected("Invalid issue observation")
         row = db.execute("SELECT * FROM tasks WHERE task_id=?", (command.task_id,)).fetchone()
         if row is None:
+            if db.execute("SELECT 1 FROM tasks WHERE issue_id=? AND current_attempt IS NOT NULL "
+                          "AND phase NOT IN ('completed','canceled','skipped')", (command.issue_id,)).fetchone():
+                raise Rejected('An unresolved submission already owns this issue identity')
             db.execute("INSERT INTO tasks(task_id,issue_id,project_id,generation,repository,identifier,phase,"
                        "eligible,dependencies_ready,priority,sort_order,content_revision,reason,canceled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                        (command.task_id, command.issue_id, command.project_id, command.generation,
@@ -285,12 +342,12 @@ class Controller:
                 changes.update(phase="queued" if command.eligible else "skipped", reason=command.reason)
                 if task['phase']=='skipped' and command.eligible:
                     changes['sequence']=db.execute('SELECT MAX(sequence)+1 FROM tasks').fetchone()[0]
-            if not active and task["phase"] == "held" and not task["eligible"] and command.eligible:
-                changes.update(phase="queued", reason="Resubmitted for a new readiness review.",
-                               sequence=db.execute("SELECT MAX(sequence)+1 FROM tasks").fetchone()[0])
             if active and task["spec"]:
                 changed = json.loads(task["spec"])["content_revision"] != command.content_revision
-                if changed or not command.eligible:
+                attempt = db.execute('SELECT * FROM attempts WHERE attempt_id=?', (task['current_attempt'],)).fetchone()
+                if task['review_attention'] or attempt and attempt['retry_kind']:
+                    pass  # Reporting/eligibility changes cannot erase actionable feedback.
+                elif changed or not command.eligible:
                     changes.update(phase="held", reason="Task content or eligibility changed; execution authorization held.")
                 elif not command.dependencies_ready:
                     attempt = db.execute("SELECT coding_started FROM attempts WHERE attempt_id=?", (task["current_attempt"],)).fetchone()
@@ -298,6 +355,7 @@ class Controller:
                         changes.update(phase="held", reason=command.reason or "Prerequisites are unresolved.")
             if any(task[k] != v for k, v in changes.items()):
                 self._update(db, task, **changes)
+            self._accept_resubmission(db, self._task(db, command.task_id))
         self._report(db, command.task_id)
 
     def _authority(self, db, task, *, coding=False, allow_hold=False):
@@ -318,10 +376,22 @@ class Controller:
             raise Rejected('Task specification belongs to another repository')
         if not task["eligible"] or not task["dependencies_ready"] or db.execute("SELECT 1 FROM holds LIMIT 1").fetchone():
             raise Rejected("New admissions are held")
+        if task['review_attention']:
+            raise Rejected('The readiness budget requires an explicit human resubmission')
+        if task['review_attempts'] >= REVIEW_MAX_ATTEMPTS:
+            attempt = self._attempt(db, task, task['current_attempt']) if task['current_attempt'] else None
+            self._review_attention(db, task, attempt,
+                                   'budget_exhausted', 'Readiness automatic attempt budget is exhausted.', now)
+            return
         if initial:
+            previous = db.execute('SELECT * FROM attempts WHERE attempt_id=?', (task['current_attempt'],)).fetchone()
+            if previous and previous['retry_kind'] == 'review' and previous['retry_at'] > now:
+                raise Rejected('The recorded readiness retry delay has not elapsed')
             head = db.execute("SELECT task_id FROM tasks WHERE repository=? AND phase='queued' AND eligible=1 "
-                              "AND dependencies_ready=1 ORDER BY CASE priority WHEN 0 THEN 5 ELSE priority END,sort_order,sequence LIMIT 1",
-                              (task["repository"],)).fetchone()
+                              "AND dependencies_ready=1 AND NOT EXISTS (SELECT 1 FROM attempts a "
+                              "WHERE a.attempt_id=tasks.current_attempt AND a.retry_kind='review' AND a.retry_at>?) "
+                              "ORDER BY CASE priority WHEN 0 THEN 5 ELSE priority END,sort_order,sequence LIMIT 1",
+                              (task["repository"], now)).fetchone()
             if not head or head[0] != task["task_id"]:
                 raise Rejected("A higher-priority task owns the queue head")
             if db.execute("SELECT 1 FROM grants WHERE repository=?", (task["repository"],)).fetchone():
@@ -331,10 +401,12 @@ class Controller:
             self._authority(db, task, allow_hold=True)
         ordinal = db.execute("SELECT COALESCE(MAX(ordinal),0)+1 FROM attempts WHERE task_id=?", (task["task_id"],)).fetchone()[0]
         attempt_id = identity(task["task_id"], ordinal)
-        db.execute("INSERT INTO attempts(attempt_id,task_id,ordinal,dispatch_status,started_at,attempt_kind) VALUES(?,?,?,'intent',?,?)",
-                   (attempt_id, task["task_id"], ordinal, now, kind))
+        db.execute("INSERT INTO attempts(attempt_id,task_id,ordinal,dispatch_status,started_at,attempt_kind,review_cycle) "
+                   "VALUES(?,?,?,'intent',?,?,?)", (attempt_id, task["task_id"], ordinal, now, kind, task['review_cycle']))
         self._update(db, task, phase="reviewing", spec=json.dumps(asdict(spec), sort_keys=True),
-                     current_attempt=attempt_id, reason="Waiting for GitHub review preflight.")
+                     current_attempt=attempt_id, reason="Waiting for GitHub review preflight.",
+                     review_attempts=task['review_attempts']+1,
+                     review_submitted_at=task['review_submitted_at'] or now)
         db.execute("INSERT INTO effects(effect_id,task_id,kind,payload) VALUES(?,?,?,?)",
                    (attempt_id, task["task_id"], "dispatch", json.dumps({"attempt_id": attempt_id})))
         if initial:
@@ -462,9 +534,17 @@ class Controller:
         self._release_reservation(db,task,attempt,'review',now)
         db.execute("UPDATE attempts SET review_result=? WHERE attempt_id=?", (json.dumps(result), command.attempt_id))
         db.execute("UPDATE sessions SET finished=1 WHERE attempt_id=? AND phase='review'", (command.attempt_id,))
-        if verdict == "retry":
-            db.execute("UPDATE attempts SET retry_kind='review',retry_at=? WHERE attempt_id=?", (now + 900, command.attempt_id))
-        self._update(db, task, phase="ready" if verdict == "ready" else "held", reason=result["summary"])
+        if verdict == 'ready':
+            db.execute("UPDATE attempts SET retry_kind='',retry_at=0,retry_decision='approved' WHERE attempt_id=?",
+                       (command.attempt_id,))
+            self._update(db, task, phase='ready', reason=result['summary'])
+        else:
+            detail = result['summary']
+            for entry in result.get('evidence', []):
+                detail += f"\nEvidence: {entry['evidence']}. {entry['reason']} Next action: {entry['next_action']}"
+            for blocker in result.get('blockers', []):
+                detail += f"\nDecision: {blocker['decision']} Consequence: {blocker['consequence']} Question: {blocker['question']}"
+            self._review_attention(db, task, attempt, verdict, detail, now)
 
     def _progress(self, db, task, attempt, command):
         self._authority(db, task, coding=True)
@@ -496,7 +576,7 @@ class Controller:
             if not validation.get("repair_validation_passed") or not validation.get("repair_result"):
                 raise Rejected("Repair must record successful validation before completion")
         if session["finished"]:
-            if command.phase == "coding" and (attempt["agent_outcome"], attempt["pull_request"]) == (command.outcome, command.pull_request):
+            if command.phase == 'review' or (attempt["agent_outcome"], attempt["pull_request"]) == (command.outcome, command.pull_request):
                 return
             raise Rejected("This execution phase already has a result")
         if command.pull_request and not re.fullmatch(re.escape("https://github.com/" + task["repository"] + "/pull/") + r"[1-9][0-9]*", command.pull_request, flags=re.I):
@@ -506,15 +586,82 @@ class Controller:
         # A callback records a result; it never proves the Actions cleanup stopped.
         db.execute("UPDATE sessions SET finished=1 WHERE attempt_id=? AND phase=?", (command.attempt_id, command.phase))
         data={**json.loads(session['data']),'finished_at':now}
+        if command.failure:
+            from common.diagnostics import validate_failure
+            data['failure'] = validate_failure(command.failure)
         db.execute("UPDATE sessions SET data=? WHERE attempt_id=? AND phase=?",
                    (json.dumps(data),command.attempt_id,command.phase))
         if command.phase == "coding":
             db.execute("UPDATE attempts SET agent_outcome=?,pull_request=? WHERE attempt_id=?",
                        (command.outcome, command.pull_request or attempt["pull_request"], command.attempt_id))
         if command.outcome == "waiting_for_quota":
-            db.execute("UPDATE attempts SET retry_kind='capacity',retry_at=? WHERE attempt_id=?", (now + 900, command.attempt_id))
+            if not task['review_attention']:
+                db.execute("UPDATE attempts SET retry_kind='capacity',retry_at=?,retry_decision='capacity_wait' WHERE attempt_id=?",
+                           (now + 900, command.attempt_id))
+                if command.phase == 'review' and attempt['review_charged'] and not attempt['review_result']:
+                    db.execute('UPDATE tasks SET review_attempts=review_attempts-1 WHERE task_id=?', (task['task_id'],))
+                    db.execute('UPDATE attempts SET review_charged=0 WHERE attempt_id=?', (command.attempt_id,))
+        if command.phase == 'review' and command.outcome == 'failed':
+            if not task['review_attention'] and not attempt['retry_kind']:
+                self._review_failure(db, task, attempt, command.failure, now)
+            return
+        if task['review_attention']:
+            return
         self._update(db, task, phase="published" if command.pull_request else "held",
                      reason=command.reason or ("Waiting for CI and merge." if command.pull_request else "Waiting for verified GitHub completion."))
+
+    def _review_attention(self, db, task, attempt, classification, detail, now):
+        from common.policy import redact_review_text
+        reason = redact_review_text(detail) + '\nResolve the failure or supply the evidence, then explicitly move the issue to Todo to resubmit.'
+        if attempt:
+            db.execute("UPDATE attempts SET retry_kind='',retry_at=0,failure_class=?,retry_decision='attention',review_detail=? WHERE attempt_id=?",
+                       (classification, reason, attempt['attempt_id']))
+        self._update(db, task, phase='held', reason=reason, review_attention=reason, review_attention_at=now)
+
+    def _schedule_review(self, db, task, attempt, classification, detail, now):
+        if task['review_attention'] or attempt['retry_decision'] in {'retry', 'attention'}:
+            return
+        if task['review_attempts'] >= REVIEW_MAX_ATTEMPTS:
+            self._review_attention(db, task, attempt, classification,
+                                   f'Readiness exhausted all {REVIEW_MAX_ATTEMPTS} automatic attempts. ' + detail, now)
+            return
+        remaining = REVIEW_MAX_ATTEMPTS-task['review_attempts']
+        delay = REVIEW_RETRY_DELAYS[max(0, task['review_attempts']-1)]
+        reason = f'{detail} Automatic review retry in {delay//60} minutes; {remaining} attempt(s) remaining in this submission.'
+        db.execute("UPDATE attempts SET failure_class=?,retry_decision='retry',retry_kind='review',retry_at=?,review_detail=? WHERE attempt_id=?",
+                   (classification, now+delay, reason, attempt['attempt_id']))
+        self._update(db, task, phase='held', reason=reason)
+
+    def _review_failure(self, db, task, attempt, diagnostic, now):
+        from common.diagnostics import failure_summary
+        classification = review_failure_class(diagnostic)
+        detail = failure_summary(diagnostic) if diagnostic else 'Readiness execution failed without verified temporary-failure evidence.'
+        if classification.startswith('temporary_'):
+            self._schedule_review(db, task, attempt, classification, detail, now)
+        elif not task['review_attention']:
+            self._review_attention(db, task, attempt, classification, detail, now)
+
+    def _resubmit(self, db, task, command, now):
+        if (not re.fullmatch('[0-9a-f]{64}', command.submission_id)
+                or type(command.submitted_at) not in (float, int) or not math.isfinite(command.submitted_at)
+                or command.submitted_at > now or command.submitted_at <= max(task['review_submitted_at'], task['review_attention_at'])):
+            return
+        if not db.execute('INSERT OR IGNORE INTO review_submissions VALUES (?,?,?)',
+                          (command.submission_id, task['task_id'], command.submitted_at)).rowcount:
+            return
+        if not task['review_attention'] or not task['eligible'] or task['canceled']:
+            return
+        self._update(db, task, pending_submission_at=command.submitted_at)
+        self._accept_resubmission(db, self._task(db, task['task_id']))
+
+    def _accept_resubmission(self, db, task):
+        if (not task['pending_submission_at'] or not task['eligible'] or task['canceled']
+                or db.execute('SELECT 1 FROM grants WHERE task_id=?', (task['task_id'],)).fetchone()):
+            return
+        self._update(db, task, phase='queued', reason='Human resubmitted for a new bounded readiness review.',
+                     review_cycle=task['review_cycle']+1, review_attempts=0, review_attention='', review_attention_at=0,
+                     review_submitted_at=task['pending_submission_at'], pending_submission_at=0,
+                     sequence=db.execute('SELECT COALESCE(MAX(sequence),0)+1 FROM tasks').fetchone()[0])
 
     def _external(self, db, task, attempt, command, now):
         if (attempt["run_id"] and (attempt["run_id"], attempt["run_attempt"]) != (command.run_id, command.run_attempt)):
@@ -530,39 +677,83 @@ class Controller:
                     command.pull_state, command.attempt_id))
         verified = command.stopped and command.all_attempts_stopped and command.publication_checked
         if not verified:
-            if command.stopped:
+            if command.stopped and not task['review_attention'] and not attempt['retry_kind']:
                 self._update(db, task, phase="held", reason=command.reason or "Waiting for complete stop and publication evidence.")
             return
-        if (task["eligible"] and not task["canceled"] and not task["dependencies_ready"]
-                and not attempt["coding_started"] and command.pull_state == "absent"):
-            self._update(db, task, phase="queued", reason="Waiting for unresolved prerequisites.")
-            db.execute("DELETE FROM grants WHERE task_id=?", (task["task_id"],))
-            self._queue_reports(db,task['repository'])
-            return
+        self._release_stopped_credentials(db, task)
         no_changes = command.pull_state == "absent" and attempt["agent_outcome"] == "completed" and command.conclusion == "success"
-        result = json.loads(attempt["review_result"] or "null")
-        review_denied = result and result.get("verdict") in {"needs_clarification", "rejected"}
-        if command.pull_state == "merged" or no_changes or task["canceled"] and command.pull_state in {"absent","closed"} or review_denied and command.pull_state == "absent":
-            phase = "completed" if command.pull_state == "merged" or no_changes else "held" if review_denied else "canceled"
-            self._update(db, task, phase=phase, reason=command.reason or ("Pull request merged." if command.pull_state == "merged" else "Verified task outcome."))
-            db.execute("DELETE FROM grants WHERE task_id=?", (task["task_id"],))
-            self._queue_reports(db,task['repository'])
-        elif command.pull_state == "open" and not command.repairable:
-            self._update(db, task, phase="published", reason=command.reason or "Waiting for PR checks and merge.")
+        if command.pull_state == 'merged' or no_changes or task['canceled'] and command.pull_state in {'absent', 'closed'}:
+            phase = 'completed' if command.pull_state == 'merged' or no_changes else 'canceled'
+            self._update(db, task, phase=phase, reason=command.reason or (
+                'Pull request merged.' if command.pull_state == 'merged' else 'Verified task outcome.'))
+            db.execute("UPDATE attempts SET retry_kind='',retry_at=0 WHERE attempt_id=?", (command.attempt_id,))
+            self._release_grant(db, task)
+            return
+        if (not task['review_attention'] and task["eligible"] and not task["dependencies_ready"]
+                and not attempt["coding_started"] and command.pull_state == "absent"):
+            # A prerequisite wait before assessment is not a failed review.
+            session = db.execute("SELECT agent_started FROM sessions WHERE attempt_id=? AND phase='review'",
+                                 (command.attempt_id,)).fetchone()
+            if attempt['review_charged'] and not attempt['review_result'] and (not session or not session[0]):
+                db.execute('UPDATE tasks SET review_attempts=review_attempts-1 WHERE task_id=?', (task['task_id'],))
+                db.execute('UPDATE attempts SET review_charged=0 WHERE attempt_id=?', (command.attempt_id,))
+            self._update(db, task, phase="queued", reason="Waiting for unresolved prerequisites.")
+            self._release_grant(db, task)
+            return
+        result = json.loads(attempt['review_result'] or 'null')
+        if (not task['review_attention'] and not attempt['coding_started'] and not attempt['retry_kind']
+                and attempt['agent_outcome'] != 'completed'):
+            # A failed job alone is not a temporary service failure. GitHub's
+            # timed_out conclusion is structured execution evidence even if the
+            # worker never reached startup or could not return its callback.
+            session = db.execute("SELECT data FROM sessions WHERE attempt_id=? ORDER BY phase LIMIT 1",
+                                 (command.attempt_id,)).fetchone()
+            diagnostic = json.loads(session[0]).get('failure', {}) if session else {}
+            if not diagnostic and command.conclusion == 'timed_out':
+                diagnostic = {'operation': 'worker/readiness', 'kind': 'timeout'}
+            if command.conclusion != 'success' or not result:
+                self._review_failure(db, task, attempt, diagnostic, now)
+            elif task['eligible']:
+                self._review_attention(db, task, attempt, 'execution_failed',
+                                       'The approved run stopped before coding produced an outcome; inspect the run before resubmitting.', now)
+        task = self._task(db, task['task_id'])
+        attempt = self._attempt(db, task, command.attempt_id)
+        if task['review_attention']:
+            if command.pull_state in {'absent', 'closed'}:
+                self._release_grant(db, task)
+                self._accept_resubmission(db, self._task(db, task['task_id']))
+            return  # An unresolved PR always retains ownership and attention.
+        if command.pull_state == 'open' and not command.repairable:
+            self._update(db, task, phase='published', reason=command.reason or 'Waiting for PR checks and merge.')
+        elif command.repairable and not task['repair_used']:
+            if task['review_attempts'] >= REVIEW_MAX_ATTEMPTS:
+                self._review_attention(db, task, attempt, 'budget_exhausted',
+                                       'Readiness budget is exhausted; coding repair requires another assessment.', now)
+            else:
+                db.execute("UPDATE attempts SET retry_kind='repair',retry_at=? WHERE attempt_id=?", (now, command.attempt_id))
+                self._update(db, task, phase='held', reason=command.reason or 'One coding repair is authorized.')
+        elif attempt['retry_kind']:
+            self._update(db, task, phase='held', reason=task['reason'])
         else:
-            retry = attempt["retry_kind"]
-            if not retry and not attempt["coding_started"] and command.pull_state == "absent" and command.conclusion in {"failure", "timed_out"}:
-                retry = "startup" if result and result.get("verdict")=="ready" else "review"
-            if command.repairable and not task["repair_used"]:
-                retry = "repair"
-            if retry and not attempt["retry_at"]:
-                delay=60 if retry=="startup" else 900 if retry in {"review","capacity"} else 0
-                db.execute("UPDATE attempts SET retry_kind=?,retry_at=? WHERE attempt_id=?", (retry, now+delay, command.attempt_id))
-            reason = task["reason"] if retry in {"capacity","context"} or retry=="review" and result else (
-                "Readiness job failed; retry scheduled after 15 minutes." if retry=="review" else
-                "Worker startup failed; retry scheduled after 60 seconds." if retry=="startup" else
-                "GitHub task failed; execution is held.")
-            self._update(db, task, phase="held", reason=command.reason or reason)
+            self._update(db, task, phase='held', reason=command.reason or 'GitHub task failed; execution is held.')
+
+    def _release_stopped_credentials(self, db, task):
+        # The caller has verified all external attempts stopped. Clear only their
+        # exact fenced owners, retaining refreshed auth and unrelated leases.
+        for attempt in db.execute('SELECT * FROM attempts WHERE task_id=?', (task['task_id'],)).fetchall():
+            for phase in ('review', 'coding'):
+                owner = f"{attempt['attempt_id']}:{attempt['run_id']}:{attempt['run_attempt']}:{phase}"
+                db.execute("UPDATE accounts SET owner='',fence='',lease_until=0,version=version+1 WHERE owner=?", (owner,))
+                session = db.execute('SELECT data FROM sessions WHERE attempt_id=? AND phase=?',
+                                     (attempt['attempt_id'], phase)).fetchone()
+                if session:
+                    data = {**json.loads(session[0]), 'account_reserved': False, 'probe_account_id': ''}
+                    db.execute('UPDATE sessions SET finished=1,data=? WHERE attempt_id=? AND phase=?',
+                               (json.dumps(data), attempt['attempt_id'], phase))
+
+    def _release_grant(self, db, task):
+        if db.execute('DELETE FROM grants WHERE task_id=?', (task['task_id'],)).rowcount:
+            self._queue_reports(db, task['repository'])
 
     def _retry(self, db, task, command, now):
         attempt = self._attempt(db, task, task["current_attempt"])
@@ -571,6 +762,14 @@ class Controller:
         if (command.kind not in {"startup", "capacity", "context", "repair", "review"} or command.kind != attempt["retry_kind"]
                 or attempt["retry_at"] > now or attempt["pull_state"] == "merged"):
             raise Rejected("Retry is not authorized by the recorded task policy")
+        if task['review_attention'] or task['review_attempts'] >= REVIEW_MAX_ATTEMPTS:
+            self._review_attention(db, task, attempt, 'budget_exhausted', 'Readiness automatic attempt budget is exhausted.', now)
+            if attempt['pull_state'] in {'absent', 'closed'}:
+                self._release_grant(db, task)
+            return
+        if command.kind in {'startup', 'context', 'review'} and (attempt['retry_decision'] != 'retry'
+                or not attempt['failure_class'].startswith('temporary_')):
+            raise Rejected('No verified temporary execution failure authorizes this retry')
         if command.kind == "repair":
             if task["repair_used"]:
                 raise Rejected("The repair budget is exhausted")
@@ -597,4 +796,5 @@ class Controller:
         return TaskView(task_id, row["issue_id"], row["project_id"], row["repository"], row["identifier"], Phase(row["phase"]),
                         row["revision"], bool(db.execute("SELECT 1 FROM grants WHERE task_id=?", (task_id,)).fetchone()),
                         bool(row["eligible"]), bool(row["dependencies_ready"]), row["reason"],
-                        TaskSpec(**json.loads(row["spec"])) if row["spec"] else None, dict(attempt) if attempt else {}, sessions, bool(row["canceled"]), row["content_revision"])
+                        TaskSpec(**json.loads(row["spec"])) if row["spec"] else None, dict(attempt) if attempt else {}, sessions, bool(row["canceled"]), row["content_revision"],
+                        row["review_cycle"], row["review_attempts"], row["review_attention"], bool(row['pending_submission_at']), row['generation'])

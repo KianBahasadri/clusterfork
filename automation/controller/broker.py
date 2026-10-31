@@ -103,7 +103,8 @@ class Broker:
             self.metadata(view, phase, **fields)
             return self.config(view, route, role, issue, images)
 
-        view = self.apply(Authorize(view.task_id, key, role))
+        if action != 'finish':
+            view = self.apply(Authorize(view.task_id, key, role))
         if action == "heartbeat":
             return self.apply(AccountRequest(view.task_id,key,role,action,data))
         if action in {"accounts", "claim", "bind_account", "exhaust_account"}:
@@ -128,12 +129,12 @@ class Broker:
             result = None if data.get("result_error") else data.get("result")
             updated = self.apply(Review(view.task_id, key, result, view.spec))
             verdict = json.loads(updated.attempt["review_result"])["verdict"]
-            return {"status": {"ready": "passed", "retry": "readiness_retry"}.get(verdict, verdict)}
+            return {"status": 'passed' if verdict == 'ready' else verdict}
         if action == "progress":
             return self.progress(view, data)
         if action == "finish":
             status = data.get("status")
-            if selector and status != "waiting_for_quota":
+            if selector and status not in {"waiting_for_quota", "failed"}:
                 raise Rejected("Preflight cannot report an agent result")
             fields = {}
             if status == "failed" and "failure" in data:
@@ -150,7 +151,7 @@ class Broker:
             if fields:
                 self.metadata(view, phase, **fields)
             reason="Waiting for account capacity. "+quota_wait_text(fields.get("quota_wait",{})) if status=="waiting_for_quota" else ""
-            self.apply(Finish(view.task_id, key, phase, status, data.get("pull_request", ""), reason))
+            self.apply(Finish(view.task_id, key, phase, status, data.get("pull_request", ""), reason, fields.get('failure', {})))
             return {"status": status}
         if action in {"steering_open", "steering_close", "instructions", "instruction_result"}:
             return self.instruction(view, action, data)
