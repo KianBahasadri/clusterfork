@@ -38,6 +38,61 @@
       "validation_commands": [["python3", "-m", "unittest", "discover", "-s", "tests", "-q"]],
       "linear_team_id": "62b50878-78f5-4a97-912e-2198fed3836a",
       "required_checks": ["test", "routing-runtime"]
+    },
+    {
+      "project_id": "8a69fdae-5ed0-4751-84b4-d0dfcf737962",
+      "auto_merge": true,
+      "repository": "KianBahasadri/conky-linear-HUP",
+      "workflow": "clusterfork-task.yml",
+      "ref": "main",
+      "linear_team_id": "62b50878-78f5-4a97-912e-2198fed3836a",
+      "ready_state_ids": [
+        "ace01594-2daf-44bb-9690-cb0dccc11795"
+      ],
+      "linear_states": {
+        "in_progress": "764abaaa-b22c-42bb-8d6f-0c9c67b5f138",
+        "blocked": "26518242-2ca2-486c-884c-f9a829c3988f",
+        "done": "aa75d2cb-3bba-44e4-a1c8-d875533a600a"
+      },
+      "validation_commands": [
+        [
+          "bash",
+          "-c",
+          "set -e; command -v uv >/dev/null || python3 -m pip install uv; if ! command -v lua5.4 >/dev/null || ! command -v shellcheck >/dev/null; then sudo apt-get update; sudo apt-get install -y lua5.4 shellcheck; fi"
+        ],
+        [
+          "uv",
+          "sync",
+          "--locked"
+        ],
+        [
+          "env",
+          "CI=1",
+          "uv",
+          "run",
+          "pytest",
+          "tests/",
+          "-q"
+        ],
+        [
+          "bash",
+          "-c",
+          "uv run python -m py_compile scripts/*.py"
+        ],
+        [
+          "bash",
+          "-c",
+          "for script in scripts/*.sh; do bash -n \"$script\" || exit; done"
+        ],
+        [
+          "bash",
+          "-c",
+          "shellcheck scripts/*.sh"
+        ]
+      ],
+      "required_checks": [
+        "test"
+      ]
     }
   ]
 }

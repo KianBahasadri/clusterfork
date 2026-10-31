@@ -58,6 +58,12 @@ The [setup-remote-development skill](../skills/setup-remote-development/SKILL.md
 owns enrollment details. Run its helper from central source against an explicit
 target checkout with existing access; no per-target workflow, runtime pin or new secret.
 
+Validation commands run in the worker's cleaned environment. Reuse an existing
+CI check by its actual check name and bootstrap any repository tools absent from
+the shared runtime. The Conky binding installs uv, Lua 5.4 and ShellCheck when
+needed, syncs locked dependencies, and sets `CI=1` for pytest so missing Lua
+fails validation rather than skipping renderer coverage.
+
 | Action | Purpose |
 | --- | --- |
 | `discover` | Find real GitHub identity and existing Linear project/team/state UUIDs |
