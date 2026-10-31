@@ -68,8 +68,8 @@ minimal inbox event before acknowledging it. Repeated delivery is deduplicated.
 Controller unavailability returns a retryable failure.
 
 The Function App relay and its packaging, publishing and verification steps are
-removed. Changing a Linear webhook requires an authorized workspace administrator;
-the normal app client-credentials grant cannot administer that setting.
+removed. [Webhook setup and URL maintenance](remote-development-setup.md#smallest-administrator-procedure-for-an-ingress-change)
+owns the administrator procedure, credential requirements and API limitations.
 
 ## Operator commands
 
