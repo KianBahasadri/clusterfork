@@ -68,7 +68,7 @@ def init(directory, env=None):
 def plan(directory, *, env=None, apply=False):
     with tempfile.TemporaryDirectory(prefix="clusterfork-tf-plan-") as temporary:
         target = Path(temporary) / "reviewed.tfplan"
-        terraform(directory, "plan", "-input=false", "-json", "-detailed-exitcode", f"-out={target}",
+        terraform(directory, "plan", "-input=false", "-lock-timeout=5m", "-json", "-detailed-exitcode", f"-out={target}",
                   env=env, codes=(0, 2), terraform_json=True)
         data = json.loads(terraform(directory, "show", "-json", str(target), env=env))
         counts = check_plan(data)

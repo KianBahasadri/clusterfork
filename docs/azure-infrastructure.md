@@ -32,7 +32,8 @@ State lives in the dedicated `cftfstate7604cac329` account in
 have separate role assignments. Shared-key authentication and public container
 access are disabled. Azure encrypts stored data; blob versioning and deletion
 retention protect state recovery. Backend access uses Microsoft Entra identities,
-including GitHub OIDC, and Azure blob leases serialize state writes.
+including GitHub OIDC, and Azure blob leases serialize state writes. Plans wait up to five minutes for an
+existing operation to release its state lock.
 
 The operator has Blob Data Owner on both containers. The deployment identity has
 Blob Data Contributor on the automation container only. It cannot read or rewrite
