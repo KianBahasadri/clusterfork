@@ -44,6 +44,9 @@ enabled = false
 url = "https://mcp.linear.app/mcp"
 enabled = false
 
+[mcp_servers.linear.headers]
+Authorization = "Bearer ${LINEAR_API_KEY}"
+
 [mcp_servers.pixellab]
 url = "https://api.pixellab.ai/mcp"
 enabled = false

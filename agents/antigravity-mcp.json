@@ -15,6 +15,9 @@
     },
     "linear": {
       "serverUrl": "https://mcp.linear.app/mcp",
+      "headers": {
+        "Authorization": "Bearer ${LINEAR_API_KEY}"
+      },
       "disabled": true
     },
     "chrome-devtools": {

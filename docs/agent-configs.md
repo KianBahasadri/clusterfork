@@ -141,3 +141,68 @@ its launch environment. OpenCode uses `{env:NAME}` references. Claude plugins,
 Grok, and Qwen keep `${NAME}` placeholders for their clients to resolve.
 The shell profile exports the installed `.env`; GUI-launched clients still
 need the environment expected by their native expansion mechanism.
+
+### Shared Linear API key
+
+`LINEAR_API_KEY` is optional. Set it in the gitignored checkout-root `.env`
+using a plain assignment (optional quotes are supported), then run
+`./install-clusterfork.sh`. The installer copies that file to
+`~/.config/clusterfork/.env`, which is the central installed secret source.
+Use a Linear API key for the workspace and permissions you intend these
+clients to access. Linear supports API keys in the
+[`Authorization: Bearer` header](https://linear.app/docs/mcp#faq).
+
+At installation, a nonempty, non-whitespace `LINEAR_API_KEY` in that file selects
+shared-key authentication for every shipped Linear entry. Ambient environment
+variables do not select this mode. Templates contain only secret references;
+the installer renders them as follows:
+
+| Client | Shared-key configuration |
+| --- | --- |
+| Codex | `bearer_token_env_var = "LINEAR_API_KEY"`; [Codex reads the key from its launch environment](https://developers.openai.com/codex/mcp/) |
+| Antigravity, Command Code | An installed `headers.Authorization` bearer value, expanded from the installed `.env`; [Antigravity supports custom headers](https://antigravity.google/docs/mcp?tab=cli) |
+| OpenCode | `headers.Authorization = "Bearer {env:LINEAR_API_KEY}"`, resolved at launch |
+| Claude Linear plugin, Grok, Qwen | `headers.Authorization = "Bearer ${LINEAR_API_KEY}"`, resolved by the client |
+
+The installed `.env` and expanded MCP files have owner-only permissions (`0600`).
+Native environment references remain references in installed configuration;
+Codex's config never receives the key value. Installer output lists destinations
+and server names without printing credentials. Keep expanded configuration out
+of version control and shared logs.
+
+Run `source ~/.config/clusterfork/bash_profile.sh` in the launching shell after
+installation, and start new client sessions. GUI clients that resolve native
+environment references need to inherit the updated environment when restarted.
+Antigravity and Command Code can read their expanded headers without inheriting
+the key. Reload their MCP configuration or restart them after installation.
+Enable Linear where needed using the controls above: Codex still ships on;
+Antigravity and the other optional Linear entries still ship off or excluded.
+Reinstallation restores those enablement defaults.
+
+If the key is absent, empty, or whitespace-only at installation, the installer
+omits the Linear bearer reference/header. Existing OAuth credentials and login
+workflows remain usable, including `codex mcp login linear` and Antigravity's
+MCP authentication flow. OAuth caches are not changed. Adding or removing the key
+requires reinstalling so all clients select the same mode; merely exporting a
+key after a keyless install does not enable shared-key authentication.
+Controller `LINEAR_OAUTH_CLIENT_ID` / `LINEAR_OAUTH_CLIENT_SECRET` selection and
+its app identity remain independent from interactive MCP authentication.
+
+To rotate the key, replace the value in the checkout `.env`, rerun the installer,
+reload the shell profile, and restart client sessions or reload MCP configuration
+as above. This refreshes Antigravity's and Command Code's expanded headers and
+the launch environment for native references. Editing only the installed `.env`
+does not refresh expanded headers, and a later installation replaces that file
+from the checkout. Rotation needs no separate OAuth login in each application.
+To return to OAuth, remove or empty the value in the checkout `.env`, reinstall,
+and run `unset LINEAR_API_KEY` before reloading the launching shell profile so
+an old exported value does not linger.
+
+For a workspace smoke check, use an already authorized client setup after the
+refresh: in both Codex and Antigravity, read the same known Linear issue and
+confirm its team/workspace matches the key's intended workspace. Re-enable
+Antigravity's Linear entry after reinstalling when necessary. Repeat after
+rotation, then retire the old key once the new sessions work. Automated installer
+tests use fake credentials to cover both modes, rotation, repeat installs,
+preserved client state, and secret-free output; they do not establish live
+workspace access.
