@@ -96,7 +96,8 @@ class Broker:
                                                    "request_id": CONTEXT.get()["request_id"]})
                             break
                         except (HTTPError, URLError, TimeoutError) as exc:
-                            if (action != "start" or (isinstance(exc, HTTPError) and exc.code != 503)
+                            if (action not in {"start", "checkout", "github", "context", "progress"}
+                                    or (isinstance(exc, HTTPError) and exc.code != 503)
                                     or attempt == len(self.retry_delays)):
                                 raise
                             self.sleep(self.retry_delays[attempt])

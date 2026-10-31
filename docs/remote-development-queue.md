@@ -82,10 +82,13 @@ a non-ready state back to Todo. Only a signed human state-transition event, with
 its original action identity/time and current eligibility, authorizes resubmission.
 Duplicate/redelivered events, scans, bot lifecycle writes, labels, comments, run
 IDs and timestamps alone cannot resubmit. A human submission received before
-cleanup stays pending until safe release. The durable inbox protects intent even
-before event processing; SQLite retains the original signed transition with the
-pending/accepted cycle. Upgrades recover existing transition provenance from the
-retained inbox without replenishing budgets.
+cleanup stays pending until safe release. Webhook intake commits the original
+transition to `linear_intents` atomically with the inbox receipt, before HTTP
+acknowledgement. This watermark survives inbox processing and restart; older
+deliveries cannot replace a newer human action. Distinct actions with equal source
+times hold authorization until an unambiguous newer action arrives. An acknowledged
+ineligible submission remains withdrawn across redelivery and re-enrollment.
+Upgrades recover retained signed receipts without replenishing budgets.
 
 Submission processing and pending/queued revalidation use complete history for
 that issue to distinguish the controller app's Needs attention projection from a
@@ -127,6 +130,13 @@ queued tasks and every next attempt, including retries and repair.
 Events/periodic observations discover satisfied/removed prerequisites. Rejoining
 the runnable queue preserves any pending readiness retry delay and budget.
 
+Human moves out of the ready states withdraw execution authorization, including
+a move to Needs attention during coding. A signed transition fences worker
+operations at intake; observations also detect a pause without waiting for its
+webhook. The controller recognizes its own In Progress projection from durable
+effects instead of treating every active issue's Needs attention state as eligible.
+Pausing never proves runner stop, releases credentials or resolves an open PR.
+
 ## Linear feedback
 
 At most one owned execution-status label appears: `clusterfork: queued`,
@@ -154,14 +164,20 @@ failure, delay and remaining attempts. Terminal feedback names the exact missing
 decision/evidence or execution failure and next action, preserves current/prior
 run links, and retains the existing user notification for attention-worthy review
 failures. A reporting outage never resets the budget or recreates retry intent.
-Needs attention state projection has its own durable acknowledgement per readiness
-failure, separate from comment/label/report revisions. Cleanup and report retries
-cannot repeat an acknowledged projection over a newer submission. Before a first
-or unacknowledged write, targeted issue history vetoes overwriting newer human
-workflow intent. Signed event processing reconciles an in-flight controller write
-that nevertheless landed later, while preserving a subsequent human withdrawal.
-These history reads are confined to readiness projection and signed/pending/queued
-resubmission checks; settled historical tasks gain no per-task polling.
+Every workflow-state transition has its own durable effect identity, independent
+of comment/label/report revisions. Controller owns the desired state and epoch;
+the driver records intent before writing, then confirmation or uncertainty.
+Before a write, the controller rechecks its lifecycle epoch, current enrollment
+facts and human watermark. Cleanup cannot replay confirmed states. Ambiguous
+writes reconcile against the observed state before repeating a mutation.
+Targeted history remains a recovery fallback for delayed/missing transitions and
+unacknowledged attention writes. Signed events and retained projection provenance
+distinguish controller traffic from a later human withdrawal. A controller write
+already in flight may land after a human action; reconciliation restores the
+latest signed human state rather than treating that echo as new intent. SQLite
+does not make remote Linear writes atomic. History reads remain targeted; settled
+historical tasks gain no per-task polling. Upgrading adopts existing acknowledged
+attention effects and live reported execution without resetting grants or budgets.
 Late failure/context feedback keeps the original held-cycle boundary; it cannot
 make an already submitted human transition look older than the failure.
 

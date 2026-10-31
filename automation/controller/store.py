@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS grants (
  repository TEXT PRIMARY KEY,
  task_id TEXT NOT NULL UNIQUE REFERENCES tasks(task_id)
 );
+CREATE INDEX IF NOT EXISTS tasks_issue_id ON tasks(issue_id);
 CREATE TABLE IF NOT EXISTS attempts (
  attempt_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(task_id),
  ordinal INTEGER NOT NULL CHECK(ordinal > 0),
@@ -67,11 +68,20 @@ CREATE TABLE IF NOT EXISTS effects (
  state TEXT NOT NULL CHECK(state IN ('pending','claimed','done')) DEFAULT 'pending'
 );
 CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS effects_task_kind ON effects(task_id,kind);
 CREATE TABLE IF NOT EXISTS legacy_history (
  legacy_key TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(task_id), data TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS inbox (
  event_id TEXT PRIMARY KEY, payload TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0 CHECK(done IN (0,1))
+);
+CREATE TABLE IF NOT EXISTS linear_intents (
+ issue_id TEXT PRIMARY KEY, action_id TEXT NOT NULL, changed_at REAL NOT NULL,
+ transition TEXT NOT NULL, conflicted INTEGER NOT NULL DEFAULT 0 CHECK(conflicted IN (0,1)),
+ withdrawn INTEGER NOT NULL DEFAULT 0 CHECK(withdrawn IN (0,1))
+);
+CREATE TABLE IF NOT EXISTS linear_workflows (
+ task_id TEXT PRIMARY KEY REFERENCES tasks(task_id), policy TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS review_submissions (
  submission_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(task_id), submitted_at REAL NOT NULL,
@@ -121,7 +131,7 @@ CREATE TABLE IF NOT EXISTS telemetry_outbox (
  event_id TEXT PRIMARY KEY, created_at REAL NOT NULL, payload TEXT NOT NULL,
  tries INTEGER NOT NULL DEFAULT 0, next_at REAL NOT NULL DEFAULT 0
 );
-PRAGMA user_version=10;
+PRAGMA user_version=11;
 """
 
 
@@ -144,7 +154,7 @@ class Database:
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA synchronous=FULL")
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10):
+        if version not in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11):
             self.close()
             raise Rejected("Unsupported task database version")
         if version == 1:

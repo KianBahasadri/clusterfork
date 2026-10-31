@@ -9,8 +9,8 @@ from types import SimpleNamespace
 from .authorization import SELECTOR_ACTIONS,authorize_job, verify_review_job
 from .images import Images
 from .context import Context
-from .model import (Authorize, AccountRequest, EvidenceChanged, Finish, Progress, Rejected, Review, Role,
-                    SessionUpdated, Start, dependency_admission_applies)
+from .model import (AccountRequest, Finish, Progress, Rejected, Review, Role,
+                    SessionUpdated, Start)
 from .workflows import ENGINE, WORKFLOW
 from .telemetry import correlate
 from common.diagnostics import validate_failure
@@ -112,7 +112,7 @@ class Broker:
             return self.config(view, route, role, issue, images)
 
         if action != 'finish':
-            view = self.apply(Authorize(view.task_id, key, role))
+            view = self.controller.authorize(view.task_id, key, role, action, now=self.clock())
         if action == "heartbeat":
             return self.apply(AccountRequest(view.task_id,key,role,action,data))
         if action in {"accounts", "claim", "bind_account", "exhaust_account"}:
@@ -131,8 +131,6 @@ class Broker:
                     permissions["actions"]="read"
             return {"token": self.github.installation_token(route.repository, permissions=permissions)}
         if action == "github":
-            if view.phase not in {"executing", "published"}:
-                raise Rejected("Publication is not authorized in this task phase")
             permissions = {"contents": "write", "pull_requests": "write"}
             if self.github.workflow_changes_allowed(route.repository) is True:
                 permissions["workflows"] = "write"
@@ -211,16 +209,11 @@ class Broker:
         return {route.repository.lower() for route in self.registry.routes.values()}
 
     def context_authority(self, view, role, *, require_lease=False):
-        current = self.controller.inspect(view.task_id)
-        session = current.session(role.phase)
+        current = self.controller.authorize(view.task_id, view.attempt['attempt_id'], role,
+                                            'context' if require_lease else 'validate_context', now=self.clock())
         route = self.registry.routes.get(current.project_id)
-        if (not current.active or current.canceled or not current.eligible
-                or (not current.dependencies_ready and dependency_admission_applies(current.attempt))
-                or route is None or route.repository.lower() != current.repository
-                or current.phase in {"held", "completed", "canceled", "skipped"}
-                or current.attempt["attempt_id"] != view.attempt["attempt_id"] or current.attempt["stopped"]
-                or session and (session["finished"] or session["deadline"] <= self.clock())):
-            raise Rejected("Related context access is no longer authorized")
+        if route is None or route.repository.lower() != current.repository:
+            raise Rejected('Related repository context authorization was revoked')
         # Recheck mapped source scopes after network activity as well as before
         # it, including a configuration revocation while a fetch was in flight.
         from common.context import pull_ref
@@ -230,25 +223,13 @@ class Broker:
         repositories = self.context_repositories()
         if any(request["operation"] == "pull" and pull_ref(request["target"])[0] not in repositories for request in requests):
             raise Rejected("Related repository context authorization was revoked")
-        if require_lease or (role.phase == "coding" and not dependency_admission_applies(current.attempt)):
-            if (not session or not session["account_id"]
-                    or (require_lease and session["data"].get("account_reserved"))):
-                raise Rejected("Related context requires an active execution account lease")
-            # Fenced release still permits trusted WIP preservation after the
-            # agent stops. Context-tool use always needs the live execution lease.
-            if require_lease or session["data"].get("released_account_id") != session["account_id"]:
-                account, _ = self.accounts.get(session["account_id"])
-                owner = f"{view.attempt['attempt_id']}:{view.attempt['run_id']}:{view.attempt['run_attempt']}:{role.phase}"
-                if account.get("owner") != owner or account.get("lease_until", 0) <= self.clock():
-                    raise Rejected("Related context requires an active execution account lease")
 
     def validate_context(self, view, role):
         try:
             return self.context.revalidate(view, self.context_repositories(),
                                            lambda: self.context_authority(view, role), approved=role.phase == "coding")
-        except (ValueError, RequestError, KeyError, TypeError, AttributeError):
-            self.apply(EvidenceChanged(view.task_id, view.attempt["attempt_id"]))
-            raise Rejected("Related context requires a fresh readiness assessment") from None
+        except (RequestError, ContextError) as exc:
+            return self.controller.context_failure(view.task_id, view.attempt['attempt_id'], exc, now=self.clock())
 
 
     def progress(self, view, data):
@@ -305,9 +286,6 @@ class Broker:
     def instruction(self, view, action, data):
         session = view.session("coding")
         metadata = session["data"]
-        stages = {"coding", "testing"} if action == "steering_close" else {"coding"}
-        if view.attempt["stage"] not in stages or metadata.get("steering_closed"):
-            raise Rejected("The agent is no longer accepting instructions")
         for field in ("thread_id", "turn_id"):
             value = data.get(field)
             if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", value):

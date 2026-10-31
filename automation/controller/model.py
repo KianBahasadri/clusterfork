@@ -63,6 +63,7 @@ class IssueObserved:
     reason: str = ""
     canceled: bool = False
     submission_current: bool = True
+    workflow: dict = field(default_factory=dict)
 
     @property
     def task_id(self):
@@ -212,6 +213,7 @@ class Authorize:
     task_id: str
     attempt_id: str
     role: Role
+    action: str = 'execute'
 
 
 @dataclass(frozen=True)
@@ -258,6 +260,14 @@ class ReportConfirmed:
 
 
 @dataclass(frozen=True)
+class ProjectionUpdated:
+    task_id: str
+    effect_id: str
+    outcome: str  # claimed/confirmed/uncertain/superseded
+    observation: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class AccountRequest:
     task_id: str
     attempt_id: str
@@ -274,7 +284,7 @@ class InstructionRequest:
 
 Command = (IssueObserved | Admit | DispatchObserved | Resubmit | Start | Assign | Review | Progress |
            Finish | ExternalObserved | Retry | Hold | SessionUpdated | EffectUpdated | Authorize |
-           ExhaustAccount | ContextObserved | EvidenceChanged | InboxQueued | InboxDone | Initialize | ReportConfirmed | AccountRequest | InstructionRequest)
+           ExhaustAccount | ContextObserved | EvidenceChanged | InboxQueued | InboxDone | Initialize | ReportConfirmed | ProjectionUpdated | AccountRequest | InstructionRequest)
 
 
 @dataclass(frozen=True)
