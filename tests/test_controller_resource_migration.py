@@ -39,8 +39,13 @@ class ResourceMigrationTests(unittest.TestCase):
         self.remote = Mock()
         self.remote.list_entities.side_effect = lambda: copy.deepcopy(self.accounts)
         def fence(entity, **kwargs):
+            # Exercise the pinned SDK codec: large lease timestamps require Int64.
+            from azure.data.tables._serialize import _add_entity_properties
+            from azure.data.tables import EntityProperty
+            _add_entity_properties(entity)
             self.assertEqual(kwargs["etag"], "fixture-version")
-            self.accounts[:] = [Entity(entity)]
+            self.accounts[:] = [Entity({key:value.value if isinstance(value,EntityProperty) else value
+                                       for key,value in entity.items()})]
         self.remote.update_entity.side_effect = fence
         other = Mock()
         other.list_entities.side_effect = lambda: copy.deepcopy(self.instructions)

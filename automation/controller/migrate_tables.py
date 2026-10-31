@@ -44,11 +44,11 @@ def migrate(controller,config,credential,*,client_factory=None):
     # Existing CLI versions check this lease before reclaiming. Fence them before
     # importing so they cannot later reclaim stale copies behind the new owner.
     from azure.core import MatchConditions
-    from azure.data.tables import UpdateMode
+    from azure.data.tables import UpdateMode,EntityProperty,EdmType
     for row in current:
         if row.get('owner')==FENCE_OWNER:
             continue
-        fenced={**dict(row),'owner':FENCE_OWNER,'fence':str(uuid4()),'lease_until':4102444800}
+        fenced={**dict(row),'owner':FENCE_OWNER,'fence':str(uuid4()),'lease_until':EntityProperty(4102444800,EdmType.INT64)}
         accounts.update_entity(fenced,mode=UpdateMode.REPLACE,etag=row.metadata['etag'],
                                match_condition=MatchConditions.IfNotModified)
     digest=hashlib.sha256(json.dumps(bundle,sort_keys=True).encode()).hexdigest()
