@@ -129,6 +129,49 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(second.active)
         self.assertFalse(self.controller.inspect(urgent_blocked.task_id).active)
 
+    def test_pre_coding_blocker_keeps_grant_until_complete_stop_and_publication_checks(self):
+        issue = self.issue()
+        view = self.apply(Admit(issue.task_id, SPEC))
+        self.review(view)
+        held = self.apply(replace(issue, dependencies_ready=False))
+        self.assertEqual(held.phase, Phase.HELD)
+        with self.assertRaises(Rejected):
+            self.start(view, Role.CODING_SELECT, review_job_succeeded=True)
+        for incomplete in ({"stopped": False}, {"all_attempts_stopped": False}, {"publication_checked": False}):
+            with self.subTest(incomplete=incomplete):
+                current = self.external(view, **incomplete)
+                self.assertTrue(current.active)
+                self.assertFalse(current.review_attention or current.attempt["retry_kind"])
+        queued = self.external(view)
+        self.assertEqual(queued.phase, Phase.QUEUED)
+        self.assertFalse(queued.active or queued.review_attention or queued.attempt["retry_kind"])
+        self.assertEqual(self.controller.waiting(), ())
+        with self.assertRaises(Rejected):
+            self.apply(Admit(issue.task_id, SPEC))
+        self.apply(issue)
+        next_attempt = self.apply(Admit(issue.task_id, SPEC))
+        self.assertNotEqual(next_attempt.attempt["attempt_id"], view.attempt["attempt_id"])
+        self.assertFalse(next_attempt.attempt["coding_started"])
+
+    def test_added_blocker_gates_next_repair_attempt_after_running_coding_stops(self):
+        issue = self.issue()
+        view = self.coding(self.apply(Admit(issue.task_id, SPEC)))
+        running = self.apply(replace(issue, dependencies_ready=False))
+        self.assertEqual(running.phase, Phase.EXECUTING)
+        failed = self.external(view, conclusion="failure", repairable=True)
+        self.assertEqual(failed.attempt["retry_kind"], "repair")
+        with self.assertRaises(Rejected):
+            self.apply(Retry(view.task_id, SPEC, "Coding failed", "repair"))
+        self.assertEqual(len(self.controller.attempt_history(view.task_id)), 1)
+        self.apply(issue)
+        repair = self.apply(Retry(view.task_id, SPEC, "Coding failed", "repair"))
+        self.assertEqual(repair.attempt["attempt_kind"], "repair")
+        self.assertFalse(repair.attempt["coding_started"])
+        held = self.apply(replace(issue, dependencies_ready=False))
+        self.assertEqual(held.phase, Phase.HELD)
+        with self.assertRaises(Rejected):
+            self.start(repair, Role.REVIEW_SELECT)
+
     def test_a_waiting_issue_that_leaves_and_rejoins_gets_new_fifo_position(self):
         first=self.issue(1)
         self.apply(replace(first,eligible=False))

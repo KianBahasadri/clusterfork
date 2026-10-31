@@ -43,6 +43,11 @@ def identity(*parts):
     return hashlib.sha256(json.dumps(parts, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def dependency_admission_applies(attempt):
+    """Prerequisites gate new attempts until their coding has started."""
+    return not attempt or not attempt["coding_started"]
+
+
 @dataclass(frozen=True)
 class IssueObserved:
     issue_id: str

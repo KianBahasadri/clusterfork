@@ -9,7 +9,8 @@ from types import SimpleNamespace
 from .authorization import SELECTOR_ACTIONS,authorize_job, verify_review_job
 from .images import Images
 from .context import Context
-from .model import Authorize, AccountRequest, EvidenceChanged, Finish, Progress, Rejected, Review, Role, SessionUpdated, Start
+from .model import (Authorize, AccountRequest, EvidenceChanged, Finish, Progress, Rejected, Review, Role,
+                    SessionUpdated, Start, dependency_admission_applies)
 from .workflows import ENGINE, WORKFLOW
 from .telemetry import correlate
 from common.diagnostics import validate_failure
@@ -213,7 +214,8 @@ class Broker:
         current = self.controller.inspect(view.task_id)
         session = current.session(role.phase)
         route = self.registry.routes.get(current.project_id)
-        if (not current.active or current.canceled or not current.eligible or not current.dependencies_ready
+        if (not current.active or current.canceled or not current.eligible
+                or (not current.dependencies_ready and dependency_admission_applies(current.attempt))
                 or route is None or route.repository.lower() != current.repository
                 or current.phase in {"held", "completed", "canceled", "skipped"}
                 or current.attempt["attempt_id"] != view.attempt["attempt_id"] or current.attempt["stopped"]
@@ -228,13 +230,17 @@ class Broker:
         repositories = self.context_repositories()
         if any(request["operation"] == "pull" and pull_ref(request["target"])[0] not in repositories for request in requests):
             raise Rejected("Related repository context authorization was revoked")
-        if require_lease:
-            if not session or not session["account_id"] or session["data"].get("account_reserved"):
+        if require_lease or (role.phase == "coding" and not dependency_admission_applies(current.attempt)):
+            if (not session or not session["account_id"]
+                    or (require_lease and session["data"].get("account_reserved"))):
                 raise Rejected("Related context requires an active execution account lease")
-            account, _ = self.accounts.get(session["account_id"])
-            owner = f"{view.attempt['attempt_id']}:{view.attempt['run_id']}:{view.attempt['run_attempt']}:{role.phase}"
-            if account.get("owner") != owner or account.get("lease_until", 0) <= self.clock():
-                raise Rejected("Related context requires an active execution account lease")
+            # Fenced release still permits trusted WIP preservation after the
+            # agent stops. Context-tool use always needs the live execution lease.
+            if require_lease or session["data"].get("released_account_id") != session["account_id"]:
+                account, _ = self.accounts.get(session["account_id"])
+                owner = f"{view.attempt['attempt_id']}:{view.attempt['run_id']}:{view.attempt['run_attempt']}:{role.phase}"
+                if account.get("owner") != owner or account.get("lease_until", 0) <= self.clock():
+                    raise Rejected("Related context requires an active execution account lease")
 
     def validate_context(self, view, role):
         try:

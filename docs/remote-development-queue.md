@@ -118,8 +118,14 @@ unrelated work.
 Refresh dependencies at admission and guarded worker operations. A new pre-coding
 blocker holds authorization; once prior attempts stop without a PR, return to the
 queue position and release the grant. Blockers added after coding starts do not
-interrupt it. Events/periodic observations discover satisfied/removed prerequisites.
-Rejoining the runnable queue preserves any pending readiness retry delay and budget.
+interrupt that attempt's context access, coding/testing/publication stages or
+publication authorization. An added admission-only edge does not invalidate
+approval through the root issue's cached dependency metadata; original snapshots
+and approval bindings stay intact. Material changes to reviewed evidence, new
+unreviewed evidence and other authorization losses still apply. Prerequisites gate
+queued tasks and every next attempt, including retries and repair.
+Events/periodic observations discover satisfied/removed prerequisites. Rejoining
+the runnable queue preserves any pending readiness retry delay and budget.
 
 ## Linear feedback
 

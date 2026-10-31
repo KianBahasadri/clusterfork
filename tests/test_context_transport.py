@@ -89,6 +89,7 @@ class ContextTransportTests(unittest.TestCase):
             if phase == "coding":
                 fx.approve(config)
                 fx.start_coding()
+                fx.add_prerequisite()
                 role = Role.CODING
             with self.subTest(phase=phase), tempfile.TemporaryDirectory(prefix="cf-context-") as directory:
                 with ContextBridge(SimpleNamespace(call=call), directory, deadline=time.monotonic() + 60) as bridge:
@@ -98,6 +99,8 @@ class ContextTransportTests(unittest.TestCase):
                     config_text = json.dumps(bridge.stdio())
                     self.assertNotIn("Bearer", config_text)
                     self.assertNotIn("CONTROLLER_ONLY", config_text)
+                    if phase == "coding":
+                        self.assertEqual(call("github"), {"token": "ghs_CONTROLLER_ONLY"})
 
     @unittest.skipUnless(shutil.which("codex"), "Codex CLI unavailable")
     def test_native_codex_mcp_can_read_contract_in_readonly_and_coding_threads(self):
@@ -108,6 +111,7 @@ class ContextTransportTests(unittest.TestCase):
             if sandbox == "danger-full-access":
                 fx.approve(config)
                 fx.start_coding()
+                fx.add_prerequisite()
                 role = Role.CODING
             with self.subTest(sandbox=sandbox), tempfile.TemporaryDirectory(prefix="cf-codex-context-") as directory:
                 home = Path(directory)
@@ -143,6 +147,7 @@ class ContextTransportTests(unittest.TestCase):
             if not readonly:
                 fx.approve(config)
                 fx.start_coding()
+                fx.add_prerequisite()
             config = {**config, "model": cursor.MODEL, "effort": "high"}
             with self.subTest(readonly=readonly), tempfile.TemporaryDirectory(prefix="cf-cursor-context-") as directory:
                 home = Path(directory) / "home"

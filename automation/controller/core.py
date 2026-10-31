@@ -11,7 +11,7 @@ from .model import (Admit, Assign, DispatchObserved, ExternalObserved, Finish, H
                     IssueObserved, Phase, Progress, Rejected, Retry, Review, Role,
                     Start, TaskSpec, TaskView, identity, SessionUpdated, EffectUpdated, Authorize, ExhaustAccount,
                     ContextObserved, InboxQueued, InboxDone, Initialize, ReportConfirmed, AccountRequest, InstructionRequest,
-                    Resubmit, EvidenceChanged)
+                    Resubmit, EvidenceChanged, dependency_admission_applies)
 from common.policy import REVIEW_MAX_ATTEMPTS, REVIEW_RETRY_DELAYS, review_failure_class
 
 
@@ -359,10 +359,8 @@ class Controller:
                     pass  # Reporting/eligibility changes cannot erase actionable feedback.
                 elif changed or not command.eligible:
                     changes.update(phase="held", reason="Task content or eligibility changed; execution authorization held.")
-                elif not command.dependencies_ready:
-                    attempt = db.execute("SELECT coding_started FROM attempts WHERE attempt_id=?", (task["current_attempt"],)).fetchone()
-                    if not attempt or not attempt[0]:
-                        changes.update(phase="held", reason=command.reason or "Prerequisites are unresolved.")
+                elif not command.dependencies_ready and dependency_admission_applies(attempt):
+                    changes.update(phase="held", reason=command.reason or "Prerequisites are unresolved.")
             if any(task[k] != v for k, v in changes.items()):
                 self._update(db, task, **changes)
             self._accept_resubmission(db, self._task(db, command.task_id))
@@ -376,7 +374,7 @@ class Controller:
             raise Rejected("Task authorization is held")
         if not task["dependencies_ready"]:
             attempt = db.execute("SELECT coding_started FROM attempts WHERE attempt_id=?", (task["current_attempt"],)).fetchone()
-            if not attempt or not attempt[0]:
+            if dependency_admission_applies(attempt):
                 raise Rejected("Prerequisites are unresolved")
 
     def _new_attempt(self, db, task, spec, now, *, initial=False, kind="normal"):
@@ -712,7 +710,7 @@ class Controller:
             self._release_grant(db, task)
             return
         if (not task['review_attention'] and task["eligible"] and not task["dependencies_ready"]
-                and not attempt["coding_started"] and command.pull_state == "absent"):
+                and dependency_admission_applies(attempt) and command.pull_state == "absent"):
             # A prerequisite wait before assessment is not a failed review.
             session = db.execute("SELECT agent_started FROM sessions WHERE attempt_id=? AND phase='review'",
                                  (command.attempt_id,)).fetchone()

@@ -7,7 +7,7 @@ import json
 from urllib.parse import parse_qs, urlsplit
 
 from common.clients import Linear, RequestError
-from controller.model import Role
+from controller.model import IssueObserved, Role
 import test_controller_broker as fixtures
 from call_budget import record_api_calls
 
@@ -18,10 +18,15 @@ BLOB = hashlib.sha1(f"blob {len(CONTRACT.encode())}\0".encode() + CONTRACT.encod
 
 
 class ContextFixture:
-    def __init__(self, test):
+    def __init__(self, test, *, provider="codex"):
         self.f = fixtures.ControllerBrokerTests(methodName="runTest")
         self.f.setUp()
         test.addCleanup(self.f.doCleanups)
+        if provider == "cursor":
+            from test_cursor_accounts import auth
+            self.f.pool = self.f.accounts.pools[provider]
+            self.f.account_a = "cursor:" + self.f.pool.enroll(auth("reviewer"))
+            self.f.account_b = "cursor:" + self.f.pool.enroll(auth("coder"))
         self.repo = next(r.repository for r in self.f.registry.routes.values() if r.repository != self.f.route.repository).lower()
         self.pull = f"https://github.com/{self.repo}/pull/55"
         self.root = {**self.f.issue, "updatedAt": "2026-10-31T00:00:00Z", "state": {"id": "todo", "type": "unstarted", "name": "Todo"}}
@@ -73,6 +78,13 @@ class ContextFixture:
                   account_id=self.f.account_b, usage_before={"observed_at": 1000, "windows": [
                       {"name": "primary", "used_percent": 10, "resets_at": 2000, "duration_minutes": 300}]})
         return config
+
+    def add_prerequisite(self):
+        self.dependencies[self.root["id"]].append({"id": "new-edge", "type": "blocks", "issue": {
+            "id": "22222222-2222-4222-8222-222222222222", "identifier": "KIAN-947"}})
+        return self.f.controller.apply(IssueObserved(self.root["id"], self.f.route.project_id,
+            self.f.route.repository, self.f.registry.generation, self.root["identifier"], True, False,
+            content_revision=self.f.spec.content_revision, reason="Unfinished prerequisite."), now=self.f.broker.clock())
 
     @staticmethod
     def page(rows, after):
