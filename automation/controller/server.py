@@ -16,17 +16,19 @@ from common.routing import WebhookError, webhook_event
 from common.accounts import WorkerError
 from common.identity import verify_oidc
 from common.diagnostics import context,operation
+from .telemetry import HTTP_CONTEXT,http_operation,http_failure
 
 
 class Application:
     def __init__(self, controller, broker, driver, *, webhook_secret, metadata, verify=verify_oidc, clock=time.time,
-                 resources_idle=lambda: True,capabilities=None,setup=None,account_operator=None):
+                 resources_idle=lambda: True,capabilities=None,setup=None,account_operator=None,telemetry=None):
         self.controller, self.broker, self.driver = controller, broker, driver
         self.webhook_secret, self.metadata = webhook_secret, metadata
         self.verify, self.clock = verify, clock
         self.resources_idle = resources_idle
         self.capabilities,self.setup=capabilities or {},setup
         self.account_operator=account_operator
+        self.telemetry=telemetry
         self.wakeup = threading.Event()
 
     def drained(self):
@@ -95,7 +97,34 @@ def http_handler(application):
         def log_message(self, format, *args):
             pass  # Request paths/headers may contain bearer material; emit bounded operations only.
 
+        def send_error(self, code, message=None, explain=None):
+            started=time.monotonic()
+            try:
+                super().send_error(code,message,explain)
+            finally:
+                if application.telemetry is not None:
+                    try:
+                        application.telemetry.request('controller/unknown',code,(time.monotonic()-started)*1000)
+                    except Exception:
+                        pass
+
         def dispatch(self):
+            started=time.monotonic()
+            ids={}
+            token=HTTP_CONTEXT.set(ids)
+            self.telemetry_status,self.telemetry_failure=503,None
+            try:
+                self.respond()
+            finally:
+                HTTP_CONTEXT.reset(token)
+                if application.telemetry is not None:
+                    try:
+                        application.telemetry.request(http_operation(self.command,self.path),self.telemetry_status,
+                                                      (time.monotonic()-started)*1000,ids,self.telemetry_failure)
+                    except Exception:
+                        pass  # Diagnostics cannot change a worker response.
+
+        def respond(self):
             self.connection.settimeout(25)
             try:
                 length = int(self.headers.get("Content-Length", "0"))
@@ -105,16 +134,22 @@ def http_handler(application):
                     body=self.rfile.read(length)
                     status,result=application.handle(self.command,self.path,self.headers,body)
             except WebhookError as exc:
+                self.telemetry_failure=http_failure(exc,http_operation(self.command,self.path))
                 status,result=exc.status,{"error":str(exc)}
             except WorkerError as exc:
+                self.telemetry_failure=http_failure(exc,http_operation(self.command,self.path))
                 status,result=exc.status,{"error":str(exc)}
             except Rejected as exc:
+                self.telemetry_failure=http_failure(exc,http_operation(self.command,self.path))
                 status,result=403,{"error":str(exc)}
-            except (ValueError,TypeError,KeyError):
+            except (ValueError,TypeError,KeyError) as exc:
+                self.telemetry_failure=http_failure(exc,http_operation(self.command,self.path))
                 status,result=400,{"error":"Invalid request"}
             except Exception as exc:
+                self.telemetry_failure=http_failure(exc,http_operation(self.command,self.path))
                 logging.warning("Controller request deferred (%s)",type(exc).__name__)
                 status,result=503,{"error":"Controller unavailable"}
+            self.telemetry_status=status
             data=json.dumps(result).encode()
             self.send_response(status)
             self.send_header("Content-Type","application/json")
@@ -128,12 +163,18 @@ def http_handler(application):
 class HTTPServer(ThreadingHTTPServer):
     daemon_threads=True
 
-    def __init__(self,address,handler,*,max_workers=32):
+    def __init__(self,address,handler,*,max_workers=32,telemetry=None):
         self.slots=threading.BoundedSemaphore(max_workers)
+        self.telemetry=telemetry
         super().__init__(address,handler)
 
     def process_request(self,request,address):
         if not self.slots.acquire(blocking=False):
+            if self.telemetry is not None:
+                try:
+                    self.telemetry.request('controller/overload',503,0)
+                except Exception:
+                    pass
             try:
                 request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n")
             finally:

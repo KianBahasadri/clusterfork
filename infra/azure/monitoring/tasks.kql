@@ -1,0 +1,7 @@
+__EVENTS__
+Events
+| where EventType == 'task_outcome'
+| summarize arg_max(EvidenceSequence, *) by TaskId
+| project TimeGenerated, TaskId, RunId, RunAttempt, Outcome, TaskFinal, RetryKind, AllStopped, PublicationChecked, ActionsUrl
+| order by TimeGenerated desc
+| take 200

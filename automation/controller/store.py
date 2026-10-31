@@ -83,7 +83,15 @@ CREATE TABLE IF NOT EXISTS instructions (
  comment_id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, sequence INTEGER NOT NULL,
  state TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(issue_id,sequence)
 );
-PRAGMA user_version=5;
+CREATE TABLE IF NOT EXISTS telemetry_receipts (
+ sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+ event_id TEXT NOT NULL UNIQUE, attempt_id TEXT NOT NULL REFERENCES attempts(attempt_id)
+);
+CREATE TABLE IF NOT EXISTS telemetry_outbox (
+ event_id TEXT PRIMARY KEY, created_at REAL NOT NULL, payload TEXT NOT NULL,
+ tries INTEGER NOT NULL DEFAULT 0, next_at REAL NOT NULL DEFAULT 0
+);
+PRAGMA user_version=6;
 """
 
 
@@ -106,7 +114,7 @@ class Database:
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA synchronous=FULL")
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, 3, 4, 5):
+        if version not in (0, 1, 2, 3, 4, 5, 6):
             self.close()
             raise Rejected("Unsupported task database version")
         if version == 1:

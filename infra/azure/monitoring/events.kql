@@ -1,0 +1,4 @@
+// One immutable logical event may be delivered repeatedly after an ambiguous send.
+let Events = ClusterforkController_CL
+| where TimeGenerated {TimeRange}
+| summarize arg_max(TimeGenerated, *) by EventId;

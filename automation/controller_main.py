@@ -22,6 +22,7 @@ from controller.release import RequiredRuntime
 from controller.server import Application,HTTPServer,OperatorServer,http_handler
 from controller.setup import evidence
 from controller.store import Database
+from controller.telemetry import Telemetry
 from common.clients import GitHub,Linear
 from common.routing import Registry
 from common.policy import PROTOCOL,digest
@@ -59,7 +60,13 @@ def build(config,manifest,database,credential):
     driver=Driver(controller,registry,linear,github,manifest["revision"],
                   runtime_ready=required,runtime_source_ready=required.source_matches,steering=instructions)
     broker=Broker(controller,registry,linear,github,refresh=driver.refresh,steering=instructions)
-    return Application(controller,broker,driver,webhook_secret=secret(credential,vault,"linear-webhook-secret"),
+    telemetry=None
+    if config.get('telemetry'):
+        try:
+            telemetry=Telemetry(database,credential,config['telemetry'],manifest['revision'])
+        except Exception:
+            logging.warning('Controller telemetry initialization deferred')
+    return Application(controller,broker,driver,webhook_secret=secret(credential,vault,"linear-webhook-secret"),telemetry=telemetry,
                        metadata=manifest,resources_idle=controller.accounts.idle,
                        capabilities={'protocol':PROTOCOL,'registry_digest':digest(json.loads((Path(__file__).parent/'controller/projects.json').read_text())),
                                      'missing':[],'resource_backend':'sqlite'},setup=lambda project:evidence(registry,github,manifest,project),
@@ -74,7 +81,7 @@ def serve(args):
     stop=threading.Event()
     with Database(args.database) as database:
         application=build(config,manifest,database,ManagedIdentityCredential())
-        http=HTTPServer(("127.0.0.1",args.port),http_handler(application))
+        http=HTTPServer(("127.0.0.1",args.port),http_handler(application),telemetry=application.telemetry)
         operator=OperatorServer(args.socket,application)
         def loop():
             last_scan=0
@@ -89,6 +96,8 @@ def serve(args):
                 application.wakeup.wait(30)
                 application.wakeup.clear()
         threads=[threading.Thread(target=target,daemon=True) for target in (http.serve_forever,operator.serve_forever,loop)]
+        if application.telemetry is not None:
+            threads.insert(0,threading.Thread(target=application.telemetry.run,args=(stop,),daemon=True))
         for thread in threads:
             thread.start()
         def stopping(*_):
@@ -102,6 +111,8 @@ def serve(args):
         http.server_close()
         operator.server_close()
         threads[-1].join(timeout=30)
+        if application.telemetry is not None:
+            threads[0].join(timeout=15)
 
 
 def main():

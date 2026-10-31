@@ -228,6 +228,10 @@ class Controller:
                             db.execute("UPDATE attempts SET retry_kind='context',retry_at=? WHERE attempt_id=?", (now, command.attempt_id))
                 else:
                     raise Rejected("Unsupported controller command")
+            # Local projection shares this commit. Export runs on a separate thread,
+            # after the transaction; projection failures cannot reject the command.
+            from .telemetry import capture
+            capture(db, command, now)
             self._report(db, command.task_id)
             return self._view(db, command.task_id)
 

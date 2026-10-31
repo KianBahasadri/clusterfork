@@ -48,4 +48,10 @@ jobs:
       - name: Install controller deployment dependencies
         run: python -m pip install -r automation/controller/requirements.txt
       - name: Test, drain, deploy and verify the required controller runtime
+        id: deploy
         run: python automation/controller_deploy.py --revision "$GITHUB_SHA"
+      - name: Verify controller telemetry and the saved Azure Monitor workbook
+        if: steps.deploy.outputs.proceed == 'true'
+        continue-on-error: true
+        timeout-minutes: 12
+        run: python automation/controller_monitoring.py --revision "$GITHUB_SHA"

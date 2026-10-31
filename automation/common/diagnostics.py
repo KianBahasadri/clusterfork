@@ -28,6 +28,7 @@ OPERATIONS = {"worker/execution", "worker/heartbeat", "worker/account_release", 
               "command/python", "command/codex", "command/other", *("broker/" + name for name in ACTIONS),
               *("linear/" + name for name in LINEAR_OPERATIONS), "github/installation", "github/access_token",
               "github/branch", "github/pulls", "github/pull", "github/dispatch", "github/runs", "github/graphql"}
+OPERATIONS.update({"controller/health", "controller/linear", "controller/accounts", "controller/unknown", "controller/overload"})
 KINDS = {"timeout", "http_error", "transport_error", "command_failed", "lease_lost", "worker_error", "graphql_error"}
 GRAPHQL_CODES = {"FORBIDDEN", "UNAUTHENTICATED", "BAD_USER_INPUT", "GRAPHQL_VALIDATION_FAILED",
                  "INTERNAL_SERVER_ERROR", "RATELIMITED", "RATE_LIMITED"}

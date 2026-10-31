@@ -5,7 +5,7 @@ from dataclasses import replace
 import sys
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock,patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "automation")]
@@ -13,6 +13,8 @@ from controller.broker import Broker
 from controller.core import Controller
 from controller.model import Admit, IssueObserved, Rejected, Role, TaskSpec
 from controller.store import Database
+from controller.telemetry import HTTP_CONTEXT
+from common.diagnostics import context
 from common.routing import Registry
 from common.clients import GitHub, Linear
 from common.policy import PROTOCOL, issue_revision, policy_version
@@ -82,6 +84,25 @@ class ControllerBrokerTests(unittest.TestCase):
         self.assertEqual(self.call(Role.REVIEW,"accounts"),{"accounts":[self.account_a]})
         with self.assertRaisesRegex(Rejected,"another account"):
             self.call(Role.REVIEW,"claim",account_id=self.account_b)
+
+    def test_http_correlation_requires_authorized_workflow_and_dispatch_binding(self):
+        ids={}
+        token=HTTP_CONTEXT.set(ids)
+        self.addCleanup(HTTP_CONTEXT.reset,token)
+        with context(dispatch_key=self.key,run_id='123',run_attempt='1'):
+            with self.assertRaises(Rejected):
+                self.broker.handle('start',{**claims(Role.REVIEW),'repository':'Unrelated/Repository'},
+                                   {'dispatch_key':self.key,'protocol':PROTOCOL})
+            self.assertEqual(ids,{})
+            self.call(Role.REVIEW_SELECT,'start',protocol=PROTOCOL)
+        self.assertEqual(ids['RunId'],'123')
+        self.assertEqual(ids['AttemptId'],self.key)
+        self.assertEqual(ids['Phase'],'review')
+
+    def test_failed_optional_correlation_does_not_reject_authorized_work(self):
+        with patch('controller.broker.correlate',side_effect=RuntimeError('telemetry unavailable')):
+            self.call(Role.REVIEW_SELECT,'start',protocol=PROTOCOL)
+        self.assertTrue(self.controller.inspect(self.view.task_id).session('review')['selector_started'])
 
     def test_same_run_review_and_coding_bind_different_accounts(self):
         self.review()

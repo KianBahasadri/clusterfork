@@ -1,0 +1,8 @@
+__EVENTS__
+Events
+| where EventType == 'http_summary'
+| summarize Requests=sum(Count), Failures=sum(Failures), TotalDurationMs=sum(DurationMs), MaxLatencyMs=max(MaxDurationMs)
+    by Operation, StatusClass
+| extend MeanLatencyMs=TotalDurationMs / Requests
+| project-away TotalDurationMs
+| order by Requests desc

@@ -1,0 +1,8 @@
+__EVENTS__
+Events
+| where EventType == 'http_summary'
+| summarize Requests=sum(Count), TotalDurationMs=sum(DurationMs), MaxLatencyMs=max(MaxDurationMs)
+    by bin(TimeGenerated, {TimeRange:grain})
+| extend MeanLatencyMs=TotalDurationMs / Requests
+| project TimeGenerated, MeanLatencyMs, MaxLatencyMs
+| order by TimeGenerated asc

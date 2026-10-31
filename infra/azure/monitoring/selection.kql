@@ -1,0 +1,8 @@
+__EVENTS__
+Events
+| where isnotempty(RunId) and ('{RunId:escape}' == '*' or RunId == '{RunId:escape}')
+| where '{Attempt:escape}' == '*' or RunAttempt == tolong('{Attempt:escape}')
+| summarize Records=count(), FirstRecord=min(TimeGenerated), LastRecord=max(TimeGenerated)
+| extend Coverage=iff(Records == 0,
+    "No controller telemetry for this selection and time range. Older runs predate ingestion; records can also be delayed, dropped, expired or capped. Open the GitHub Actions attempt for detailed logs. Missing phase results are unknown, not inferred failures.",
+    "Chronological controller evidence and bounded HTTP samples. Request IDs exist only when provided and validated. Quiet successful polls have aggregates only. GitHub stop and task/publication outcomes are separate from phase results. Detailed runner logs remain in GitHub Actions.")

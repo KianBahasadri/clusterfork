@@ -10,13 +10,22 @@ the controller’s private SQLite database. Terraform owns its persistent disk.
 | Stack | Resources |
 | --- | --- |
 | `infra/bootstrap` | Dedicated state resource group, storage account, private state containers, and state access roles |
-| `infra/azure` | Automation resource group, controller VM/network/disk, retained historical telemetry, Key Vault and credential references, deployment identity, federation, and permissions |
+| `infra/azure` | Automation resource group, controller VM/network/disk, retained monitoring, controller ingestion/workbook, Key Vault and credential references, deployment identity, federation, and permissions |
 
 The runtime stack owns the controller infrastructure and protected secrets. The
 legacy Function App, consumption plan, runtime storage, containers, queues, tables
 and their obsolete role assignments are retired. Historical Application Insights
 and its capped Log Analytics workspace retain their existing records; they do
 not host a controller or receive new Function App traffic.
+
+`monitoring.tf` owns the `ClusterforkController_CL` custom table/schema through
+AzAPI, a direct data collection rule, the VM's DCR-scoped Monitoring Metrics
+Publisher grant, the deployment identity's workspace-scoped Log Analytics Reader
+grant, and the **Clusterfork controller** workbook. Its layout and KQL live under
+`infra/azure/monitoring/`. The retained workspace keeps its 30-day retention and
+0.1 GB/day ingestion quota; the custom table uses the same retention with no
+extended archive. [Remote diagnostics](remote-development-observability.md#controller-telemetry-and-workbook)
+owns telemetry behavior, workbook usage, privacy boundaries and smoke checks.
 
 ## State and deletion protection
 
@@ -88,7 +97,8 @@ private local socket. An existing operator public SSH key satisfies Azure VM
 creation; no SSH port is exposed. Terraform outputs contain public configuration
 and resource identity, not runtime secrets.
 
-The VM's system-assigned identity has Key Vault Secrets User. It has no Table
+The VM's system-assigned identity has Key Vault Secrets User and the ingestion
+grant described above. It has no Table
 Data Contributor grant. The service verifies the configured VM identity before
 opening its HTTP transports.
 

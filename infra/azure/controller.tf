@@ -130,5 +130,9 @@ output "controller_config" {
     hostname               = azurerm_public_ip.controller.fqdn
     azure_tenant_id        = var.tenant_id
     account_operators      = [var.operator_object_id]
+    telemetry = {
+      endpoint = azurerm_monitor_data_collection_rule.controller.logs_ingestion_endpoint
+      rule_id  = azurerm_monitor_data_collection_rule.controller.immutable_id
+    }
   }
 }
