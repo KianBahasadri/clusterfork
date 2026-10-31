@@ -40,6 +40,15 @@ class Application:
         return bool(self.resources_idle())
 
     def handle(self, method, path, headers, body):
+        if method == 'GET' and urlsplit(path).path == '/api/accounts/snapshot':
+            if self.account_operator is None:
+                raise WorkerError('Account operator access is unavailable',401)
+            self.account_operator(headers.get('Authorization',''))
+            query=parse_qs(urlsplit(path).query,keep_blank_values=True)
+            if set(query)!={'provider'} or len(query['provider'])!=1 or query['provider'][0] not in {'codex','cursor'}:
+                return 400,{'error':'Invalid account snapshot query'}
+            from .account_usage import snapshot
+            return 200,snapshot(self.controller.accounts,query['provider'][0],now=self.clock())
         if method == "GET" and urlsplit(path).path == "/api/health":
             result={**self.capabilities,"mode":"single-controller","deployment":self.metadata,
                         "holds":list(self.controller.holds()),"active_tasks":len(self.controller.active()),
@@ -139,6 +148,8 @@ def http_handler(application):
             except WorkerError as exc:
                 self.telemetry_failure=http_failure(exc,http_operation(self.command,self.path))
                 status,result=exc.status,{"error":str(exc)}
+                if exc.reason_code:
+                    result['reason_code']=exc.reason_code
             except Rejected as exc:
                 self.telemetry_failure=http_failure(exc,http_operation(self.command,self.path))
                 status,result=403,{"error":str(exc)}

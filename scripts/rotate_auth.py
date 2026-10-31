@@ -20,9 +20,13 @@ import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from account_sessions import account_identity, login_fingerprints
+
 SUFFIX_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 PROFILE_PREFIX = "auth.json."
 REMOTE_MANIFEST = "remote-profiles.json"
+CLOUD_DIRECTORY = "cloud-reserved"
 CLAUDE_ACTIVE = ".credentials.json"
 CLAUDE_PREFIX = ".credentials.json."
 
@@ -144,12 +148,10 @@ def atomic_write_bytes(dest: Path, data: bytes, mode: int = 0o600) -> None:
     atomic_replace(tmp, dest)
 
 
-def load_remote_profiles(store_dir: Path) -> dict:
-    """Read reservations and undo legacy local staging without transferring ownership.
+def load_remote_profiles(store_dir: Path, *, migrate=True) -> dict:
+    """Read ownership and archive legacy cloud copies without contacting the cloud.
 
-    Normal reservations only need the manifest. Old handoffs used either backup
-    key; restore those files once, leaving the backup and all active links alone.
-    This runs in the installed rotator too, without cloud access or dependencies.
+    migrate=False is the consumer path: no recovery, chmod, unlink or writes.
     """
     manifest_path = store_dir / REMOTE_MANIFEST
     if not manifest_path.exists():
@@ -157,6 +159,19 @@ def load_remote_profiles(store_dir: Path) -> dict:
     manifest = json.loads(manifest_path.read_text())
     if not isinstance(manifest, dict):
         raise ValueError("Invalid remote account ownership")
+    for name, record in manifest.items():
+        if (not SUFFIX_RE.fullmatch(name) or not isinstance(record, dict)
+                or record.get("ownership", "cloud") not in {"local", "cloud"}
+                or not re.fullmatch(r"[0-9a-f]{64}", record.get("account_id", ""))):
+            raise ValueError("Invalid remote account ownership")
+        if record.get("ownership") == "local" and (
+                not re.fullmatch(r"[0-9a-f]{64}", record.get("session_id", ""))
+                or not isinstance(record.get("fingerprints"), list) or len(record["fingerprints"]) < 2
+                or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+                       for value in record["fingerprints"])):
+            raise ValueError("Invalid independent local login registration")
+    if not migrate:
+        return manifest
     changed = False
     for name, record in manifest.items():
         if not SUFFIX_RE.fullmatch(name) or not isinstance(record, dict):
@@ -205,7 +220,84 @@ def load_remote_profiles(store_dir: Path) -> dict:
         changed = True
     if changed:
         atomic_write_text(manifest_path, json.dumps(manifest))
+    # Old copies belong to the cloud session, including rotated copies of that
+    # same chain. Never infer a local login from differing file contents.
+    changed = False
+    for name, record in manifest.items():
+        if record.get("ownership") == "local":
+            continue
+        if record.get("reclaim"):
+            continue
+        destination = store_dir / CLOUD_DIRECTORY / f"{name}.json"
+        source = store_dir / f"{PROFILE_PREFIX}{name}"
+        expected = record.get("source_sha256")
+        if destination.parent.is_symlink() or destination.is_symlink() or source.is_symlink():
+            raise ValueError("Reserved profile destination was replaced")
+        if source.exists():
+            data = source.read_bytes()
+            if expected and hashlib.sha256(data).hexdigest() != expected:
+                raise ValueError("Reserved profile credentials changed; refusing to overwrite them")
+            auth = json.loads(data)
+            provider = "cursor" if "accessToken" in auth else "codex"
+            if account_identity(auth, provider) != record["account_id"]:
+                raise ValueError("Reserved credentials belong to another account")
+            expected = hashlib.sha256(data).hexdigest()
+            destination.parent.mkdir(mode=0o700, exist_ok=True)
+            if destination.exists():
+                if destination.read_bytes() != data:
+                    raise ValueError("Reserved profile archive was replaced")
+            else:
+                # Archive first. A failed manifest write or unlink is repeatable.
+                os.link(source, destination)
+            source.unlink()
+        if destination.exists():
+            data = destination.read_bytes()
+            if expected and hashlib.sha256(data).hexdigest() != expected:
+                raise ValueError("Reserved profile archive changed")
+            record["source_sha256"] = hashlib.sha256(data).hexdigest()
+            destination.chmod(0o600)
+            auth = json.loads(data)
+            provider = "cursor" if "accessToken" in auth else "codex"
+            if account_identity(auth, provider) != record["account_id"]:
+                raise ValueError("Reserved credentials belong to another account")
+            fingerprints = sorted(set(record.get("fingerprints", [])) | set(login_fingerprints(auth, provider)))
+            if fingerprints != record.get("fingerprints"):
+                record["fingerprints"] = fingerprints
+                changed = True
+        if record.get("ownership") != "cloud":
+            record["ownership"] = "cloud"
+            changed = True
+    if changed:
+        atomic_write_text(manifest_path, json.dumps(manifest))
     return manifest
+
+
+def cloud_enrolled(record):
+    return record.get("ownership", "cloud") == "cloud" or record.get("cloud_enrolled", True)
+
+
+def profile_is_local(store_dir, name, manifest, provider):
+    """Availability is independent of selection; unregistered account aliases fail closed."""
+    record = manifest.get(name, {})
+    if record and record.get("ownership", "cloud") != "local":
+        return False
+    path = store_dir / f"{PROFILE_PREFIX}{name}"
+    if path.is_symlink() or not path.is_file():
+        return False
+    try:
+        auth = json.loads(path.read_text())
+        identity = account_identity(auth, provider)
+    except (ValueError, TypeError, OSError):
+        return not record and not manifest
+    enrolled = {value["account_id"] for value in manifest.values() if cloud_enrolled(value)}
+    if identity not in enrolled:
+        return not record or record.get("ownership") == "local" and record["account_id"] == identity
+    if record.get("ownership") != "local" or record["account_id"] != identity:
+        return False
+    cloud_fingerprints = {fingerprint for value in manifest.values()
+                          if value["account_id"] == identity and value.get("ownership", "cloud") == "cloud"
+                          for fingerprint in value.get("fingerprints", [])}
+    return not cloud_fingerprints.intersection(login_fingerprints(auth, provider))
 
 
 def prefixed_paths(directory: Path, prefix: str) -> list[Path]:
@@ -551,7 +643,12 @@ class SharedStoreBackend:
         if self.command not in {"rotate-codex", "rotate-cursor-cli"}:
             return set()
         try:
-            return set(load_remote_profiles(self.store_dir))
+            manifest = load_remote_profiles(self.store_dir)
+            if not manifest:
+                return set()
+            provider = "cursor" if self.command == "rotate-cursor-cli" else "codex"
+            names = set(manifest) | set(self.suffixes())
+            return {name for name in names if not profile_is_local(self.store_dir, name, manifest, provider)}
         except (OSError, ValueError, TypeError):
             fail(f"{self.command}: cannot read remote account ownership; refusing local rotation")
 
@@ -560,7 +657,7 @@ class SharedStoreBackend:
         if requested in remote:
             provider = "cursor" if self.command == "rotate-cursor-cli" else "codex"
             fail(f"{self.command}: profile is reserved for remote work",
-                 f"  Reclaim it with automation/accounts.py reclaim --provider {provider} --profile NAME first.")
+                 f"  Register a fresh login with automation/accounts.py register-local --provider {provider}, or reclaim it first.")
         return [name for name in self.suffixes() if name not in remote]
 
     def current_suffix(self) -> str | None:
@@ -575,7 +672,7 @@ class SharedStoreBackend:
     def list_profiles(self) -> int:
         remote = self.remote_profiles()
         current = self.current_suffix() if self.current.is_symlink() else None
-        result = print_profile_list(self.command, self.suffixes(), current)
+        result = print_profile_list(self.command, sort_names(set(self.suffixes()) | remote), current)
         if remote:
             print(f"  {len(remote)} profiles reserved for remote work; skipped by local rotation")
         return result
@@ -619,6 +716,11 @@ class SharedStoreBackend:
         if not confirm_delete(self.command, name):
             return 1
         profile.unlink()
+        if self.command in {"rotate-codex", "rotate-cursor-cli"}:
+            manifest = load_remote_profiles(self.store_dir)
+            if manifest.get(name, {}).get("ownership") == "local":
+                del manifest[name]
+                atomic_write_text(self.store_dir / REMOTE_MANIFEST, json.dumps(manifest))
         if selected:
             self.current.unlink()
         print(f"{self.command}: deleted profile {name}")
@@ -630,6 +732,33 @@ class SharedStoreBackend:
         if not self.auth.is_file():
             fail(f"{self.command}: missing active credentials: {self.auth}")
 
+        local_record = None
+        if self.command in {"rotate-codex", "rotate-cursor-cli"}:
+            manifest = load_remote_profiles(self.store_dir)
+            if manifest:
+                provider = "cursor" if self.command == "rotate-cursor-cli" else "codex"
+                try:
+                    auth = json.loads(self.auth.read_text())
+                    identity = account_identity(auth, provider)
+                    fingerprints = login_fingerprints(auth, provider)
+                except (OSError, ValueError, TypeError):
+                    fail(f"{self.command}: cannot establish active login ownership")
+                managed = any(record["account_id"] == identity and cloud_enrolled(record) for record in manifest.values())
+                source = next((record for alias, record in manifest.items()
+                                   if record.get("ownership") == "local" and record["account_id"] == identity
+                                   and (self.auth.resolve() == (self.store_dir / f"{PROFILE_PREFIX}{alias}").resolve()
+                                        or set(fingerprints).intersection(record.get("fingerprints", [])))
+                                   and profile_is_local(self.store_dir, alias, manifest, provider)), None)
+                if manifest.get(name, {}).get("ownership") == "local" and source is None:
+                    fail(f"{self.command}: refusing to overwrite an independent login")
+                if managed or source:
+                    if source is None:
+                        fail(f"{self.command}: managed account requires explicit fresh local login registration")
+                    existing = manifest.get(name)
+                    if existing and existing.get("session_id") != source["session_id"]:
+                        fail(f"{self.command}: refusing to overwrite an independent login")
+                    local_record = {**source, "fingerprints": sorted(set(source.get("fingerprints", [])) | set(fingerprints))}
+
         self.store_dir.mkdir(parents=True, exist_ok=True)
         try:
             os.chmod(self.store_dir, 0o700)
@@ -640,6 +769,9 @@ class SharedStoreBackend:
         if dest.is_dir():
             fail(f"{self.command}: {dest} exists and is a directory")
         atomic_copy(self.auth, dest)
+        if local_record:
+            manifest[name] = local_record
+            atomic_write_text(self.store_dir / REMOTE_MANIFEST, json.dumps(manifest))
 
         atomic_symlink(f"{PROFILE_PREFIX}{name}", self.current)
         if not self._auth_links_to_current():

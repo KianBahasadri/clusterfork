@@ -322,6 +322,19 @@ PY
     chmod 600 "$path" || return 1
   done
 
+  if [[ "$label" == "Codex" || "$label" == "Cursor" ]]; then
+    python3 - "$(dirname "$ROTATE_AUTH_DEST")" "$store_dir" "$active_suffix" "$label" <<'PY' || return 1
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from rotate_auth import load_remote_profiles, profile_is_local
+store = Path(sys.argv[2])
+manifest = load_remote_profiles(store)
+if manifest and not profile_is_local(store, sys.argv[3], manifest, sys.argv[4].lower()):
+    raise SystemExit("Selected account has no registered independent local login")
+PY
+  fi
+
   tmp_link="$store_dir/.current.tmp.$$"
   rm -f -- "$tmp_link" || return 1
   ln -s "auth.json.$active_suffix" "$tmp_link" || return 1
@@ -452,6 +465,7 @@ step "notify service" "$NOTIFY_DEST_DIR" "ntfy compose"
 [[ -f "$ROTATE_AUTH_SRC" ]] || fail "missing $(tildify "$ROTATE_AUTH_SRC")"
 mkdir -p "$(dirname "$ROTATE_AUTH_DEST")"
 cp "$ROTATE_AUTH_SRC" "$ROTATE_AUTH_DEST"
+cp "$REPO_DIR/scripts/account_sessions.py" "$(dirname "$ROTATE_AUTH_DEST")/account_sessions.py"
 chmod +x "$ROTATE_AUTH_DEST"
 step "rotate-auth" "$ROTATE_AUTH_DEST"
 

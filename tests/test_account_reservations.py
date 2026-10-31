@@ -51,16 +51,14 @@ class AccountReservationTests(unittest.TestCase):
             argv.extend(["--profile", name])
         with patch.object(accounts, "connect", return_value=table) as connect, \
              patch.object(sys, "argv", argv), redirect_stdout(output):
-            try:
-                accounts.main()
-            finally:
-                if action == "list":
-                    connect.assert_not_called()
-                else:
-                    connect.assert_called_once_with(provider)
+            accounts.main()
+            if action == "list":
+                connect.assert_not_called()
+            else:
+                connect.assert_called_once_with(provider)
         return output.getvalue()
 
-    def test_enrollment_preserves_files_links_and_refreshed_cloud_logins_for_both_providers(self):
+    def test_enrollment_archives_old_files_and_preserves_links_and_latest_cloud_login(self):
         for provider in self.PROVIDERS:
             with self.subTest(provider=provider), tempfile.TemporaryDirectory() as directory:
                 backend = self.backend(directory, provider)
@@ -75,9 +73,10 @@ class AccountReservationTests(unittest.TestCase):
                 self.assertEqual(set(manifest), {"21kb60", "alias", "local-a", "local-b"})
                 self.assertEqual(len(records(table)), 3)
                 self.assertEqual(manifest["21kb60"]["account_id"], manifest["alias"]["account_id"])
-                self.assertTrue(all(set(record) == {"account_id", "source_sha256"}
+                self.assertTrue(all(set(record) == {"account_id", "source_sha256", "ownership", "fingerprints"}
                                     for record in manifest.values()))
-                self.assertEqual({p.name: p.read_bytes() for p in store.glob("auth.json.*")}, originals)
+                self.assertEqual({"auth.json." + p.stem: p.read_bytes() for p in (store / "cloud-reserved").glob("*.json")}, originals)
+                self.assertEqual(list(store.glob("auth.json.*")), [])
                 self.assertEqual((os.readlink(backend.current), os.readlink(backend.auth)), links)
                 self.assertFalse((store / "remote-staged").exists())
                 pool = table
@@ -88,7 +87,8 @@ class AccountReservationTests(unittest.TestCase):
                 cloud = copy.deepcopy(records(table))
                 self.command("enroll", provider, store, table, "21kb60")
                 self.assertEqual(records(table), cloud)
-                self.assertEqual(active.read_bytes(), originals[active.name])
+                self.assertEqual((store / "cloud-reserved/21kb60.json").read_bytes(), originals[active.name])
+                self.assertFalse(backend.auth.exists())
 
     def test_visibility_selection_rotation_and_kickoff_match_for_both_providers(self):
         for provider in self.PROVIDERS:
@@ -101,6 +101,7 @@ class AccountReservationTests(unittest.TestCase):
                 output = io.StringIO()
                 with redirect_stdout(output), patch.object(rotate_auth, "ping_agent") as ping:
                     backend.list_profiles()
+                    migrated = json.loads((backend.store_dir / accounts.MANIFEST).read_text())
                     self.assertIn("* 21kb60", output.getvalue())
                     self.assertIn("1 profiles reserved for remote work", output.getvalue())
                     for operation in (lambda: backend.select("21kb60"), lambda: backend.save("21kb60"),
@@ -120,7 +121,7 @@ class AccountReservationTests(unittest.TestCase):
                     self.assertEqual(backend.kickoff(), 0)
                     self.assertEqual(visited, ["local-a", "local-b"])
                     self.assertEqual(backend.current_suffix(), "21kb60")
-                    self.assertEqual(json.loads((backend.store_dir / accounts.MANIFEST).read_text()), reservation)
+                    self.assertEqual(json.loads((backend.store_dir / accounts.MANIFEST).read_text()), migrated)
 
     def staged_handoff(self, backend, provider, key):
         profile = backend.store_dir / "auth.json.21kb60"
@@ -144,10 +145,13 @@ class AccountReservationTests(unittest.TestCase):
                     profile, backup, record = self.staged_handoff(backend, provider, key)
                     links = (os.readlink(backend.current), os.readlink(backend.auth))
                     self.assertIn("21kb60:", self.command("list", provider, backend.store_dir))
-                    self.assertEqual(profile.read_bytes(), backup.read_bytes())
-                    self.assertEqual(profile.stat().st_mode & 0o777, 0o600)
+                    archive = backend.store_dir / "cloud-reserved/21kb60.json"
+                    self.assertFalse(profile.exists())
+                    self.assertEqual(archive.read_bytes(), backup.read_bytes())
+                    self.assertEqual(archive.stat().st_mode & 0o777, 0o600)
                     self.assertEqual(json.loads((backend.store_dir / accounts.MANIFEST).read_text()),
-                                     {"21kb60": {k: record[k] for k in ("account_id", "source_sha256")}})
+                                     {"21kb60": {**{k: record[k] for k in ("account_id", "source_sha256")},
+                                                 "ownership": "cloud", "fingerprints": accounts.login_fingerprints(json.loads(archive.read_text()), provider)}})
                     with redirect_stdout(io.StringIO()) as output:
                         backend.list_profiles()
                     self.assertIn("21kb60", output.getvalue())
@@ -161,7 +165,10 @@ class AccountReservationTests(unittest.TestCase):
                     update_account(table, identity, state="staged")
                     cloud = copy.deepcopy(records(table))
                     self.command("enroll", provider, backend.store_dir, table, "21kb60")
-                    self.assertEqual(records(table), cloud)
+                    self.assertEqual({key: {k: v for k, v in row.items() if k != "metadata"}
+                                      for key, row in records(table).items()},
+                                     {key: {k: v for k, v in row.items() if k != "metadata"}
+                                      for key, row in cloud.items()})
                     self.command("reclaim", provider, backend.store_dir, table, "21kb60")
                     self.assertEqual(json.loads(profile.read_text()), latest)
                     self.assertEqual(json.loads((backend.store_dir / accounts.MANIFEST).read_text()), {})
@@ -186,7 +193,11 @@ class AccountReservationTests(unittest.TestCase):
                         self.command("reclaim", provider, backend.store_dir, table, "21kb60")
                     self.assertEqual(records(table), cloud)
                     self.assertEqual(backend.current_suffix(), "21kb60")
-                    self.assertEqual(backend.remote_profiles(), {"21kb60"})
+                    if conflict == "busy":
+                        self.assertEqual(backend.remote_profiles(), {"21kb60"})
+                    else:
+                        with self.assertRaises(rotate_auth.RotateError):
+                            backend.remote_profiles()
 
     def test_legacy_repair_refuses_changed_or_escaped_files_and_keeps_reservation(self):
         for conflict in ("backup", "destination", "outside", "symlink"):

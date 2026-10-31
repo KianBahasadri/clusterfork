@@ -14,6 +14,7 @@ from urllib.request import Request,urlopen
 
 sys.path.insert(0,str(Path(__file__).parent))
 from controller.broker import Broker
+from controller.account_usage import UsageCollector
 from controller.core import Controller
 from controller.driver import Driver
 from controller.instructions import Instructions
@@ -81,6 +82,8 @@ def serve(args):
     stop=threading.Event()
     with Database(args.database) as database:
         application=build(config,manifest,database,ManagedIdentityCredential())
+        usage=UsageCollector(application.controller.accounts,application.broker.registry,
+                             enabled=lambda:not application.controller.holds())
         http=HTTPServer(("127.0.0.1",args.port),http_handler(application),telemetry=application.telemetry)
         operator=OperatorServer(args.socket,application)
         def loop():
@@ -96,6 +99,8 @@ def serve(args):
                 application.wakeup.wait(30)
                 application.wakeup.clear()
         threads=[threading.Thread(target=target,daemon=True) for target in (http.serve_forever,operator.serve_forever,loop)]
+        usage_thread=threading.Thread(target=usage.run,args=(stop,),daemon=True)
+        threads.insert(0,usage_thread)
         if application.telemetry is not None:
             threads.insert(0,threading.Thread(target=application.telemetry.run,args=(stop,),daemon=True))
         for thread in threads:
@@ -110,6 +115,7 @@ def serve(args):
         operator.shutdown()
         http.server_close()
         operator.server_close()
+        usage_thread.join(timeout=50)
         threads[-1].join(timeout=30)
         if application.telemetry is not None:
             threads[0].join(timeout=15)

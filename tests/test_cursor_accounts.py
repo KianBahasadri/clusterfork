@@ -325,9 +325,11 @@ class CursorAccountTests(unittest.TestCase):
                  redirect_stdout(io.StringIO()):
                 accounts.main()
             manifest = json.loads((store / accounts.MANIFEST).read_text())
-            self.assertEqual(manifest["21kb60"], {"account_id": identity,
-                "source_sha256": accounts.digest(store / "auth.json.21kb60")})
-            self.assertEqual(json.loads((store / "auth.json.21kb60").read_text()), auth())
+            archive = store / "cloud-reserved/21kb60.json"
+            self.assertEqual(manifest["21kb60"], {"account_id": identity, "ownership": "cloud",
+                "source_sha256": accounts.digest(archive), "fingerprints": accounts.login_fingerprints(auth(), "cursor")})
+            self.assertEqual(json.loads(archive.read_text()), auth())
+            self.assertFalse((store / "auth.json.21kb60").exists())
             self.assertEqual(manifest["alias"]["account_id"], identity)
             self.assertEqual(json.loads(pool.get(identity)[0]["auth"])["refreshToken"], "latest-cloud-login")
 
@@ -342,7 +344,7 @@ class CursorAccountTests(unittest.TestCase):
     def test_cursor_local_rotation_honors_remote_reservation(self):
         from test_remote_worker import LocalRemoteOwnershipTests
         with tempfile.TemporaryDirectory() as directory:
-            backend, rotate = LocalRemoteOwnershipTests().backend(directory)
+            backend, rotate = LocalRemoteOwnershipTests().backend(directory, "cursor")
             backend.command = "rotate-cursor-cli"
             for operation in (lambda: backend.select("remote"), lambda: backend.save("remote"),
                               lambda: backend.delete("remote"), lambda: backend.kickoff(["remote"])):

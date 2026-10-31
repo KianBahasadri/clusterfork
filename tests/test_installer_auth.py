@@ -10,13 +10,15 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from test_independent_accounts import login
+from common.accounts import account_identity, login_fingerprints
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class InstallerSharedAuthTests(unittest.TestCase):
-    def test_reinstall_updates_both_ownership_guards_and_restores_legacy_cursor_visibility(self):
+    def test_reinstall_updates_both_guards_and_archives_legacy_cloud_profiles(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             home, repo = root / "home", root / "repo"
@@ -37,14 +39,15 @@ class InstallerSharedAuthTests(unittest.TestCase):
                 store.mkdir(parents=True)
                 agent_dir.mkdir(parents=True)
                 for name in ("local-a", "local-b", "21kb60"):
-                    (store / f"auth.json.{name}").write_text(json.dumps({"fixture": name}))
+                    (store / f"auth.json.{name}").write_text(json.dumps(login(provider, account=name)))
                 (store / "current").symlink_to("auth.json.local-a")
                 (agent_dir / "auth.json").symlink_to(os.path.relpath(store / "current", agent_dir))
                 links[provider] = (agent_dir / "auth.json").readlink()
                 source = store / "auth.json.21kb60"
-                record = {"account_id": f"synthetic-{provider}",
+                record = {"account_id": account_identity(login(provider, account="21kb60"), provider),
                           "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
-                manifests[provider] = {"21kb60": dict(record)}
+                manifests[provider] = {"21kb60": {**record, "ownership": "cloud",
+                    "fingerprints": login_fingerprints(login(provider, account="21kb60"), provider)}}
                 if provider == "cursor":
                     backup = store / "remote-staged/auth.json.21kb60"
                     backup.parent.mkdir()
@@ -62,10 +65,11 @@ class InstallerSharedAuthTests(unittest.TestCase):
                 self.assertNotIn("shared auth was not configured", proc.stderr)
                 for provider in ("codex", "cursor"):
                     store = stores[provider]
-                    self.assertTrue((store / "auth.json.21kb60").is_file())
+                    self.assertFalse((store / "auth.json.21kb60").exists())
+                    self.assertTrue((store / "cloud-reserved/21kb60.json").is_file())
                     self.assertEqual((store / "current").readlink(), Path("auth.json.local-a"))
                     self.assertEqual(json.loads((store / "remote-profiles.json").read_text()), manifests[provider])
-                    self.assertEqual(hashlib.sha256((store / "auth.json.21kb60").read_bytes()).hexdigest(),
+                    self.assertEqual(hashlib.sha256((store / "cloud-reserved/21kb60.json").read_bytes()).hexdigest(),
                                      manifests[provider]["21kb60"]["source_sha256"])
                     agent_dir = home / (".codex" if provider == "codex" else ".config/cursor")
                     self.assertEqual((agent_dir / "auth.json").readlink(), links[provider])
