@@ -66,6 +66,7 @@ ROTATE_AUTH_DEST="$CLUSTERFORK_CONFIG_DIR/scripts/rotate_auth.py"
 CODEVIEW_SRC_DIR="$REPO_DIR/scripts/codeview"
 CODEVIEW_DEST_DIR="$CLUSTERFORK_CONFIG_DIR/scripts/codeview"
 AGENTS_SRC_DIR="$REPO_DIR/agents"
+MCP_CONFIG_RENDERER="$REPO_DIR/scripts/mcp_config.py"
 OPENCODE_CONFIG_SRC="$AGENTS_SRC_DIR/opencode.json"
 OPENCODE_CONFIG_DEST="$HOME/.config/opencode/opencode.json"
 QWEN_CONFIG_SRC="$AGENTS_SRC_DIR/qwen.json"
@@ -405,7 +406,7 @@ printf '  from  %s\n\n' "$(tildify "$REPO_DIR")"
 command -v python3 >/dev/null || fail "python3 is required" "Needed by the rotate-* commands."
 [[ -f "$DOTENV_SRC" ]] || fail "missing $(tildify "$DOTENV_SRC")" "Create it in the repo root with your local environment values."
 mkdir -p "$CLUSTERFORK_CONFIG_DIR"
-cp "$DOTENV_SRC" "$DOTENV_DEST"
+install -m 600 "$DOTENV_SRC" "$DOTENV_DEST"
 step "env file" "$DOTENV_DEST"
 
 if [[ -f "$BELL_SOUND_SRC" ]]; then
@@ -463,12 +464,12 @@ step "codeview server" "$CODEVIEW_DEST_DIR"
 
 [[ -f "$OPENCODE_CONFIG_SRC" ]] || fail "missing $(tildify "$OPENCODE_CONFIG_SRC")"
 mkdir -p "$(dirname "$OPENCODE_CONFIG_DEST")"
-cp "$OPENCODE_CONFIG_SRC" "$OPENCODE_CONFIG_DEST"
+python3 "$MCP_CONFIG_RENDERER" "$OPENCODE_CONFIG_SRC" "$OPENCODE_CONFIG_DEST" "$DOTENV_DEST"
 step "opencode" "$OPENCODE_CONFIG_DEST"
 
 [[ -f "$QWEN_CONFIG_SRC" ]] || fail "missing $(tildify "$QWEN_CONFIG_SRC")"
 mkdir -p "$(dirname "$QWEN_CONFIG_DEST")"
-cp "$QWEN_CONFIG_SRC" "$QWEN_CONFIG_DEST"
+python3 "$MCP_CONFIG_RENDERER" "$QWEN_CONFIG_SRC" "$QWEN_CONFIG_DEST" "$DOTENV_DEST"
 step "qwen code" "$QWEN_CONFIG_DEST"
 
 [[ -f "$ANTIGRAVITY_CONFIG_SRC" ]] || fail "missing $(tildify "$ANTIGRAVITY_CONFIG_SRC")"
@@ -585,6 +586,8 @@ CLAUDE_PLUGINS_PY
     plugin_name="$(basename "$d")"
     rm -rf -- "${CLAUDE_SKILLS_DEST_DIR:?}/$plugin_name"
     cp -r "$d" "$CLAUDE_SKILLS_DEST_DIR/$plugin_name"
+    python3 "$MCP_CONFIG_RENDERER" "$d/.mcp.json" \
+      "$CLAUDE_SKILLS_DEST_DIR/$plugin_name/.mcp.json" "$DOTENV_DEST"
     plugin_names+=", $plugin_name"
   done
   plugin_detail="${plugin_names#, }"
@@ -601,7 +604,7 @@ grok_theme=""
 if [[ -f "$GROK_CONFIG_DEST" ]]; then
   grok_theme="$(sed -n 's/^theme = "\(.*\)"/\1/p' "$GROK_CONFIG_DEST" | head -n1)"
 fi
-cp "$GROK_CONFIG_SRC" "$GROK_CONFIG_DEST"
+python3 "$MCP_CONFIG_RENDERER" "$GROK_CONFIG_SRC" "$GROK_CONFIG_DEST" "$DOTENV_DEST"
 if [[ -n "$grok_theme" ]]; then
   sed -i "s/^theme = \".*\"/theme = \"$grok_theme\"/" "$GROK_CONFIG_DEST"
 fi
@@ -639,118 +642,19 @@ substep "$CURSOR_USAGE_FETCH_DEST"
 # Cursor MCP: expand ${VAR} from clusterfork .env so secrets stay out of the repo.
 [[ -f "$CURSOR_MCP_SRC" ]] || fail "missing $(tildify "$CURSOR_MCP_SRC")"
 mkdir -p "$(dirname "$CURSOR_MCP_DEST")"
-python3 - "$CURSOR_MCP_SRC" "$CURSOR_MCP_DEST" "$DOTENV_DEST" <<'PY'
-import json, re, sys
-from pathlib import Path
-
-src, dest, dotenv = map(Path, sys.argv[1:])
-env = {}
-if dotenv.is_file():
-    for line in dotenv.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, _, v = line.partition("=")
-        env[k.strip()] = v.strip().strip('"').strip("'")
-
-def expand(value: str) -> str:
-    def repl(m: re.Match[str]) -> str:
-        key = m.group(1)
-        if key not in env:
-            raise SystemExit(f"cursor mcp: ${{{key}}} not set in {dotenv}")
-        return env[key]
-    return re.sub(r"\$\{([A-Z_][A-Z0-9_]*)\}", repl, value)
-
-def walk(obj):
-    if isinstance(obj, dict):
-        return {k: walk(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [walk(v) for v in obj]
-    if isinstance(obj, str):
-        return expand(obj)
-    return obj
-
-data = walk(json.loads(src.read_text(encoding="utf-8")))
-dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-PY
+python3 "$MCP_CONFIG_RENDERER" "$CURSOR_MCP_SRC" "$CURSOR_MCP_DEST" "$DOTENV_DEST" --expand
 step "cursor mcp" "$CURSOR_MCP_DEST" "$(mcp_server_names "$CURSOR_MCP_SRC")"
 
 # Command Code MCP: same ${VAR} expansion as Cursor so secrets stay out of the repo.
 [[ -f "$COMMAND_CODE_MCP_SRC" ]] || fail "missing $(tildify "$COMMAND_CODE_MCP_SRC")"
 mkdir -p "$(dirname "$COMMAND_CODE_MCP_DEST")"
-python3 - "$COMMAND_CODE_MCP_SRC" "$COMMAND_CODE_MCP_DEST" "$DOTENV_DEST" <<'PY'
-import json, re, sys
-from pathlib import Path
-
-src, dest, dotenv = map(Path, sys.argv[1:])
-env = {}
-if dotenv.is_file():
-    for line in dotenv.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, _, v = line.partition("=")
-        env[k.strip()] = v.strip().strip('"').strip("'")
-
-def expand(value: str) -> str:
-    def repl(m: re.Match[str]) -> str:
-        key = m.group(1)
-        if key not in env:
-            raise SystemExit(f"command code mcp: ${{{key}}} not set in {dotenv}")
-        return env[key]
-    return re.sub(r"\$\{([A-Z_][A-Z0-9_]*)\}", repl, value)
-
-def walk(obj):
-    if isinstance(obj, dict):
-        return {k: walk(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [walk(v) for v in obj]
-    if isinstance(obj, str):
-        return expand(obj)
-    return obj
-
-data = walk(json.loads(src.read_text(encoding="utf-8")))
-dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-PY
+python3 "$MCP_CONFIG_RENDERER" "$COMMAND_CODE_MCP_SRC" "$COMMAND_CODE_MCP_DEST" "$DOTENV_DEST" --expand
 step "command code mcp" "$COMMAND_CODE_MCP_DEST" "$(mcp_server_names "$COMMAND_CODE_MCP_SRC")"
 
 # Antigravity MCP: same ${VAR} expansion as Cursor/Command Code so secrets stay out of the repo.
 [[ -f "$ANTIGRAVITY_MCP_SRC" ]] || fail "missing $(tildify "$ANTIGRAVITY_MCP_SRC")"
 mkdir -p "$(dirname "$ANTIGRAVITY_MCP_DEST")"
-python3 - "$ANTIGRAVITY_MCP_SRC" "$ANTIGRAVITY_MCP_DEST" "$DOTENV_DEST" <<'PY'
-import json, re, sys
-from pathlib import Path
-
-src, dest, dotenv = map(Path, sys.argv[1:])
-env = {}
-if dotenv.is_file():
-    for line in dotenv.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, _, v = line.partition("=")
-        env[k.strip()] = v.strip().strip('"').strip("'")
-
-def expand(value: str) -> str:
-    def repl(m: re.Match[str]) -> str:
-        key = m.group(1)
-        if key not in env:
-            raise SystemExit(f"antigravity mcp: ${{{key}}} not set in {dotenv}")
-        return env[key]
-    return re.sub(r"\$\{([A-Z_][A-Z0-9_]*)\}", repl, value)
-
-def walk(obj):
-    if isinstance(obj, dict):
-        return {k: walk(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [walk(v) for v in obj]
-    if isinstance(obj, str):
-        return expand(obj)
-    return obj
-
-data = walk(json.loads(src.read_text(encoding="utf-8")))
-dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-PY
+python3 "$MCP_CONFIG_RENDERER" "$ANTIGRAVITY_MCP_SRC" "$ANTIGRAVITY_MCP_DEST" "$DOTENV_DEST" --expand
 step "antigravity mcp" "$ANTIGRAVITY_MCP_DEST" "$(mcp_server_names "$ANTIGRAVITY_MCP_SRC")"
 
 # Command Code config: ensure telemetry is disabled. Merge keys from the repo
@@ -856,17 +760,15 @@ from pathlib import Path
 src_path, dest_path, dotenv_path, scripts_dir = map(Path, sys.argv[1:])
 sys.path.insert(0, str(scripts_dir))
 import codex_hook_trust
+from mcp_config import load_dotenv, toml_template
 
 env = dict(os.environ)
-if dotenv_path.is_file():
-    for line in dotenv_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, _, v = line.partition("=")
-        env[k.strip()] = v.strip().strip('"').strip("'")
+installed_env = load_dotenv(dotenv_path)
+env.update(installed_env)
 
-src_raw = src_path.read_text(encoding="utf-8")
+# Only the installed .env selects shared-key auth; ambient controller secrets
+# must not opt an interactive client into a different authentication mode.
+src_raw = toml_template(src_path, installed_env)
 
 def expand_match(m: re.Match[str]) -> str:
     var = m.group(1)

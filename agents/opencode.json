@@ -27,6 +27,9 @@
     "linear": {
       "type": "remote",
       "url": "https://mcp.linear.app/mcp",
+      "headers": {
+        "Authorization": "Bearer {env:LINEAR_API_KEY}"
+      },
       "enabled": false
     },
     "chrome-devtools": {
