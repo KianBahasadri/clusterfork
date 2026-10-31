@@ -19,3 +19,7 @@ The deployment gate and signed webhook relay were read from this checkout.
 two-job-sqlite: observed consolidated workflow and controller resources
 
 The task checkout contained both phase jobs and the SQLite resource implementation.
+
+sqlite-only-runtime: observed final cleanup after automatic deployment
+
+This task read the preceding acceptance merge and the runtime without relay or migration adapters.
