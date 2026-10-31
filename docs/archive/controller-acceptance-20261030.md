@@ -15,3 +15,7 @@ The installer fix was read from this task's checkout.
 deployment-completion: observed before admission
 
 The deployment gate and signed webhook relay were read from this checkout.
+
+two-job-sqlite: observed consolidated workflow and controller resources
+
+The task checkout contained both phase jobs and the SQLite resource implementation.
