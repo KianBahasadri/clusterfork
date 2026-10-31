@@ -77,3 +77,5 @@ jobs:
       - uses: ./.github/actions/setup-cursor
       - name: Verify Cursor read-only filesystem boundary without credentials
         run: python3 automation/check_cursor_sandbox.py
+      - name: Verify related context through headless transports without model calls
+        run: env -u NO_COLOR python3 -m unittest discover -s tests -p 'test_context_transport.py' -v

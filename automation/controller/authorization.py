@@ -6,10 +6,10 @@ from .model import Rejected, Role
 from .workflows import ENGINE, ROLE_FILES, WORKFLOW
 
 SELECTOR_ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "bind_account", "finish"}
-REVIEW_ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "bind_account", "checkout", "review", "finish"}
+REVIEW_ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "bind_account", "checkout", "review", "finish", "context"}
 CODING_ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "bind_account", "exhaust_account",
                   "checkout", "github", "progress", "finish", "steering_open", "instructions",
-                  "instruction_result", "steering_close"}
+                  "instruction_result", "steering_close", "context"}
 
 
 def release_ref(revision):

@@ -8,16 +8,19 @@ from types import SimpleNamespace
 
 from .authorization import SELECTOR_ACTIONS,authorize_job, verify_review_job
 from .images import Images
-from .model import Authorize, AccountRequest, Finish, Progress, Rejected, Review, Role, SessionUpdated, Start
+from .context import Context
+from .model import Authorize, AccountRequest, EvidenceChanged, Finish, Progress, Rejected, Review, Role, SessionUpdated, Start
 from .workflows import ENGINE, WORKFLOW
 from .telemetry import correlate
 from common.diagnostics import validate_failure
+from common.clients import RequestError
 from common.images import image_digest
 from common.policy import PROTOCOL, REVIEW_TIMEOUT_SECONDS, issue_revision, policy_version
 from common.accounts import account_provider, execution_profiles
 from common.reporting import validate_quota_wait, validate_usage, quota_wait_text
 from common.reporting import worker_branch
 from common.repair import repair_instructions
+from common.context import CONTEXT_PROTOCOL, ContextError
 
 
 class Broker:
@@ -27,6 +30,7 @@ class Broker:
         self.linear, self.github, self.clock = linear, github, clock
         self.refresh, self.steering = refresh, steering
         self.images=Images(controller.database,linear.download_image,clock=clock)
+        self.context = Context(controller.database, linear, github)
 
     def apply(self, command):
         return self.controller.apply(command, now=self.clock())
@@ -92,6 +96,9 @@ class Broker:
                 raise Rejected("Task image context changed")
         else:
             issue, images = None, []
+        if phase == "coding" and (action in {"start", "checkout", "github"} or
+                action == "progress" and data.get("stage") in {"coding", "publishing"}):
+            self.validate_context(view, role)
         if action == "start":
             passed = verify_review_job(self.github, run_id, run_attempt) if phase == "coding" else False
             view = self.apply(Start(view.task_id, key, run_id, run_attempt, role, passed))
@@ -109,6 +116,12 @@ class Broker:
             return self.apply(AccountRequest(view.task_id,key,role,action,data))
         if action in {"accounts", "claim", "bind_account", "exhaust_account"}:
             return self.apply(AccountRequest(view.task_id,key,role,action,data))
+        if action == "context":
+            try:
+                return self.context.read(view, data.get("request"), self.context_repositories(),
+                                         lambda: self.context_authority(view, role, require_lease=True))
+            except ContextError as exc:
+                return {"status": exc.status, "complete": False}
         if action == "checkout":
             permissions={"contents":"read"}
             if phase=="coding":
@@ -127,7 +140,9 @@ class Broker:
             if data.get("binding") != self.binding(view):
                 raise Rejected("Review result belongs to a different specification")
             result = None if data.get("result_error") else data.get("result")
-            updated = self.apply(Review(view.task_id, key, result, view.spec))
+            with self.context.lock_for(view):
+                evidence = self.validate_context(view, role) if isinstance(result, dict) and result.get("verdict") == "ready" else ""
+                updated = self.apply(Review(view.task_id, key, result, view.spec, evidence))
             verdict = json.loads(updated.attempt["review_result"])["verdict"]
             return {"status": 'passed' if verdict == 'ready' else verdict}
         if action == "progress":
@@ -167,6 +182,7 @@ class Broker:
                   **execution_profiles(self.registry, {"assigned_account_id": identity}),
                   "binding": self.binding(view), "readiness": {"review_key": view.attempt["attempt_id"], **self.binding(view)},
                   "repository": route.repository, "ref": route.ref, "images": images,
+                  "context_capability": CONTEXT_PROTOCOL,
                   "workflow_changes_allowed": self.github.workflow_changes_allowed(route.repository) is True,
                   "review_timeout_seconds": REVIEW_TIMEOUT_SECONDS,
                   "selection": {"min_remaining_percent": self.registry.agent_selection.min_remaining_percent,
@@ -189,6 +205,44 @@ class Broker:
                               "failure_output":previous["data"].get("failure",{}).get("failure_output","")}
             result["repair"].update({k:previous["data"][k] for k in ("wip_branch","wip_commit_sha") if k in previous["data"]})
         return result
+
+    def context_repositories(self):
+        return {route.repository.lower() for route in self.registry.routes.values()}
+
+    def context_authority(self, view, role, *, require_lease=False):
+        current = self.controller.inspect(view.task_id)
+        session = current.session(role.phase)
+        route = self.registry.routes.get(current.project_id)
+        if (not current.active or current.canceled or not current.eligible or not current.dependencies_ready
+                or route is None or route.repository.lower() != current.repository
+                or current.phase in {"held", "completed", "canceled", "skipped"}
+                or current.attempt["attempt_id"] != view.attempt["attempt_id"] or current.attempt["stopped"]
+                or session and (session["finished"] or session["deadline"] <= self.clock())):
+            raise Rejected("Related context access is no longer authorized")
+        # Recheck mapped source scopes after network activity as well as before
+        # it, including a configuration revocation while a fetch was in flight.
+        from common.context import pull_ref
+        with self.controller.database.transaction() as db:
+            requests = [json.loads(row[0]) for row in db.execute(
+                "SELECT request FROM context_sources WHERE attempt_id=? AND status='ok'", (view.attempt["attempt_id"],))]
+        repositories = self.context_repositories()
+        if any(request["operation"] == "pull" and pull_ref(request["target"])[0] not in repositories for request in requests):
+            raise Rejected("Related repository context authorization was revoked")
+        if require_lease:
+            if not session or not session["account_id"] or session["data"].get("account_reserved"):
+                raise Rejected("Related context requires an active execution account lease")
+            account, _ = self.accounts.get(session["account_id"])
+            owner = f"{view.attempt['attempt_id']}:{view.attempt['run_id']}:{view.attempt['run_attempt']}:{role.phase}"
+            if account.get("owner") != owner or account.get("lease_until", 0) <= self.clock():
+                raise Rejected("Related context requires an active execution account lease")
+
+    def validate_context(self, view, role):
+        try:
+            return self.context.revalidate(view, self.context_repositories(),
+                                           lambda: self.context_authority(view, role), approved=role.phase == "coding")
+        except (ValueError, RequestError, KeyError, TypeError, AttributeError):
+            self.apply(EvidenceChanged(view.task_id, view.attempt["attempt_id"]))
+            raise Rejected("Related context requires a fresh readiness assessment") from None
 
 
     def progress(self, view, data):

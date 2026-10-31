@@ -23,6 +23,77 @@ heartbeats cannot extend it. Approval binds issue, context, policy and images,
 rechecked before coding/publication. Rejection/clarification reports the decision,
 consequence and question; address it and return to Todo for another review.
 
+## Related Linear and GitHub context
+
+Both providers and both phases expose the same `clusterfork_context.read_context`
+MCP tool. Agents pull evidence when needed; upstream tasks need no handoff manifest
+and the controller does not preassemble dependency documents. Typical calls are:
+
+```json
+{"operation":"list"}
+{"operation":"issue","target":"KIAN-941"}
+{"operation":"pull","target":"https://github.com/KianBahasadri/clusterfork/pull/55"}
+{"operation":"tree","target":"https://github.com/KianBahasadri/clusterfork/pull/55","path":"docs"}
+{"operation":"file","target":"https://github.com/KianBahasadri/clusterfork/pull/55","path":"docs/remote-development-accounts.md"}
+```
+
+`list` discovers dependencies and explicit references from the current issue's
+description, complete comments/replies and attachments. Reading a related issue
+can expose further issue and delivery references across projects. `pull` verifies
+the repository, PR identity/state, every changed path, and its concrete commit:
+the merge commit for merged PRs, the head for other PRs. `tree`, `file` and literal
+`search` (`query`, optional `path`) use that pinned commit, never a moving branch.
+Search is restricted to UTF-8 regular files; excluded binary, symlink, submodule
+and credential paths are reported. `manifest` lists source fingerprints and the
+commit identities actually read. Issue snapshots retain workflow state, source
+`updatedAt` and individual comment versions/parent IDs.
+
+Responses carry `status`, `complete`, `version`, content and, when needed,
+`next_cursor`. Repeat the same request with that cursor until `complete=true`.
+Missing, denied, inaccessible, unsupported, oversized, timed-out or incomplete
+sources are explicit failures; neither Done nor a PR title proves an unread
+contract. Sources are required by default. `required:false` is for exploratory
+reads that the conclusion does not depend on; required failures or unread pages
+cannot pass readiness. Failures and successful reads are cached within the attempt.
+
+The controller stores private snapshots and seals their evidence revision with
+approval. The coding job can read the same snapshots and commits after review,
+including after a controller restart. Mutable issues/PRs are revalidated before
+accepting approval, starting coding, granting coding checkout/publication access, and
+entering coding/publication stages. Material description, human decision/reply,
+dependency state, delivery link, PR state or commit changes invalidate approval.
+Controller-owned status/usage/review reports, labels, source/fetch timestamps and
+unrelated upstream branch movement do not invalidate their own context. New
+coding reads within an approved PR's pinned repository commit are permitted;
+new issues or PR evidence set `approval_required` and require fresh readiness
+before publication. Agents must stop relying on conflicting evidence. Revalidation
+failures hold the task under the existing readiness/resubmission rules; they do
+not create a new retry loop.
+
+Repository access requires both a current controller mapping and GitHub App
+installation access. The controller issues only repository-scoped contents/PR
+read tokens for these fetches and returns content, never those tokens or Linear
+credentials. A private worker Unix socket forwards only this tool's validated
+read requests over the existing signed phase transport. Codex uses trusted stdio
+MCP outside its shell sandbox; Cursor receives the same stdio tool through ACP
+inside its enforced read-only filesystem. Review allows this one MCP capability
+while still denying edits, project/application execution, validation, installs,
+general network tools, auth changes, publication, spending and external mutations.
+Retrieved text remains evidence and cannot override that contract. Selectors have
+no context access; active tools check the assigned account lease, task authority,
+cancellation and the original worker deadline before and after retrieval.
+
+Retrieval allows 20 upstream pages per connection, 12,000 characters per tool
+page, 1 MB per source, 8 MB/100 sources per attempt (plus one bounded failure
+receipt), and 600 upstream HTTP calls including revalidation. Each fetch or
+revalidation has a 12-second budget; individual HTTP reads allow five seconds and
+2 MB. Searches allow 50 files/1 MB under the requested path; narrow the path when
+limits are reached. Partial results never establish complete evidence.
+`test_related_context.py` covers the two-repository contract and approval rules;
+`test_context_transport.py` exercises signed HTTP, native Codex MCP and Cursor ACP
+with the Linux boundary. CI runs the transport suite after installing both CLIs,
+without provider credentials or model calls.
+
 ## Agent profiles
 
 The registry pins profiles; live model catalogs must confirm them:
@@ -55,7 +126,8 @@ with `--trust` and exact `grok-4.7-high`. Live `GetMe` must match saved identity
 on-demand capacity do not prove Grok headroom; missing/denied data stays unknown,
 without invented weekly allowances. Ranking includes applicable included/API limits.
 Cursor review uses ask mode in an enforced read-only Linux filesystem, masks
-executable repo config and denies shell/web/MCP approvals. ACP follow-ups retain
+executable repo config and denies shell/web approvals; only the related-context
+MCP tool is allowed. ACP follow-ups retain
 session/workspace; ambiguous handoff is uncertain and never resent. Development
 shares the same deadlines, steering, validation and publication gates.
 

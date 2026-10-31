@@ -11,7 +11,7 @@ from .model import (Admit, Assign, DispatchObserved, ExternalObserved, Finish, H
                     IssueObserved, Phase, Progress, Rejected, Retry, Review, Role,
                     Start, TaskSpec, TaskView, identity, SessionUpdated, EffectUpdated, Authorize, ExhaustAccount,
                     ContextObserved, InboxQueued, InboxDone, Initialize, ReportConfirmed, AccountRequest, InstructionRequest,
-                    Resubmit)
+                    Resubmit, EvidenceChanged)
 from common.policy import REVIEW_MAX_ATTEMPTS, REVIEW_RETRY_DELAYS, review_failure_class
 
 
@@ -280,6 +280,9 @@ class Controller:
                         if not attempt["coding_started"] and not attempt["retry_kind"]:
                             self._review_attention(db, task, attempt, 'context_changed',
                                                    'Reviewed context changed before coding; approval is invalid and a fresh assessment is required.', now)
+                elif isinstance(command, EvidenceChanged):
+                    self._review_attention(db, task, attempt, 'context_changed',
+                                           'Related context changed, conflicts with approval, or is unavailable; a fresh readiness assessment is required.', now)
                 else:
                     raise Rejected("Unsupported controller command")
             # Local projection shares this commit. Export runs on a separate thread,
@@ -530,6 +533,9 @@ class Controller:
         except (ValueError, TypeError) as exc:
             # Only the validator's bounded diagnostics are retained, never raw output.
             result = {"verdict": "rejected", "summary": "Invalid reviewer result: " + str(exc)[:1500]}
+        if result.get("verdict") == "ready":
+            from .context import seal
+            seal(db, command.attempt_id, command.evidence_revision)
         verdict = result["verdict"]
         self._release_reservation(db,task,attempt,'review',now)
         db.execute("UPDATE attempts SET review_result=? WHERE attempt_id=?", (json.dumps(result), command.attempt_id))

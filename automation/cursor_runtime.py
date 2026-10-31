@@ -79,14 +79,21 @@ def rpc(home, method):
 
 class CursorServer(AppServer):
     """Use the existing bounded NDJSON transport, with ACP's initialization."""
-    def __init__(self, home, *, env, cwd, read_only=False):
+    def __init__(self, home, *, env, cwd, read_only=False, context_bridge=None):
         self.timeout, self.sequence = 30, 0
         args = ["cursor-agent", "--trust", "--model", MODEL, "acp"]
+        if context_bridge:
+            from common.context import SERVER
+            write_private(Path(home) / ".cursor/mcp.json", {"mcpServers": {SERVER: context_bridge.stdio()}})
         if read_only:
-            write_private(Path(home) / ".config/cursor/cli-config.json", {
+            from common.context import SERVER, TOOL
+            permissions = {
                 "version": 1, "editor": {"vimMode": False}, "autoAcceptWebSearch": False,
-                "permissions": {"allow": ["Read(*)"], "deny": [
-                    "Write(*)", "Shell(*)", "WebFetch(*)", "WebSearch(*)", "Mcp(*:*)"]}})
+                "permissions": {"allow": ["Read(*)"] + ([f"Mcp({SERVER}:{TOOL})"] if context_bridge else []),
+                                "deny": ["Write(*)", "Shell(*)", "WebFetch(*)", "WebSearch(*)"]
+                                + ([] if context_bridge else ["Mcp(*:*)"])}}
+            for path in (".config/cursor/cli-config.json", ".cursor/cli-config.json"):
+                write_private(Path(home) / path, permissions)
             # Ask mode limits tools; Linux additionally enforces read-only files
             # even if a provider/tool implementation regresses. Only auth/data
             # and scratch space can be written. No runner credentials in env.
@@ -110,10 +117,10 @@ class CursorServer(AppServer):
         super().send({"jsonrpc": "2.0", **value})
 
 
-def open_session(server, workspace, model, effort, *, read_only=False):
+def open_session(server, workspace, model, effort, *, read_only=False, mcp_servers=()):
     if (model, effort) != (MODEL, EFFORT):
         raise CursorError("cursor_profile_unavailable")
-    result = server.call("session/new", {"cwd": str(workspace), "mcpServers": []})
+    result = server.call("session/new", {"cwd": str(workspace), "mcpServers": list(mcp_servers)})
     models = (result.get("models") or {}).get("availableModels", [])
     if not any(row.get("modelId") == MODEL for row in models):
         raise CursorError("cursor_profile_unavailable")
@@ -180,8 +187,21 @@ def quota_snapshot(identity, model, data, *, allow_exhausted=False):
 def run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), *,
               timeout=18_000, deadline=None, image_paths=(), read_only=False,
               steering=True, server_factory=CursorServer, observe_tool=None, validate=None):
+    from context_transport import agent_context
+    deadline = deadline if deadline is not None else time.monotonic() + timeout
+    with agent_context(broker, config, home, failure_signals, deadline=deadline) as bridge:
+        return _run_agent(broker, config, home, workspace, prompt, env, failure_signals,
+                          timeout=timeout, deadline=deadline, image_paths=image_paths, read_only=read_only,
+                          steering=steering, server_factory=server_factory, observe_tool=observe_tool,
+                          validate=validate, bridge=bridge)
+
+
+def _run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), *,
+               timeout, deadline, image_paths, read_only, steering, server_factory, observe_tool, validate, bridge):
     from agent_session import WORKER_RULES
-    server = server_factory(home, env=env, cwd=workspace, read_only=read_only)
+    from context_transport import cursor_context_call
+    server = server_factory(home, env=env, cwd=workspace, read_only=read_only,
+                            **({"context_bridge": bridge} if bridge else {}))
     deadline = deadline if deadline is not None else time.monotonic() + timeout
     session, pending, active, summary = {}, None, None, []
     pending_reported = False
@@ -206,7 +226,8 @@ def run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), 
             pending_reported = True
 
     try:
-        session = {"thread_id": open_session(server, workspace, config["model"], config["effort"], read_only=read_only),
+        session = {"thread_id": open_session(server, workspace, config["model"], config["effort"], read_only=read_only,
+                                             mcp_servers=bridge.cursor_servers() if bridge else ()),
                    "turn_id": str(uuid4())}
         if steering:
             if broker.call("steering_open", **session).get("accepting") is not True:
@@ -230,8 +251,9 @@ def run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), 
                 if "id" in event:
                     if event["method"] == "session/request_permission":
                         options = params.get("options", [])
+                        context_read = bridge and cursor_context_call(params.get("toolCall") or {})
                         option = next((row for row in options if row.get("kind") == (
-                            "reject_once" if read_only else "allow_once")), None)
+                            "reject_once" if read_only and not context_read else "allow_once")), None)
                         outcome = {"outcome": "selected", "optionId": option["optionId"]} if option else {"outcome": "cancelled"}
                         server.send({"id": event["id"], "result": {"outcome": outcome}})
                     else:
@@ -241,7 +263,8 @@ def run_agent(broker, config, home, workspace, prompt, env, failure_signals=(), 
                     update = params.get("update", {})
                     if read_only and update.get("sessionUpdate") == "tool_call" and (
                             update.get("kind") not in {"read", "search", "think"}
-                            or update.get("title", "").lower().startswith("web search")):
+                            or update.get("title", "").lower().startswith("web search")) and not (
+                                bridge and cursor_context_call(update)):
                         raise CursorError("cursor_readiness_tool_denied")
                     if observe_tool and update.get("sessionUpdate") in {"tool_call", "tool_call_update"}:
                         observe_tool(update)

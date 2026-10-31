@@ -35,6 +35,8 @@ from common.policy import (PROTOCOL, RESULT_SCHEMA, review_prompt, workflow_publ
                               MAX_CORRECTION_TURNS, MAX_FAILURE_OUTPUT_BYTES, redact_review_text)
 from publication_guard import PublicationBlocked, PublicationGuard, PublicationScanError, changed_lines
 from common.images import image_prompt, materialize_images
+from common.context import CONTEXT_PROMPT
+from context_transport import agent_context
 from common.diagnostics import (CONTEXT, context, failure, failure_summary, http_operation, identifiers, operation, record,
                          permits_failure_output)
 
@@ -536,12 +538,15 @@ def review_readiness(broker, config, worker_heartbeat, directory):
                         failure_signals=[heartbeat.failed, worker_heartbeat.failed])
                     output.write_text(text)
                 else:
-                    command(["codex", "exec", "--ignore-user-config", "--ignore-rules", "--ephemeral",
+                    deadline = time.monotonic() + config["review_timeout_seconds"]
+                    with agent_context(broker, config, home, [heartbeat.failed, worker_heartbeat.failed], deadline=deadline) as bridge:
+                        command(["codex", "exec", "--ignore-user-config", "--ignore-rules", "--ephemeral",
                          "--color", "never", "--sandbox", "read-only", "--model", config["model"],
                          "-c", 'approval_policy="never"',
                          "-c", f'model_reasoning_effort="{config["effort"]}"',
                          "-c", 'cli_auth_credentials_store="file"',
                          "--output-schema", str(schema), "--output-last-message", str(output)]
+                        + [arg for value in (bridge.codex_config() if bridge else ()) for arg in ("-c", value)]
                         + [arg for path in image_paths for arg in ("--image", path)] + ["-"],
                         stdin=review_prompt(config["issue"], workflow_changes_allowed=config.get("workflow_changes_allowed"),
                                             images=config.get("images", [])),
@@ -748,7 +753,7 @@ def development_prompt(broker, config):
     issue = config["issue"]
     prompt = (f"Implement Linear issue {issue['identifier']}: {issue['title']}\nIssue URL: {issue['url']}\n\n"
               + workflow_publication_policy(config.get("workflow_changes_allowed"))
-              + f"\n\n{issue.get('description') or ''}" + image_prompt(config.get("images", [])))
+              + CONTEXT_PROMPT + f"\n\n{issue.get('description') or ''}" + image_prompt(config.get("images", [])))
     if config.get("repair"):
         repair = config["repair"]
         instructions = repair.get("instructions")
