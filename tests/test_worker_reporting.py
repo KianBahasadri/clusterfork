@@ -15,7 +15,7 @@ sys.path[:0] = [str(ROOT / "automation")]
 import worker
 from codex_runtime import CodexError, inspect_account, quota_snapshot, read_usage
 from common.clients import Linear, RequestError
-from common.reporting import QUEUED_LABEL, SELECTION_LABEL, STAGE_LABELS, attempt_comment, usage_report, validate_usage
+from common.reporting import QUEUED_LABEL, SELECTION_LABEL, STAGE_LABELS, attempt_comment, timestamp, usage_report, validate_usage
 from test_remote_worker import NOW, ISSUE
 
 
@@ -131,6 +131,47 @@ class LabelAdapterTests(unittest.TestCase):
 
 
 class UsageTests(unittest.TestCase):
+    def comment(self, before, after=None, *, finished=False):
+        run = {"owner": "123:1", "account_id": "a" * 64, "model": "gpt-6.1-sol", "effort": "max",
+               "status": "completed", "started_at": NOW, "finished_at": NOW + 61,
+               "usage_before": json.dumps(before), "usage_after": json.dumps(after) if after else ""}
+        return attempt_comment(run, "owner/repo", finished=finished)
+
+    def test_start_comment_emphasizes_each_current_used_reading(self):
+        body = self.comment(usage(4, 6))
+        self.assertIn(f"Usage before coding ({timestamp(NOW)}):", body)
+        self.assertIn(f"- codex/primary (300-minute): **4% used** / 96% remaining; resets {timestamp(NOW + 1000)}", body)
+        self.assertIn(f"- codex/secondary (weekly): **6% used** / 94% remaining; resets {timestamp(NOW + 10000)}", body)
+        self.assertEqual(body.count("**"), 4)
+
+    def test_completion_comment_emphasizes_only_after_readings_and_preserves_details(self):
+        after = usage(4, 6)
+        after["observed_at"] += 61
+        after["windows"][0]["resets_at"] += 1000
+        body = self.comment(usage(17, 5), after, finished=True)
+        self.assertIn(f"Usage before ({timestamp(NOW)}) and after ({timestamp(NOW + 61)}):", body)
+        self.assertIn("- codex/primary (300-minute): 17% used / 83% remaining → **4% used** / 96% remaining"
+                      "; change unavailable (window reset or changed, or reset time unknown)"
+                      f"; resets {timestamp(NOW + 2000)}", body)
+        self.assertIn("- codex/secondary (weekly): 5% used / 95% remaining → **6% used** / 94% remaining"
+                      f"; usage change +1 percentage points; resets {timestamp(NOW + 10000)}", body)
+        self.assertIn("Usage changes compare account quota readings; provider reporting may lag or include other activity.", body)
+        self.assertEqual(body.count("**"), 4)
+
+    def test_completion_comment_emphasizes_new_window_readings(self):
+        after = usage(11, 21)
+        after["windows"].append({**after["windows"][0], "name": "codex/new", "used_percent": 12.5})
+        body = self.comment(usage(), after, finished=True)
+        self.assertIn("- codex/new (300-minute): **12.5% used** / 87.5% remaining; change unavailable (new window)", body)
+        self.assertEqual(body.count("**"), 6)
+
+    def test_missing_final_reading_stays_unavailable_and_before_readings_stay_plain(self):
+        body = self.comment(usage(), finished=True)
+        self.assertIn("final reading unavailable; usage change unavailable.\n\nBefore:", body)
+        self.assertIn(f"- codex/primary (300-minute): 10% used / 90% remaining; resets {timestamp(NOW + 1000)}", body)
+        self.assertIn(f"- codex/secondary (weekly): 20% used / 80% remaining; resets {timestamp(NOW + 10000)}", body)
+        self.assertNotIn("**", body)
+
     def test_readings_preserve_weekly_names_and_exhausted_final_usage(self):
         raw = limits(100, 100)
         raw["rateLimitsByLimitId"]["codex"]["rateLimitReachedType"] = "weekly"
@@ -173,8 +214,10 @@ class UsageTests(unittest.TestCase):
         after["windows"].pop()
         run["usage_after"] = json.dumps(after)
         body = attempt_comment(run, "owner/repo", finished=True)
+        self.assertIn("- codex/primary (300-minute): 10% used / 90% remaining → **2% used** / 98% remaining", body)
         self.assertIn("window reset or changed", body)
-        self.assertIn("→ unavailable; change unavailable", body)
+        self.assertIn("- codex/secondary (weekly): 20% used / 80% remaining → unavailable; change unavailable", body)
+        self.assertEqual(body.count("**"), 2)
         self.assertNotIn("usage change -8", body)
         self.assertNotIn("usage change +0", body)
 

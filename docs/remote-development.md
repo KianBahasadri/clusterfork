@@ -118,13 +118,17 @@ stopped or release an unresolved PR. Only owned queued, selected, clarification,
 repair and stage labels are changed. Account capacity uses the waiting-for-quota
 stage. One stable task comment carries the current reason and run/PR links.
 
-`controller/reporting.py` reuses `worker_reporting.attempt_comment` for distinct
+`controller/reporting.py` reuses `common.reporting.attempt_comment` for distinct
 start and finish usage comments with stable IDs per attempt. The initial account,
 profile and quota snapshot remain immutable through failover. Final readings and
 changes are reported separately for each account; unknown/reset windows and
-missing final readings are explicit. Worker time covers its recorded agent-job
-start through the finish callback, excluding later PR/CI waiting. No timestamp is
-invented when a missing callback leaves duration unknown.
+missing final readings are explicit. Each current `N% used` phrase is bold in
+Linear: the initial reading in start comments and each account's final reading
+(including newly observed windows) in finish comments. Before readings in finish
+comments stay plain, including when the final reading is unavailable.
+Worker time covers its recorded agent-job start through the finish callback,
+excluding later PR/CI waiting. No timestamp is invented when a missing callback
+leaves duration unknown.
 
 The shared Linear adapter preserves previous actors' comments and replies. It
 creates one deterministic replacement when ownership prevents updating a comment,

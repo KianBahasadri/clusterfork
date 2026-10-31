@@ -99,19 +99,22 @@ def window_name(window):
     return f"{public_text(window['name'])} ({period})"
 
 
-def usage_lines(before, after=None):
+def usage_lines(before, after=None, *, emphasize_current=True):
     lines = []
     current = {window["name"]: window for window in after["windows"]} if after else {}
     for window in before["windows"]:
         used = window["used_percent"]
-        prefix = f"- {window_name(window)}: {used:g}% used / {100 - used:g}% remaining"
+        reading = f"{used:g}% used"
+        if after is None and emphasize_current:
+            reading = f"**{reading}**"
+        prefix = f"- {window_name(window)}: {reading} / {100 - used:g}% remaining"
         if after is not None:
             latest = current.pop(window["name"], None)
             if latest is None:
                 prefix += " → unavailable; change unavailable"
             else:
                 final = latest["used_percent"]
-                prefix += f" → {final:g}% used / {100 - final:g}% remaining"
+                prefix += f" → **{final:g}% used** / {100 - final:g}% remaining"
                 if (window["resets_at"] is None or latest["resets_at"] is None
                         or window["resets_at"] != latest["resets_at"]
                         or window["duration_minutes"] != latest["duration_minutes"] or final < used):
@@ -125,7 +128,7 @@ def usage_lines(before, after=None):
         lines.append(prefix)
     for window in current.values():
         used = window["used_percent"]
-        lines.append(f"- {window_name(window)}: {used:g}% used / {100 - used:g}% remaining; change unavailable (new window)")
+        lines.append(f"- {window_name(window)}: **{used:g}% used** / {100 - used:g}% remaining; change unavailable (new window)")
     if not any(window["duration_minutes"] == 10080 for window in before["windows"]):
         lines.append("- Weekly usage: unavailable (provider did not identify a weekly window).")
     return "\n".join(lines)
@@ -169,7 +172,7 @@ def attempt_comment(run, repository, *, finished=False):
             before, after = segment["usage_before"], segment.get("usage_after")
             body += f"Usage before ({timestamp(before['observed_at'])}) and after"
             body += f" ({timestamp(after['observed_at'])}):\n\n{usage_lines(before, after)}" if after else (
-                f": final reading unavailable; usage change unavailable.\n\nBefore:\n\n{usage_lines(before)}")
+                f": final reading unavailable; usage change unavailable.\n\nBefore:\n\n{usage_lines(before, emphasize_current=False)}")
             body += "\n\n"
         body += "Usage changes compare account quota readings; provider reporting may lag or include other activity."
     else:
