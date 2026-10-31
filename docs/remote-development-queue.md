@@ -92,7 +92,8 @@ Upgrades recover retained signed receipts without replenishing budgets.
 
 Submission processing and pending/queued revalidation use complete history for
 that issue to distinguish the controller app's Needs attention projection from a
-later human workflow action. A delayed signed Todo event can remain eligible
+later human workflow action, matching the signed transition within a bounded 300-second
+window to accommodate Linear webhook-to-history timestamp skew. A delayed signed Todo event can remain eligible
 through our own projection, including an in-flight write with a lost response.
 History alone never authorizes a cycle. Missing, inconsistent or ambiguous causal
 evidence defers event acknowledgement or admission while retaining durable intent.

@@ -196,25 +196,27 @@ def changes(snapshot):
     return [entry for entry in entries if state_change(entry) or eligibility_change(entry)]
 
 
-def submission_snapshot(snapshot, submission, blocked, *, owned_states=()):
+def submission_snapshot(snapshot, submission, blocked, *, owned_states=(), tolerance_seconds=300):
     """Resolve only our own attention projection over an exact signed transition.
 
     Any subsequent foreign workflow/eligibility action withdraws the intent,
     including a bot moving away and back to Todo. Missing causal evidence defers
     the inbox item instead of acknowledging it as an ineligible submission.
     """
-    recent = [entry for entry in changes(snapshot) if entry['changed_at'] >= submission['changed_at']
-              and not owned_attention(entry, blocked, owned_states)]
-    matching = [entry for entry in recent if entry['changed_at'] == submission['changed_at']
-                and (entry.get('actor') or {}).get('id') == submission['actor_id']
-                and (entry.get('actor') or {}).get('app') is False and not entry.get('botActor')
-                and (entry.get('fromState') or {}).get('id') == submission['from_state']
-                and (entry.get('toState') or {}).get('id') == submission['to_state']]
-    if not matching:
+    candidates = [entry for entry in changes(snapshot)
+                  if abs(entry['changed_at'] - submission['changed_at']) <= tolerance_seconds
+                  and (entry.get('actor') or {}).get('id') == submission['actor_id']
+                  and (entry.get('actor') or {}).get('app') is False and not entry.get('botActor')
+                  and (entry.get('fromState') or {}).get('id') == submission['from_state']
+                  and (entry.get('toState') or {}).get('id') == submission['to_state']]
+    if not candidates:
         raise Rejected('Signed human transition is not yet present in Linear history')
+    matched = min(candidates, key=lambda e: abs(e['changed_at'] - submission['changed_at']))
+    recent = [entry for entry in changes(snapshot) if entry['changed_at'] >= matched['changed_at']
+              and not owned_attention(entry, blocked, owned_states)]
     latest = max(entry['changed_at'] for entry in recent)
     current = [entry for entry in recent if entry['changed_at'] == latest]
-    valid = len(current) == 1 and current[0] in matching
+    valid = len(current) == 1 and current[0] == matched
     # Keep cancellation authoritative even if an in-flight controller request
     # landed after it. Current project/archive/enrollment checks still apply.
     states = [entry for entry in recent if state_change(entry)]
