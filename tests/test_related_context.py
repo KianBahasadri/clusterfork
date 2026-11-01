@@ -140,6 +140,7 @@ class RelatedContextTests(unittest.TestCase):
                     self.assertFalse(view.review_attention)
                     # Exact KIAN-946 reproduction: publication without any prior
                     # context retrieval must survive the dependency observation.
+                    fx.f.advance('publishing')
                     with CallBudget(self, linear=fx.f.linear, github=fx.f.github, exact={
                             "linear.issue": 1, "linear.complete": 1, "linear.query": 12 if fetched else 1,
                             "github.branch_sha": 1, "github.installation_token": 2 if fetched else 1,
@@ -153,8 +154,6 @@ class RelatedContextTests(unittest.TestCase):
                         else:
                             self.assertEqual(fx.complete("manifest", role=Role.CODING), [])
                     fx.call(Role.CODING, "checkout")
-                    fx.call(Role.CODING, "progress", stage="testing")
-                    fx.call(Role.CODING, "progress", stage="coding", context_sha=fx.f.spec.context_sha)
                     fx.call(Role.CODING, "progress", stage="publishing")
                     fx.call(Role.CODING, "github")
                     self.assertEqual(fx.f.broker.context.sources(view), sources)
@@ -216,7 +215,7 @@ class RelatedContextTests(unittest.TestCase):
                 self.fx.add_prerequisite()
 
         self.fx.after_query = start_during_fetch
-        self.fx.call(Role.CODING, "github")
+        self.fx.call(Role.CODING, "checkout")
         self.assertEqual(len(started), 1)
         current = self.fx.f.controller.inspect(self.fx.f.view.task_id)
         self.assertEqual(current.phase, "executing")
@@ -307,6 +306,7 @@ class RelatedContextTests(unittest.TestCase):
         self.fx.contract()
         self.fx.approve(self.config)
         self.fx.start_coding()
+        self.fx.f.advance('publishing')
         self.fx.add_prerequisite()
         account, _ = self.fx.f.accounts.get(self.fx.f.account_b)
         self.fx.call(Role.CODING, "save", account_id=self.fx.f.account_b, lease=account["fence"], release=True)
@@ -329,6 +329,7 @@ class RelatedContextTests(unittest.TestCase):
         self.fx.comments[DEPENDENCY][0]["updatedAt"] = "later"  # No content change.
         self.fx.pull_data["updated_at"] = "later"
         self.fx.start_coding()
+        self.fx.f.advance('publishing')
         self.fx.call(Role.CODING, "github")
         self.assertEqual(self.fx.f.controller.inspect(self.fx.f.view.task_id).phase, "executing")
 
@@ -352,6 +353,7 @@ class RelatedContextTests(unittest.TestCase):
         search = self.fx.complete("search", target=self.fx.pull, path="docs", query="account_id", role=Role.CODING)
         self.assertEqual(search["result"]["matches"][0]["line"], 1)
         self.assertFalse(self.fx.read("manifest", role=Role.CODING)["approval_required"])
+        self.fx.f.advance('publishing')
         self.fx.call(Role.CODING, "github")
 
     def test_mutations_unrelated_issues_repositories_paths_and_credentials_are_denied(self):

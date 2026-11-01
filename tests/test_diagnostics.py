@@ -287,6 +287,7 @@ class DurableFailureTests(unittest.TestCase):
         call('start',protocol=worker.PROTOCOL)
         call('claim',account_id=identity)
         call('progress',stage='coding',context_sha=f.spec.context_sha,account_id=identity,usage_before=usage())
+        f.advance('publishing')
         call('progress',stage='publishing')
         call('finish',status='failed',failure={'operation':'command/gh','kind':'timeout','stage':'publishing',
              'timeout_seconds':20,'elapsed_ms':20000,'message':'SECRET','failure_output':'Private-traceback ghp_synthetic'})

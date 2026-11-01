@@ -9,13 +9,14 @@ from types import SimpleNamespace
 
 from .authorization import release_ref
 from .model import (Admit, ContextObserved, DispatchObserved, EffectUpdated, ExternalObserved,
-                    Hold, InboxDone, IssueObserved, Rejected, Retry, TaskSpec, identity, ReportConfirmed, Resubmit, ProjectionUpdated)
+                    Hold, InboxDone, IssueObserved, Rejected, Retry, TaskSpec, identity, ReportConfirmed, Resubmit, ProjectionUpdated,
+                    MergeRequested)
 from .images import Images
 from .workflows import ENGINE, WORKFLOW
 from .reporting import attempt_reports,execution_status,repair_terminal,repair_report,review_report
 from common.routing import DispatchError, dependency_status, eligibility
 from common.images import image_digest
-from common.publication import comment_id, failed_required_checks, pull_outcome
+from common.publication import comment_id, failed_required_checks, pull_outcome, merge_ready
 from common.policy import issue_revision, policy_version, redact_review_text
 from common.reporting import worker_branch
 from common.reporting import AUTO_REPAIR_LABEL
@@ -41,9 +42,9 @@ class Driver:
             raise Rejected("Task project mapping changed")
         return route
 
-    def runtime_route(self, route, revision):
+    def runtime_route(self, route, revision, phase=None):
         return SimpleNamespace(repository=ENGINE,workflow=WORKFLOW,
-                               ref=release_ref(revision).removeprefix('refs/tags/'),worker_revision='')
+                               ref=release_ref(revision).removeprefix('refs/tags/'),worker_revision='',phase=phase)
 
     def original_route(self,view):
         current=self.registry.routes.get(view.project_id)
@@ -213,6 +214,8 @@ class Driver:
             except Rejected:
                 continue
         self.dispatch()
+        from .publication import reconcile
+        reconcile(self)
         self.report()
         if self.steering is not None:
             self.steering.reconcile()
@@ -227,9 +230,12 @@ class Driver:
             self.apply(EffectUpdated(view.task_id, effect["effect_id"], "claimed"))
             diagnostic = {}
             try:
-                route = self.runtime_route(self.route(view), view.spec.runtime_sha)
+                phase = json.loads(effect['payload']).get('phase', 'review')
+                if phase != view.attempt['execution_phase']:
+                    raise Rejected('Dispatch effect belongs to a superseded phase')
+                route = self.runtime_route(self.route(view), view.spec.runtime_sha, phase)
                 self.github.dispatch(route, {"linear_issue_id":view.issue_id,"linear_identifier":view.identifier,
-                                             "linear_project_id":view.project_id,"dispatch_key":view.attempt["attempt_id"]})
+                                             "linear_project_id":view.project_id,"dispatch_key":view.attempt["attempt_id"], 'phase': phase})
             except DispatchError as exc:
                 status = "unknown" if exc.uncertain else "rejected"
                 diagnostic = failure(exc, 'github/dispatch')
@@ -244,13 +250,15 @@ class Driver:
         target = self.original_route(view)
         engine = self.runtime_route(target, view.spec.runtime_sha)
         key = view.attempt["attempt_id"]
-        runs = self.github.dispatch_runs(engine, key)
+        matching = self.github.dispatch_runs(engine, key)
+        marker = f" · {view.attempt['execution_phase']} · {key}"
+        runs = [run for run in matching if marker in run.get('display_title', '')]
         owner = f"{view.attempt['run_id']}:{view.attempt['run_attempt']}" if view.attempt["run_id"] else ""
         recorded = self.github.worker_result(ENGINE, owner) if owner else None
         if owner:
             latest = self.github.worker_result(ENGINE, owner, latest=True)
             # Listings can lag, and a manual rerun may be a different attempt.
-            all_stopped = latest["status"] == "completed" and all(r["status"] == "completed" for r in runs)
+            all_stopped = latest["status"] == "completed" and all(r["status"] == "completed" for r in matching)
         else:
             if not runs:
                 if view.attempt['dispatch_status']!='rejected':
@@ -258,7 +266,7 @@ class Driver:
                 recorded={'id':'','run_attempt':0,'status':'completed','conclusion':'failure'}
             else:
                 recorded = min(runs, key=lambda r:(r["id"],r["run_attempt"]))
-            all_stopped = all(r["status"] == "completed" for r in runs)
+            all_stopped = all(r["status"] == "completed" for r in matching)
         for prior in self.controller.attempt_history(view.task_id):
             if prior['attempt_id'] == key:
                 continue
@@ -267,6 +275,10 @@ class Driver:
             if prior['run_id']:
                 latest = self.github.worker_result(ENGINE, f"{prior['run_id']}:{prior['run_attempt']}", latest=True)
                 all_stopped = all_stopped and latest['status'] == 'completed'
+        for review in self.controller.review_history(view.task_id):
+            if review['run_id'] and (review['attempt_id'] != key or view.attempt['execution_phase'] == 'coding'):
+                review_latest = self.github.worker_result(ENGINE, f"{review['run_id']}:{review['run_attempt']}", latest=True)
+                all_stopped = all_stopped and review_latest['status'] == 'completed'
         receipt = {"identifier":view.identifier,"target_dispatch_key":view.task_id,
                    "target_branch":worker_branch(view.identifier,view.task_id)}
         pull = self.github.worker_pull(target, receipt, view.task_id, view.attempt["pull_request"])
@@ -281,6 +293,12 @@ class Driver:
         self.apply(ExternalObserved(view.task_id,key,str(recorded["id"]),recorded["run_attempt"],
                                     recorded["status"]=="completed",recorded.get("conclusion") or "",all_stopped,
                                     True,(pull or {}).get("url", ""),pull_state,reason,repairable))
+        current = self.controller.inspect(view.task_id)
+        plan = (current.session('coding') or {}).get('data', {}).get('publication', {})
+        route = self.registry.routes.get(current.project_id)
+        if (current.active and route and current.spec.auto_merge and pull and plan
+                and pull.get('headRefOid') == plan['commit_sha'] and merge_ready(pull, route.required_checks)):
+            self.apply(MergeRequested(view.task_id, key, plan['commit_sha']))
 
     def render(self, view):
         attempt = view.attempt

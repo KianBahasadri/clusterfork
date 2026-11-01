@@ -12,7 +12,7 @@ from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from common import diagnostics
-from .model import ExternalObserved, Finish, Progress, Review, Start, identity
+from .model import ExternalObserved, Finish, Progress, Review, Start, StepResult, identity
 from .workflows import ENGINE
 
 STREAM = "Custom-ClusterforkController"
@@ -102,7 +102,7 @@ def capture(db, command, now):
     Receipts are a fixed set per attempt, retained with its existing evidence even
     after the bounded delivery queue expires. No historical outcomes are backfilled.
     """
-    if not isinstance(command, (Start, Review, Finish, Progress, ExternalObserved)):
+    if not isinstance(command, (Start, Review, Finish, Progress, StepResult, ExternalObserved)):
         return
     saved = False
     try:
@@ -123,7 +123,15 @@ def _capture(db, command, now):
     task = dict(db.execute("SELECT * FROM tasks WHERE task_id=?", (command.task_id,)).fetchone())
     # The run binding comes from committed, authenticated controller evidence,
     # never the body of a request or a client's diagnostic fields.
-    ids = correlation({"run_id": attempt["run_id"], "run_attempt": str(attempt["run_attempt"]),
+    phase = attempt['execution_phase']
+    source = attempt
+    if isinstance(command, ExternalObserved) and not attempt['run_id'] and command.run_id:
+        # Review stop can atomically issue a separate coding dispatch. Its old
+        # authenticated run remains in the review session after that transition.
+        review = db.execute("SELECT * FROM sessions WHERE attempt_id=? AND phase='review'", (command.attempt_id,)).fetchone()
+        if review and (review['run_id'], review['run_attempt']) == (command.run_id, command.run_attempt):
+            source, phase = dict(review), 'review'
+    ids = correlation({"run_id": source["run_id"], "run_attempt": str(source["run_attempt"]),
                        "dispatch_key": attempt["attempt_id"], "request_id": diagnostics.CONTEXT.get().get("request_id")})
     base = {**ids, "TaskId": task["task_id"], "RetryKind": attempt["retry_kind"]}
     def emit(kind, phase="", stage="", outcome="", **extra):
@@ -134,7 +142,7 @@ def _capture(db, command, now):
 
     if isinstance(command, Start):
         emit("phase_preflight_started" if command.role.selector else "phase_started", command.role.phase)
-    elif isinstance(command, Progress):
+    elif isinstance(command, (Progress, StepResult)):
         emit("phase_stage", "coding", attempt["stage"])
     elif isinstance(command, (Review, Finish)):
         phase = "review" if isinstance(command, Review) else command.phase
@@ -146,12 +154,12 @@ def _capture(db, command, now):
     elif isinstance(command, ExternalObserved):
         # A missing callback is not a phase failure. A rejected dispatch is not
         # an observed GitHub stop. Missing conclusions are left unreported.
-        if attempt["stopped"] and ids["RunId"] and attempt["conclusion"] in CONCLUSIONS:
-            emit("github_stopped", outcome=attempt["conclusion"])
-        if attempt["publication_checked"] and attempt["pull_state"]:
-            emit("publication_observed", outcome=attempt["pull_state"])
-        if attempt["stopped"] and attempt["all_stopped"] and attempt["publication_checked"]:
-            emit("task_outcome", outcome=task["phase"], RetryKind=attempt["retry_kind"],
+        if command.stopped and ids["RunId"] and command.conclusion in CONCLUSIONS:
+            emit("github_stopped", phase, outcome=command.conclusion)
+        if command.publication_checked and command.pull_state:
+            emit("publication_observed", phase, outcome=command.pull_state)
+        if command.stopped and command.all_attempts_stopped and command.publication_checked:
+            emit("task_outcome", phase, outcome=task["phase"], RetryKind=attempt["retry_kind"],
                  TaskFinal=task["phase"] in {"completed", "canceled", "skipped"},
                  AllStopped=True, PublicationChecked=True)
 

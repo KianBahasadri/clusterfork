@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS attempts (
  pull_request TEXT NOT NULL DEFAULT '', pull_state TEXT NOT NULL DEFAULT '',
  retry_kind TEXT NOT NULL DEFAULT '', retry_at REAL NOT NULL DEFAULT 0,
  started_at REAL NOT NULL DEFAULT 0,
+ execution_phase TEXT NOT NULL DEFAULT 'review' CHECK(execution_phase IN ('review','coding')),
  attempt_kind TEXT NOT NULL DEFAULT 'normal' CHECK(attempt_kind IN ('normal','startup','capacity','context','review','repair')),
  review_cycle INTEGER NOT NULL DEFAULT 1, review_charged INTEGER NOT NULL DEFAULT 1,
  failure_class TEXT NOT NULL DEFAULT '', retry_decision TEXT NOT NULL DEFAULT '', review_detail TEXT NOT NULL DEFAULT '',
@@ -58,6 +59,7 @@ CREATE TABLE IF NOT EXISTS sessions (
  account_id TEXT NOT NULL DEFAULT '', agent_started INTEGER NOT NULL DEFAULT 0,
  selector_started INTEGER NOT NULL DEFAULT 0,
  finished INTEGER NOT NULL DEFAULT 0, deadline REAL NOT NULL DEFAULT 0,
+ run_id TEXT NOT NULL DEFAULT '', run_attempt INTEGER NOT NULL DEFAULT 0,
  data TEXT NOT NULL DEFAULT '{}',
  PRIMARY KEY(attempt_id,phase)
 );
@@ -131,7 +133,14 @@ CREATE TABLE IF NOT EXISTS telemetry_outbox (
  event_id TEXT PRIMARY KEY, created_at REAL NOT NULL, payload TEXT NOT NULL,
  tries INTEGER NOT NULL DEFAULT 0, next_at REAL NOT NULL DEFAULT 0
 );
-PRAGMA user_version=11;
+CREATE TABLE IF NOT EXISTS execution_steps (
+ step_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL REFERENCES attempts(attempt_id),
+ ordinal INTEGER NOT NULL CHECK(ordinal > 0),
+ kind TEXT NOT NULL CHECK(kind IN ('coding','testing','publishing','preserving','finished')),
+ inputs TEXT NOT NULL DEFAULT '{}', result TEXT,
+ UNIQUE(attempt_id,ordinal)
+);
+PRAGMA user_version=12;
 """
 
 
@@ -154,7 +163,7 @@ class Database:
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA synchronous=FULL")
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11):
+        if version not in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
             self.close()
             raise Rejected("Unsupported task database version")
         if version == 1:
@@ -201,6 +210,17 @@ class Database:
                                        'AND task_id IN (SELECT task_id FROM tasks WHERE issue_id=?)',
                                        (json.dumps(submission, sort_keys=True), identity(event['id'], submission),
                                         submission['changed_at'], event['id']))
+        if version and version < 12:
+            with self.transaction() as db:
+                for table, name, definition in (('attempts', 'execution_phase', "TEXT NOT NULL DEFAULT 'review'"),
+                                                ('sessions', 'run_id', "TEXT NOT NULL DEFAULT ''"),
+                                                ('sessions', 'run_attempt', 'INTEGER NOT NULL DEFAULT 0')):
+                    if name not in {r['name'] for r in db.execute(f'PRAGMA table_info({table})')}:
+                        db.execute(f'ALTER TABLE {table} ADD COLUMN {name} {definition}')
+                db.execute("UPDATE sessions SET run_id=(SELECT run_id FROM attempts a WHERE a.attempt_id=sessions.attempt_id),"
+                           "run_attempt=(SELECT run_attempt FROM attempts a WHERE a.attempt_id=sessions.attempt_id)")
+                db.execute("UPDATE attempts SET execution_phase='coding' WHERE EXISTS "
+                           "(SELECT 1 FROM sessions s WHERE s.attempt_id=attempts.attempt_id AND s.phase='coding')")
         self.connection.executescript(SCHEMA)
 
     @contextmanager

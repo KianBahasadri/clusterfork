@@ -424,11 +424,14 @@ class CursorWorkerTests(unittest.TestCase):
             with patch.object(cursor, "run_agent", side_effect=run), \
                  worker.run_codex(self.broker, config, self.heartbeat, Path(directory)) as summary:
                 self.assertEqual(summary, "Cursor implementation complete")
+                self.f.advance('testing')
                 self.call("progress", stage="testing")
+                self.f.advance('publishing')
                 self.call("github")
             self.assertFalse(any(action == "accounts" for action, _ in self.calls))
             self.assertEqual({data["account_id"] for action, data in self.calls if action == "claim"}, {self.reference})
             self.assertEqual(json.loads(self.cursor.get(self.reference.split(":")[1])[0]["auth"])["refreshToken"], "cloud-refreshed")
+            self.f.advance('finished')
             self.call("finish", status="completed")
         run = execution_row(self.f)
         body = attempt_comment(run, "KianBahasadri/clusterfork", finished=True)

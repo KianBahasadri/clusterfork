@@ -24,12 +24,13 @@ def workflow(name):
 
 
 class ControllerWorkflowTests(unittest.TestCase):
-    def test_coding_needs_passing_review_in_the_same_run(self):
+    def test_controller_dispatches_exactly_one_phase_without_job_chaining(self):
         jobs=workflow(WORKFLOW)['jobs']
         self.assertEqual(set(jobs),{'review','code'})
-        self.assertEqual(jobs['code']['needs'],'review')
-        self.assertEqual(jobs['code']['if'],"needs.review.outputs.ready == 'true'")
+        self.assertEqual(jobs['review']['if'],"inputs.phase == 'review'")
+        self.assertEqual(jobs['code']['if'],"inputs.phase == 'coding'")
         for job in jobs.values():
+            self.assertNotIn('needs',job)
             self.assertEqual(job['with']['worker_revision'],'${{ github.sha }}')
 
     def test_two_signed_phases_run_on_fresh_vms_and_select_before_target_access(self):
@@ -49,12 +50,12 @@ class ControllerWorkflowTests(unittest.TestCase):
             self.assertNotIn('--select-account',execute['run'])
             self.assertEqual(execute['env']['WORKER_REVISION'],'${{ inputs.worker_revision }}')
 
-    def test_only_readiness_result_crosses_job_boundaries(self):
+    def test_phase_results_go_to_controller_without_job_outputs(self):
         for name in ROLE_FILES.values():
             data=workflow(name)
             job,=data['jobs'].values()
-            self.assertFalse(set(job.get('outputs',{}))-{'ready'})
-            self.assertFalse(set(data['on']['workflow_call'].get('outputs',{}))-{'ready'})
+            self.assertNotIn('outputs',job)
+            self.assertNotIn('outputs',data['on']['workflow_call'])
 
 
 if __name__ == "__main__":

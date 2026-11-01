@@ -171,7 +171,10 @@ class PublicationIntegrationTests(unittest.TestCase):
             before = git("ls-remote", "origin", "refs/heads/" + BRANCH)
             broker = Mock(key=KEY, publication_guard=guard or PublicationGuard({}))
             broker.publication_guard.remember_auth(AUTH)
-            broker.call.side_effect = lambda action, **kw: {"token": PUBLISH_TOKEN if action == "github" else CHECKOUT_TOKEN}
+            from controller_fixtures import ExecutorScript
+            script = ExecutorScript()
+            broker.call.side_effect = lambda action, **kw: ({'token': PUBLISH_TOKEN if action=='github' else CHECKOUT_TOKEN}
+                                                           if action in {'github','checkout'} else script(action, **kw))
             config = {"repository": "owner/repo", "ref": "main", "auto_merge": True,
                       "issue": {"identifier": "KIAN-908", "title": title, "url": issue_url},
                       "validation_commands": [[sys.executable, "-c", validation or "pass"]]}
@@ -194,7 +197,6 @@ class PublicationIntegrationTests(unittest.TestCase):
                      patch.object(worker, "find_pr", return_value=URL if existing else None), \
                      patch.object(worker, "repair_check_output", return_value=""), \
                      patch.object(worker, "json_request", return_value=pull) as request, \
-                     patch.object(worker, "request_auto_merge") as merge, \
                      patch.object(worker, "command", wraps=worker.command) as command:
                     if expected_reason:
                         with self.assertLogs(level="ERROR") as logged, self.assertRaises(worker.WorkerFailure) as caught:
@@ -209,16 +211,14 @@ class PublicationIntegrationTests(unittest.TestCase):
                         self.assertEqual(git("ls-remote", "origin", "refs/heads/" + BRANCH), before)
                         self.assertFalse(any(call.args[0][:2] == ["git", "push"] for call in command.call_args_list))
                         self.assertFalse(any(len(call.args) > 2 for call in request.call_args_list))
-                        merge.assert_not_called()
+                        self.assertFalse(any(len(c.args) > 2 for c in request.call_args_list))
                     else:
                         self.assertEqual(worker.execute(broker, config, SimpleNamespace(failed=threading.Event()), root),
-                                         ("completed", URL))
-                        merge.assert_called_once()
+                                         ("completed", None))
+                        self.assertFalse(any(len(c.args) > 2 for c in request.call_args_list))
                         if not existing:
-                            self.assertEqual(request.call_args.args[2]["title"], "KIAN-908: " + title)
-                            self.assertIn(summary, request.call_args.args[2]["body"])
-                    if existing and not repair:
-                        agent.assert_not_called()
+                            self.assertEqual(script.publication['title'], "KIAN-908: " + title)
+                            self.assertIn(summary, script.publication['body'])
                 self.assertEqual(git("ls-remote", "origin", "refs/heads/main").split()[0], main)
             finally:
                 os.chdir(previous)

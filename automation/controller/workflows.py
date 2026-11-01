@@ -9,11 +9,15 @@ ROLE_FILES={'review':'clusterfork-review.yml','coding':'clusterfork-code.yml'}
 
 def entrypoint():
     return '''name: Clusterfork task
-run-name: "Clusterfork task · ${{ inputs.linear_identifier }} · ${{ inputs.dispatch_key }}"
+run-name: "Clusterfork task · ${{ inputs.linear_identifier }} · ${{ inputs.phase }} · ${{ inputs.dispatch_key }}"
 
 on:
   workflow_dispatch:
     inputs:
+      phase:
+        required: true
+        type: choice
+        options: [review, coding]
       linear_issue_id:
         required: true
         type: string
@@ -32,18 +36,18 @@ permissions:
   id-token: write
 
 concurrency:
-  group: clusterfork-task-${{ inputs.linear_issue_id }}
+  group: clusterfork-task-${{ inputs.linear_issue_id }}-${{ inputs.phase }}
   cancel-in-progress: false
 
 jobs:
   review:
+    if: inputs.phase == 'review'
     uses: ./.github/workflows/clusterfork-review.yml
     with:
       dispatch_key: ${{ inputs.dispatch_key }}
       worker_revision: ${{ github.sha }}
   code:
-    needs: review
-    if: needs.review.outputs.ready == 'true'
+    if: inputs.phase == 'coding'
     uses: ./.github/workflows/clusterfork-code.yml
     with:
       dispatch_key: ${{ inputs.dispatch_key }}
@@ -52,8 +56,6 @@ jobs:
 
 
 def role_workflow(role):
-    outputs=('    outputs:\n      ready:\n        value: ${{ jobs.run.outputs.ready }}\n' if role=='review' else '')
-    job_output=('    outputs:\n      ready: ${{ steps.execute.outputs.ready }}\n' if role=='review' else '')
     return '''name: Clusterfork ROLE
 
 on:
@@ -65,7 +67,7 @@ on:
       worker_revision:
         required: true
         type: string
-OUTPUTS
+
 permissions:
   contents: read
   id-token: write
@@ -74,7 +76,7 @@ jobs:
   run:
     runs-on: ubuntu-24.04
     timeout-minutes: TIMEOUT
-JOB_OUTPUTS    steps:
+    steps:
       - name: Check out the approved runtime
         uses: actions/checkout@v4
         with:
@@ -91,7 +93,7 @@ JOB_OUTPUTS    steps:
           DISPATCH_KEY: ${{ inputs.dispatch_key }}
           WORKER_REVISION: ${{ inputs.worker_revision }}
         run: python3 "$GITHUB_WORKSPACE/.clusterfork-runtime/automation/worker.py"
-'''.replace('ROLE',role).replace('OUTPUTS\n',outputs).replace('JOB_OUTPUTS',job_output).replace('TIMEOUT','20' if role=='review' else '360')
+'''.replace('ROLE',role).replace('TIMEOUT','20' if role=='review' else '360')
 
 
 def render():

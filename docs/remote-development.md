@@ -1,6 +1,6 @@
 # Remote development
 
-Eligible Linear tasks use the [SQLite controller and native two-job graph](remote-development-controller.md).
+Eligible Linear tasks use the [sole controller and independent phase runs](remote-development-controller.md).
 This topic owns worker behavior, provider policy, merges, lifecycle and repairs.
 [Queues](remote-development-queue.md), [deployment](remote-development-deployments.md),
 [setup](remote-development-setup.md), [accounts](remote-development-accounts.md),
@@ -9,8 +9,8 @@ own their detailed contracts.
 
 ## Worker execution
 
-`automation/worker.py` runs review, coding, validation, guarded publication and
-cleanup. `agent_session.py`, `codex_runtime.py` and `cursor_runtime.py` implement
+`automation/worker.py` executes controller-directed review, coding, validation,
+guarded commit/push preparation and cleanup. `agent_session.py`, `codex_runtime.py` and `cursor_runtime.py` implement
 provider conversations. `automation/controller/projects.json` supplies states,
 branches, validation commands, merge policy, profiles and quota thresholds.
 
@@ -143,13 +143,18 @@ shares the same deadlines, steering, validation and publication gates.
 
 ## Automatic merges
 
-Mappings default `auto_merge` to `true`; `false` stops at an open PR. The broker
-sends policy; new/recovered PRs request native squash auto-merge bound to observed
-head after repository/base/branch/bot/dispatch-marker verification. Missing repo
-auto-merge or PR-specific required checks refuses the request. Existing App grants
-suffice; no Administration grant or `--admin`/force-merge bypass is used.
-GitHub handles pending/failed CI and conflicts. Worker success can precede merge;
-recovery recognizes already merged PRs to avoid repeating work. See [GitHub auto-merge](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/automatically-merging-a-pull-request).
+Mappings default `auto_merge` to `true`; `false` stops at an open PR. The
+controller creates/recovers the PR, observes complete PR-specific required checks,
+and requests a direct squash merge bound to the validated head SHA. Every
+configured check must be required and visible, and all required checks must pass.
+Drafts, unresolved mergeability, conflicts and blocking branch requirements wait
+or follow the existing repair policy. Repository, base, branch, bot author and
+dispatch marker are verified before publication/merge. GitHub enforces its branch
+requirements; no Administration grant or bypass is used. Native auto-merge need
+not be enabled. Worker success can precede PR creation and merge; the controller
+recognizes verified merges without repeating implementation. The
+[GitHub merge endpoint](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request)
+receives the exact head SHA and squash method.
 
 ## Linear lifecycle
 

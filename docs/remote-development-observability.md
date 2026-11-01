@@ -22,6 +22,10 @@ publish only bounded explanations/links. `common/diagnostics.py` emits
 `Clusterfork: ` JSON. Requests generate validated IDs, scoped to verified GitHub
 run/attempt/dispatch, never caller-asserted run IDs, and cleared after each request.
 Heartbeat/save/instruction polls are quiet/Debug; Azure SDK logging is Warning.
+Review and coding retain separate run/attempt correlation, including the review
+stop that issues coding. Controller command results record committed stage visits;
+repeated result receipts do not duplicate those events. Command polling and result
+requests use the existing finite HTTP operation classifications.
 Failures retain safe classes; background errors add task prefixes. The HTTP handler
 omits raw paths/headers. Actions summaries survive missing controller callbacks.
 

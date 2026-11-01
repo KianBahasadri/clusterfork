@@ -238,7 +238,7 @@ renewal path; expired/revoked logins fail without invented endpoints or local fa
 
 ## Worker credential boundary
 
-The App private key stays in Azure. [Signed job roles](remote-development-controller.md#native-execution-graph)
+The App private key stays in Azure. [Signed job roles](remote-development-controller.md#controller-owned-execution)
 authorize each phase. Review/coding select independently before target checkout.
 Private probe homes are saved/released; atomic assignment reserves the chosen
 lease and closes pool access. Execution worker leases preempt background usage-collector
@@ -284,17 +284,19 @@ admitted attempt may choose Cursor on a fresh VM. Rollouts remain runner-local;
 guarded [WIP preservation](remote-development.md#retries-and-validation) can retain
 unfinished repository edits. Running Cursor sessions do not switch providers.
 
-Publication credentials are repository-scoped Contents/Pull requests write, plus
-Workflows write when the installation grants it. The broker checks that grant at
-start and before publication credentials. Checkout stays read-only; publication
-tokens are reissued before publishing, kept in the trusted worker parent, never
-workflow inputs. Auth caches/transcripts are not uploaded as artifacts.
+Worker push credentials are repository-scoped Contents write, plus Workflows write
+when the installation grants it. Only an active controller publication or WIP
+command authorizes them; they never include Pull requests write. The broker checks
+workflow grants at start and before push credentials. Checkout stays read-only;
+push tokens stay in the trusted worker parent, never workflow inputs. The
+controller separately obtains PR creation and exact-head merge credentials, after
+verified worker stop. Auth caches/transcripts are not uploaded as artifacts.
 
 ### Publication credential checks
 
 Before commit, scan staged changes; before push, scan full committed
 `origin/<base>...HEAD`. Recovered branches/PRs pass the same guard before publish
-or auto-merge. Binary changes are matched as text; external diff/textconv cannot
+or controller publication. Binary changes are matched as text; external diff/textconv cannot
 hide content.
 
 The in-memory guard retains nonempty `access_token`, `refresh_token`, `account_id`,

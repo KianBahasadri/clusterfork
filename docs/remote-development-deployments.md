@@ -26,6 +26,8 @@ detection independently holds admission before the workflow reaches that step.
 Drain requires verified stop/publication and released leases; uncertainty, missing
 observations, running attempts or open PRs block switching. Stopped retries may
 retain grants. Network checks run outside transactions, preserving heartbeats.
+Outstanding controller PR/merge effects also block drain, including uncertain
+publication after the executor has stopped.
 
 Terraform applies the reviewed no-delete/no-replace plan; Run Command installs
 the exact commit in a release directory after verifying VM identity and mounted

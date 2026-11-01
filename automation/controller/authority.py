@@ -6,7 +6,7 @@ from .model import Rejected, Role, dependency_admission_applies
 
 
 OPEN_STAGES = {'initializing', 'selecting_account', 'coding', 'testing'}
-ACTIONS = {'execute', 'start', 'validate_context', 'context', 'checkout', 'github',
+ACTIONS = {'execute', 'start', 'validate_context', 'context', 'checkout', 'github', 'command', 'step_result',
            'heartbeat', 'accounts', 'claim', 'bind_account', 'exhaust_account', 'review',
            'progress', 'steering_open', 'steering_close', 'instructions', 'instruction_result'}
 
@@ -32,6 +32,8 @@ def authorize(db, task, attempt, role, action, now, accounts):
     admission(db, task)
     if attempt['stopped']:
         raise Rejected('This attempt already stopped')
+    if role.phase != attempt['execution_phase']:
+        raise Rejected('The controller has not dispatched this execution phase')
     session = db.execute('SELECT * FROM sessions WHERE attempt_id=? AND phase=?',
                          (attempt['attempt_id'], role.phase)).fetchone()
     # These queries run before Start creates the phase session. Start itself
@@ -49,6 +51,11 @@ def authorize(db, task, attempt, role, action, now, accounts):
         raise Rejected('Initial account selection must finish before execution access')
     if action == 'github' and (role != Role.CODING or task['phase'] not in {'executing', 'published'}):
         raise Rejected('Publication is not authorized in this task phase')
+    if action == 'github':
+        from .execution import current
+        step = current(db, attempt['attempt_id'])
+        if not step or step['kind'] not in {'publishing', 'preserving'}:
+            raise Rejected('The controller has not authorized a push')
     if action == 'review' and role != Role.REVIEW:
         raise Rejected('Only the review phase may assess readiness')
     if action in {'progress', 'exhaust_account'} and role != Role.CODING:

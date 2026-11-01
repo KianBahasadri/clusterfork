@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "automation")]
 from controller.broker import Broker
 from controller.core import Controller
-from controller.model import Admit, IssueObserved, Rejected, Role, TaskSpec
+from controller.model import Admit, IssueObserved, Rejected, Role, TaskSpec, ExternalObserved
 from controller.store import Database
 from controller.telemetry import HTTP_CONTEXT
 from common.diagnostics import context
@@ -60,7 +60,9 @@ class ControllerBrokerTests(unittest.TestCase):
         self.broker = Broker(self.controller,self.registry,self.linear,self.github,clock=lambda:1000)
 
     def call(self, role, action, **fields):
-        return self.broker.handle(action,claims(role),{"dispatch_key":self.key,**fields})
+        evidence = claims(role)
+        evidence['run_id'] = str(getattr(self, 'run_ids', {}).get(role.phase, evidence['run_id']))
+        return self.broker.handle(action,evidence,{"dispatch_key":self.key,**fields})
 
     def preflight(self, role, identity):
         self.call(role,"start",protocol=PROTOCOL)
@@ -73,6 +75,14 @@ class ControllerBrokerTests(unittest.TestCase):
         config=self.call(Role.REVIEW,"start",protocol=PROTOCOL)
         result=self.call(Role.REVIEW,"review",binding=config["binding"],result=ready())
         self.assertEqual(result,{"status":"passed"})
+        reviewed = self.controller.inspect(self.view.task_id).session('review')
+        self.controller.apply(ExternalObserved(self.view.task_id, self.key, reviewed['run_id'], 1, True, 'success', True, True,
+                                               pull_state='absent'), now=self.broker.clock())
+
+    def advance(self, kind, *, has_changes=False):
+        from controller_fixtures import advance_to
+        return advance_to(self.controller, self.controller.inspect(self.view.task_id), kind,
+                          now=self.broker.clock(), has_changes=has_changes)
 
     def test_probes_save_refresh_and_release_before_binding_without_cross_job_credentials(self):
         self.preflight(Role.REVIEW_SELECT,self.account_a)

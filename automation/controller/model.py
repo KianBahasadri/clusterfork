@@ -152,6 +152,39 @@ class Progress:
 
 
 @dataclass(frozen=True)
+class StepResult:
+    task_id: str
+    attempt_id: str
+    step_id: str
+    outcome: str
+    result: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PublicationResolved:
+    task_id: str
+    attempt_id: str
+    effect_id: str
+    pull_request: str
+    pull_state: str = 'open'
+
+
+@dataclass(frozen=True)
+class MergeRequested:
+    task_id: str
+    attempt_id: str
+    commit_sha: str
+
+
+@dataclass(frozen=True)
+class EffectFailed:
+    task_id: str
+    attempt_id: str
+    effect_id: str
+    rejected: bool
+
+
+@dataclass(frozen=True)
 class Finish:
     task_id: str
     attempt_id: str
@@ -283,6 +316,7 @@ class InstructionRequest:
 
 
 Command = (IssueObserved | Admit | DispatchObserved | Resubmit | Start | Assign | Review | Progress |
+           StepResult | PublicationResolved | MergeRequested | EffectFailed |
            Finish | ExternalObserved | Retry | Hold | SessionUpdated | EffectUpdated | Authorize |
            ExhaustAccount | ContextObserved | EvidenceChanged | InboxQueued | InboxDone | Initialize | ReportConfirmed | ProjectionUpdated | AccountRequest | InstructionRequest)
 

@@ -16,7 +16,7 @@ from common.policy import MAX_FAILURE_OUTPUT_BYTES, redact_review_text
 
 CONTEXT = ContextVar("clusterfork_diagnostics", default={})
 STAGES = {"initializing", "selecting_account", "coding", "testing", "publishing", "review", "waiting_for_quota"}
-ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "bind_account", "exhaust_account", "checkout", "github", "progress", "finish",
+ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "bind_account", "exhaust_account", "checkout", "github", "progress", "finish", "command", "step_result",
            "review", "context", "steering_open", "instructions", "instruction_result", "steering_close",
            "validation_start", "validation_heartbeat", "validation_claim", "validation_save", "validation_begin", "validation_finish"}
 LINEAR_OPERATIONS = {"issue", "project", "comments", "viewer", "comment", "issueUpdate", "issueLabels",

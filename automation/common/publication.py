@@ -89,9 +89,24 @@ def pull_outcome(pull, auto_merge):
             return "blocked", "GitHub requires the PR branch to be updated before merging."
         if pull.get("mergeable") == "UNKNOWN" or pull.get("mergeStateStatus") == "UNKNOWN":
             return "in_progress", "GitHub is calculating mergeability."
-        if not pull.get("autoMergeRequest"):
-            return "blocked", "Automatic merge is not enabled on this PR."
         if pull.get("mergeStateStatus") == "BLOCKED":
             return "blocked", "GitHub branch requirements are preventing the merge."
-        return "in_progress", "Required CI passed; waiting for GitHub to merge the PR."
+        return "in_progress", "Required CI passed; waiting for the controller to merge the PR."
     return "in_progress", "Required CI passed; the project is configured for manual merging."
+
+
+def merge_ready(pull, required_checks):
+    """Require complete PR-specific evidence for every configured and required check."""
+    if (pull.get('state') != 'OPEN' or pull.get('merged') or pull.get('isDraft')
+            or pull.get('mergeable') != 'MERGEABLE' or pull.get('mergeStateStatus') not in {'CLEAN', 'HAS_HOOKS'}):
+        return False
+    commits = pull.get('commits', {}).get('nodes', [])
+    rollup = commits[-1]['commit'].get('statusCheckRollup') if commits else None
+    if not rollup or rollup['contexts']['pageInfo']['hasNextPage']:
+        return False
+    checks = [check for check in rollup['contexts']['nodes'] if check.get('isRequired')]
+    names = {check.get('name', check.get('context')) for check in checks}
+    return bool(checks) and set(required_checks).issubset(names) and all(
+        check.get('status') == 'COMPLETED' and check.get('conclusion') in {'SUCCESS', 'NEUTRAL', 'SKIPPED'}
+        if check['__typename'] == 'CheckRun' else check['__typename'] == 'StatusContext' and check.get('state') == 'SUCCESS'
+        for check in checks)

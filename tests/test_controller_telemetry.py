@@ -57,9 +57,10 @@ class ControllerTelemetryTests(unittest.TestCase):
             self.fixture.external(view, conclusion="failure", pull_state="absent")
         self.assertEqual(len(self.events("phase_started")), 2)
         self.assertEqual(len(self.events("phase_result")), 2)
-        self.assertEqual(len(self.events("github_stopped")), 1)
-        self.assertEqual(len(self.events("publication_observed")), 1)
-        self.assertEqual(len(self.events("task_outcome")), 1)
+        self.assertEqual(len(self.events("github_stopped")), 2)
+        self.assertEqual({e['Phase'] for e in self.events('github_stopped')}, {'review', 'coding'})
+        self.assertEqual(len(self.events("publication_observed")), 2)
+        self.assertEqual(len(self.events("task_outcome")), 2)
         before = self.events()
         self.telemetry.flush()
         self.assertFalse(self.events())
@@ -77,7 +78,7 @@ class ControllerTelemetryTests(unittest.TestCase):
         deliveries = [json.loads(call.args[0]) for call in self.sender.call_args_list]
         logical = deduplicate(before + before + sum(deliveries, []))
         self.assertEqual(sum(e["EventType"] == "phase_result" for e in logical), 2)
-        self.assertEqual(sum(e["EventType"] == "github_stopped" for e in logical), 1)
+        self.assertEqual(sum(e["EventType"] == "github_stopped" for e in logical), 2)
 
     def test_version_five_upgrade_preserves_evidence_without_backfilling_old_outcomes(self):
         with self.database.transaction() as db:
@@ -93,7 +94,7 @@ class ControllerTelemetryTests(unittest.TestCase):
         self.assertEqual(Controller(self.database).inspect(view.task_id), view)
         telemetry.Telemetry(self.database, Mock(), CONFIG, "b" * 40, clock=lambda: 2000, send=self.sender)
         self.assertEqual([e["EventType"] for e in self.events()], ["controller_started"])
-        self.assertEqual(self.database.connection.execute("PRAGMA user_version").fetchone()[0], 11)
+        self.assertEqual(self.database.connection.execute("PRAGMA user_version").fetchone()[0], 12)
 
     def test_no_callback_or_missing_conclusion_does_not_invent_an_agent_outcome(self):
         view = self.fixture.admit()
@@ -112,10 +113,10 @@ class ControllerTelemetryTests(unittest.TestCase):
                                       pull_request="https://github.com/Owner/Repo/pull/1")
         self.assertEqual(final.phase, "completed")
         self.assertEqual(self.events("phase_result")[-1]["Outcome"], "failed")
-        self.assertEqual(self.events("github_stopped")[0]["Outcome"], "failure")
-        self.assertEqual(self.events("publication_observed")[0]["Outcome"], "merged")
-        self.assertTrue(self.events("task_outcome")[0]["TaskFinal"])
-        self.assertEqual(self.events("task_outcome")[0]["Outcome"], "completed")
+        self.assertEqual(self.events("github_stopped")[-1]["Outcome"], "failure")
+        self.assertEqual(self.events("publication_observed")[-1]["Outcome"], "merged")
+        self.assertTrue(self.events("task_outcome")[-1]["TaskFinal"])
+        self.assertEqual(self.events("task_outcome")[-1]["Outcome"], "completed")
 
     def test_evidence_sequence_resolves_latest_task_decision_when_timestamps_tie(self):
         view = self.fixture.coding(self.fixture.admit())
@@ -125,7 +126,7 @@ class ControllerTelemetryTests(unittest.TestCase):
         self.fixture.external(view, conclusion="failure", pull_state="merged",
                               pull_request="https://github.com/Owner/Repo/pull/1")
         decisions = self.events("task_outcome")
-        self.assertEqual(len(decisions), 2)
+        self.assertEqual(len(decisions), 3)
         self.assertEqual(len({d["TimeGenerated"] for d in decisions}), 1)
         self.assertEqual(max(decisions, key=lambda d: d["EvidenceSequence"])["Outcome"], "completed")
 

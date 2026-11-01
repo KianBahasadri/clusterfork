@@ -32,7 +32,11 @@ class Application:
         self.wakeup = threading.Event()
 
     def drained(self):
-        for view in self.controller.active():
+        active = self.controller.active()
+        active_ids = {view.task_id for view in active}
+        if any(effect['task_id'] in active_ids for kind in ('publication', 'merge') for effect in self.controller.effects(kind)):
+            return False
+        for view in active:
             attempt=view.attempt
             if (not attempt.get("stopped") or not attempt.get("all_stopped")
                     or not attempt.get("publication_checked") or attempt.get("pull_state") not in {"absent","closed"}):

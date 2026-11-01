@@ -178,8 +178,11 @@ class AccountFailoverTests(unittest.TestCase):
             with worker.run_codex(self.broker, self.config, self.heartbeat, root) as summary:
                 self.assertIn("original edits", summary)
                 self.assertEqual((workspace / "work.txt").read_text(), "existing edits\nfinished\n")
+                self.f.advance('testing')
                 self.call("progress", stage="testing")
+                self.f.advance('publishing')
                 self.call("progress", stage="publishing")
+                self.f.advance('finished')
             self.call("finish", status="completed")
         self.assertEqual(len(self.servers), 2)
         self.assertTrue(all(server.closed for server in self.servers))
@@ -252,8 +255,8 @@ class AccountFailoverTests(unittest.TestCase):
         with self.execution() as (root, _), patch.object(worker, "command", side_effect=command), \
              patch.object(worker, "find_pr", return_value=None), patch.object(worker, "json_request", side_effect=publish):
             status, pull = worker.execute(self.broker, config, self.heartbeat, root)
-        self.assertEqual((status, pull), ("completed", "https://github.com/test/repo/pull/1"))
-        self.assertEqual(events, ["validation", "push", "PR"])
+        self.assertEqual((status, pull), ("completed", None))
+        self.assertEqual(events, ["validation", "push"])
         stages = [data["stage"] for action, data in self.calls if action == "progress" and "stage" in data]
         self.assertEqual(stages, ["selecting_account", "coding", "coding", "testing", "publishing"])
 
@@ -265,10 +268,15 @@ class AccountFailoverTests(unittest.TestCase):
             self.assertEqual(deadline, 18000)
             self.assertFalse(any(event.is_set() for event in failure_signals))
             validated.append(summary)
+            self.f.advance('testing')
             self.broker_call("progress", stage="testing")
             if len(validated) == 1:
+                step = self.call('command')
+                command = self.call('step_result', step_id=step['step_id'], outcome='failed', result={
+                    'failure': {'operation': 'validation/1', 'kind': 'command_failed', 'exit_code': 1}})
                 self.broker_call("progress", stage="coding")
-                return "Fix validation/1 in the existing workspace without committing or changing authentication."
+                return command['inputs']['prompt']
+            self.f.advance('publishing')
             return None
         with self.execution() as (root, _):
             with worker.run_codex(self.broker, self.config, self.heartbeat, root, validate=validate):
@@ -278,7 +286,7 @@ class AccountFailoverTests(unittest.TestCase):
         self.assertEqual(self.deadlines, [18000, 18000])
         turns = [params for method, params in self.servers[0].methods if method == "turn/start"]
         self.assertEqual(len(turns), 2)
-        self.assertIn("Fix validation/1", turns[1]["input"][0]["text"])
+        self.assertIn("validation/1", turns[1]["input"][0]["text"])
         resumed = [params for method, params in self.servers[1].methods if method == "thread/resume"]
         self.assertEqual(resumed[0]["threadId"], "thread-one")
         self.assertEqual(json.loads(execution_row(self.f)["exhausted_account_ids"]), [self.identities[0]])
@@ -297,6 +305,7 @@ class AccountFailoverTests(unittest.TestCase):
         with self.execution() as (root, _), patch.object(worker, "read_usage", side_effect=missing):
             with worker.run_codex(self.broker, self.config, self.heartbeat, root):
                 pass
+        self.f.advance('finished')
         self.call("finish", status="completed")
         row = execution_row(self.f)
         segments = json.loads(row["usage_segments"])

@@ -27,7 +27,7 @@ Complete documentation before this prune: parent commit [`f5642f9103c77727752316
 
 ## Remote development
 
-- [Controller implementation](remote-development-controller.md) — SQLite ownership, two-job GitHub workflow and signed roles
+- [Controller implementation](remote-development-controller.md) — SQLite ownership, executor commands, independent phase runs and signed roles
 - [Runtime](remote-development.md) — routing, quota selection, publication, lifecycle, and retries
 - [Controller deployment](remote-development-deployments.md) — runtime freshness, draining, holds and direct Linear ingress
 - [Issue description images](remote-development-images.md) — visual inputs, download limits, approval binding, and validation

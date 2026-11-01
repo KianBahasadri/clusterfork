@@ -11,7 +11,8 @@ from .model import (Admit, Assign, DispatchObserved, ExternalObserved, Finish, H
                     IssueObserved, Phase, Progress, Rejected, Retry, Review, Role,
                     Start, TaskSpec, TaskView, identity, SessionUpdated, EffectUpdated, Authorize, ExhaustAccount,
                     ContextObserved, InboxQueued, InboxDone, Initialize, ReportConfirmed, AccountRequest, InstructionRequest,
-                    Resubmit, EvidenceChanged, ProjectionUpdated, dependency_admission_applies)
+                    Resubmit, EvidenceChanged, ProjectionUpdated, dependency_admission_applies,
+                    StepResult, PublicationResolved, MergeRequested, EffectFailed)
 from common.policy import REVIEW_MAX_ATTEMPTS, REVIEW_RETRY_DELAYS, review_failure_class
 
 
@@ -94,6 +95,30 @@ class Controller:
         except (Rejected, KeyError):
             return False
 
+    def executor_command(self, task_id, attempt_id, *, now):
+        self.authorize(task_id, attempt_id, Role.CODING, 'command', now=now)
+        from .execution import current
+        with self.database.transaction() as db:
+            step = current(db, attempt_id)
+            if not step:
+                raise Rejected('No executor command is available')
+            return {key: step[key] for key in ('step_id', 'kind', 'inputs')}
+
+    def publication_authority(self, task_id, attempt_id):
+        from .authority import admission
+        with self.database.transaction() as db:
+            task = self._task(db, task_id)
+            attempt = self._attempt(db, task, attempt_id)
+            admission(db, task, allow_hold=True)
+            if (task['review_attention'] or task['content_revision'] != json.loads(task['spec'])['content_revision']
+                    or task['phase'] not in {'executing', 'published'}
+                    or not attempt['stopped'] or not attempt['all_stopped'] or attempt['agent_outcome'] != 'completed'):
+                raise Rejected('Publication requires current authority and verified executor completion')
+            session = db.execute("SELECT data FROM sessions WHERE attempt_id=? AND phase='coding'", (attempt_id,)).fetchone()
+            if not session or not json.loads(session[0]).get('publication', {}).get('has_changes'):
+                raise Rejected('No validated publication is available')
+            return self._view(db, task_id)
+
     def context_failure(self, task_id, attempt_id, error, *, now):
         """Interpret trusted retrieval facts; absence of a response is not drift."""
         from common.clients import RequestError
@@ -167,12 +192,17 @@ class Controller:
 
     def review_history(self,task_id):
         with self.database.transaction() as db:
-            return tuple({**dict(row), 'result': json.loads(row['review_result']) if row['review_result'] else {
+            return tuple({**dict(row), **self._review_run(db, row['attempt_id']), 'result': json.loads(row['review_result']) if row['review_result'] else {
                 'verdict': 'execution_failed' if row['retry_decision'] == 'attention' else 'temporary_failure',
                 'summary': row['review_detail'] or row['failure_class'].replace('_', ' ')}}
                 for row in db.execute('SELECT * FROM attempts WHERE task_id=? AND '
                                       '(review_result IS NOT NULL OR failure_class != \'\') ORDER BY ordinal',
                                       (task_id,)).fetchall())
+
+    @staticmethod
+    def _review_run(db, attempt_id):
+        row = db.execute("SELECT run_id,run_attempt FROM sessions WHERE attempt_id=? AND phase='review'", (attempt_id,)).fetchone()
+        return dict(row) if row else {}
 
     def repair_parent(self, task_id):
         with self.database.transaction() as db:
@@ -308,7 +338,8 @@ class Controller:
                 if command.operation!='save':
                     self.authorize(command.task_id,command.attempt_id,command.role,command.operation,now=now)
                 view=self._view(db,command.task_id)
-                owner=f"{command.attempt_id}:{attempt['run_id']}:{attempt['run_attempt']}:{command.role.phase}"
+                session = self._view(db, task['task_id']).session(command.role.phase) or attempt
+                owner=f"{command.attempt_id}:{session['run_id']}:{session['run_attempt']}:{command.role.phase}"
                 from .account_commands import execute
                 return execute(self,db,view,command.role,owner,command.operation,command.data,now)
             if isinstance(command, EffectUpdated):
@@ -355,6 +386,49 @@ class Controller:
                     self._review(db, task, attempt, command, now)
                 elif isinstance(command, Progress):
                     self._progress(db, task, attempt, command, now)
+                elif isinstance(command, StepResult):
+                    self.authorize(command.task_id, command.attempt_id, Role.CODING, 'step_result', now=now)
+                    from .execution import result
+                    result(self, db, task, attempt, command, now)
+                elif isinstance(command, PublicationResolved):
+                    self.publication_authority(task['task_id'], attempt['attempt_id'])
+                    effect = db.execute("SELECT * FROM effects WHERE effect_id=? AND task_id=? AND kind='publication'",
+                                        (command.effect_id, task['task_id'])).fetchone()
+                    if not effect or json.loads(effect['payload'])['attempt_id'] != attempt['attempt_id']:
+                        raise Rejected('Unknown publication effect')
+                    if not re.fullmatch(re.escape('https://github.com/' + task['repository'] + '/pull/') + r'[1-9][0-9]*', command.pull_request, re.I):
+                        raise Rejected('Invalid controller publication reference')
+                    if command.pull_state not in {'open', 'merged', 'closed'}:
+                        raise Rejected('Invalid controller publication state')
+                    db.execute('UPDATE attempts SET pull_request=?,pull_state=?,publication_checked=1 WHERE attempt_id=?',
+                               (command.pull_request, command.pull_state, attempt['attempt_id']))
+                    db.execute("UPDATE effects SET state='done' WHERE effect_id=?", (command.effect_id,))
+                    self._update(db, task, phase='published', reason='Waiting for required checks and controller merge.')
+                elif isinstance(command, MergeRequested):
+                    view = self.publication_authority(task['task_id'], attempt['attempt_id'])
+                    if not view.spec.auto_merge or command.commit_sha != view.session('coding')['data']['publication']['commit_sha']:
+                        raise Rejected('Merge does not match the validated publication')
+                    db.execute('INSERT OR IGNORE INTO effects(effect_id,task_id,kind,payload) VALUES (?,?,?,?)',
+                               (identity(attempt['attempt_id'], 'merge', command.commit_sha), task['task_id'], 'merge',
+                                json.dumps({'attempt_id': attempt['attempt_id'], 'commit_sha': command.commit_sha})))
+                elif isinstance(command, EffectFailed):
+                    effect = db.execute("SELECT * FROM effects WHERE effect_id=? AND task_id=? AND kind IN ('publication','merge')",
+                                        (command.effect_id, task['task_id'])).fetchone()
+                    if not effect or effect['state'] != 'claimed' or json.loads(effect['payload'])['attempt_id'] != attempt['attempt_id']:
+                        raise Rejected('Unknown controller action')
+                    payload = json.loads(effect['payload'])
+                    if command.rejected:
+                        failures = payload.get('failures', 0) + 1
+                        payload.update(failures=failures, retry_at=now+60*failures, rejected=True)
+                        db.execute('UPDATE effects SET state=?,payload=? WHERE effect_id=?',
+                                   ('pending' if failures < 3 else 'done', json.dumps(payload), command.effect_id))
+                        if failures >= 3:
+                            self._review_attention(db, task, attempt, 'controller_action_failed',
+                                                   'GitHub repeatedly rejected controller ' + effect['kind'] + '; resolve repository access or branch requirements.', now)
+                        else:
+                            self._update(db, task, reason='GitHub rejected controller ' + effect['kind'] + '; a bounded retry is scheduled.')
+                    else:
+                        self._update(db, task, reason='Controller ' + effect['kind'] + ' outcome is uncertain; checking GitHub before advancing.')
                 elif isinstance(command, Finish):
                     self._finish(db, task, attempt, command, now)
                 elif isinstance(command, ExternalObserved):
@@ -499,6 +573,8 @@ class Controller:
             from .authority import admission
             admission(db, task, allow_hold=True)
         ordinal = db.execute("SELECT COALESCE(MAX(ordinal),0)+1 FROM attempts WHERE task_id=?", (task["task_id"],)).fetchone()[0]
+        db.execute("UPDATE effects SET state='done' WHERE task_id=? AND kind IN ('publication','merge') AND state='pending'",
+                   (task['task_id'],))
         attempt_id = identity(task["task_id"], ordinal)
         db.execute("INSERT INTO attempts(attempt_id,task_id,ordinal,dispatch_status,started_at,attempt_kind,review_cycle) "
                    "VALUES(?,?,?,'intent',?,?,?)", (attempt_id, task["task_id"], ordinal, now, kind, task['review_cycle']))
@@ -507,7 +583,7 @@ class Controller:
                      review_attempts=task['review_attempts']+1,
                      review_submitted_at=task['review_submitted_at'] or now)
         db.execute("INSERT INTO effects(effect_id,task_id,kind,payload) VALUES(?,?,?,?)",
-                   (attempt_id, task["task_id"], "dispatch", json.dumps({"attempt_id": attempt_id})))
+                   (attempt_id, task["task_id"], "dispatch", json.dumps({"attempt_id": attempt_id, "phase": "review"})))
         if initial:
             self._queue_reports(db,task['repository'])
 
@@ -517,6 +593,8 @@ class Controller:
             raise Rejected("Invalid authenticated job identity")
         if attempt["stopped"]:
             raise Rejected("This attempt already stopped")
+        if command.role.phase != attempt['execution_phase']:
+            raise Rejected('The controller has not dispatched this execution phase')
         if attempt["run_id"] and (attempt["run_id"], attempt["run_attempt"]) != (command.run_id, command.run_attempt):
             raise Rejected("This dispatch belongs to another GitHub attempt")
         if command.role.phase == "coding":
@@ -525,8 +603,8 @@ class Controller:
                 raise Rejected("A valid successful review job is required before coding")
         db.execute("UPDATE attempts SET run_id=?,run_attempt=?,dispatch_status='accepted' WHERE attempt_id=?",
                    (command.run_id, command.run_attempt, command.attempt_id))
-        db.execute("INSERT OR IGNORE INTO sessions(attempt_id,phase,deadline) VALUES (?,?,?)",
-                   (command.attempt_id, command.role.phase, now + (720 if command.role.phase == "review" else 6 * 3600)))
+        db.execute("INSERT OR IGNORE INTO sessions(attempt_id,phase,deadline,run_id,run_attempt) VALUES (?,?,?,?,?)",
+                   (command.attempt_id, command.role.phase, now + (720 if command.role.phase == "review" else 6 * 3600), command.run_id, command.run_attempt))
         session = dict(db.execute("SELECT * FROM sessions WHERE attempt_id=? AND phase=?",
                                   (command.attempt_id, command.role.phase)).fetchone())
         if session["finished"] or session["deadline"] <= now:
@@ -547,6 +625,9 @@ class Controller:
                 data={**json.loads(session['data']),'agent_started_at':now}
                 db.execute("UPDATE sessions SET data=? WHERE attempt_id=? AND phase=?",
                            (json.dumps(data),command.attempt_id,command.role.phase))
+                if command.role.phase == 'coding':
+                    from .execution import issue
+                    issue(db, command.attempt_id, 'coding')
 
     def _session(self, db, task, attempt, command):
         allowed = {"thread_id", "turn_id", "steering_closed", "account_email", "account_plan",
@@ -652,6 +733,11 @@ class Controller:
         self.authorize(command.task_id, command.attempt_id, Role.CODING, 'progress', now=now)
         if command.stage not in {"initializing", "selecting_account", "coding", "testing", "publishing"}:
             raise Rejected("Invalid coding stage")
+        from .execution import current
+        step = current(db, command.attempt_id)
+        if (step and (command.stage in {'testing', 'publishing'} or attempt['stage'] in {'testing', 'publishing'})
+                and command.stage != step['kind'] and not (step['kind'] in {'finished', 'preserving'} and command.stage == attempt['stage'])):
+            raise Rejected('Only the controller can advance executor stages')
         session = db.execute("SELECT * FROM sessions WHERE attempt_id=? AND phase='coding'", (command.attempt_id,)).fetchone()
         if not session or not session["agent_started"] or session["finished"]:
             raise Rejected("Coding job is not active")
@@ -673,6 +759,11 @@ class Controller:
         session = db.execute("SELECT * FROM sessions WHERE attempt_id=? AND phase=?", (command.attempt_id, command.phase)).fetchone()
         if not session:
             raise Rejected("Unknown execution phase")
+        if command.phase == 'coding' and command.outcome == 'completed':
+            from .execution import current
+            step = current(db, command.attempt_id)
+            if not step or step['kind'] != 'finished' or command.pull_request:
+                raise Rejected('Successful execution must return validated publication evidence to the controller')
         if command.phase=="coding" and command.outcome=="completed" and attempt["attempt_kind"]=="repair":
             validation=json.loads(session["data"])
             if not validation.get("repair_validation_passed") or not validation.get("repair_result"):
@@ -709,7 +800,7 @@ class Controller:
             return
         if task['review_attention']:
             return
-        self._update(db, task, phase="published" if command.pull_request else "held",
+        self._update(db, task, phase="executing" if command.phase == 'coding' and command.outcome == 'completed' else "held",
                      reason=command.reason or ("Waiting for CI and merge." if command.pull_request else "Waiting for verified GitHub completion."))
 
     def _review_attention(self, db, task, attempt, classification, detail, now):
@@ -797,14 +888,44 @@ class Controller:
             if command.stopped and not task['review_attention'] and not attempt['retry_kind']:
                 self._update(db, task, phase="held", reason=command.reason or "Waiting for complete stop and publication evidence.")
             return
+        result = json.loads(attempt['review_result'] or 'null')
+        if (attempt['execution_phase'] == 'review' and result and result.get('verdict') == 'ready'
+                and command.conclusion == 'success' and command.pull_state in {'absent', 'open'}
+                and not task['review_attention'] and task['eligible'] and task['dependencies_ready']):
+            self._release_stopped_credentials(db, task)
+            db.execute("UPDATE attempts SET execution_phase='coding',run_id='',run_attempt=0,dispatch_status='intent',"
+                       "stopped=0,all_stopped=0,publication_checked=0,conclusion='',stage='initializing' WHERE attempt_id=?",
+                       (attempt['attempt_id'],))
+            db.execute('INSERT OR IGNORE INTO effects(effect_id,task_id,kind,payload) VALUES (?,?,?,?)',
+                       (identity(attempt['attempt_id'], 'coding-dispatch'), task['task_id'], 'dispatch',
+                        json.dumps({'attempt_id': attempt['attempt_id'], 'phase': 'coding'})))
+            self._update(db, task, phase='ready', reason='Controller dispatched coding after verified review completion.')
+            return
         self._release_stopped_credentials(db, task)
-        no_changes = command.pull_state == "absent" and attempt["agent_outcome"] == "completed" and command.conclusion == "success"
+        coding_session = db.execute("SELECT data FROM sessions WHERE attempt_id=? AND phase='coding'", (attempt['attempt_id'],)).fetchone()
+        prepared = json.loads(coding_session[0]).get('publication', {}) if coding_session else {}
+        unresolved_create = any(row['state'] == 'claimed' for row in db.execute(
+            "SELECT state FROM effects WHERE task_id=? AND kind='publication' AND state!='done'", (task['task_id'],)))
+        if unresolved_create and command.pull_state == 'absent':
+            self._update(db, task, reason='Controller publication outcome is uncertain; retaining ownership until GitHub resolves it.')
+            return
+        unresolved_merge = any(row['state'] == 'claimed' for row in db.execute(
+            "SELECT state FROM effects WHERE task_id=? AND kind='merge' AND state!='done'", (task['task_id'],)))
+        if unresolved_merge and command.pull_state == 'open':
+            self._update(db, task, phase='published', reason='Controller merge outcome is uncertain; checking GitHub before further execution.')
+            return
+        no_changes = (command.pull_state == 'absent' and attempt['agent_outcome'] == 'completed'
+                      and command.conclusion == 'success' and prepared.get('has_changes') is False)
         if command.pull_state == 'merged' or no_changes or task['canceled'] and command.pull_state in {'absent', 'closed'}:
             phase = 'completed' if command.pull_state == 'merged' or no_changes else 'canceled'
             self._update(db, task, phase=phase, reason=command.reason or (
                 'Pull request merged.' if command.pull_state == 'merged' else 'Verified task outcome.'))
             db.execute("UPDATE attempts SET retry_kind='',retry_at=0 WHERE attempt_id=?", (command.attempt_id,))
             self._release_grant(db, task)
+            return
+        if (prepared.get('has_changes') and command.pull_state == 'absent' and attempt['agent_outcome'] == 'completed'
+                and not task['review_attention']):
+            self._update(db, task, phase='executing', reason='Waiting for controller publication of the prepared commit.')
             return
         if (not task['review_attention'] and task["eligible"] and not task["dependencies_ready"]
                 and dependency_admission_applies(attempt) and command.pull_state == "absent"):
@@ -859,11 +980,11 @@ class Controller:
         # exact fenced owners, retaining refreshed auth and unrelated leases.
         for attempt in db.execute('SELECT * FROM attempts WHERE task_id=?', (task['task_id'],)).fetchall():
             for phase in ('review', 'coding'):
-                owner = f"{attempt['attempt_id']}:{attempt['run_id']}:{attempt['run_attempt']}:{phase}"
-                db.execute("UPDATE accounts SET owner='',fence='',lease_until=0,version=version+1 WHERE owner=?", (owner,))
-                session = db.execute('SELECT data FROM sessions WHERE attempt_id=? AND phase=?',
+                session = db.execute('SELECT data,run_id,run_attempt FROM sessions WHERE attempt_id=? AND phase=?',
                                      (attempt['attempt_id'], phase)).fetchone()
                 if session:
+                    owner = f"{attempt['attempt_id']}:{session['run_id']}:{session['run_attempt']}:{phase}"
+                    db.execute("UPDATE accounts SET owner='',fence='',lease_until=0,version=version+1 WHERE owner=?", (owner,))
                     data = {**json.loads(session[0]), 'account_reserved': False, 'probe_account_id': ''}
                     db.execute('UPDATE sessions SET finished=1,data=? WHERE attempt_id=? AND phase=?',
                                (json.dumps(data), attempt['attempt_id'], phase))

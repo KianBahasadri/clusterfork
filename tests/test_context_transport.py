@@ -100,6 +100,7 @@ class ContextTransportTests(unittest.TestCase):
                     self.assertNotIn("Bearer", config_text)
                     self.assertNotIn("CONTROLLER_ONLY", config_text)
                     if phase == "coding":
+                        fx.f.advance('publishing')
                         self.assertEqual(call("github"), {"token": "ghs_CONTROLLER_ONLY"})
 
     @unittest.skipUnless(shutil.which("codex"), "Codex CLI unavailable")

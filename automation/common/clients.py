@@ -565,7 +565,7 @@ class GitHub:
             raise RequestError()
         return result["sha"]
 
-    def verify_worker_run(self, repository, claims, dispatch_key, *, workflow="clusterfork-task.yml"):
+    def verify_worker_run(self, repository, claims, dispatch_key, *, workflow="clusterfork-task.yml", phase=None):
         from common.accounts import WorkerError
         token = self.installation_token(repository, permissions={"actions": "read"})
         run = self.request(f"https://api.github.com/repos/{repository}/actions/runs/{claims['run_id']}",
@@ -576,6 +576,7 @@ class GitHub:
                 or run.get("head_repository", {}).get("full_name") != repository
                 or run.get("path") != f".github/workflows/{workflow}"
                 or dispatch_key not in run.get("display_title", "")
+                or phase is not None and f' · {phase} · {dispatch_key}' not in run.get('display_title', '')
                 or run.get("actor", {}).get("login") != "clusterfork[bot]"):
             raise WorkerError("GitHub run does not match the dispatch", 403)
 
@@ -611,6 +612,8 @@ class GitHub:
             runs = result["workflow_runs"]
             for run in runs:
                 if key not in run.get("display_title", ""):
+                    continue
+                if getattr(route, 'phase', None) and f" · {route.phase} · {key}" not in run.get('display_title', ''):
                     continue
                 if (run.get("event") != "workflow_dispatch"
                         or run.get("path") != f".github/workflows/{route.workflow}"
@@ -664,7 +667,7 @@ class GitHub:
         result = self.request("https://api.github.com/graphql", token=f"Bearer {token}", method="POST", data={
             "query": """query($owner: String!, $name: String!, $number: Int!) {
               repository(owner: $owner, name: $name) { pullRequest(number: $number) {
-                url state merged body baseRefName headRefName headRepository { nameWithOwner }
+                url state merged body title baseRefName headRefName headRefOid headRepository { nameWithOwner }
                 author { login __typename } mergeable mergeStateStatus isDraft autoMergeRequest { enabledAt }
                 commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) {
                   nodes {
@@ -684,6 +687,33 @@ class GitHub:
                 or f"<!-- clusterfork-dispatch:{target_key} -->" not in (pull.get("body") or "")):
             raise RequestError()
         return pull
+
+    def create_worker_pull(self, route, publication):
+        token = self.installation_token(route.repository, permissions={'pull_requests': 'write'})
+        try:
+            return self.request(f'https://api.github.com/repos/{route.repository}/pulls', token=f'Bearer {token}',
+                                method='POST', data={'title': publication['title'], 'body': publication['body'],
+                                                     'head': publication['branch'], 'base': route.ref})
+        except RequestError as exc:
+            raise DispatchError('Controller publication request failed', uncertain=exc.status is None or exc.status >= 500) from None
+
+    def merge_worker_pull(self, route, url, commit_sha):
+        import re
+        match = re.fullmatch(re.escape(f'https://github.com/{route.repository}/pull/') + r'([1-9][0-9]*)', url)
+        if not match or not re.fullmatch('[0-9a-f]{40}', commit_sha):
+            raise ValueError('Invalid controller merge identity')
+        permissions = {'contents': 'write', 'pull_requests': 'write'}
+        if self.workflow_changes_allowed(route.repository) is True:
+            permissions['workflows'] = 'write'
+        token = self.installation_token(route.repository, permissions=permissions)
+        try:
+            result = self.request(f'https://api.github.com/repos/{route.repository}/pulls/{match[1]}/merge',
+                                  token=f'Bearer {token}', method='PUT', data={'sha': commit_sha, 'merge_method': 'squash'})
+        except RequestError as exc:
+            raise DispatchError('Controller merge request failed', uncertain=exc.status is None or exc.status >= 500) from None
+        if not isinstance(result, dict) or result.get('merged') is not True:
+            raise DispatchError('Controller merge request was rejected', uncertain=False)
+        return result
 
     def dispatch(self, route, inputs):
         token = self.installation_token(route.repository)
