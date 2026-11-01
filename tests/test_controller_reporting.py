@@ -52,12 +52,15 @@ class ControllerReportingTests(unittest.TestCase):
         self.assertEqual(f.controller.inspect(f.view.task_id).session('review')['account_id'],f.account_a)
         self.assertTrue(f.controller.inspect(f.view.task_id).active)
         f.call(Role.REVIEW,'review',binding=config['binding'],result=ready())
+        self.fixture.runs[f.key].update(status='completed',conclusion='success')
+        self.driver.tick()
         self.driver.report()
         self.assert_status(f.issue['id'],SELECTION_LABEL)
         f.preflight(Role.CODING_SELECT,f.account_b)
         f.call(Role.CODING,'start',protocol=PROTOCOL)
         url=f'https://github.com/{f.route.repository}/pull/1'
-        f.call(Role.CODING,'finish',status='completed',pull_request=url)
+        f.advance('finished',has_changes=True)
+        f.call(Role.CODING,'finish',status='completed')
         self.fixture.runs[f.key].update(status='completed',conclusion='success')
         f.github.worker_pull.side_effect=lambda route,receipt,key,url='': (
             {'merged':True,'state':'MERGED','url':f'https://github.com/{f.route.repository}/pull/1'}
@@ -69,7 +72,7 @@ class ControllerReportingTests(unittest.TestCase):
         second=next(v for v in f.controller.tasks() if v.issue_id==self.fixture.second_issue['id'])
         self.assertTrue(second.active)
         self.assertEqual(second.spec.context_sha,'c'*40)
-        self.assertEqual(f.github.dispatch.call_count,2)
+        self.assertEqual(f.github.dispatch.call_count,3)
 
     def test_real_coding_results_report_usage_time_and_keep_start_immutable(self):
         f=self.f
@@ -98,12 +101,15 @@ class ControllerReportingTests(unittest.TestCase):
         after=copy.deepcopy(before)
         after['observed_at']=1123
         after['windows'][0]['used_percent']=43
+        f.advance('testing')
         f.call(Role.CODING,'progress',stage='testing',usage_after=after,usage_account_id=f.account_b)
         self.driver.report()
         self.assert_status(f.issue['id'],STAGE_LABELS['testing'])
+        f.advance('publishing')
         f.call(Role.CODING,'progress',stage='publishing')
         self.driver.report()
         self.assert_status(f.issue['id'],STAGE_LABELS['publishing'])
+        f.advance('finished')
         f.call(Role.CODING,'save',account_id=f.account_b,lease=leased['lease'],release=True)
         f.broker.clock=lambda:1123
         f.call(Role.CODING,'finish',status='completed')
@@ -114,7 +120,7 @@ class ControllerReportingTests(unittest.TestCase):
         self.assertIn('- primary (300-minute): 40% used / 60% remaining → **43% used** / 57% remaining',finishes[0].args[2])
         self.assertIn('usage change +3 percentage points',finishes[0].args[2])
         self.assertEqual(len([call for call in f.linear.status_comment.call_args_list if 'development started.' in call.args[2]]),1)
-        f.controller.apply(ExternalObserved(f.view.task_id,f.key,'123',1,True,'success',True,True,pull_state='absent'),now=1123)
+        f.controller.apply(ExternalObserved(f.view.task_id,f.key,str(f.run_ids['coding']),1,True,'success',True,True,pull_state='absent'),now=1123)
         self.driver.report()
         self.assert_status(f.issue['id'],None)
         self.assertFalse(f.controller.inspect(f.view.task_id).active)
@@ -162,8 +168,9 @@ class ControllerReportingTests(unittest.TestCase):
         f.review()
         f.preflight(Role.CODING_SELECT,f.account_b)
         f.call(Role.CODING,'start',protocol=PROTOCOL)
+        f.advance('finished')
         f.controller.apply(Finish(view.task_id,f.key,'coding','completed'),now=1000)
-        f.controller.apply(ExternalObserved(view.task_id,f.key,'123',1,True,'success',True,True,pull_state='absent'),now=1000)
+        f.controller.apply(ExternalObserved(view.task_id,f.key,str(f.run_ids['coding']),1,True,'success',True,True,pull_state='absent'),now=1000)
         self.driver.report()
         settled=f.controller.inspect(view.task_id)
         signature=f.controller.report_signature('task:'+view.task_id)
@@ -199,7 +206,7 @@ class ControllerReportingTests(unittest.TestCase):
         self.fixture.runs[f.key].update(status='completed',conclusion='success')
         self.driver.tick()
         self.assert_status(f.issue['id'],STAGE_LABELS['waiting_for_quota'])
-        self.assertEqual(f.github.dispatch.call_count,1)
+        self.assertEqual(f.github.dispatch.call_count,1 + (role.phase=='coding'))
         self.driver.clock=lambda:1900
         self.driver.tick()
         retried=f.controller.inspect(f.view.task_id)
@@ -207,7 +214,7 @@ class ControllerReportingTests(unittest.TestCase):
         self.assertTrue(retried.active)
         self.assert_status(f.issue['id'],SELECTION_LABEL)
         self.assert_status(self.fixture.second_issue['id'],QUEUED_LABEL)
-        self.assertEqual(f.github.dispatch.call_count,2)
+        self.assertEqual(f.github.dispatch.call_count,2 + (role.phase=='coding'))
 
     def test_review_quota_wait_replaces_selection_and_preserves_retry_and_grant(self):
         self.quota_wait(Role.REVIEW_SELECT)
@@ -222,9 +229,10 @@ class ControllerReportingTests(unittest.TestCase):
         f.preflight(Role.CODING_SELECT,f.account_b)
         f.call(Role.CODING,'start',protocol=PROTOCOL)
         url=f'https://github.com/{f.route.repository}/pull/1'
-        f.call(Role.CODING,'finish',status='completed',pull_request=url)
+        f.advance('finished',has_changes=True)
+        f.call(Role.CODING,'finish',status='completed')
         self.driver.report()
-        self.assert_status(f.issue['id'],STAGE_LABELS['review'])
+        self.assert_status(f.issue['id'],STAGE_LABELS['publishing'])
         self.fixture.runs[f.key].update(status='completed',conclusion='success')
         pull={'merged':False,'state':'OPEN','url':url}
         f.github.worker_pull.side_effect=lambda route,receipt,key,url='':pull if key==f.view.task_id else None
@@ -270,8 +278,8 @@ class ControllerReportingTests(unittest.TestCase):
     def test_failed_stage_replacement_does_not_confirm_report_or_change_execution(self):
         f=self.f
         self.driver.tick(scan=True)
-        signature=f.controller.report_signature('task:'+f.view.task_id)
         f.review()
+        signature=f.controller.report_signature('task:'+f.view.task_id)
         f.preflight(Role.CODING_SELECT,f.account_b)
         f.call(Role.CODING,'start',protocol=PROTOCOL)
         f.call(Role.CODING,'progress',stage='selecting_account')
@@ -291,7 +299,7 @@ class ControllerReportingTests(unittest.TestCase):
         self.driver.report()
         self.assert_status(f.issue['id'],STAGE_LABELS['selecting_account'])
         self.assertFalse(f.controller.effects('report'))
-        self.assertEqual(f.github.dispatch.call_count,1)
+        self.assertEqual(f.github.dispatch.call_count,2)
         self.assertEqual(f.controller.inspect(f.view.task_id).session('coding')['account_id'],f.account_b)
 
     def test_unchanged_projection_still_cleans_stale_labels_and_retries_failed_cleanup(self):

@@ -10,6 +10,7 @@ REVIEW_ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "bind_accou
 CODING_ACTIONS = {"start", "heartbeat", "accounts", "claim", "save", "bind_account", "exhaust_account",
                   "checkout", "github", "progress", "finish", "steering_open", "instructions",
                   "instruction_result", "steering_close", "context"}
+CODING_ACTIONS.update({'command', 'step_result'})
 
 
 def release_ref(revision):

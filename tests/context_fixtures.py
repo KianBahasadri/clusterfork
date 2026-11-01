@@ -68,7 +68,12 @@ class ContextFixture:
         return config
 
     def approve(self, config):
-        return self.call(Role.REVIEW, "review", binding=config["binding"], result=fixtures.ready())
+        result = self.call(Role.REVIEW, "review", binding=config["binding"], result=fixtures.ready())
+        from controller.model import ExternalObserved
+        view = self.f.controller.inspect(self.f.view.task_id)
+        self.f.controller.apply(ExternalObserved(view.task_id, self.f.key, view.attempt['run_id'], view.attempt['run_attempt'],
+                                                 True, 'success', True, True, pull_state='absent'), now=self.f.broker.clock())
+        return result
 
     def start_coding(self):
         self.f.preflight(Role.CODING_SELECT, self.f.account_b)

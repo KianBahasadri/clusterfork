@@ -68,7 +68,7 @@ fails validation rather than skipping renderer coverage.
 | --- | --- |
 | `discover` | Find real GitHub identity and existing Linear project/team/state UUIDs |
 | `configure` | Preview/write mapping and optional validation CI; preserve unrelated files |
-| `merge` | Add required checks and automatic squash merge; retain protections |
+| `merge` | Add required checks and permit controller squash merging; retain protections |
 | `verify` | Check deployed mapping/runtime, workflow/tag, App grants, current CI, states/labels |
 | `enroll` | Repeat verification; add existing enrollment project label last |
 

@@ -1,7 +1,8 @@
 # clusterfork-symphony controller
 
-The Azure VM controller owns task decisions and durable resources; GitHub executes
-the phases. See [runtime policy](remote-development.md), [queues](remote-development-queue.md),
+The Azure VM controller is the sole task orchestrator. Linear supplies human
+requests and displays committed status; GitHub runners execute controller commands.
+See [runtime policy](remote-development.md), [queues](remote-development-queue.md),
 [accounts](remote-development-accounts.md) and [deployment](remote-development-deployments.md)
 for their operational rules.
 
@@ -66,9 +67,10 @@ secrets and verifies the expected VM resource identity before serving.
 
 ## Deployment and migration
 
-SQLite schema 11 adds intent/workflow records and indexes without rewriting
-task, attempt, grant, lease or approval history. Startup recovers intent from the
-retained authenticated inbox. Older controller binaries reject schema 11;
+SQLite schema 12 retains each phase's GitHub run identity and durable executor
+commands/results. Upgrades retain task, grant, lease, approval and human-intent
+history; existing phase identities are adopted from their recorded attempt.
+Startup recovers intent from the retained authenticated inbox. Older controller binaries reject schema 12;
 rollback requires a compatible binary or restoration of the pre-upgrade database
 after the normal deployment drain. [Queue policy](remote-development-queue.md#linear-feedback)
 owns adoption of existing Linear projection acknowledgements.
@@ -80,27 +82,47 @@ are removed; their [historical records](README.md#historical-investigations) rem
 [Deployment](remote-development-deployments.md) owns runtime identity, draining,
 ingress and operator/deployment holds, including initial-install holds.
 
-## Native execution graph
+## Controller-owned execution
 
-`automation/controller/workflows.py` generates `clusterfork-task.yml`: `review`,
-then `code` after successful review, each on a fresh hosted VM. Each job checks
-out approved runtime and runs one trusted worker: probe quota, reserve an account,
-irreversibly close initial pool access, obtain scoped target checkout, execute.
-Runtime and target checkouts are siblings. Only the review scheduling boolean
-crosses jobs; review and coding have separate account bindings.
+`automation/controller/workflows.py` generates `clusterfork-task.yml`, which
+executes exactly the controller-selected `review` or `coding` phase. There is no
+job dependency or worker result that schedules another phase. After readiness
+approval, the controller verifies that review and its cleanup stopped, releases
+its credentials, and durably dispatches coding as a separate GitHub run. Each
+phase uses a fresh hosted VM, independent account binding and the approved runtime.
+Runtime and target checkouts are siblings.
+
+Inside coding, `execution.py` implements Controller's durable commands: coding,
+testing, bounded coding corrections, and commit/push preparation. Workers report
+results against immutable command IDs; repeated identical results return the
+current command, while conflicting or superseded results cannot advance work.
+Progress reports cannot choose another stage or grant push access. Commands,
+correction counts and result receipts survive controller restart.
 
 The assignment transaction reserves the lease; heartbeats renew it through
 checkout. Starting execution cannot reopen initial selection. Review uses the
-read-only sandbox; coding validates and publishes a guarded PR before credential
-release. The controller dispatches at its verified immutable runtime tag.
+read-only sandbox. Coding executes validation and guarded commit/push commands,
+then returns the exact prepared SHA and scanned PR metadata. Only the controller
+creates/recovers the PR and decides when to merge; the worker has no PR-write
+credential. A successful callback with prepared changes cannot count as no-change
+completion while publication remains pending. The controller dispatches at its
+verified immutable runtime tag.
+
+`publication.py` performs persisted PR/merge effects outside transactions after
+verified executor stop and fresh task/context authorization. Definite rejections
+permit at most three calls, with durable one- and two-minute delays. Ambiguous
+writes are discovered instead of blindly repeated. An unresolved PR creation
+retains repository ownership even after cancellation. Terminal observations settle
+pending effects without polling historical tasks. [Runtime](remote-development.md#automatic-merges)
+owns check and merge policy.
 
 `authorization.py` binds verified GitHub OIDC claims to the mapped task, immutable
 runtime tag/revision, exact caller workflow and reusable job role. The HTTP adapter
 cryptographically verifies signature, issuer, audience and expiry, and checks
 hosted-runner type, run/attempt and actual dispatch by `clusterfork[bot]`. The task
 grant authorizes the mapped target, independently of caller repository name.
-Coding also requires successful `review / run` evidence from the exact GitHub
-attempt; an output boolean alone cannot authorize it.
+Coding also requires successful `review / run` evidence from the recorded review
+run/attempt; its own GitHub identity remains separately bound.
 
 ## Verification
 

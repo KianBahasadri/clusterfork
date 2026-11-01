@@ -59,7 +59,8 @@ class ControllerTests(unittest.TestCase):
         self.start(view, Role.REVIEW_SELECT)
         self.apply(Assign(view.task_id, view.attempt["attempt_id"], Role.REVIEW_SELECT, ACCOUNT_A))
         self.start(view, Role.REVIEW)
-        return self.apply(Review(view.task_id, view.attempt["attempt_id"], ready(), SPEC))
+        reviewed = self.apply(Review(view.task_id, view.attempt["attempt_id"], ready(), SPEC))
+        return self.external(reviewed)
 
     def coding(self, view):
         self.review(view)
@@ -96,7 +97,7 @@ class ControllerTests(unittest.TestCase):
             self.assertTrue(restored.active)
             self.assertEqual(restored.attempt["attempt_id"],view.attempt["attempt_id"])
             self.assertEqual(restored.attempt["attempt_kind"],"normal")
-            self.assertEqual(upgraded.connection.execute("PRAGMA user_version").fetchone()[0],11)
+            self.assertEqual(upgraded.connection.execute("PRAGMA user_version").fetchone()[0],12)
 
     def test_ineligibility_is_not_cancellation_and_canceled_work_requires_stop_and_pr_resolution(self):
         issue=self.issue()
@@ -221,6 +222,7 @@ class ControllerTests(unittest.TestCase):
     def test_partial_manual_rerun_cannot_inherit_assignment_or_review(self):
         view = self.admit()
         self.review(view)
+        self.start(view, Role.CODING_SELECT, review_job_succeeded=True)
         with self.assertRaisesRegex(Rejected, "another GitHub attempt"):
             self.apply(Start(view.task_id, view.attempt["attempt_id"], "123", 2,
                              Role.CODING_SELECT, review_job_succeeded=True))
@@ -257,6 +259,8 @@ class ControllerTests(unittest.TestCase):
 
     def test_finish_callback_does_not_release_repository_before_cleanup(self):
         view = self.coding(self.admit())
+        from controller_fixtures import advance_to
+        advance_to(self.controller, view, 'finished')
         view = self.apply(Finish(view.task_id, view.attempt["attempt_id"], "coding", "completed"))
         self.assertTrue(view.active)
         self.assertNotEqual(view.phase, Phase.COMPLETED)
@@ -269,7 +273,9 @@ class ControllerTests(unittest.TestCase):
     def test_publication_survives_job_cleanup_failure_and_merge_is_authoritative(self):
         view = self.coding(self.admit())
         url = "https://github.com/Owner/Repo/pull/5"
-        self.apply(Finish(view.task_id, view.attempt["attempt_id"], "coding", "completed", url))
+        from controller_fixtures import advance_to
+        advance_to(self.controller, view, 'finished', has_changes=True)
+        self.apply(Finish(view.task_id, view.attempt["attempt_id"], "coding", "completed"))
         view = self.external(view, conclusion="failure", pull_request=url, pull_state="open")
         self.assertTrue(view.active)
         self.assertEqual(view.phase, Phase.PUBLISHED)

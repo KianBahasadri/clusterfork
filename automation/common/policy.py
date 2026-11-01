@@ -117,7 +117,7 @@ def digest(value):
 STEERING_PROTOCOL = "linear-steering-v1"
 AUTO_REPAIR_PROTOCOL = "auto-repair-original-issue-broker-instructions-v3"
 ACCOUNT_ISOLATION_PROTOCOL = "codex-first-cursor-grok-high-single-account-v3"
-WORKER_RECOVERY_PROTOCOL = "in-session-validation-private-failures-wip-v1"
+WORKER_RECOVERY_PROTOCOL = "controller-orchestration-steps-publication-merge-v2"
 MAX_CORRECTION_TURNS = 2
 MAX_FAILURE_OUTPUT_BYTES = 16_000
 WORKFLOW_PUBLICATION = {

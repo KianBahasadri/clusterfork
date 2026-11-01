@@ -263,7 +263,7 @@ def configure_merge(row, *, apply=False):
         raise SetupError("Resolve the existing merge policy and configure meaningful required CI checks")
     changes = []
     info = gh(f"repos/{repo}")
-    settings = {key: True for key in ("allow_auto_merge", "allow_squash_merge") if info.get(key) is not True}
+    settings = {key: True for key in ("allow_squash_merge",) if info.get(key) is not True}
     missing = required - effective_checks(repo, branch)
     ruleset = None
     body = None
@@ -290,7 +290,7 @@ def configure_merge(row, *, apply=False):
         params["required_status_checks"] += [{"context": name} for name in sorted(required - present)]
         params.update(strict_required_status_checks_policy=True, do_not_enforce_on_create=False)
     if settings:
-        changes.append("enable repository auto-merge and squash merge")
+        changes.append("enable repository squash merge for controller-managed merging")
     if body:
         changes.append("add required checks without replacing existing protections: " + ", ".join(sorted(missing)))
     if apply:
@@ -377,7 +377,7 @@ def verify(checkout, registry_path, project_id, linear, *, label_id=None):
     if evidence.get("workflow_active") is not True:
         raise SetupError("The configured worker workflow must be active in GitHub Actions")
     info = gh(f"repos/{repo}")
-    if not row["auto_merge"] or not info.get("allow_auto_merge") or not info.get("allow_squash_merge"):
+    if not row["auto_merge"] or not info.get("allow_squash_merge"):
         raise SetupError("Configure automatic squash merging without overriding the existing merge policy")
     required = set(row["required_checks"])
     if not required or not required.issubset(effective_checks(repo, branch)):

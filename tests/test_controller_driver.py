@@ -10,7 +10,7 @@ from uuid import UUID
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "automation")]
 from controller.driver import Driver
-from controller.model import Phase, Role, Hold, InboxQueued, identity
+from controller.model import Phase, Role, Hold, InboxQueued, identity, Rejected
 from common.routing import DispatchError
 from common.policy import PROTOCOL
 import test_controller_broker as fixtures
@@ -64,17 +64,32 @@ class ControllerDriverTests(unittest.TestCase):
         f.linear.set_state.side_effect=lambda key,state:self.change_state(
             key, {'id':state,'type':'started'}, app=True, own=True)
         self.runs={}
+        self.run_history=[]
+        f.run_ids={}
         self.counter=122
         def dispatch(route,inputs):
             self.counter+=1
-            self.runs[inputs["dispatch_key"]]={"id":self.counter,"run_attempt":1,"status":"in_progress","conclusion":None}
+            run={"id":self.counter,"run_attempt":1,"status":"in_progress","conclusion":None,
+                 'phase': inputs['phase'], 'key': inputs['dispatch_key'],
+                 'display_title': f"Clusterfork task · {inputs['linear_identifier']} · {inputs['phase']} · {inputs['dispatch_key']}"}
+            self.runs[inputs['dispatch_key']]=run
+            self.run_history.append(run)
+            f.run_ids[inputs['phase']]=self.counter
         f.github.dispatch.side_effect=dispatch
-        f.github.dispatch_runs.side_effect=lambda route,key:[copy.deepcopy(self.runs[key])] if key in self.runs else []
-        f.github.worker_result.side_effect=lambda repo,owner,**kwargs:copy.deepcopy(next(r for r in self.runs.values() if str(r["id"])==owner.split(":")[0]))
+        f.github.dispatch_runs.side_effect=lambda route,key:[copy.deepcopy(r) for r in self.run_history if r['key']==key and (not route.phase or r['phase']==route.phase)]
+        f.github.worker_result.side_effect=lambda repo,owner,**kwargs:copy.deepcopy(next(r for r in self.run_history if str(r["id"])==owner.split(":")[0]))
         f.github.worker_pull.return_value=None
         self.ready=True
         self.driver=Driver(f.controller,f.registry,f.linear,f.github,f.spec.runtime_sha,
                            runtime_ready=lambda:self.ready,clock=lambda:1000)
+        review = f.review
+        def reviewed():
+            if f.key not in self.runs:
+                self.driver.dispatch()
+            review()
+            self.runs[f.key].update(status='completed', conclusion='success')
+            self.driver.tick()
+        f.review=reviewed
 
     def publish_and_merge_first(self):
         f=self.fixture
@@ -82,7 +97,8 @@ class ControllerDriverTests(unittest.TestCase):
         f.review()
         f.preflight(Role.CODING_SELECT,f.account_b)
         f.call(Role.CODING,"start",protocol=PROTOCOL)
-        f.call(Role.CODING,"finish",status="completed",pull_request=f"https://github.com/{f.route.repository}/pull/1")
+        f.advance('finished', has_changes=True)
+        f.call(Role.CODING,"finish",status="completed")
         self.runs[f.key].update(status="completed",conclusion="success")
         f.github.worker_pull.side_effect=lambda route,receipt,key,url="": (
             {"merged":True,"state":"MERGED","url":f"https://github.com/{f.route.repository}/pull/1"}
@@ -100,9 +116,9 @@ class ControllerDriverTests(unittest.TestCase):
         self.assertTrue(second.active)
         self.assertEqual(second.spec.context_sha,"c"*40)
         self.assertEqual(second.spec.runtime_sha,f.spec.runtime_sha)
-        self.assertEqual(f.github.dispatch.call_count,2)
+        self.assertEqual(f.github.dispatch.call_count,3)
         self.driver.tick()
-        self.assertEqual(f.github.dispatch.call_count,2)
+        self.assertEqual(f.github.dispatch.call_count,3)
 
     def test_guarded_refresh_keeps_running_coding_and_blocks_queued_admission_on_new_prerequisite(self):
         f = self.fixture
@@ -115,16 +131,20 @@ class ControllerDriverTests(unittest.TestCase):
         f.linear.issue_dependencies.return_value = [{"id": str(UUID(int=300)), "type": "blocks", "issue": {
             "id": str(UUID(int=301)), "identifier": "KIAN-3", "state": {"type": "unstarted"}, "trashed": False}}]
         f.broker.refresh = self.driver.refresh
-        f.call(Role.CODING, "github")
+        with self.assertRaisesRegex(Rejected, 'not authorized a push'):
+            f.call(Role.CODING, "github")
         self.driver.tick()
         current = f.controller.inspect(f.view.task_id)
         self.assertEqual(current.phase, "executing")
         self.assertFalse(current.dependencies_ready or current.review_attention or current.attempt["retry_kind"])
         self.assertEqual(len(f.controller.attempt_history(current.task_id)), 1)
-        self.assertEqual(f.github.dispatch.call_count, 1)
+        self.assertEqual(f.github.dispatch.call_count, 2)
+        f.advance('testing')
         f.call(Role.CODING, "progress", stage="testing")
+        f.advance('publishing')
         f.call(Role.CODING, "progress", stage="publishing")
         f.call(Role.CODING, "github")
+        f.advance('finished')
         f.call(Role.CODING, "finish", status="completed")
         self.runs[f.key].update(status="completed", conclusion="success")
         self.driver.tick()
@@ -132,13 +152,13 @@ class ControllerDriverTests(unittest.TestCase):
         second = next(v for v in f.controller.tasks() if v.issue_id == self.second_issue["id"])
         self.assertEqual(second.phase, "queued")
         self.assertFalse(second.active or second.dependencies_ready)
-        self.assertEqual(f.github.dispatch.call_count, 1)
+        self.assertEqual(f.github.dispatch.call_count, 2)
         f.linear.issue_dependencies.return_value = []
         self.driver.tick()
         self.assertTrue(f.controller.inspect(second.task_id).active)
-        self.assertEqual(f.github.dispatch.call_count, 2)
+        self.assertEqual(f.github.dispatch.call_count, 3)
         self.driver.tick()
-        self.assertEqual(f.github.dispatch.call_count,2)
+        self.assertEqual(f.github.dispatch.call_count,3)
 
     def test_runtime_change_holds_second_task_until_required_release_is_ready(self):
         self.publish_and_merge_first()
@@ -147,7 +167,7 @@ class ControllerDriverTests(unittest.TestCase):
         self.driver.tick()
         self.assertEqual(f.controller.inspect(f.view.task_id).phase,Phase.COMPLETED)
         self.assertEqual(len(f.controller.active()),0)
-        self.assertEqual(f.github.dispatch.call_count,1)
+        self.assertEqual(f.github.dispatch.call_count,2)
         self.assertIn("deployment:required-runtime",f.controller.holds())
         self.ready=True
         self.driver.runtime_sha="f"*40
@@ -155,7 +175,7 @@ class ControllerDriverTests(unittest.TestCase):
         second=next(v for v in f.controller.tasks() if v.issue_id==self.second_issue["id"])
         self.assertEqual(second.spec.runtime_sha,"f"*40)
         self.assertEqual(second.spec.context_sha,"c"*40)
-        self.assertEqual(f.github.dispatch.call_count,2)
+        self.assertEqual(f.github.dispatch.call_count,3)
         self.assertNotIn("deployment:required-runtime",f.controller.holds())
 
     def test_waiting_status_tracks_the_new_owner_when_the_previous_task_finishes(self):
@@ -276,10 +296,6 @@ class ControllerDriverTests(unittest.TestCase):
         f.linear.set_label.assert_any_call(f.view.issue_id,'clusterfork: auto-repair',True)
         self.assertNotEqual(first_key,repair.attempt["attempt_id"])
         f.key=repair.attempt["attempt_id"]
-        def call(role,action,**fields):
-            evidence={**claims(role),"run_id":"124"}
-            return f.broker.handle(action,evidence,{"dispatch_key":f.key,**fields})
-        f.call=call
         config=execute_failure()
         self.assertEqual(config["repair"]["target_dispatch_key"],f.view.task_id)
         self.assertEqual(config["repair"]["target_branch"],worker_branch(f.view.identifier,f.view.task_id))
@@ -288,7 +304,7 @@ class ControllerDriverTests(unittest.TestCase):
         final=f.controller.inspect(f.view.task_id)
         self.assertEqual(final.phase,Phase.HELD)
         self.assertEqual(final.attempt["retry_kind"],"")
-        self.assertEqual(f.github.dispatch.call_count,2)
+        self.assertEqual(f.github.dispatch.call_count,4)
         f.linear.set_label.assert_any_call(f.view.issue_id,'clusterfork: auto-repair',False)
         reports=[call for call in f.linear.status_comment.call_args_list if 'Auto-Repair Report' in call.args[2]]
         self.assertEqual(len(reports),1)

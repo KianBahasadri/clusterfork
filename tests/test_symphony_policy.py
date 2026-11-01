@@ -284,7 +284,7 @@ class SymphonyCausalityTests(unittest.TestCase):
         scenario.driver.report()
         self.assertEqual(f.linear.set_state.call_count, writes)
         self.assertFalse(f.controller.effects('linear_state'))
-        self.assertEqual(f.database.connection.execute('PRAGMA user_version').fetchone()[0], 11)
+        self.assertEqual(f.database.connection.execute('PRAGMA user_version').fetchone()[0], 12)
 
 
 class SymphonyAuthorityTests(unittest.TestCase):
@@ -297,7 +297,7 @@ class SymphonyAuthorityTests(unittest.TestCase):
         stale = f.controller.inspect(f.view.task_id)
         with f.database.transaction() as db:
             before = [tuple(row) for row in db.execute('SELECT * FROM effects ORDER BY effect_id')]
-        for action in ('context', 'github', 'heartbeat', 'instructions', 'progress'):
+        for action in ('context', 'command', 'heartbeat', 'instructions', 'progress'):
             f.controller.authorize(stale.task_id, f.key, Role.CODING, action, now=1001)
         with f.database.transaction() as db:
             self.assertEqual([tuple(row) for row in db.execute('SELECT * FROM effects ORDER BY effect_id')], before)
@@ -340,10 +340,11 @@ class SymphonyAuthorityTests(unittest.TestCase):
                     f.registry.generation, f.issue['identifier'], True, False, content_revision=f.spec.content_revision), now=1001)
                 fx.dependencies[fx.root['id']].append({'id': 'new-edge', 'type': 'blocks',
                     'issue': {'id': 'new-issue', 'identifier': 'KIAN-999'}})
-                for action in ('context', 'github', 'heartbeat', 'instructions', 'progress'):
+                for action in ('context', 'command', 'heartbeat', 'instructions', 'progress'):
                     f.controller.authorize(f.view.task_id, f.key, Role.CODING, action, now=1001)
                 fx.complete('manifest', role=Role.CODING)
                 fx.call(Role.CODING, 'heartbeat')
+                f.advance('publishing')
                 fx.call(Role.CODING, 'progress', stage='publishing')
                 fx.call(Role.CODING, 'github')
                 with f.database.transaction() as db:
@@ -358,6 +359,7 @@ class SymphonyAuthorityTests(unittest.TestCase):
                 fx.contract()
                 fx.approve(cfg)
                 fx.start_coding()
+                fx.f.advance('publishing')
                 before = fx.f.controller.inspect(fx.f.view.task_id)
                 fx.failed[f'/repos/{fx.repo}/pulls/55'] = status
                 with self.assertRaises(RequestError):
@@ -412,7 +414,7 @@ class SymphonyAuthorityTests(unittest.TestCase):
 
 class SymphonyBrokerRetryTests(unittest.TestCase):
     def test_only_repeatable_operations_retry_temporary_failures_with_a_stable_request_identity(self):
-        for action in ('start', 'checkout', 'github', 'context', 'progress'):
+        for action in ('start', 'checkout', 'github', 'context', 'progress', 'command', 'step_result'):
             with self.subTest(action=action):
                 broker = worker.Broker('https://clusterfork-controller-7604cac329.mexicocentral.cloudapp.azure.com/api/worker',
                                        'a' * 64, sleep=Mock(), retry_delays=(0, 0))

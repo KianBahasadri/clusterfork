@@ -96,7 +96,7 @@ class Broker:
                                                    "request_id": CONTEXT.get()["request_id"]})
                             break
                         except (HTTPError, URLError, TimeoutError) as exc:
-                            if (action not in {"start", "checkout", "github", "context", "progress"}
+                            if (action not in {"start", "checkout", "github", "context", "progress", "command", "step_result"}
                                     or (isinstance(exc, HTTPError) and exc.code != 503)
                                     or attempt == len(self.retry_delays)):
                                 raise
@@ -621,55 +621,6 @@ def published_pull(config, token, pull_url, dispatch_key, branch, *, expected_sh
     return pull
 
 
-def request_auto_merge(config, token, pull_url, dispatch_key, branch, *, expected_sha=None):
-    if not config.get("auto_merge", True):
-        return
-    repository = config["repository"]
-    pull = published_pull(config, token, pull_url, dispatch_key, branch, expected_sha=expected_sha)
-    head = pull["head"]
-    if pull.get("merged"):
-        return
-    if pull.get("state") != "open" or pull.get("draft"):
-        raise WorkerFailure("Worker pull request is not ready for auto-merge")
-    owner, name = repository.split("/")
-    policy = json_request("https://api.github.com/graphql", token, {
-        "query": """query($owner: String!, $name: String!) {
-          repository(owner: $owner, name: $name) {
-            autoMergeAllowed
-          }
-        }""",
-        "variables": {"owner": owner, "name": name}})
-    repo = (policy.get("data") or {}).get("repository") or {}
-    if policy.get("errors") or not repo.get("autoMergeAllowed"):
-        raise WorkerFailure("Auto-merge must be enabled in the repository")
-    env = {**clean_environment(), "GH_TOKEN": token}
-    # PR-specific check visibility needs no Administration grant. GitHub may take
-    # a few seconds to register new runs. Pending/failed required checks are valid
-    # gates: native auto-merge waits for them rather than bypassing them.
-    for attempt in range(30):
-        raw = command(["gh", "pr", "checks", pull_url, "--required", "--json", "name,bucket"],
-                      env=env, allowed_returncodes=(0, 1, 8))
-        try:
-            checks = json.loads(raw)
-        except ValueError:
-            checks = None
-        if isinstance(checks, list) and checks and all(
-            isinstance(check, dict) and isinstance(check.get("name"), str) and check["name"]
-            and check.get("bucket") in {"pass", "pending", "fail", "cancel", "skipping"}
-            for check in checks
-        ) and set(config.get("required_checks", ())).issubset({check["name"] for check in checks}):
-            break
-        if attempt < 29:
-            time.sleep(2)
-    else:
-        raise WorkerFailure("Auto-merge requires observable required CI checks on the pull request")
-    # No --admin: GitHub enforces required checks, reviews and merge conflicts.
-    # Match the observed commit so a concurrent push cannot be merged blindly.
-    command(["gh", "pr", "merge", pull_url, "--auto", "--squash", "--match-head-commit", head["sha"]],
-            env=env)
-    print(f"Automatic squash merge requested: {pull_url}", flush=True)
-
-
 def scan_publication(broker, base, metadata, *, staged=False):
     """Check exact values everywhere; static patterns only on non-test additions."""
     with operation("worker/publication_scan"):
@@ -839,6 +790,18 @@ def execute(broker, config, heartbeat, directory):
 
 
 def _execute(broker, config, heartbeat, directory):
+    executor = broker.call('command')
+
+    def expect(kind):
+        if not isinstance(executor, dict) or executor.get('kind') != kind or not isinstance(executor.get('step_id'), str):
+            raise WorkerFailure('Controller did not authorize the requested executor command')
+
+    def advance(outcome='completed', **result):
+        nonlocal executor
+        executor = broker.call('step_result', step_id=executor['step_id'], outcome=outcome, result=result)
+        return executor
+
+    expect('coding')
     issue = config["issue"]
     repair = config.get("repair")
     target_key = repair["target_dispatch_key"] if repair else (
@@ -890,23 +853,19 @@ def _execute(broker, config, heartbeat, directory):
                     checkout_head = wip_head
         command(["git", "checkout", "-b", branch, checkout_head])
     original = command(["git", "rev-parse", "HEAD"]).strip()
-    if existing and not repair:
-        token = broker.call("github")["token"]
-        broker.publication_guard.remember(token)
-        pull = published_pull(config, token, existing, target_key, branch, expected_sha=original)
-        scan_publication(broker, config["ref"], (pull.get("title") or "", pull.get("body") or ""))
-        request_auto_merge(config, token, existing, target_key, branch, expected_sha=original)
-        return "completed", existing
     config = {**config, "checkout_sha": command(["git", "rev-parse", f"origin/{config['ref']}"]).strip()}
     if not repair and config.get("readiness", {}).get("context_sha", config["checkout_sha"]) != config["checkout_sha"]:
         raise WorkerFailure("Coding checkout changed after readiness approval; request another review")
     if repair and existing:
         config["repair"] = {**repair, "check_output": repair_check_output(broker, config, token, existing)}
     repair_base = config["checkout_sha"] if repair else None
-    corrections, changed_files, publication_token = 0, 0, None
+    changed_files = 0
 
     def validate(summary, *, deadline, failure_signals):
-        nonlocal corrections, changed_files, publication_token
+        nonlocal changed_files
+        expect('coding')
+        advance()
+        expect('testing')
         broker.call("progress", stage="testing")
         check_name = "Git branch and HEAD integrity"
         try:
@@ -925,36 +884,23 @@ def _execute(broker, config, heartbeat, directory):
                 changed_files = check_workflow_changes(config)
                 check_name = "Pre-commit staging and PublicationGuard"
                 command(["git", "add", "-A"])
-                publication_token = broker.call("github")["token"]
-                broker.publication_guard.remember(publication_token)
                 metadata = publication_metadata(issue, summary, target_key)
                 if existing:
                     metadata += [pull.get("title") or "", pull.get("body") or ""]
                 scan_publication(broker, config["ref"], metadata, staged=True)
                 scan_publication(broker, config["ref"], metadata)
+            advance()
+            expect('publishing')
             return None
         except WorkerFailure as exc:
             diagnostic = failure(exc)
-            if (corrections >= MAX_CORRECTION_TURNS or time.monotonic() >= deadline
-                    or any(event.is_set() for event in failure_signals) or diagnostic["kind"] == "lease_lost"):
+            if time.monotonic() >= deadline or any(event.is_set() for event in failure_signals):
                 raise
-            corrections += 1
-            detail = failure_summary(diagnostic)
-            command_info = ""
-            if diagnostic["operation"].startswith("validation/"):
-                index = int(diagnostic["operation"].split("/")[1])
-                command_info = "\nCommand: " + json.dumps(config["validation_commands"][index - 1])
-            prompt = (f"Worker check failed: {check_name} (correction {corrections}/{MAX_CORRECTION_TURNS}).\n{detail}{command_info}\n"
-                      f"Scrubbed stdout/stderr tail:\n{diagnostic.get('failure_output', '(no subprocess output)')}\n\n"
-                      "Fix the cause in the existing workspace, retaining the task and authorized follow-ups. "
-                      "Do not commit, push, open a PR, or change authentication. "
-                      "The worker will re-run all integrity, workflow permission, validation, and publication checks.")
-            try:
-                prompt = broker.publication_guard.scrub(prompt)
-            except PublicationScanError:
-                raise exc  # Preserve the original check failure if output cannot be safely scrubbed.
-            broker.call("progress", stage="coding", context_sha=config["checkout_sha"])
-            return prompt
+            advance('failed', failure=diagnostic, check=check_name)
+            if executor.get('kind') != 'coding':
+                raise
+            broker.call('progress', stage='coding', context_sha=config['checkout_sha'])
+            return broker.publication_guard.scrub(executor['inputs']['prompt'])
 
     expected_head = original
 
@@ -962,11 +908,15 @@ def _execute(broker, config, heartbeat, directory):
         nonlocal expected_head
         if summary is None:
             return "waiting_for_quota", None
+        expect('publishing')
         changed = command(["git", "status", "--porcelain"]).strip()
-        broker.call("progress", stage="publishing", **({"repair_validation_passed": True} if repair else {}))
-        token = publication_token
+        broker.call("progress", stage="publishing")
+        token = broker.call('github')['token']
+        broker.publication_guard.remember(token)
         metadata = publication_metadata(issue, summary, target_key)
         title, body = metadata[:2]
+        scan_publication(broker, config['ref'], metadata, staged=True)
+        scan_publication(broker, config['ref'], metadata)
         if changed:
             # The live validation callback staged and scanned this exact index.
             command(["git", "-c", "user.name=clusterfork[bot]", "-c",
@@ -974,43 +924,26 @@ def _execute(broker, config, heartbeat, directory):
                      f"{issue['identifier']}: {issue['title'][:180]}"])
         expected_head = command(["git", "rev-parse", "HEAD"]).strip()
         delta = command(["git", "diff", "--name-only", f"origin/{config['ref']}...HEAD"]).strip()
-        if repair:
-            broker.call("progress", stage="publishing", repair_result={
-                "commit_sha": command(["git", "rev-parse", "HEAD"]).strip(), "changed_files": changed_files})
-        if not delta and not existing:
-            return "completed", None
         rewritten = bool(repair and remote_head
                          and command(["git", "rev-list", "--count", f"HEAD..{remote_head}"]).strip() != "0")
         pull_url = existing
-        if rewritten and not pull_url:
-            # A failed pre-publication attempt may have pushed its WIP to the
-            # worker branch. Establish and verify its bot PR before any forced
-            # update, just as for a PR that existed when this repair started.
-            scan_publication(broker, config["ref"], metadata)
-            created = json_request(f"https://api.github.com/repos/{config['repository']}/pulls", token,
-                                   {"title": title, "head": branch, "base": config["ref"], "body": body})
-            pull_url = created["html_url"]
         # Revalidate ownership before updating an existing PR, including when
         # the project uses manual merging. Never publish to a foreign/fork PR.
         if pull_url:
-            pull = published_pull(config, token, pull_url, target_key, branch,
+            pull = published_pull(config, broker.call('checkout')['token'], pull_url, target_key, branch,
                                   expected_sha=(observed_pr_head or remote_head) if repair else None)
             if pull.get("state") != "open" or pull.get("merged"):
                 raise WorkerFailure("Worker pull request is no longer open")
             metadata += [pull.get("title") or "", pull.get("body") or ""]
         scan_publication(broker, config["ref"], metadata)
         force = [f"--force-with-lease=refs/heads/{branch}:{remote_head}"] if rewritten else []
-        with git_auth(token, directory) as env:
-            command(["git", "push", *force, "origin", f"HEAD:refs/heads/{branch}"], env=env)
-        if pull_url:
-            request_auto_merge(config, token, pull_url, target_key, branch,
-                               expected_sha=command(["git", "rev-parse", "HEAD"]).strip())
-            return "completed", pull_url
-        pull = json_request(f"https://api.github.com/repos/{config['repository']}/pulls", token,
-                            {"title": title, "head": branch, "base": config["ref"], "body": body})
-        request_auto_merge(config, token, pull["html_url"], target_key, branch,
-                           expected_sha=command(["git", "rev-parse", "HEAD"]).strip())
-        return "completed", pull["html_url"]
+        if delta or existing:
+            with git_auth(token, directory) as env:
+                command(["git", "push", *force, "origin", f"HEAD:refs/heads/{branch}"], env=env)
+        advance(branch=branch, commit_sha=expected_head, title=title, body=body,
+                has_changes=bool(delta or existing), changed_files=changed_files)
+        expect('finished')
+        return "completed", None
 
     try:
         with run_codex(broker, config, heartbeat, directory, validate=validate) as summary:
@@ -1018,6 +951,9 @@ def _execute(broker, config, heartbeat, directory):
     except Exception as exc:
         if config.get("_coding_started"):
             try:
+                if executor.get('kind') not in {'preserving', 'finished'}:
+                    advance('failed', failure=failure(exc))
+                expect('preserving')
                 check_checkout(branch, expected_head, repair_base=repair_base)
                 expected_head = command(["git", "rev-parse", "HEAD"]).strip()
                 exc.clusterfork_wip = preserve_wip(broker, config, directory, branch, expected_head, target_key)
@@ -1071,9 +1007,6 @@ def main():
             if config.get('account_selection') is True:
                 selected = select_account_for_run(broker, config, heartbeat)
                 if not selected:
-                    if os.environ.get('GITHUB_OUTPUT'):
-                        with open(os.environ['GITHUB_OUTPUT'],'a') as output:
-                            output.write('ready=false\n')
                     return 0
                 config=broker.call('start',protocol=PROTOCOL)
             if config.get('account_selection') is not False or not valid_account_id(config.get('account_id')):
@@ -1081,12 +1014,6 @@ def main():
             prepare_checkout(broker,config,Path(directory))
             if config["phase"] == "readiness":
                 status, pull = review_readiness(broker, config, heartbeat, Path(directory)), None
-                # The combined workflow advances through a native needs edge.
-                # This output is a scheduling hint; the broker verifies the
-                # persisted review and actual successful review job independently.
-                if os.environ.get("GITHUB_OUTPUT"):
-                    with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-                        output.write(f"ready={str(status == 'passed').lower()}\n")
             else:
                 status, pull = execute(broker, config, heartbeat, Path(directory))
         if config["phase"] == "development":

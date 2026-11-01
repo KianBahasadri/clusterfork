@@ -30,7 +30,7 @@ from common.clients import GitHub as GitHubClient
 from common.routing import Registry
 from common.selection import select_account
 from common.accounts import WorkerError
-from controller_fixtures import account_pool, records, coding_fixture, execution_row
+from controller_fixtures import account_pool, records, coding_fixture, execution_row, ExecutorScript
 from controller.model import Rejected, Role
 from test_controller_authorization import claims as job_claims
 from common.policy import POLICY, PROTOCOL, RESULT_SCHEMA, REVIEW_TIMEOUT_SECONDS, digest
@@ -128,7 +128,7 @@ def validate_fake_turns(validate, summary):
 class WorkerAdmissionTests(unittest.TestCase):
     def run_worker(self, config):
         broker = Mock()
-        config={"runtime_sha":"b"*40,**config}
+        config={"runtime_sha":"b"*40, 'sole_orchestrator':True, **config}
         broker.call.return_value = config
         with patch.dict(os.environ, {"CLUSTERFORK_BROKER_URL": "https://broker.example/worker",
                                      "DISPATCH_KEY": KEY,"WORKER_REVISION":"b"*40}, clear=True), \
@@ -436,7 +436,7 @@ class GitPublicationTests(unittest.TestCase):
                               "issue": {"id": ISSUE, "identifier": "KIAN-891", "title": "Update workflow", "url": "https://linear.app/test"},
                               "validation_commands": [[sys.executable, "-c", f"from pathlib import Path; Path({str(validated)!r}).touch()"]]}
                     broker = Mock(key=KEY, publication_guard=worker.PublicationGuard({}))
-                    broker.call.return_value = {"token": "test-token"}
+                    broker.call.side_effect = ExecutorScript('test-token')
                     @contextmanager
                     def implement(*args, validate):
                         if source != "recovered":
@@ -452,10 +452,10 @@ class GitPublicationTests(unittest.TestCase):
                              patch.object(worker, "json_request", return_value={"html_url": "https://github.com/owner/repo/pull/1"}) as request:
                             if allowed:
                                 self.assertEqual(worker.execute(broker, config, SimpleNamespace(failed=threading.Event()), root),
-                                                 ("completed", "https://github.com/owner/repo/pull/1"))
+                                                 ("completed", None))
                                 self.assertTrue(validated.exists())
                                 self.assertIn(".github/workflows/example.yml", git("diff", "--name-only", "main..." + branch))
-                                request.assert_called_once()
+                                request.assert_not_called()
                             else:
                                 with self.assertRaises(worker.WorkerFailure) as caught:
                                     worker.execute(broker, config, SimpleNamespace(failed=threading.Event()), root)
@@ -492,7 +492,8 @@ class GitPublicationTests(unittest.TestCase):
                 git("checkout", "main")
                 git("branch", "-D", branch)
                 broker = Mock(key="d" * 64, publication_guard=worker.PublicationGuard({}))
-                broker.call.return_value = {"token": "temporary-token"}
+                script = ExecutorScript()
+                broker.call.side_effect = script
                 heartbeat = SimpleNamespace(failed=threading.Event())
                 url = "https://github.com/owner/repo/pull/1"
                 pull = {"html_url": url, "state": "open", "merged": False,
@@ -518,19 +519,18 @@ class GitPublicationTests(unittest.TestCase):
                     with patch.object(worker, "run_codex", side_effect=implement) as agent, \
                          patch.object(worker, "find_pr", return_value=url if existing_pr else None), \
                          patch.object(worker, "repair_check_output", return_value=""), \
-                         patch.object(worker, "json_request", return_value=pull) as request, \
-                         patch.object(worker, "request_auto_merge") as merge:
-                        self.assertEqual(worker.execute(broker, config, heartbeat, root), ("completed", url))
+                         patch.object(worker, "json_request", return_value=pull) as request:
+                        self.assertEqual(worker.execute(broker, config, heartbeat, root), ("completed", None))
                     agent.assert_called_once()
                     self.assertEqual(git("ls-remote", "origin", "refs/heads/main").split()[0], main)
                     repaired = git("ls-remote", "origin", "refs/heads/" + branch).split()[0]
                     self.assertNotEqual(repaired, broken)
                     self.assertFalse(git("ls-remote", "origin", "refs/heads/clusterfork/kian-1000-*"))
-                    self.assertEqual(merge.call_args.args[3:5], (KEY, branch))
-                    self.assertEqual(merge.call_args.kwargs["expected_sha"], repaired)
-                    broker.call.assert_any_call("progress", stage="publishing", repair_validation_passed=True)
+                    self.assertFalse(any(len(c.args) > 2 for c in request.call_args_list))
+                    self.assertEqual(script.publication['commit_sha'], repaired)
+                    broker.call.assert_any_call("progress", stage="publishing")
                     creates = [call for call in request.call_args_list if len(call.args) > 2]
-                    self.assertEqual(len(creates), 0 if existing_pr else 1)
+                    self.assertEqual(len(creates), 0)
                     if creates:
                         self.assertIn("clusterfork-dispatch:" + KEY, creates[0].args[2]["body"])
                         self.assertEqual(creates[0].args[2]["head"], branch)
@@ -574,8 +574,9 @@ class GitPublicationTests(unittest.TestCase):
             class Broker:
                 key = KEY
                 publication_guard = worker.PublicationGuard({})
+                script = ExecutorScript('temporary-test-token')
                 def call(self, action, **data):
-                    return {"token": "temporary-test-token"}
+                    return self.script(action, **data)
             class Heartbeat:
                 failed = threading.Event()
             config = {"repository": "owner/repo", "ref": "main", "auto_merge": False, "issue": {
@@ -595,10 +596,11 @@ class GitPublicationTests(unittest.TestCase):
                      patch.object(worker, "json_request", return_value={"html_url": "https://github.com/owner/repo/pull/1"}) as request:
                     outcome, pull = worker.execute(Broker(), config, Heartbeat(), root)
                 self.assertEqual(outcome, "completed")
-                self.assertEqual(pull, "https://github.com/owner/repo/pull/1")
+                self.assertIsNone(pull)
                 self.assertEqual(subprocess.check_output(["git", "--git-dir", str(remote), "rev-parse", "main"], text=True), main_before)
-                self.assertEqual(request.call_args.args[2]["head"], "clusterfork/kian-891-aaaaaaaa")
-                self.assertIn("clusterfork-dispatch:" + KEY, request.call_args.args[2]["body"])
+                request.assert_not_called()
+                self.assertEqual(Broker.script.publication['branch'], "clusterfork/kian-891-aaaaaaaa")
+                self.assertIn("clusterfork-dispatch:" + KEY, Broker.script.publication['body'])
             finally:
                 os.chdir(old)
 
@@ -721,7 +723,7 @@ class RepairRecoveryTests(unittest.TestCase):
                 git("reset", "--hard", initial)  # workflow checkout predates base advancement
             git("branch", "-D", branch)
             broker = Mock(key="d" * 64, publication_guard=worker.PublicationGuard({}))
-            broker.call.return_value = {"token": "opaque-github-credential"}
+            broker.call.side_effect = ExecutorScript('opaque-github-credential')
             url = "https://github.com/owner/repo/pull/1"
             pull = {"html_url": url, "state": "open", "merged": False, "title": "Original work",
                     "user": {"login": "clusterfork[bot]"}, "base": {"ref": "main"},
@@ -784,7 +786,7 @@ class RepairRecoveryTests(unittest.TestCase):
                     self.assertEqual((checkout / "saved.txt").read_text(), "preserved WIP\n")
                     (checkout / "file.txt").write_text("fixed\n")
                 run.implement = implement
-                self.assertEqual(worker.execute(run.broker, run.config, run.heartbeat, run.root), ("completed", run.url))
+                self.assertEqual(worker.execute(run.broker, run.config, run.heartbeat, run.root), ("completed", None))
                 prompt = run.prompts[0]
                 self.assertIn("parent-private-traceback", prompt)
                 self.assertIn("git log origin/main..HEAD", prompt)
@@ -832,7 +834,7 @@ class RepairRecoveryTests(unittest.TestCase):
                 git("reset", "--hard", "origin/main")
                 (checkout / "file.txt").write_text("fixed\n")
             run.implement = implement
-            self.assertEqual(worker.execute(run.broker, run.config, run.heartbeat, run.root), ("completed", run.url))
+            self.assertEqual(worker.execute(run.broker, run.config, run.heartbeat, run.root), ("completed", None))
             self.assertIn(f"--force-with-lease=refs/heads/{run.branch}:{run.parent}", run.pushes[-1])
             self.assertEqual(run.git("rev-parse", "HEAD^"), run.git("rev-parse", "origin/main"))
 
@@ -844,7 +846,7 @@ class RepairRecoveryTests(unittest.TestCase):
                     git("reset", "--hard", "origin/main")
                     (checkout / "file.txt").write_text("fixed\n")
                 run.implement = implement
-                self.assertEqual(worker.execute(run.broker, run.config, run.heartbeat, run.root), ("completed", run.url))
+                self.assertEqual(worker.execute(run.broker, run.config, run.heartbeat, run.root), ("completed", None))
                 self.assertEqual((run.checkout / "base.txt").read_text(), "current base\n")
                 head = run.git("rev-parse", "HEAD")
                 self.assertEqual(run.git("ls-remote", "origin", f"refs/heads/{run.branch}").split()[0], head)
@@ -1030,13 +1032,12 @@ class ValidationRecoveryTests(unittest.TestCase):
                      patch.object(worker, "command", side_effect=command), \
                      patch.object(worker, "find_pr", return_value=url if open_pr else None), \
                      patch.object(worker, "json_request", return_value=pull) as request, \
-                     patch.object(worker, "request_auto_merge") as merge, \
                      redirect_stdout(io.StringIO()) as output:
                     config = broker.call("start", protocol=PROTOCOL)
                     yield SimpleNamespace(root=root, git=git, broker=broker, service=service, config=config, fixture=f, key=f.key,
                         heartbeat=SimpleNamespace(failed=threading.Event()), branch=branch, base=base,
                         prior_head=prior_head, calls=calls, servers=servers, prompts=prompts, request=request,
-                        merge=merge, output=output, validation_liveness=validation_liveness)
+                        output=output, validation_liveness=validation_liveness)
             finally:
                 os.chdir(original)
                 worker.CONTEXT.reset(context_token)
@@ -1105,7 +1106,7 @@ class ValidationRecoveryTests(unittest.TestCase):
                 self.assertNotIn("traceback-marker", public)
                 self.assertNotIn("opaque-leased-login", public)
                 self.assertEqual(run.git("ls-remote", "origin", "refs/heads/main").split()[0], run.base)
-                run.merge.assert_not_called()
+                self.assertFalse(any(len(c.args) > 2 for c in run.request.call_args_list))
 
     def test_wip_preservation_refuses_credentials_and_unauthorized_workflows(self):
         for path, text in (("tests/live.txt", "opaque-leased-login"), ("config.txt", "ghp_synthetic"),
@@ -1216,6 +1217,9 @@ class ValidationRecoveryTests(unittest.TestCase):
             run.broker.call('claim',account_id=identity)
             from test_worker_reporting import usage
             run.broker.call('progress',stage='coding',context_sha=run.base,account_id=identity,usage_before=usage())
+            step = run.broker.call('command')
+            run.broker.call('step_result', step_id=step['step_id'], outcome='failed',
+                            result={'failure': {'operation': 'worker/execution', 'kind': 'worker_error'}})
             run.git("checkout", "-b", run.branch, "origin/" + run.branch)
             run.git("rm", "prior.txt")
             run.git("commit", "-m", "revert previous attempt")
@@ -1229,93 +1233,7 @@ class ValidationRecoveryTests(unittest.TestCase):
             self.assertEqual(run.git("ls-remote", "origin", f"refs/heads/{run.branch}"), run.prior_head)
 
 
-class AutoMergeTests(unittest.TestCase):
-    def setUp(self):
-        self.config = {"repository": "owner/repo", "ref": "main"}
-        self.branch = "clusterfork/kian-891-aaaaaaaa"
-        self.url = "https://github.com/owner/repo/pull/1"
-        self.sha = "c" * 40
-        self.pull = {"html_url": self.url, "state": "open", "draft": False, "merged": False,
-                     "user": {"login": "clusterfork[bot]"},
-                     "head": {"repo": {"full_name": "owner/repo"}, "ref": self.branch, "sha": self.sha},
-                     "base": {"ref": "main"}, "body": f"<!-- clusterfork-dispatch:{KEY} -->"}
-        self.policy = {"data": {"repository": {"autoMergeAllowed": True}}}
-
-    def request(self, **kwargs):
-        worker.request_auto_merge(self.config, "private-test-token", self.url, KEY, self.branch, **kwargs)
-
-    def test_default_auto_merge_uses_exact_commit_and_never_bypasses_checks(self):
-        with patch.object(worker, "json_request", side_effect=[self.pull, self.policy]), \
-             patch.object(worker, "command", side_effect=['[{"name":"test","bucket":"pending"}]', '']) as command:
-            self.request(expected_sha=self.sha)
-        args = command.call_args.args[0]
-        self.assertEqual(args, ["gh", "pr", "merge", self.url, "--auto", "--squash", "--match-head-commit", self.sha])
-        self.assertNotIn("--admin", args)
-        self.assertNotIn("private-test-token", args)
-        self.assertEqual(command.call_args.kwargs["env"]["GH_TOKEN"], "private-test-token")
-        self.assertEqual(command.call_args_list[0].args[0],
-                         ["gh", "pr", "checks", self.url, "--required", "--json", "name,bucket"])
-        self.assertIn(8, command.call_args_list[0].kwargs["allowed_returncodes"])
-
-    def test_project_can_disable_auto_merge(self):
-        self.config["auto_merge"] = False
-        with patch.object(worker, "json_request") as request, patch.object(worker, "command") as command:
-            self.request()
-        request.assert_not_called()
-        command.assert_not_called()
-
-    def test_configured_required_checks_cannot_be_replaced_by_an_unrelated_gate(self):
-        self.config["required_checks"] = ["Repository tests"]
-        with patch.object(worker, "json_request", side_effect=[self.pull, self.policy]), \
-             patch.object(worker, "command", return_value='[{"name":"Other check","bucket":"pass"}]') as command, \
-             patch.object(worker.time, "sleep"), self.assertRaises(worker.WorkerFailure):
-            self.request()
-        self.assertTrue(all(call.args[0][2] == "checks" for call in command.call_args_list))
-        with patch.object(worker, "json_request", side_effect=[self.pull, self.policy]), \
-             patch.object(worker, "command", side_effect=['[{"name":"Repository tests","bucket":"pending"}]', '']) as command:
-            self.request()
-        self.assertEqual(command.call_args.args[0][2], "merge")
-
-    def test_missing_ci_or_repository_auto_merge_prevents_merge(self):
-        with patch.object(worker, "json_request", side_effect=[self.pull, {"data": {"repository": {"autoMergeAllowed": False}}}]), \
-             patch.object(worker, "command") as command, self.assertRaises(worker.WorkerFailure):
-            self.request()
-        command.assert_not_called()
-        for result in ['[]', '{"error":"unavailable"}', 'not json']:
-            with self.subTest(result=result), \
-                 patch.object(worker, "json_request", side_effect=[self.pull, self.policy]), \
-                 patch.object(worker, "command", return_value=result) as command, \
-                 patch.object(worker.time, "sleep"), self.assertRaises(worker.WorkerFailure):
-                self.request()
-            self.assertTrue(all(call.args[0][2] == "checks" for call in command.call_args_list))
-
-    def test_foreign_fork_changed_head_or_unrelated_pr_cannot_be_auto_merged(self):
-        cases = []
-        for field, value in [("user", {"login": "someone-else"}), ("body", "unrelated PR"),
-                             ("base", {"ref": "another-branch"}), ("draft", True)]:
-            cases.append({**self.pull, field: value})
-        cases.append({**self.pull, "head": {**self.pull["head"], "repo": {"full_name": "attacker/repo"}}})
-        cases.append({**self.pull, "head": {**self.pull["head"], "sha": "d" * 40}})
-        for pull in cases:
-            with self.subTest(pull=pull), patch.object(worker, "json_request", return_value=pull), \
-                 patch.object(worker, "command") as command, self.assertRaises(worker.WorkerFailure):
-                self.request(expected_sha=self.sha)
-            command.assert_not_called()
-
-    def test_retry_recovers_merged_pr_without_repeating_work_or_requesting_merge(self):
-        merged = {**self.pull, "state": "closed", "merged": True, "merged_at": "2026-10-28T20:00:00Z"}
-        with patch.object(worker, "json_request", return_value=[merged]) as request:
-            self.assertEqual(worker.find_pr(self.config, "token", self.branch), self.url)
-            self.assertIn("state=all", request.call_args.args[0])
-        with patch.object(worker, "json_request", return_value=merged), patch.object(worker, "command") as command:
-            self.request()
-        command.assert_not_called()
-
-    def test_closed_unmerged_pr_is_not_treated_as_completed_work(self):
-        closed = {**self.pull, "state": "closed", "merged_at": None}
-        with patch.object(worker, "json_request", return_value=[closed]):
-            self.assertIsNone(worker.find_pr(self.config, "token", self.branch))
-
+class WorkerConfigurationTests(unittest.TestCase):
     def test_registry_defaults_to_auto_merge_and_rejects_non_boolean_override(self):
         config = json.loads((ROOT / "automation/controller/projects.json").read_text())
         config["projects"][0].pop("auto_merge", None)

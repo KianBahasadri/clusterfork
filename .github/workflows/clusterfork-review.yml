@@ -9,9 +9,7 @@ on:
       worker_revision:
         required: true
         type: string
-    outputs:
-      ready:
-        value: ${{ jobs.run.outputs.ready }}
+
 permissions:
   contents: read
   id-token: write
@@ -20,8 +18,6 @@ jobs:
   run:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    outputs:
-      ready: ${{ steps.execute.outputs.ready }}
     steps:
       - name: Check out the approved runtime
         uses: actions/checkout@v4

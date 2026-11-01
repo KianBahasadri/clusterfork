@@ -10,7 +10,7 @@ from .authorization import SELECTOR_ACTIONS,authorize_job, verify_review_job
 from .images import Images
 from .context import Context
 from .model import (AccountRequest, Finish, Progress, Rejected, Review, Role,
-                    SessionUpdated, Start)
+                    SessionUpdated, Start, StepResult)
 from .workflows import ENGINE, WORKFLOW
 from .telemetry import correlate
 from common.diagnostics import validate_failure
@@ -63,7 +63,8 @@ class Broker:
         if role.selector and action not in SELECTOR_ACTIONS:
             raise Rejected('Initial account selection must finish before execution access')
         run_id, run_attempt = str(claims["run_id"]), int(claims["run_attempt"])
-        if view.attempt["run_id"] and (view.attempt["run_id"], view.attempt["run_attempt"]) != (run_id, run_attempt):
+        recorded_run = current_session or view.attempt
+        if recorded_run["run_id"] and (recorded_run["run_id"], recorded_run["run_attempt"]) != (run_id, run_attempt):
             raise Rejected("Request belongs to another GitHub attempt")
         phase, selector = role.phase, role.selector
         try:
@@ -78,9 +79,9 @@ class Broker:
         if action == "start":
             if data.get("protocol") != PROTOCOL:
                 raise Rejected("Worker and controller protocol do not match")
-            self.github.verify_worker_run(ENGINE, claims, key, workflow=WORKFLOW)
+            self.github.verify_worker_run(ENGINE, claims, key, workflow=WORKFLOW, phase=phase)
         if action in {"start", "accounts", "claim", "bind_account", "checkout", "github", "review"} or (
-                action == "progress" and data.get("stage") in {"coding", "publishing"}):
+                action == "progress" and data.get("stage") in {"coding", "publishing"}) or action == 'step_result':
             if self.refresh:
                 self.refresh(view)
                 view = self.controller.inspect(view.task_id)
@@ -97,11 +98,14 @@ class Broker:
                 raise Rejected("Task image context changed")
         else:
             issue, images = None, []
-        if phase == "coding" and (action in {"start", "checkout", "github"} or
+        if phase == "coding" and (action in {"start", "checkout", "github", "step_result"} or
                 action == "progress" and data.get("stage") in {"coding", "publishing"}):
             self.validate_context(view, role)
         if action == "start":
-            passed = verify_review_job(self.github, run_id, run_attempt) if phase == "coding" else False
+            review_session = view.session('review')
+            if phase == 'coding' and not review_session:
+                raise Rejected('A valid successful review job is required before coding')
+            passed = verify_review_job(self.github, review_session['run_id'], review_session['run_attempt']) if phase == "coding" else False
             view = self.apply(Start(view.task_id, key, run_id, run_attempt, role, passed))
             fields = {"heartbeat_until": self.clock()+120}
             if phase=="coding" and not role.selector and not view.session(phase)["data"].get("steering_started_at"):
@@ -131,10 +135,20 @@ class Broker:
                     permissions["actions"]="read"
             return {"token": self.github.installation_token(route.repository, permissions=permissions)}
         if action == "github":
-            permissions = {"contents": "write", "pull_requests": "write"}
+            permissions = {"contents": "write"}
             if self.github.workflow_changes_allowed(route.repository) is True:
                 permissions["workflows"] = "write"
             return {"token": self.github.installation_token(route.repository, permissions=permissions)}
+        if action == 'command':
+            return self.controller.executor_command(view.task_id, key, now=self.clock())
+        if action == 'step_result':
+            values = data.get('result', {})
+            if not isinstance(values, dict):
+                raise Rejected('Invalid executor result')
+            if data.get('outcome') == 'failed':
+                values = {**values, 'failure': validate_failure(values.get('failure', {}))}
+            self.apply(StepResult(view.task_id, key, data.get('step_id', ''), data.get('outcome', ''), values))
+            return self.controller.executor_command(view.task_id, key, now=self.clock())
         if action == "review":
             if data.get("binding") != self.binding(view):
                 raise Rejected("Review result belongs to a different specification")
@@ -176,7 +190,7 @@ class Broker:
         identity = session["account_id"]
         result = {"protocol": PROTOCOL, "serial_admission": True, "task_controller": True,
                   "runtime_sha":view.spec.runtime_sha,
-                  "phase": "readiness" if role.phase == "review" else "development",
+                  "phase": "readiness" if role.phase == "review" else "development", "sole_orchestrator": True,
                   "account_selection": role.selector, "account_id": identity or None,
                   **execution_profiles(self.registry, {"assigned_account_id": identity}),
                   "binding": self.binding(view), "readiness": {"review_key": view.attempt["attempt_id"], **self.binding(view)},

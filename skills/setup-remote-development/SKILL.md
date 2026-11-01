@@ -103,7 +103,7 @@ python3 automation/onboard.py merge --checkout /path/to/target --project-id PROJ
 python3 automation/onboard.py merge --checkout /path/to/target --project-id PROJECT_UUID --apply
 ```
 
-This enables auto-merge/squash and adds missing required checks in an additive
+This enables squash merging and adds missing required checks in an additive
 branch ruleset. It preserves existing protection, checks, reviews, and other
 repository settings. Do not disable required reviews, bypass protection, or
 grant the App a bypass so an automatic merge can finish. Existing manual-merge
@@ -131,7 +131,7 @@ python3 automation/onboard.py verify --checkout /path/to/target --project-id PRO
 
 Verification checks the exact deployed registry/runtime digests, protocol,
 serial admission and phase isolation, App installation grants, central Actions
-availability, central workflow content and runtime tag, automatic merge settings, effective required checks,
+availability, central workflow content and runtime tag, controller merge policy and squash support, effective required checks,
 successful current CI, and Linear state/label availability. It lists existing
 Todo candidates by identifier/title. Show this list to the user before enabling;
 dependencies, prior durable receipts, quota, and readiness review still determine
@@ -155,7 +155,7 @@ Prepared files or a healthy broker alone do not establish completed enrollment.
 ## Updating the runtime or repairing setup
 
 Shared implementation changes are published once in the central repository and
-deployed automatically between tasks. The controller and both jobs use the
+deployed automatically between tasks. The controller and both phase runs use the
 same immutable release; the next task waits for required runtime deployment and
 verification. Do not update target worker pins, republish caller workflows, or
 rerun `enroll` for an ordinary runtime update. Operator holds remain independent

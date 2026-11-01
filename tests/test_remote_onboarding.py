@@ -158,6 +158,8 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(body["conditions"]["ref_name"]["include"], ["refs/heads/trunk"])
         self.assertEqual(body["rules"][0]["parameters"]["required_status_checks"], [{"context": CHECK}])
         self.assertIs(info["allow_merge_commit"], True)
+        self.assertIs(info['allow_auto_merge'], False)
+        self.assertEqual(mutations[1][1], {'allow_squash_merge': True})
         self.assertNotIn("allow_merge_commit", mutations[1][1])
 
     def test_existing_owned_ruleset_retains_all_rules_and_required_checks(self):
