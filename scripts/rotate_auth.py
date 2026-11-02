@@ -549,6 +549,7 @@ def print_scoped_profile_list(
     """Print local/remote profiles with flush name and tag columns.
 
     Each row is ``(name, is_current, has_local, has_remote)``.
+    Tag columns stay aligned across mixed local-only and remote-only rows.
     """
     if not rows:
         print(f"{command}: no saved profiles")
