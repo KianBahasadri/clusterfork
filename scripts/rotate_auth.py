@@ -542,6 +542,29 @@ def print_profile_list(command: str, suffixes: list[str], current: str | None) -
     return 0
 
 
+def print_scoped_profile_list(
+    command: str,
+    rows: list[tuple[str, bool, bool, bool]],
+) -> int:
+    """Print local/remote profiles with flush name and tag columns.
+
+    Each row is ``(name, is_current, has_local, has_remote)``.
+    """
+    if not rows:
+        print(f"{command}: no saved profiles")
+        return 0
+    name_width = max(len(name) for name, *_ in rows)
+    local_width = len("[local]")
+    print(f"{command}: saved profiles")
+    for name, is_current, has_local, has_remote in rows:
+        mark = "*" if is_current else " "
+        local_tag = "[local]" if has_local else " " * local_width
+        remote_tag = "[remote]" if has_remote else ""
+        line = f"  {mark} {name:<{name_width}}  {local_tag} {remote_tag}"
+        print(line.rstrip())
+    return 0
+
+
 def usage(command: str) -> list[str]:
     lines = [
         f"{command}: usage:",
@@ -853,17 +876,16 @@ class SharedStoreBackend:
                 for k in remote
             }
             local_names = set(self.suffixes())
-            print(f"{self.command}: saved profiles")
-            for name in sort_names(local_names | remote_names):
-                mark = "*" if (name in local_names and name == current) else " "
-                tags = []
-                if name in local_names:
-                    tags.append("[local]")
-                if name in remote_names:
-                    tags.append("[remote]")
-                tag_str = f" {' '.join(tags)}" if tags else ""
-                print(f"  {mark} {name}{tag_str}")
-            return 0
+            rows = [
+                (
+                    name,
+                    name in local_names and name == current,
+                    name in local_names,
+                    name in remote_names,
+                )
+                for name in sort_names(local_names | remote_names)
+            ]
+            return print_scoped_profile_list(self.command, rows)
         return print_profile_list(self.command, self.suffixes(), current)
 
     def select(self, requested: str | None) -> int:

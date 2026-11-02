@@ -126,6 +126,31 @@ class SortNamesTests(unittest.TestCase):
         self.assertEqual(rotate_auth.sort_names([]), [])
 
 
+class ScopedProfileListTests(unittest.TestCase):
+    def test_names_and_tags_are_column_aligned(self):
+        from io import StringIO
+        from contextlib import redirect_stdout
+
+        rows = [
+            ("a", True, True, False),
+            ("longer-name", False, True, True),
+            ("only-remote", False, False, True),
+        ]
+        buf = StringIO()
+        with redirect_stdout(buf):
+            code = rotate_auth.print_scoped_profile_list("rotate-codex", rows)
+        self.assertEqual(code, 0)
+        lines = [line for line in buf.getvalue().splitlines() if line.startswith("  ")]
+        self.assertEqual(
+            lines,
+            [
+                "  * a            [local]",
+                "    longer-name  [local] [remote]",
+                "    only-remote          [remote]",
+            ],
+        )
+
+
 class EnvPathTests(unittest.TestCase):
     def test_unset_uses_default(self):
         with tempfile.TemporaryDirectory() as tmp:

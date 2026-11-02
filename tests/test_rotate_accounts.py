@@ -122,7 +122,7 @@ class ScopedRotationTests(unittest.TestCase):
                     ping.assert_called_once()
                 self.assertEqual(json.loads(pool.get(identity)[0]["auth"]), login(provider, "remote", 1))
                 list_output = self.command(backend, client, "--list")[1]
-                self.assertIn("work [local] [remote]", list_output)
+                self.assertRegex(list_output, r"work\s+\[local\]\s+\[remote\]")
                 self.assertEqual(len([line for line in list_output.splitlines() if "work" in line]), 1)
                 self.assertNotIn("remote.work", self.command(backend, client, "--local", "--list")[1])
 
@@ -379,7 +379,7 @@ class ScopedRotationTests(unittest.TestCase):
                     self.command(backend, client, "--remote", "--migrate")
                 self.assertEqual(self.local_state(backend), before)
                 listing = self.command(backend, client, "--list")[1]
-                self.assertIn("work [local] [remote]", listing)
+                self.assertRegex(listing, r"work\s+\[local\]\s+\[remote\]")
                 self.assertEqual(len([line for line in listing.splitlines() if "work" in line]), 1)
                 self.assertNotIn("reserved", listing)
 
