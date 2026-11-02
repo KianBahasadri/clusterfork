@@ -27,6 +27,7 @@ SUFFIX_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 PROFILE_PREFIX = "auth.json."
 REMOTE_MANIFEST = "remote-profiles.json"
 CLOUD_DIRECTORY = "cloud-reserved"
+REMOTE_KEY_PREFIX = "remote:"
 CLAUDE_ACTIVE = ".credentials.json"
 CLAUDE_PREFIX = ".credentials.json."
 
@@ -148,6 +149,25 @@ def atomic_write_bytes(dest: Path, data: bytes, mode: int = 0o600) -> None:
     atomic_replace(tmp, dest)
 
 
+def remote_profile_key(name: str) -> str:
+    return REMOTE_KEY_PREFIX + name
+
+
+def valid_profile_key(name, record) -> bool:
+    return bool(SUFFIX_RE.fullmatch(name) or (
+        record.get("ownership", "cloud") == "cloud" and record.get("display_name")
+        and name == remote_profile_key(record["display_name"])))
+
+
+def legacy_archive(store_dir, name, record):
+    alias = record.get("legacy_alias", name)
+    if not SUFFIX_RE.fullmatch(alias):
+        if name.startswith(REMOTE_KEY_PREFIX) and "legacy_alias" not in record:
+            return None
+        raise ValueError("Invalid legacy remote alias")
+    return store_dir / CLOUD_DIRECTORY / f"{alias}.json"
+
+
 def load_remote_profiles(store_dir: Path, *, migrate=True) -> dict:
     """Read ownership and archive legacy cloud copies without contacting the cloud.
 
@@ -160,7 +180,7 @@ def load_remote_profiles(store_dir: Path, *, migrate=True) -> dict:
     if not isinstance(manifest, dict):
         raise ValueError("Invalid remote account ownership")
     for name, record in manifest.items():
-        if (not SUFFIX_RE.fullmatch(name) or not isinstance(record, dict)
+        if (not isinstance(record, dict) or not valid_profile_key(name, record)
                 or record.get("ownership", "cloud") not in {"local", "cloud"}
                 or not re.fullmatch(r"[0-9a-f]{64}", record.get("account_id", ""))):
             raise ValueError("Invalid remote account ownership")
@@ -170,11 +190,18 @@ def load_remote_profiles(store_dir: Path, *, migrate=True) -> dict:
                 or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
                        for value in record["fingerprints"])):
             raise ValueError("Invalid independent local login registration")
+        if "display_name" in record and (
+                record.get("ownership", "cloud") != "cloud"
+                or not isinstance(record["display_name"], str)
+                or not SUFFIX_RE.fullmatch(record["display_name"])
+                or record["display_name"] in {".", "..", "lock"}
+                or len(record["display_name"]) > 120):
+            raise ValueError("Invalid remote profile display name")
     if not migrate:
         return manifest
     changed = False
     for name, record in manifest.items():
-        if not SUFFIX_RE.fullmatch(name) or not isinstance(record, dict):
+        if not valid_profile_key(name, record):
             raise ValueError("Invalid remote account ownership")
         backup_name = record.get("local_backup") or record.get("backup_path")
         if not backup_name and record.get("state") != "staged":
@@ -186,14 +213,14 @@ def load_remote_profiles(store_dir: Path, *, migrate=True) -> dict:
             if not source.is_absolute():
                 source = store_dir / source
             if not source.resolve().is_relative_to(store_dir.resolve()):
-                raise ValueError("Reserved profile backup is outside its auth store")
+                raise ValueError("Legacy remote backup is outside its auth store")
         # A completed file restore can precede a failed manifest write. Prefer
         # that destination on retry, but never replace independently changed data.
         destination_present = destination.exists() or destination.is_symlink()
         expected = record.get("source_sha256")
         if destination_present:
             if destination.is_symlink() or not destination.is_file():
-                raise ValueError("Reserved profile destination was replaced")
+                raise ValueError("Legacy remote destination was replaced")
             data = destination.read_bytes()
             if expected is None:
                 expected = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -202,7 +229,7 @@ def load_remote_profiles(store_dir: Path, *, migrate=True) -> dict:
             if expected is None:
                 expected = hashlib.sha256(data).hexdigest()
         if hashlib.sha256(data).hexdigest() != expected:
-            raise ValueError("Reserved profile credentials changed; refusing to overwrite them")
+            raise ValueError("Legacy remote credentials changed; refusing to overwrite them")
         if not destination_present:
             fd, temporary = tempfile.mkstemp(prefix=".remote-profile-", dir=store_dir)
             try:
@@ -228,24 +255,26 @@ def load_remote_profiles(store_dir: Path, *, migrate=True) -> dict:
             continue
         if record.get("reclaim"):
             continue
-        destination = store_dir / CLOUD_DIRECTORY / f"{name}.json"
+        destination = legacy_archive(store_dir, name, record)
+        if destination is None:
+            continue
         source = store_dir / f"{PROFILE_PREFIX}{name}"
         expected = record.get("source_sha256")
         if destination.parent.is_symlink() or destination.is_symlink() or source.is_symlink():
-            raise ValueError("Reserved profile destination was replaced")
+            raise ValueError("Legacy remote destination was replaced")
         if source.exists():
             data = source.read_bytes()
             if expected and hashlib.sha256(data).hexdigest() != expected:
-                raise ValueError("Reserved profile credentials changed; refusing to overwrite them")
+                raise ValueError("Legacy remote credentials changed; refusing to overwrite them")
             auth = json.loads(data)
             provider = "cursor" if "accessToken" in auth else "codex"
             if account_identity(auth, provider) != record["account_id"]:
-                raise ValueError("Reserved credentials belong to another account")
+                raise ValueError("Legacy remote credentials belong to another account")
             expected = hashlib.sha256(data).hexdigest()
             destination.parent.mkdir(mode=0o700, exist_ok=True)
             if destination.exists():
                 if destination.read_bytes() != data:
-                    raise ValueError("Reserved profile archive was replaced")
+                    raise ValueError("Legacy remote archive was replaced")
             else:
                 # Archive first. A failed manifest write or unlink is repeatable.
                 os.link(source, destination)
@@ -253,13 +282,13 @@ def load_remote_profiles(store_dir: Path, *, migrate=True) -> dict:
         if destination.exists():
             data = destination.read_bytes()
             if expected and hashlib.sha256(data).hexdigest() != expected:
-                raise ValueError("Reserved profile archive changed")
+                raise ValueError("Legacy remote archive changed")
             record["source_sha256"] = hashlib.sha256(data).hexdigest()
             destination.chmod(0o600)
             auth = json.loads(data)
             provider = "cursor" if "accessToken" in auth else "codex"
             if account_identity(auth, provider) != record["account_id"]:
-                raise ValueError("Reserved credentials belong to another account")
+                raise ValueError("Legacy remote credentials belong to another account")
             fingerprints = sorted(set(record.get("fingerprints", [])) | set(login_fingerprints(auth, provider)))
             if fingerprints != record.get("fingerprints"):
                 record["fingerprints"] = fingerprints
@@ -270,6 +299,31 @@ def load_remote_profiles(store_dir: Path, *, migrate=True) -> dict:
     if changed:
         atomic_write_text(manifest_path, json.dumps(manifest))
     return manifest
+
+
+def normalize_profile_scopes(store_dir: Path) -> dict:
+    """Give remote metadata its own namespace; local names never belong to it."""
+    manifest = load_remote_profiles(store_dir)
+    normalized = {}
+    for alias, record in manifest.items():
+        if record.get("ownership", "cloud") == "cloud":
+            label = record.get("display_name", alias)
+            if (not isinstance(label, str) or not SUFFIX_RE.fullmatch(label)
+                    or label in {".", "..", "lock"} or len(label) > 120):
+                raise ValueError("Invalid remote profile display name")
+            key = remote_profile_key(label)
+            value = {**record, "display_name": label}
+            archive = legacy_archive(store_dir, alias, record)
+            if archive is not None and (archive.exists() or record.get("source_sha256")):
+                value["legacy_alias"] = record.get("legacy_alias", alias)
+        else:
+            key, value = alias, record
+        if key in normalized:
+            raise ValueError("Conflicting remote profile names")
+        normalized[key] = value
+    if normalized != manifest:
+        atomic_write_text(store_dir / REMOTE_MANIFEST, json.dumps(normalized))
+    return normalized
 
 
 def cloud_enrolled(record):
@@ -371,9 +425,9 @@ def refuse_active_delete(command: str, name: str) -> None:
     )
 
 
-def confirm_delete(command: str, name: str) -> bool:
+def confirm_delete(command: str, name: str, *, kind: str = "saved profile") -> bool:
     try:
-        answer = input(f"{command}: delete saved profile {name!r}? [y/N] ")
+        answer = input(f"{command}: delete {kind} {name!r}? [y/N] ")
     except (EOFError, KeyboardInterrupt):
         print()
         answer = ""
@@ -381,6 +435,100 @@ def confirm_delete(command: str, name: str) -> bool:
         return True
     print(f"{command}: deletion cancelled")
     return False
+
+
+def is_interactive() -> bool:
+    try:
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            return False
+        import termios
+        termios.tcgetattr(sys.stdin.fileno())
+        return True
+    except (OSError, AttributeError, ValueError):
+        return False
+
+
+def prompt_scope(command: str, name: str) -> str:
+    """Prompt user to choose between 'local' and 'remote' scope using arrow keys."""
+    import select
+    import termios
+    import tty
+
+    options = ["local", "remote"]
+    selected = 0
+    fd = sys.stdin.fileno()
+
+    header = f"{command}: select scope for {name!r} (use arrow keys, Enter to confirm):\n"
+    sys.stdout.write(header)
+    for i, opt in enumerate(options):
+        prefix = " > " if i == selected else "   "
+        sys.stdout.write(f"{prefix}{opt}\n")
+    sys.stdout.flush()
+
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        sys.stdout.write("\x1b[?25l")
+        sys.stdout.flush()
+
+        while True:
+            ch = os.read(fd, 1)
+            if not ch:
+                raise EOFError
+
+            action = None
+            if ch == b"\x1b":
+                r, _, _ = select.select([fd], [], [], 0.05)
+                if r:
+                    b1 = os.read(fd, 1)
+                    if b1 in (b"[", b"O"):
+                        r2, _, _ = select.select([fd], [], [], 0.05)
+                        if r2:
+                            b2 = os.read(fd, 1)
+                            if b2 == b"A":
+                                action = "up"
+                            elif b2 == b"B":
+                                action = "down"
+                else:
+                    action = "cancel"
+            elif ch in (b"\r", b"\n"):
+                action = "enter"
+            elif ch in (b"\x03", b"\x04", b"q", b"Q"):
+                action = "cancel"
+            elif ch in (b"k", b"K"):
+                action = "up"
+            elif ch in (b"j", b"J"):
+                action = "down"
+
+            if action == "up":
+                selected = max(0, selected - 1)
+            elif action == "down":
+                selected = min(len(options) - 1, selected + 1)
+            elif action == "enter":
+                break
+            elif action == "cancel":
+                raise KeyboardInterrupt
+
+            sys.stdout.write(f"\x1b[{len(options)}A")
+            for i, opt in enumerate(options):
+                prefix = " > " if i == selected else "   "
+                sys.stdout.write(f"\r\x1b[K{prefix}{opt}\n")
+            sys.stdout.flush()
+
+    finally:
+        try:
+            sys.stdout.write("\x1b[?25h")
+            sys.stdout.flush()
+        except OSError:
+            pass
+        try:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        except (termios.error, OSError):
+            pass
+
+    sys.stdout.write(f"\x1b[{len(options) + 1}A\r\x1b[J{command}: selected scope '{options[selected]}' for {name!r}\n")
+    sys.stdout.flush()
+    return options[selected]
 
 
 def print_profile_list(command: str, suffixes: list[str], current: str | None) -> int:
@@ -395,7 +543,7 @@ def print_profile_list(command: str, suffixes: list[str], current: str | None) -
 
 
 def usage(command: str) -> list[str]:
-    return [
+    lines = [
         f"{command}: usage:",
         f"  {command} [name]",
         f"  {command} --save name",
@@ -404,6 +552,27 @@ def usage(command: str) -> list[str]:
         f"  {command} --list",
         f"  {command} --kickoff [names]",
     ]
+    if command in {"rotate-codex", "rotate-cursor-cli"}:
+        lines.extend([
+            f"  {command} [--local | --remote] --save name",
+            f"  {command} --local --list",
+            f"  {command} --remote --list",
+            f"  {command} --remote --delete name",
+            f"  {command} --remote --migrate",
+            "  --save selects local or remote scope interactively, or via --local/--remote.",
+            "  --remote --migrate moves existing single-login profiles to remote.",
+        ])
+    return lines
+
+
+def parse_scope(command: str, args: list[str]) -> tuple[str | None, list[str]]:
+    scopes = [value for value in args if value in {"--local", "--remote"}]
+    if len(scopes) > 1:
+        fail(*usage(command))
+    if scopes and command not in {"rotate-codex", "rotate-cursor-cli"}:
+        fail(f"{command}: local/remote account management is supported for Codex and Cursor")
+    return (scopes[0][2:] if scopes else None,
+            [value for value in args if value not in {"--local", "--remote"}])
 
 
 def parse_action(command: str, args: list[str]) -> tuple[str, str | list[str] | None]:
@@ -418,10 +587,10 @@ def parse_action(command: str, args: list[str]) -> tuple[str, str | list[str] | 
         if len(args) != 1:
             fail(*usage(command))
         return "list", None
-    if first == "--unhook":
+    if first in {"--unhook", "--migrate"}:
         if len(args) != 1:
             fail(*usage(command))
-        return "unhook", None
+        return first[2:], None
     if first == "--kickoff":
         profiles = args[1:]
         if any(n.startswith("-") or not n for n in profiles):
@@ -435,7 +604,7 @@ def parse_action(command: str, args: list[str]) -> tuple[str, str | list[str] | 
     if first == "--save":
         if len(args) != 2:
             fail(*usage(command))
-        return "save", args[1]
+        return first[2:], args[1]
     if first == "--delete":
         if len(args) != 2:
             fail(*usage(command))
@@ -643,22 +812,27 @@ class SharedStoreBackend:
         if self.command not in {"rotate-codex", "rotate-cursor-cli"}:
             return set()
         try:
-            manifest = load_remote_profiles(self.store_dir)
+            manifest = normalize_profile_scopes(self.store_dir)
             if not manifest:
                 return set()
-            provider = "cursor" if self.command == "rotate-cursor-cli" else "codex"
-            names = set(manifest) | set(self.suffixes())
-            return {name for name in names if not profile_is_local(self.store_dir, name, manifest, provider)}
+            return {name for name, record in manifest.items() if record.get("ownership", "cloud") == "cloud"}
         except (OSError, ValueError, TypeError):
             fail(f"{self.command}: cannot read remote account ownership; refusing local rotation")
 
     def local_profiles(self, requested: str | None = None) -> list[str]:
         remote = self.remote_profiles()
-        if requested in remote:
+        names = self.suffixes()
+        if self.command in {"rotate-codex", "rotate-cursor-cli"}:
+            manifest = load_remote_profiles(self.store_dir)
             provider = "cursor" if self.command == "rotate-cursor-cli" else "codex"
-            fail(f"{self.command}: profile is reserved for remote work",
-                 f"  Register a fresh login with automation/accounts.py register-local --provider {provider}, or reclaim it first.")
-        return [name for name in self.suffixes() if name not in remote]
+            eligible = ([name for name in names if profile_is_local(self.store_dir, name, manifest, provider)]
+                        if manifest else names)
+        else:
+            eligible = names
+        if requested in remote or requested in names and requested not in eligible:
+            fail(f"{self.command}: credentials belong to a remote login",
+                 f"  Sign in separately, then: {self.command} --local --save NAME")
+        return eligible
 
     def current_suffix(self) -> str | None:
         if not self.current.is_symlink():
@@ -672,10 +846,16 @@ class SharedStoreBackend:
     def list_profiles(self) -> int:
         remote = self.remote_profiles()
         current = self.current_suffix() if self.current.is_symlink() else None
-        result = print_profile_list(self.command, sort_names(set(self.suffixes()) | remote), current)
         if remote:
-            print(f"  {len(remote)} profiles reserved for remote work; skipped by local rotation")
-        return result
+            manifest = load_remote_profiles(self.store_dir)
+            print(f"{self.command}: saved profiles")
+            for name in sort_names(set(self.suffixes()) | remote):
+                mark = "*" if name == current else " "
+                label = manifest.get(name, {}).get("display_name", name)
+                scope = "remote" if name in remote else "local"
+                print(f"  {mark} {label} [{scope}]")
+            return 0
+        return print_profile_list(self.command, self.suffixes(), current)
 
     def select(self, requested: str | None) -> int:
         if self.auth.exists() and not self.auth.is_symlink():
@@ -753,7 +933,8 @@ class SharedStoreBackend:
                     fail(f"{self.command}: refusing to overwrite an independent login")
                 if managed or source:
                     if source is None:
-                        fail(f"{self.command}: managed account requires explicit fresh local login registration")
+                        fail(f"{self.command}: current credentials are not a saved local login",
+                             f"  Sign in separately, then: {self.command} --local --save NAME")
                     existing = manifest.get(name)
                     if existing and existing.get("session_id") != source["session_id"]:
                         fail(f"{self.command}: refusing to overwrite an independent login")
@@ -858,6 +1039,11 @@ class SharedStoreBackend:
     def _choose(self, names: list[str], requested: str | None) -> str:
         if requested is not None:
             if requested not in names:
+                if self.command in {"rotate-codex", "rotate-cursor-cli"} and any(
+                        record.get("ownership", "cloud") == "cloud" and record.get("display_name", alias) == requested
+                        for alias, record in load_remote_profiles(self.store_dir).items()):
+                    fail(f"{self.command}: no local profile named {requested!r}",
+                         f"  Sign in, then: {self.command} --local --save {requested}")
                 extra = format_suffixes("suffixes", names)
                 lines = [f"{self.command}: no matching {PROFILE_PREFIX}{requested} file"]
                 if extra:
@@ -1237,10 +1423,31 @@ def run(argv: list[str]) -> int:
         return 0 if argv else 1
 
     backend = make_backend(argv[0])
-    action, name = parse_action(backend.command, argv[1:])
+    scope, args = parse_scope(backend.command, argv[1:])
+    action, name = parse_action(backend.command, args)
     if action == "help":
         print("\n".join(usage(backend.command)))
         return 0
+    if action == "migrate" and scope != "remote":
+        fail(f"{backend.command}: use --remote --migrate to transfer existing single-login profiles")
+    if (scope == "remote" or action in {"save", "delete"}
+            and backend.command in {"rotate-codex", "rotate-cursor-cli"}):
+        if scope == "remote" and action not in {"save", "list", "delete", "migrate"}:
+            fail(f"{backend.command}: use --remote with --save, --list, --delete or --migrate",
+                 "  Remote jobs select their own credentials.")
+        if action == "save" and scope is None:
+            if not is_interactive():
+                fail(*usage(backend.command))
+            try:
+                assert isinstance(name, str)
+                scope = prompt_scope(backend.command, name)
+            except (KeyboardInterrupt, EOFError):
+                fail(f"{backend.command}: save cancelled")
+        from rotate_accounts import manage
+        return manage(backend, scope or "local", action, name)
+    if scope == "local" and action == "list":
+        assert isinstance(backend, SharedStoreBackend)
+        return print_profile_list(backend.command, backend.local_profiles(), backend.current_suffix())
     if action == "list":
         return backend.list_profiles()
     if action == "unhook":
@@ -1270,4 +1477,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # The scoped helper imports this module for the shared ownership rules and
+    # error type. Reuse the running CLI instead of loading a second copy.
+    sys.modules["rotate_auth"] = sys.modules[__name__]
     sys.exit(main())

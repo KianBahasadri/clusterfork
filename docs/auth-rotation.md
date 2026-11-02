@@ -84,8 +84,46 @@ Each agent file links relatively to its store's `current`, which links to
 `auth.json.NAME`. Rotation changes only `current`. Save copies the active login,
 selects it and rebuilds the chain even after login replaced the agent link with
 a regular file. Unhook removes only the agent-side symlink, retaining store and
-`current`. [Remote accounts](remote-development-accounts.md) owns cloud reservation
+`current`. [Remote accounts](remote-development-accounts.md) owns remote scope
 and reclaim rules for Codex/Cursor.
+
+## Local and remote account commands
+
+Codex and Cursor accept `--local` and `--remote` in any argument position. Omitted
+scope means local for selection, deletion and kickoff. `--save` prompts interactively
+to choose between local and remote scope using keyboard navigation (Up/Down arrow
+keys and Enter); in non-interactive shells, `--save` requires an explicit `--local`
+or `--remote` flag and otherwise exits with the command usage. `--list` without a
+scope shows the host's saved profiles in both sets, labeling local/remote
+entries when remote profiles exist.
+
+```bash
+rotate-codex --local --save work
+rotate-codex --remote --save work
+rotate-codex --local --list
+rotate-codex --remote --list
+rotate-codex --local --unhook
+rotate-codex --local --delete work
+rotate-codex --remote --delete work
+```
+
+Replace `rotate-codex` with `rotate-cursor-cli` for Cursor. Sign in with the provider,
+then use `--save NAME` to save that login in the selected set. For another login,
+use `--unhook`, sign in again, then `--save NAME` with the desired scope.
+Local save selects the saved profile. Remote save transfers the current login and
+reattaches the previous local profile when one exists. These commands never start
+a provider sign-in.
+Remote jobs select their own account, so `--remote` accepts only
+`--save`, `--list`, `--delete` and `--migrate`. It never installs remote credentials locally for
+selection or kickoff. Remote operations use the existing Azure CLI operator login;
+the installed helpers need only Python's standard library.
+
+Local save registers a separate provider login automatically when the same account
+also has remote credentials. No additional registration flag is required. The
+[account ownership topic](remote-development-accounts.md#scoped-rotator-management)
+owns independence checks, names, interrupted additions and remote deletion.
+`rotate-codex --remote --migrate` (or the Cursor equivalent) transfers existing
+single-login profiles into the remote set without another provider sign-in.
 
 ## Sharing with a container
 
@@ -113,4 +151,4 @@ of a missing agent link.
 
 Repair refuses regular-file agent credentials. Use the provider's `--save NAME`
 to copy that login and rebuild the chain, also when importing a new machine's
-credentials. Cloud-reserved legacy handoff recovery belongs to [remote accounts](remote-development-accounts.md#enroll-and-reclaim).
+credentials. Legacy remote handoff recovery belongs to [remote accounts](remote-development-accounts.md#enroll-and-reclaim).

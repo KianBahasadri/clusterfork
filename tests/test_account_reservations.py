@@ -1,4 +1,4 @@
-"""Local Codex/Cursor reservation parity and recovery; no real credentials or Azure."""
+"""Local/remote scope parity and legacy transfer recovery; no real credentials or Azure."""
 
 import copy
 from contextlib import redirect_stdout
@@ -102,13 +102,14 @@ class AccountReservationTests(unittest.TestCase):
                 with redirect_stdout(output), patch.object(rotate_auth, "ping_agent") as ping:
                     backend.list_profiles()
                     migrated = json.loads((backend.store_dir / accounts.MANIFEST).read_text())
-                    self.assertIn("* 21kb60", output.getvalue())
-                    self.assertIn("1 profiles reserved for remote work", output.getvalue())
+                    self.assertIn("21kb60 [remote]", output.getvalue())
+                    self.assertNotIn("* 21kb60", output.getvalue())
+                    self.assertNotIn("reserved", output.getvalue())
                     for operation in (lambda: backend.select("21kb60"), lambda: backend.save("21kb60"),
                                       lambda: backend.delete("21kb60"), lambda: backend.kickoff(["21kb60"])):
-                        with self.assertRaisesRegex(rotate_auth.RotateError, "reserved for remote work") as error:
+                        with self.assertRaises(rotate_auth.RotateError) as error:
                             operation()
-                        self.assertIn(f"--provider {provider}", str(error.exception))
+                        self.assertNotIn("reserved", str(error.exception))
                         self.assertEqual(backend.current_suffix(), "21kb60")
                     ping.assert_not_called()
                     for expected in ("local-a", "local-b", "local-a"):
@@ -155,7 +156,8 @@ class AccountReservationTests(unittest.TestCase):
                     with redirect_stdout(io.StringIO()) as output:
                         backend.list_profiles()
                     self.assertIn("21kb60", output.getvalue())
-                    self.assertIn("1 profiles reserved for remote work", output.getvalue())
+                    self.assertIn("21kb60 [remote]", output.getvalue())
+                    self.assertNotIn("reserved", output.getvalue())
                     self.assertEqual((os.readlink(backend.current), os.readlink(backend.auth)), links)
                     backup.unlink()  # Neither normal enrollment nor reclaim depends on the backup now.
                     table = account_pool(self, provider)
@@ -194,7 +196,7 @@ class AccountReservationTests(unittest.TestCase):
                     self.assertEqual(records(table), cloud)
                     self.assertEqual(backend.current_suffix(), "21kb60")
                     if conflict == "busy":
-                        self.assertEqual(backend.remote_profiles(), {"21kb60"})
+                        self.assertEqual(backend.remote_profiles(), {"remote:21kb60"})
                     else:
                         with self.assertRaises(rotate_auth.RotateError):
                             backend.remote_profiles()
@@ -235,9 +237,9 @@ class AccountReservationTests(unittest.TestCase):
             self.assertEqual(profile.read_bytes(), backup.read_bytes())
             self.assertEqual(json.loads((backend.store_dir / accounts.MANIFEST).read_text()), {"21kb60": record})
             backup.unlink()
-            self.assertEqual(backend.remote_profiles(), {"21kb60"})
+            self.assertEqual(backend.remote_profiles(), {"remote:21kb60"})
             self.assertEqual(backend.current_suffix(), "local-a")
-            self.assertNotIn("local_backup", json.loads((backend.store_dir / accounts.MANIFEST).read_text())["21kb60"])
+            self.assertNotIn("local_backup", json.loads((backend.store_dir / accounts.MANIFEST).read_text())["remote:21kb60"])
 
 
 if __name__ == "__main__":

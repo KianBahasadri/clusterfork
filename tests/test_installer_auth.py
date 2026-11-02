@@ -46,7 +46,7 @@ class InstallerSharedAuthTests(unittest.TestCase):
                 source = store / "auth.json.21kb60"
                 record = {"account_id": account_identity(login(provider, account="21kb60"), provider),
                           "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
-                manifests[provider] = {"21kb60": {**record, "ownership": "cloud",
+                manifests[provider] = {"remote:21kb60": {**record, "ownership": "cloud", "display_name": "21kb60", "legacy_alias": "21kb60",
                     "fingerprints": login_fingerprints(login(provider, account="21kb60"), provider)}}
                 if provider == "cursor":
                     backup = store / "remote-staged/auth.json.21kb60"
@@ -70,7 +70,7 @@ class InstallerSharedAuthTests(unittest.TestCase):
                     self.assertEqual((store / "current").readlink(), Path("auth.json.local-a"))
                     self.assertEqual(json.loads((store / "remote-profiles.json").read_text()), manifests[provider])
                     self.assertEqual(hashlib.sha256((store / "cloud-reserved/21kb60.json").read_bytes()).hexdigest(),
-                                     manifests[provider]["21kb60"]["source_sha256"])
+                                     manifests[provider]["remote:21kb60"]["source_sha256"])
                     agent_dir = home / (".codex" if provider == "codex" else ".config/cursor")
                     self.assertEqual((agent_dir / "auth.json").readlink(), links[provider])
 
@@ -83,12 +83,22 @@ class InstallerSharedAuthTests(unittest.TestCase):
                 listed = run_wrapper("--list")
                 self.assertEqual(listed.returncode, 0, listed.stderr)
                 self.assertIn("21kb60", listed.stdout)
-                self.assertIn("1 profiles reserved for remote work", listed.stdout)
+                self.assertIn("21kb60 [remote]", listed.stdout)
+                self.assertNotIn("reserved", listed.stdout)
                 refused = run_wrapper("21kb60")
                 self.assertEqual(refused.returncode, 1)
-                self.assertIn("reserved for remote work", refused.stderr)
-                self.assertIn(f"--provider {provider}", refused.stderr)
+                self.assertIn("no local profile named", refused.stderr)
+                self.assertIn(f"{command} --local --save 21kb60", refused.stderr)
                 self.assertEqual((stores[provider] / "current").readlink(), Path("auth.json.local-a"))
+                # Scoped commands run from the installed tree without this
+                # checkout or the worker runtime's third-party packages.
+                scoped = run_wrapper("--remote", "--save", "..")
+                self.assertEqual(scoped.returncode, 1)
+                self.assertIn("Choose a profile name", scoped.stderr)
+                self.assertNotIn("Traceback", scoped.stderr)
+                listed_local = run_wrapper("--local", "--list")
+                self.assertEqual(listed_local.returncode, 0, listed_local.stderr)
+                self.assertNotIn("21kb60", listed_local.stdout)
 
     def test_grok_runtime_lock_is_not_treated_as_a_saved_profile(self):
         with tempfile.TemporaryDirectory() as tmp:

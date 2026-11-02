@@ -9,11 +9,63 @@ credential record and at most one cloud job lease, regardless of alias or login
 count. Independent local and cloud logins share the underlying provider quota.
 
 `remote-profiles.json` in `~/.local/share/clusterfork-auth/{codex,cursor}/` records
-alias ownership. Cloud reservations default to `ownership: cloud`; only explicit
-registration creates `ownership: local` with a persistent `session_id`.
+local/remote scope. Remote entries retain the internal value `ownership: cloud`;
+registered local sessions use `ownership: local` with a persistent `session_id`.
 Controller metadata separately retains the cloud session ID, known token/session
 fingerprints and registered local-session fingerprints. Local credential contents
 stay on their host; registration transmits hashes, never the local auth cache.
+
+## Scoped rotator management
+
+Use the [scoped rotate commands](auth-rotation.md#local-and-remote-account-commands)
+for ordinary account management. Sign in with the provider, then save the current
+login in the chosen local or remote set. Remote save checks for reuse of local access/refresh
+tokens and provider session claims before uploading anything. When the same
+account is already local, it preserves the saved local files, selection and
+session IDs, registering only their fingerprints with the controller. A new
+remote login cannot replace an already enrolled login, including refreshed cloud
+tokens. Delete that remote account explicitly before saving a replacement.
+
+Every profile belongs to the local or remote set. Remote entries use manifest key
+`remote:NAME` and `display_name: NAME`; local credentials use `auth.json.NAME`.
+The colon is outside the valid local-name alphabet, so neither set occupies names
+in the other. Legacy entries, including the earlier `remote.NAME` keys, normalize
+into this namespace during rotate operations and installer repair. A remote name
+can immediately be reused for a fresh local login. Consumer aliases use display
+names and remain sorted/unique.
+
+The explicit single-login migration groups saved aliases by provider identity and
+known token/session fingerprints. With one login, it transfers that login to the
+remote set, detaches its local selection and removes the local profile files.
+Duplicate aliases and refreshes do not create independent logins. An already
+enrolled remote login is kept, including refreshed tokens and its active/staged
+state. Registered independent local logins remain local; ambiguous unregistered
+copies fail without discarding them. This is an operator migration, not the
+default for future saves: an explicit local save stays local.
+
+Transfers journal source hashes before archiving old local copies. Retrying after
+interruption never overwrites the controller's current credentials. After verifying
+remote enrollment, migration deletes matching legacy handoff archives/backups and removes their
+metadata. It requires no provider sign-in and never copies an archive back to local.
+
+Pending remote transfers live under the private sibling directory
+`.<store-directory-name>-logins/{local,remote}/NAME/`, outside profile enumeration.
+Remote save moves the detached regular auth file into this journal before upload,
+reattaching the previous independent local profile when available. It refuses to
+upload a selected local profile or a login that reuses local tokens/session claims.
+Successful save removes the pending home; failure retains it so repeating the
+same save can finish without another sign-in. Scoped `--delete NAME` can discard
+an unfinished transfer when no saved remote account exists. Legacy pending local
+logins can also be discarded. No provider login happens during rotation or installation.
+
+Remote deletion confirms once per invocation and removes the entire provider
+account from the pool, including its remote aliases. It claims the existing
+exclusive transfer lease, refuses a busy account, and journals the transfer ID so
+an interrupted deletion can retry under the same owner. It discards the remote
+login instead of reclaiming it locally, clears its host metadata/legacy archives and
+marks independent local registrations `cloud_enrolled: false`. Saved local files
+and selection remain intact. Remote listing uses only the controller's cached
+snapshot and includes accounts added on other hosts.
 
 <a id="enroll-and-reclaim"></a>
 
@@ -31,7 +83,7 @@ python3 -m venv ~/.config/clusterfork/automation/venv
 Codex is the default; add `--provider cursor` for every Cursor command. Enrollment
 includes the active saved profile by default; repeat `--profile NAME` to select
 profiles. It deduplicates provider identities, preserves existing cloud tokens
-(including refreshes), reserves other saved aliases of that account and leaves
+(including refreshes), transfers other saved aliases of that login and leaves
 registered independent local logins intact. Re-enrollment never uploads a
 registered local session as the cloud login. `list` reports IDs, aliases and
 ownership without tokens.
@@ -39,20 +91,20 @@ ownership without tokens.
 Stop clients using the old shared login before enrollment or migration. Existing
 processes may retain tokens in memory; a cloud lease cannot fence their refreshes.
 Mutating account commands, rotator commands and installer repair migrate legacy
-reservations locally without Azure access. For an explicit migration:
+handoffs locally without Azure access. For explicit legacy handoff recovery:
 
 ```bash
 python3 automation/accounts.py migrate --provider codex
 python3 automation/accounts.py migrate --provider cursor
 ```
 
-Migration treats all old reservations as cloud-only, even when token bytes differ.
-It archives reserved `auth.json.NAME` copies as `cloud-reserved/NAME.json` inside
-the same private store, outside local profile enumeration. Existing symlinks stay
-in place and become dangling if they pointed at those files; they cannot refresh
-the archived cloud login. Reserved aliases stay visible in rotator listings but
-selection, save, deletion and kickoff refuse them; automatic sweeps skip them.
-Unregistered aliases of an enrolled account are also unavailable locally.
+Legacy handoff records identify remote logins, even when token bytes differ.
+Recovery temporarily archives their old `auth.json.NAME` copies under the historical
+`cloud-reserved/NAME.json` path, outside local enumeration. These are recovery
+copies, not local profiles. The scoped migration verifies enrollment and removes
+them. Remote entries appear as `[remote]` in listings; local selection and kickoff
+use only local credentials. Unregistered copies of remote credentials cannot be
+used as local logins.
 
 Legacy `local_backup`/`backup_path` handoffs (including Cursor `21kb60`) are
 recovered only within the provider store, checked against their recorded SHA-256,
@@ -67,7 +119,8 @@ python3 automation/accounts.py cloud-only --provider codex --profile NAME
 ```
 
 To add local availability, unhook the provider, perform an actual fresh provider
-sign-in later, and register its regular auth file under a separate unused name:
+sign-in, then save its regular auth file. The rotate command registers the separate
+session automatically; the direct utility below remains available for maintenance:
 
 ```bash
 rotate-codex --unhook
@@ -85,7 +138,7 @@ account identity, requires an idle cloud account, and refuses occupied destinati
 An interrupted registration can be retried with the same source and destination;
 it cannot replace a subsequently refreshed or different local login.
 
-`--fresh-login` attests that the operator completed a new sign-in. Copying an auth
+The direct utility's `--fresh-login` attests that the operator completed a new sign-in. Copying an auth
 file or refreshing the existing chain does not satisfy it. Known access/refresh
 token history and provider `sid`/`session_id` claims reject reuse, including known
 rotated copies. Providers do not always expose a stable session claim: differing
@@ -105,7 +158,7 @@ it refuses busy accounts, changed local files and occupied destinations:
 python3 automation/accounts.py reclaim --provider codex --profile NAME
 ```
 
-With no independent local login, this restores the reserved aliases. If an
+With no independent local login, this transfers the remote aliases into local. If an
 independent local login exists, an explicit **separate unused** destination is
 mandatory; reclaim never replaces that login:
 
@@ -114,7 +167,7 @@ python3 automation/accounts.py reclaim --provider codex --profile NAME \
   --destination-profile NAME-reclaimed
 ```
 
-A transfer journal keeps destinations reserved until fenced cloud deletion
+A transfer journal protects destinations until fenced cloud deletion
 finishes. Retrying a completed/interrupted transfer validates the written bytes
 and preserves later local changes. Cloud ownership is removed only by this
 explicit transfer; registration and cloud-only choices retain it. Reclaim removes
@@ -318,4 +371,4 @@ with bounded reasons excluding values, contents and credential-bearing paths.
 The [once-only Cursor probe](archive/cursor-validation-20261030.md) is historical;
 its disabled smoke workflow is outside deployment/admission. That migration preserved
 staged/active metadata and refreshes without activating staged profiles or changing
-local visibility. Reservations and restore/reclaim remain separate operations.
+local visibility. Scope changes and restore/reclaim remain separate operations.

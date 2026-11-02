@@ -186,19 +186,18 @@ configure_shared_auth() {
 
   AUTH_STORE_CONFIGURED=0
   if [[ "$label" == "Codex" || "$label" == "Cursor" ]]; then
-    # The installed rotator owns reservation guards and legacy local handoffs.
-    # Restore saved-profile visibility before discovering profiles below.
+    # The installed rotator owns local/remote scopes and legacy handoffs.
     python3 - "$(dirname "$ROTATE_AUTH_DEST")" "$store_dir" <<'PY' || return 1
 import sys
 from pathlib import Path
 
 sys.path.insert(0, sys.argv[1])
-from rotate_auth import load_remote_profiles
+from rotate_auth import normalize_profile_scopes
 
 try:
-    load_remote_profiles(Path(sys.argv[2]))
+    normalize_profile_scopes(Path(sys.argv[2]))
 except (OSError, ValueError, TypeError):
-    raise SystemExit("Cannot read or restore local cloud-reserved profiles") from None
+    raise SystemExit("Cannot read local/remote profile metadata") from None
 PY
   fi
   agent_link_target="$(realpath -ms --relative-to="$agent_dir" "$current_path")" ||
@@ -466,6 +465,10 @@ step "notify service" "$NOTIFY_DEST_DIR" "ntfy compose"
 mkdir -p "$(dirname "$ROTATE_AUTH_DEST")"
 cp "$ROTATE_AUTH_SRC" "$ROTATE_AUTH_DEST"
 cp "$REPO_DIR/scripts/account_sessions.py" "$(dirname "$ROTATE_AUTH_DEST")/account_sessions.py"
+cp "$REPO_DIR/scripts/rotate_accounts.py" "$(dirname "$ROTATE_AUTH_DEST")/rotate_accounts.py"
+mkdir -p "$CLUSTERFORK_CONFIG_DIR/automation/common"
+cp "$REPO_DIR/automation/accounts.py" "$REPO_DIR/automation/account_client.py" "$CLUSTERFORK_CONFIG_DIR/automation/"
+cp "$REPO_DIR/automation/common/accounts.py" "$REPO_DIR/automation/common/__init__.py" "$CLUSTERFORK_CONFIG_DIR/automation/common/"
 chmod +x "$ROTATE_AUTH_DEST"
 step "rotate-auth" "$ROTATE_AUTH_DEST"
 
@@ -1134,6 +1137,7 @@ printf '    %-5s %-18s %s\n' gk "grok" ""
 printf '    %-5s %-18s %s\n' chrome "prime-run google-chrome" "--ozone-platform=x11 --remote-debugging-port=9222 (background)"
 printf '    %-5s %-18s %s\n' codeview "bin/codeview" "start|stop|restart|reload|status|open (no args = start)"
 printf '    %-5s %-18s %s\n' "rotate-*" "rotate_auth.py" "[name] --save name --delete name --unhook --list --kickoff [names]"
+printf '    %-5s %-18s %s\n' "" "Codex/Cursor" "[--local|--remote] --save name; --remote --list/--delete name"
 
 # Skills: list each subdirectory name under skills/.
 skills=()

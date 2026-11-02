@@ -6,7 +6,7 @@ and codeview; converters/probes run from checkout. Cloud helpers belong to
 
 ## Account rotation
 
-`scripts/rotate_auth.py` is the sole implementation; [Auth Rotation](auth-rotation.md)
+`scripts/rotate_auth.py` is the CLI entry point; [Auth Rotation](auth-rotation.md)
 owns flags/storage/container sharing.
 
 ```bash

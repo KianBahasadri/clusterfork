@@ -14,13 +14,27 @@ import time
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from codex_runtime import write_private
 from rotate_auth import (CLOUD_DIRECTORY, REMOTE_MANIFEST, SUFFIX_RE, load_remote_profiles,
-                         cloud_enrolled, profile_is_local)
+                         cloud_enrolled, legacy_archive, profile_is_local, remote_profile_key,
+                         valid_profile_key)
 from common.accounts import WorkerError, account_identity, login_fingerprints, login_id
 from account_client import AccountClient
 
 MANIFEST = REMOTE_MANIFEST
+
+
+def write_private(path, value):
+    """Write operator state without importing the worker runtime."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, temporary = tempfile.mkstemp(prefix=".clusterfork-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump(value, stream)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def connect(provider="codex"):
@@ -50,6 +64,11 @@ def saved_profiles(store):
             if p.is_file() and not p.is_symlink() and p.name != "auth.json.lock"}
 
 
+def display_aliases(manifest, identity):
+    return sorted({record.get("display_name", alias) for alias, record in manifest.items()
+                   if record["account_id"] == identity})
+
+
 def availability(store, provider):
     """Strictly read-only: no migration, network, refresh, or credential output."""
     manifest = load_remote_profiles(store, migrate=False)
@@ -66,13 +85,15 @@ def availability(store, provider):
         row = rows.setdefault(identity, {"provider": provider, "account_id": identity, "aliases": [],
                                         "cloud_available": False, "local_available": False,
                                         "local_profiles": [], "selected_local_profile": None})
-        row["aliases"].append(name)
+        row["aliases"].append(record.get("display_name", name) if record else name)
         row["cloud_available"] |= bool(record and cloud_enrolled(record))
         if profile_is_local(store, name, manifest, provider):
             row["local_profiles"].append(name)
             row["local_available"] = True
             if selected == name:
                 row["selected_local_profile"] = name
+    for row in rows.values():
+        row["aliases"] = sorted(set(row["aliases"]))
     return {"schema_version": 1, "generated_at": time.time(), "provider": provider,
             "local_scope": "host", "accounts": [rows[key] for key in sorted(rows)]}
 
@@ -119,8 +140,8 @@ def register_local(args, manifest, client, name):
     for alias, record in manifest.items():
         if record["account_id"] != identity or record.get("ownership", "cloud") != "cloud":
             continue
-        archive = args.store / CLOUD_DIRECTORY / f"{alias}.json"
-        if archive.exists() and set(fingerprints).intersection(login_fingerprints(json.loads(archive.read_text()), args.provider)):
+        archive = legacy_archive(args.store, alias, record)
+        if archive is not None and archive.exists() and set(fingerprints).intersection(login_fingerprints(json.loads(archive.read_text()), args.provider)):
             raise WorkerError("Local login reuses a known cloud token or provider session")
     session = login_id(auth, args.provider)
     destination = args.store / f"auth.json.{target}"
@@ -142,7 +163,7 @@ def register_local(args, manifest, client, name):
     write_private(args.store / MANIFEST, manifest)
     if not destination.exists():
         write_new(destination, auth)
-    client.describe(identity, aliases=[alias for alias, record in manifest.items() if record["account_id"] == identity])
+    client.describe(identity, aliases=display_aliases(manifest, identity))
 
 
 def restore_local_registration(args, manifest, client, identity):
@@ -163,7 +184,7 @@ def restore_local_registration(args, manifest, client, identity):
         record["fingerprints"] = sorted(fingerprints)
         changed = True
     if changed:
-        client.describe(identity, aliases=[alias for alias, record in manifest.items() if record["account_id"] == identity])
+        client.describe(identity, aliases=display_aliases(manifest, identity))
         write_private(args.store / MANIFEST, manifest)
 
 
@@ -178,7 +199,7 @@ def reclaim(args, manifest, client, name):
             raise WorkerError("Reclaim destination must be a separate new profile")
         destinations = [args.destination_profile]
     else:
-        destinations = [alias for alias in aliases if alias not in local]
+        destinations = sorted({manifest[alias].get("display_name", alias) for alias in aliases if alias not in local})
     record = next(manifest[alias] for alias in aliases if alias not in local)
     pending = record.get("reclaim")
     if pending:
@@ -215,8 +236,8 @@ def reclaim(args, manifest, client, name):
         if alias in local:
             manifest[alias]["cloud_enrolled"] = False
         else:
-            archive = args.store / CLOUD_DIRECTORY / f"{alias}.json"
-            if archive.exists():
+            archive = legacy_archive(args.store, alias, manifest[alias])
+            if archive is not None and archive.exists():
                 if archive.is_symlink() or digest(archive) != manifest[alias].get("source_sha256"):
                     raise WorkerError("Cloud transfer archive changed; refusing to remove it")
                 archive.unlink()
@@ -244,16 +265,20 @@ def main():
     try:
         manifest = load_remote_profiles(args.store)
     except (OSError, ValueError, TypeError):
-        raise WorkerError("Cannot read or restore local cloud-reserved profiles") from None
+        raise WorkerError("Cannot read local/remote profile metadata") from None
     if args.action in {"list", "migrate"}:
-        print(f"Cloud-managed {args.provider} profiles: {len(manifest)}")
+        print(f"Managed {args.provider} profiles: {len(manifest)}")
         for name, record in sorted(manifest.items()):
-            print(f"{name}: {record['account_id']} ({record.get('ownership', 'cloud')})")
+            scope = "local" if record.get("ownership") == "local" else "remote"
+            print(f"{record.get('display_name', name)}: {record['account_id']} ({scope})")
         return
     client = connect(args.provider)
     profiles = saved_profiles(args.store)
     names = args.profile or sorted(set(profiles) | set(manifest) if args.action == "enroll" else manifest)
-    if any(name not in set(profiles) | set(manifest) or not SUFFIX_RE.fullmatch(name) for name in names):
+    names = [remote_profile_key(name) if remote_profile_key(name) in manifest
+             and (name not in profiles or args.action != "enroll") else name for name in names]
+    if any(name not in set(profiles) | set(manifest)
+           or not valid_profile_key(name, manifest.get(name, {})) for name in names):
         raise WorkerError("Unknown saved profile")
     if args.action == "register-local" and (len(args.profile) != 1 or names[0] not in manifest):
         raise WorkerError("register-local requires one enrolled --profile")
@@ -264,7 +289,7 @@ def main():
         if args.action == "enroll":
             if name in manifest:
                 if cloud_enrolled(manifest[name]):
-                    client.describe(manifest[name]["account_id"], aliases=[name])
+                    client.describe(manifest[name]["account_id"], aliases=[manifest[name].get("display_name", name)])
                     restore_local_registration(args, manifest, client, manifest[name]["account_id"])
                 elif args.profile:
                     raise WorkerError("Independent local login cannot be enrolled as the cloud login")
@@ -303,7 +328,7 @@ def main():
                 identity = manifest[name]["account_id"]
                 if any(record["account_id"] == identity and record.get("ownership") == "local" for record in manifest.values()):
                     raise WorkerError("Independent local login exists; delete its detached profile before choosing cloud-only")
-                client.describe(identity, aliases=[name])
+                client.describe(identity, aliases=[manifest[name].get("display_name", name)])
             else:
                 reclaim(args, manifest, client, name)
         changed += 1

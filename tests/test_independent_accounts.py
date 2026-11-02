@@ -127,7 +127,7 @@ class IndependentAccountTests(unittest.TestCase):
                 # Even an unhooked regular cloud login cannot be saved under a new alias.
                 backend.auth.unlink()
                 accounts.write_private(backend.auth, login(provider, 'cloud', 1))
-                with self.assertRaisesRegex(rotate_auth.RotateError, 'explicit fresh'):
+                with self.assertRaisesRegex(rotate_auth.RotateError, 'not a saved local login'):
                     backend.save('bypass')
                 self.assertFalse((store / 'auth.json.bypass').exists())
 
