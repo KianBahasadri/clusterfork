@@ -344,6 +344,35 @@ class MockTmuxTests(unittest.TestCase):
         self.assertNotIn("--continue", log)
         self.assertNotIn("MOCK_TMUX_ERROR", log)
 
+    def test_git_repo_session_name_includes_branch(self):
+        repo_dir = self.tmp_path / "my-repo"
+        repo_dir.mkdir()
+        subprocess.run(["git", "init", "-b", "feature-x", str(repo_dir)], check=True, capture_output=True)
+        self.log.unlink(missing_ok=True)
+        self._script_run(f"'source bash_profile.sh; PWD={repo_dir} oc --help'")
+        log = self._log()
+        self.assertIn("-s my-repo-feature-x", log)
+        self.assertIn(f"-c {repo_dir}", log)
+
+    def test_git_repo_session_name_sanitizes_branch_dots(self):
+        repo_dir = self.tmp_path / "dotted-repo"
+        repo_dir.mkdir()
+        subprocess.run(["git", "init", "-b", "release.1.0", str(repo_dir)], check=True, capture_output=True)
+        self.log.unlink(missing_ok=True)
+        self._script_run(f"'source bash_profile.sh; PWD={repo_dir} oc --help'")
+        log = self._log()
+        self.assertIn("-s dotted-repo-release-1-0", log)
+
+    def test_git_repo_collision_increments_suffix(self):
+        repo_dir = self.tmp_path / "colliding-repo"
+        repo_dir.mkdir()
+        subprocess.run(["git", "init", "-b", "main", str(repo_dir)], check=True, capture_output=True)
+        self.log.unlink(missing_ok=True)
+        env = {**self.base_env, "MOCK_TMUX_EXISTING_SESSIONS": "colliding-repo-main"}
+        self._script_run(f"'source bash_profile.sh; PWD={repo_dir} oc --help'", env=env)
+        log = self._log()
+        self.assertIn("-s colliding-repo-main-1", log)
+
     def test_cc_forwarding(self):
         self.log.unlink(missing_ok=True)
         self._script_run("'source bash_profile.sh; PWD=/tmp/proj cc'")

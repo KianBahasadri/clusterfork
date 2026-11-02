@@ -13,7 +13,7 @@ _cf_tmux() (
     for kv in "${launch_env[@]}"; do export "$kv"; done
     exec "$@"
   fi
-  local base name orig i label
+  local base name orig i label branch
   agent="${agent:-${1##*/}}"
   case "$agent" in
     cursor-agent) agent=cursor ;;
@@ -22,6 +22,9 @@ _cf_tmux() (
   label="$(python3 "$(dirname "${BASH_SOURCE[0]}")/../bin/clusterfork-tmux-label" "$agent" 2>/dev/null)" || label="$agent - unknown"
   base="$(basename "$PWD")"
   [[ "$base" == "/" || -z "$base" ]] && base="root"
+  if branch="$(git -C "$PWD" branch --show-current 2>/dev/null)" && [[ -n "$branch" ]]; then
+    base="${base}-${branch}"
+  fi
   name="${base//./-}"
   name="${name//:/-}"
   [[ "$name" == -* ]] && name="_$name"
