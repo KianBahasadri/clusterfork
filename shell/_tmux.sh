@@ -23,7 +23,7 @@ _cf_tmux() (
   base="$(basename "$PWD")"
   [[ "$base" == "/" || -z "$base" ]] && base="root"
   if branch="$(git -C "$PWD" branch --show-current 2>/dev/null)" && [[ -n "$branch" ]]; then
-    base="${base}-${branch}"
+    base="${base} - ${branch}"
   fi
   name="${base//./-}"
   name="${name//:/-}"

@@ -124,9 +124,16 @@ class MockTmuxTests(unittest.TestCase):
             '    if [[ "${args[i]}" == "-t" ]]; then target="${args[i+1]:-}"; break; fi\n'
             '  done\n'
             '  if [[ -n "${MOCK_TMUX_EXISTING_SESSIONS:-}" ]]; then\n'
-            '    for s in $MOCK_TMUX_EXISTING_SESSIONS; do\n'
-            '      if [[ "$s" == "$target" ]]; then exit 0; fi\n'
-            '    done\n'
+            '    if [[ "${MOCK_TMUX_EXISTING_SESSIONS}" == *\\|* ]]; then\n'
+            '      IFS="|" read -ra _mock_sess <<< "$MOCK_TMUX_EXISTING_SESSIONS"\n'
+            '      for s in "${_mock_sess[@]}"; do\n'
+            '        if [[ "$s" == "$target" ]]; then exit 0; fi\n'
+            '      done\n'
+            '    else\n'
+            '      for s in $MOCK_TMUX_EXISTING_SESSIONS; do\n'
+            '        if [[ "$s" == "$target" ]]; then exit 0; fi\n'
+            '      done\n'
+            '    fi\n'
             '  fi\n'
             '  exit 1\n'
             'fi\n'
@@ -351,7 +358,7 @@ class MockTmuxTests(unittest.TestCase):
         self.log.unlink(missing_ok=True)
         self._script_run(f"'source bash_profile.sh; PWD={repo_dir} oc --help'")
         log = self._log()
-        self.assertIn("-s my-repo-feature-x", log)
+        self.assertIn("-s my-repo - feature-x", log)
         self.assertIn(f"-c {repo_dir}", log)
 
     def test_git_repo_session_name_sanitizes_branch_dots(self):
@@ -361,17 +368,17 @@ class MockTmuxTests(unittest.TestCase):
         self.log.unlink(missing_ok=True)
         self._script_run(f"'source bash_profile.sh; PWD={repo_dir} oc --help'")
         log = self._log()
-        self.assertIn("-s dotted-repo-release-1-0", log)
+        self.assertIn("-s dotted-repo - release-1-0", log)
 
     def test_git_repo_collision_increments_suffix(self):
         repo_dir = self.tmp_path / "colliding-repo"
         repo_dir.mkdir()
         subprocess.run(["git", "init", "-b", "main", str(repo_dir)], check=True, capture_output=True)
         self.log.unlink(missing_ok=True)
-        env = {**self.base_env, "MOCK_TMUX_EXISTING_SESSIONS": "colliding-repo-main"}
+        env = {**self.base_env, "MOCK_TMUX_EXISTING_SESSIONS": "colliding-repo - main|other"}
         self._script_run(f"'source bash_profile.sh; PWD={repo_dir} oc --help'", env=env)
         log = self._log()
-        self.assertIn("-s colliding-repo-main-1", log)
+        self.assertIn("-s colliding-repo - main-1", log)
 
     def test_cc_forwarding(self):
         self.log.unlink(missing_ok=True)
