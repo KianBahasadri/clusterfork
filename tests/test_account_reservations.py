@@ -102,7 +102,7 @@ class AccountReservationTests(unittest.TestCase):
                 with redirect_stdout(output), patch.object(rotate_auth, "ping_agent") as ping:
                     backend.list_profiles()
                     migrated = json.loads((backend.store_dir / accounts.MANIFEST).read_text())
-                    self.assertIn("21kb60 [remote]", output.getvalue())
+                    self.assertRegex(output.getvalue(), r"21kb60\s+\[remote\]")
                     self.assertNotIn("* 21kb60", output.getvalue())
                     self.assertNotIn("reserved", output.getvalue())
                     for operation in (lambda: backend.select("21kb60"), lambda: backend.save("21kb60"),
@@ -156,7 +156,7 @@ class AccountReservationTests(unittest.TestCase):
                     with redirect_stdout(io.StringIO()) as output:
                         backend.list_profiles()
                     self.assertIn("21kb60", output.getvalue())
-                    self.assertIn("21kb60 [remote]", output.getvalue())
+                    self.assertRegex(output.getvalue(), r"21kb60\s+\[remote\]")
                     self.assertNotIn("reserved", output.getvalue())
                     self.assertEqual((os.readlink(backend.current), os.readlink(backend.auth)), links)
                     backup.unlink()  # Neither normal enrollment nor reclaim depends on the backup now.

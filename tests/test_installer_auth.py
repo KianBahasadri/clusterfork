@@ -83,7 +83,7 @@ class InstallerSharedAuthTests(unittest.TestCase):
                 listed = run_wrapper("--list")
                 self.assertEqual(listed.returncode, 0, listed.stderr)
                 self.assertIn("21kb60", listed.stdout)
-                self.assertIn("21kb60 [remote]", listed.stdout)
+                self.assertRegex(listed.stdout, r"21kb60\s+\[remote\]")
                 self.assertNotIn("reserved", listed.stdout)
                 refused = run_wrapper("21kb60")
                 self.assertEqual(refused.returncode, 1)
