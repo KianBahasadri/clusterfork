@@ -178,5 +178,6 @@ if __name__=='__main__':
     try:
         main()
     except Exception as exc:
-        print('Controller deployment failed ('+type(exc).__name__+'). Admission holds are retained.',file=sys.stderr)
+        detail=str(exc).strip() or type(exc).__name__
+        print(f'Controller deployment failed ({type(exc).__name__}: {detail}). Admission holds are retained.',file=sys.stderr)
         raise SystemExit(1)
