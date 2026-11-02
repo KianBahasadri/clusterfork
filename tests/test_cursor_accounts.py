@@ -109,6 +109,11 @@ class CursorRuntimeTests(unittest.TestCase):
             self.assertEqual(snapshot.agent, "cursor")
             self.assertEqual([window.used_percent for window in snapshot.windows], [45, 45])
             self.assertEqual(snapshot.windows[0].resets_at, NOW + 86400)
+            snapshot_auto = cursor.quota_snapshot("cursor:fixture", cursor.MODEL,
+                {**usage(30), "autoBucketModels": [cursor.MODEL],
+                 "planUsage": {"autoPercentUsed": 30, "totalPercentUsed": 30}})
+            self.assertEqual([window.name for window in snapshot_auto.windows], ["cursor/auto", "cursor/included"])
+            self.assertEqual([window.used_percent for window in snapshot_auto.windows], [30, 30])
             for data in ({}, {**usage(), "enabled": False}, {**usage(), "planUsage": {}},
                          {**usage(), "planUsage": {"autoPercentUsed": 0}},
                          {**usage(), "planUsage": {"apiPercentUsed": None}},

@@ -132,9 +132,10 @@ Codex probes `account/read`, `model/list`, `account/rateLimits/read` under lease
 private homes, then reserves/rechecks before its development app-server thread;
 review uses `codex exec`. Cursor pins CLI `2026.10.22-27dcf5f` and [ACP](https://cursor.com/docs/cli/acp),
 with `--trust` and exact `grok-4.7-high`. Live `GetMe` must match saved identity;
-`GetCurrentPeriodUsage` must report known included/API usage. Auto-only and paid/
-on-demand capacity do not prove Grok headroom; missing/denied data stays unknown,
-without invented weekly allowances. Ranking includes applicable included/API limits.
+`GetCurrentPeriodUsage` must report known included, auto, or API usage. Auto quota
+applies when Grok is reported as an auto-bucket model; paid/on-demand capacity does
+not prove Grok headroom; missing/denied data stays unknown, without invented
+weekly allowances. Ranking includes applicable included, auto, or API limits.
 Cursor review uses ask mode in an enforced read-only Linux filesystem, masks
 executable repo config and denies shell/web approvals; only the related-context
 MCP tool is allowed. ACP follow-ups retain

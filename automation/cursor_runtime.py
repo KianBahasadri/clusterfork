@@ -162,11 +162,8 @@ def quota_snapshot(identity, model, data, *, allow_exhausted=False):
     if model != MODEL or data.get("enabled") is not True:
         raise CursorError("cursor_usage_unknown")
     plan = data.get("planUsage") or {}
-    # Grok is a named API model. Auto quota and paid/on-demand availability do
-    # not establish included API headroom. Never change spending settings.
-    if model in data.get("autoBucketModels", []):
-        raise CursorError("cursor_usage_unknown")
-    used = plan.get("apiPercentUsed")
+    is_auto = model in data.get("autoBucketModels", [])
+    used = plan.get("autoPercentUsed") if is_auto else plan.get("apiPercentUsed")
     if not finite_number(used):
         raise CursorError("cursor_usage_unknown")
     try:
@@ -176,7 +173,8 @@ def quota_snapshot(identity, model, data, *, allow_exhausted=False):
         raise CursorError("cursor_usage_unknown") from None
     if reset <= start or start > time.time():
         raise CursorError("cursor_usage_unknown")
-    windows = [QuotaWindow(used, reset, "cursor/api", (reset - start) / 60)]
+    window_name = "cursor/auto" if is_auto else "cursor/api"
+    windows = [QuotaWindow(used, reset, window_name, (reset - start) / 60)]
     total = plan.get("totalPercentUsed")
     if total is not None:
         windows.append(QuotaWindow(total, reset, "cursor/included", (reset - start) / 60))

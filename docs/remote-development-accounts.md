@@ -248,7 +248,7 @@ All timestamps are UTC Unix **seconds**, including Cursor billing-cycle resets;
 percentages are measured used capacity, not remaining capacity. Window fields
 are always `name`, `used_percent`, `resets_at` and `duration_minutes`; the last
 two may be `null`. Codex names are `codex/primary`, `codex/secondary` or a
-`gpt-…/primary|secondary` model limit; Cursor names are `cursor/api` and optionally
+`gpt-…/primary|secondary` model limit; Cursor names are `cursor/auto`, `cursor/api` and optionally
 `cursor/included`. These describe the configured cloud model's applicable quota,
 shared with the independent local session; never sum local/cloud or alias rows.
 

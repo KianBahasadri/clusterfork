@@ -21,7 +21,7 @@ def measurement(data):
     value=validate_usage(data)
     # Only provider-normalized names cross this boundary, never arbitrary text
     # from credentials, provider error messages or worker-supplied labels.
-    if any(window['name'] not in {'cursor/api','cursor/included'}
+    if any(window['name'] not in {'cursor/api','cursor/auto','cursor/included'}
            and not re.fullmatch(r'(?:codex|gpt-[A-Za-z0-9.-]{1,80})/(?:primary|secondary)',window['name'])
            for window in value['windows']):
         raise ValueError('Unknown quota window')
