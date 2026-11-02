@@ -848,12 +848,21 @@ class SharedStoreBackend:
         current = self.current_suffix() if self.current.is_symlink() else None
         if remote:
             manifest = load_remote_profiles(self.store_dir)
+            remote_names = {
+                manifest.get(k, {}).get("display_name", k.removeprefix("remote:"))
+                for k in remote
+            }
+            local_names = set(self.suffixes())
             print(f"{self.command}: saved profiles")
-            for name in sort_names(set(self.suffixes()) | remote):
-                mark = "*" if name == current else " "
-                label = manifest.get(name, {}).get("display_name", name)
-                scope = "remote" if name in remote else "local"
-                print(f"  {mark} {label} [{scope}]")
+            for name in sort_names(local_names | remote_names):
+                mark = "*" if (name in local_names and name == current) else " "
+                tags = []
+                if name in local_names:
+                    tags.append("[local]")
+                if name in remote_names:
+                    tags.append("[remote]")
+                tag_str = f" {' '.join(tags)}" if tags else ""
+                print(f"  {mark} {name}{tag_str}")
             return 0
         return print_profile_list(self.command, self.suffixes(), current)
 

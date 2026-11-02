@@ -121,7 +121,9 @@ class ScopedRotationTests(unittest.TestCase):
                     self.command(backend, client, "--local", "--kickoff", "work")
                     ping.assert_called_once()
                 self.assertEqual(json.loads(pool.get(identity)[0]["auth"]), login(provider, "remote", 1))
-                self.assertIn("work [remote]", self.command(backend, client, "--list")[1])
+                list_output = self.command(backend, client, "--list")[1]
+                self.assertIn("work [local] [remote]", list_output)
+                self.assertEqual(len([line for line in list_output.splitlines() if "work" in line]), 1)
                 self.assertNotIn("remote.work", self.command(backend, client, "--local", "--list")[1])
 
     def test_remote_then_local_same_name_uses_current_login_without_extra_flags(self):
@@ -377,8 +379,8 @@ class ScopedRotationTests(unittest.TestCase):
                     self.command(backend, client, "--remote", "--migrate")
                 self.assertEqual(self.local_state(backend), before)
                 listing = self.command(backend, client, "--list")[1]
-                self.assertIn("work [local]", listing)
-                self.assertIn("work [remote]", listing)
+                self.assertIn("work [local] [remote]", listing)
+                self.assertEqual(len([line for line in listing.splitlines() if "work" in line]), 1)
                 self.assertNotIn("reserved", listing)
 
     def test_remote_token_copy_with_same_name_is_migrated_without_duplicate_metadata(self):

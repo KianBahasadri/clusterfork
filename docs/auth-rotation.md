@@ -94,8 +94,8 @@ scope means local for selection, deletion and kickoff. `--save` prompts interact
 to choose between local and remote scope using keyboard navigation (Up/Down arrow
 keys and Enter); in non-interactive shells, `--save` requires an explicit `--local`
 or `--remote` flag and otherwise exits with the command usage. `--list` without a
-scope shows the host's saved profiles in both sets, labeling local/remote
-entries when remote profiles exist.
+scope shows the host's saved profiles in both sets, labeling local/remote entries
+when remote profiles exist; names present in both sets show `[local] [remote]`.
 
 ```bash
 rotate-codex --local --save work
