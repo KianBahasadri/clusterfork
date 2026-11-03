@@ -44,6 +44,24 @@ verification is independent so deployment need not admit work or wait on itself.
 Only its rollout hold clears; operator holds survive restart/install/success.
 CI, drain, plan, install and verification failures retain holds.
 
+Host commands have guest execution deadlines (one minute for operator requests,
+20 minutes for installation) and a separate CLI deadline. Operator socket reads
+also time out. An Azure `Conflict` reporting a Run Command already in progress
+fails once with an explicit busy explanation; deployment does not resubmit it.
+A CLI timeout does not prove that the guest command stopped. Inspect the existing
+operation before retrying; never clear admission holds to bypass a failed rollout.
+
+For a persistently busy action channel, a temporary **managed** Run Command can
+inspect the guest independently, with an explicit execution timeout. Check the
+process ancestry before terminating an abandoned command; stop its waiting shell
+before its interactive child so the old script cannot continue. Keep login flows
+such as `tailscale up` out of unattended host commands. Verify the action channel
+responds before retrying the tested deployment, then remove temporary managed
+command resources. If commands remain blocked after the guest process stops,
+check Azure's VM power/provisioning state separately from application health.
+Missing power state and timed-out VM operations can indicate a platform problem;
+avoid repeated restart/reapply or deployment attempts while that is unresolved.
+
 ## Direct Linear webhook ingress
 
 Linear signs deliveries directly to

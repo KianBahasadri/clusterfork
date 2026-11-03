@@ -56,6 +56,7 @@ Dated records establish neither current health nor compatibility; recheck upstre
 - [Retired integrations](archive/retired-integrations.md) — removed Aerolink and Pioneer gateways
 - [Remote live validation](archive/remote-development-validation.md) — 2026-10-28 routing, coding, merge, and lifecycle receipts
 - [Controller acceptance, 2026-10-30](archive/controller-acceptance-20261030.md) — sequential checkout fixture
+- [Controller VM incident, 2026-11-02–03](archive/controller-vm-incident-20261102.md) — blocked management operations, failed recovery paths and verified host replacement
 - [Controller cutover receipts](remote-development-controller.md#live-acceptance-2026-10-30) and [resource consolidation](remote-development-controller.md#resource-consolidation-2026-10-31-utc) — runs, PRs and deployment evidence
 - [Cursor validation, 2026-10-30](archive/cursor-validation-20261030.md) — retired staged-account probe
 - [Webhook administration, 2026-10-31](remote-development-setup.md#url-administration-investigation-kian-938-2026-10-31) — KIAN-938 permission findings

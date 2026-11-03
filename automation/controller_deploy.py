@@ -23,9 +23,16 @@ VM='clusterfork-controller-7604cac329'
 HOLD='deployment:rollout'
 
 
-def command(args,*,cwd=ROOT):
-    result=subprocess.run(args,cwd=cwd,capture_output=True,text=True)
+def command(args,*,cwd=ROOT,timeout=120):
+    try:
+        result=subprocess.run(args,cwd=cwd,capture_output=True,text=True,timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f'{Path(args[0]).name} operation timed out; remote execution may still be running; inspect before retrying') from None
     if result.returncode:
+        if (args[:4]==['az','vm','run-command','invoke']
+                and 'Run command extension execution is in progress' in result.stderr):
+            raise RuntimeError('Azure Run Command is busy (Conflict); an earlier host command has not completed. '
+                               'Inspect its status before retrying; admission holds are retained')
         raise RuntimeError(f'{Path(args[0]).name} operation failed; raw output withheld')
     return result.stdout
 
@@ -51,9 +58,14 @@ def ci_state(revision):
     return latest.get('conclusion') if latest['status']=='completed' else 'pending'
 
 
-def run_host(script):
+def run_host(script,*,timeout=60):
+    # Bound execution on the guest as well as the CLI. Killing only the local
+    # client leaves Action Run Command occupied and later deployments get 409.
+    script=("#!/bin/sh\ntimeout --kill-after=10s "+str(timeout)+"s /bin/sh <<'CF_HOST_SCRIPT'\n"
+            +script+"\nCF_HOST_SCRIPT\n")
     result=json.loads(command(['az','vm','run-command','invoke','--resource-group',GROUP,'--name',VM,
-                               '--command-id','RunShellScript','--scripts',script,'--output','json','--only-show-errors']))
+                               '--command-id','RunShellScript','--scripts',script,'--output','json','--only-show-errors'],
+                              timeout=timeout+180))
     return '\n'.join(item.get('message','') for item in result.get('value',[]))
 
 
@@ -65,6 +77,7 @@ def operator(operation,**fields):
 python3 - <<'PY'
 import base64,json,socket
 with socket.socket(socket.AF_UNIX) as client:
+    client.settimeout(45)
     client.connect('/run/clusterfork/operator.sock')
     client.sendall(base64.b64decode('PAYLOAD')+b'\\n')
     response=client.makefile('rb').readline()
@@ -133,7 +146,7 @@ def deploy(revision,*,initialize=False):
     if not still_required(manifest):
         print('A newer runtime superseded this release before installation.')
         return
-    output=run_host(install_script(config,manifest))
+    output=run_host(install_script(config,manifest),timeout=1200)
     if 'CF_INSTALL_OK' not in output or 'CF_INSTALL_FAILED' in output:
         raise RuntimeError('Controller install failed; inspect its private host log')
     deadline=time.monotonic()+300

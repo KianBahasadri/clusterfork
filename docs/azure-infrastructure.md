@@ -69,6 +69,13 @@ VM system identity has Key Vault read/ingestion grants, no Table Data Contributo
 service startup verifies VM identity. [Controller](remote-development-controller.md)
 owns task/resource locking and dated acceptance.
 
+### Host recovery, 2026-11-03
+
+The [VM incident record](archive/controller-vm-incident-20261102.md) contains the
+failure timeline, attempted recoveries, support guidance, authorized replacement,
+retained backups and final verification. Its historical recovery plan did not
+relax the routine no-delete/no-replace gate.
+
 ## Bootstrap and retained import history
 
 Use Terraform 1.15.9 and the existing Azure CLI operator identity:
