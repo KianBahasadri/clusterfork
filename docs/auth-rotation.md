@@ -50,15 +50,20 @@ trying another saved login if its credentials are rejected.
 | `rotate-antigravity` | Code Assist quota groups, falling back to raw model buckets |
 
 Quota requests read each saved login directly without temporarily activating it,
-refreshing credentials or sending model prompts. Independent accounts are probed
-concurrently, with 15-second HTTP timeouts. Codex/Cursor consider only eligible
-local logins; automatic selection never installs remote credentials or reserves
-a cloud account. OpenCode profiles need an `opencode-go` API key; other provider
-entries alone do not establish Go capacity.
+refreshing credentials or sending model prompts. When an account usage cache
+(under `CONKY_CACHE_DIR`, `CLUSTERFORK_USAGE_CACHE_DIR`, or `~/conky-linear-HUP/cache`)
+is present, fresh (within 300 seconds), and covers the eligible logins, automatic
+selection reads the cached quota snapshots directly for sub-second speed; otherwise
+independent accounts are probed concurrently via live HTTP with 15-second timeouts.
+Codex/Cursor consider only eligible local logins; automatic selection never installs
+remote credentials or reserves a cloud account. OpenCode profiles need an
+`opencode-go` API key; other provider entries alone do not establish Go capacity.
 
-Unknown, rejected, stale, reset or depleted readings are ineligible. If no account
+Automatic selection excludes the personal profile `kian` and any alias sharing its
+account identity (`ROTATE_EXCLUDE_PROFILES`), reserving it for explicit offline
+choice. Unknown, rejected, stale, reset or depleted readings are ineligible. If no account
 qualifies, the command exits 1 and retains the current credentials/selection.
-Explicit `rotate-* NAME` remains an offline choice and can select a saved profile
+Explicit `rotate-* NAME` remains an offline choice and can select any saved profile
 without a quota check. Expired credentials must be renewed by their provider CLI.
 
 ## --kickoff

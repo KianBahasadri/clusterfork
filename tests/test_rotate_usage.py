@@ -208,6 +208,60 @@ class QuotaRotationTests(unittest.TestCase):
                     chosen = rotate_usage.choose_profile(backend, ["alpha"])
                 self.assertEqual(chosen, "alpha")
 
+    def test_kian_account_is_excluded_from_automatic_selection(self):
+        backend = self.backends["codex"]
+        self.write_profile("codex", "kian", credentials("codex", "kian"))
+        reader = self.reader("codex", {"kian": 0, "alpha": 50, "beta": 30, "zulu": 40})
+        with patch.dict(account_usage.READERS, {"codex": reader}):
+            backend.select(None)
+        self.assertEqual(backend.current_suffix(), "beta")
+        self.assertEqual(rotate_auth.run(["codex", "kian"]), 0)
+        self.assertEqual(backend.current_suffix(), "kian")
+
+    def test_cache_snapshots_are_used_when_fresh(self):
+        backend = self.backends["codex"]
+        cache_dir = self.root / "conky-cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        now = time.time()
+        accounts = []
+        for name, used in (("alpha", 40), ("beta", 15), ("zulu", 60)):
+            ident = rotate_usage.identity("codex", credentials("codex", name))
+            accounts.append({
+                "accountId": ident,
+                "ok": True,
+                "staleCache": False,
+                "observedAt": now - 30,
+                "windows": [
+                    {"label": "5h", "usedPercent": used, "windowSeconds": 18000, "resetAtEpoch": now + 3600},
+                    {"label": "weekly", "usedPercent": used, "windowSeconds": 604800, "resetAtEpoch": now + 86400},
+                ],
+            })
+        (cache_dir / "codex-usage.json").write_text(json.dumps({"accounts": accounts}))
+        reader = Mock(side_effect=AssertionError("network should not be called when cache is fresh"))
+        with patch.dict(os.environ, {"CONKY_CACHE_DIR": str(cache_dir)}), patch.dict(account_usage.READERS, {"codex": reader}):
+            backend.select(None)
+        self.assertEqual(backend.current_suffix(), "beta")
+        self.assertEqual(reader.call_count, 0)
+
+    def test_cache_fallback_to_network_when_stale_or_incomplete(self):
+        backend = self.backends["codex"]
+        cache_dir = self.root / "conky-cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        now = time.time()
+        accounts = [{
+            "accountId": rotate_usage.identity("codex", credentials("codex", "alpha")),
+            "ok": True,
+            "staleCache": False,
+            "observedAt": now - 500,
+            "windows": [{"label": "5h", "usedPercent": 10, "windowSeconds": 18000, "resetAtEpoch": now + 3600}],
+        }]
+        (cache_dir / "codex-usage.json").write_text(json.dumps({"accounts": accounts}))
+        reader = self.reader("codex", {"alpha": 50, "beta": 20, "zulu": 60})
+        with patch.dict(os.environ, {"CONKY_CACHE_DIR": str(cache_dir)}), patch.dict(account_usage.READERS, {"codex": reader}):
+            backend.select(None)
+        self.assertEqual(backend.current_suffix(), "beta")
+        self.assertEqual(reader.call_count, 3)
+
 
 class ProviderQuotaTests(unittest.TestCase):
     def read(self, provider, payload):

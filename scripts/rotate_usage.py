@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -12,9 +13,24 @@ from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "automation"))
-from common.selection import AccountQuota, SelectionPolicy, select_account
+from common.selection import AccountQuota, QuotaWindow, SelectionPolicy, finite_number, select_account
 from account_sessions import account_identity, jwt_payload
-from account_usage import READERS, UsageError, grok_login
+from account_usage import READERS, UsageError, grok_login, timestamp
+
+EXCLUDED_AUTO_PROFILES = {"kian"}
+if "ROTATE_EXCLUDE_PROFILES" in os.environ:
+    EXCLUDED_AUTO_PROFILES = {
+        name.strip() for name in os.environ["ROTATE_EXCLUDE_PROFILES"].split(",") if name.strip()
+    }
+
+CACHE_FILENAMES = {
+    "codex": "codex-usage.json",
+    "cursor": "cursor-usage.json",
+    "claude": "claude-usage.json",
+    "grok": "grok-usage.json",
+    "opencode": "opencode-usage.json",
+    "antigravity": "gemini-usage.json",
+}
 
 
 def selection_config(provider):
@@ -82,17 +98,103 @@ def measure_logins(provider, logins, account_id, model):
     return None, error, None
 
 
+def read_cached_snapshots(provider, logins, model, max_age_seconds=300):
+    filename = CACHE_FILENAMES.get(provider)
+    if not filename:
+        return None
+    dirs = []
+    env = os.environ.get("CONKY_CACHE_DIR") or os.environ.get("CLUSTERFORK_USAGE_CACHE_DIR")
+    if env:
+        dirs.append(Path(env))
+    home = Path.home()
+    dirs.extend([
+        home / "conky-linear-HUP" / "cache",
+        home / "live-wallpaper" / "conky-linear-HUP" / "cache",
+    ])
+    cache_path = None
+    for d in dirs:
+        candidate = d / filename
+        if candidate.is_file():
+            cache_path = candidate
+            break
+    if cache_path is None:
+        return None
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or not isinstance(data.get("accounts"), list):
+            return None
+        cache_by_id = {}
+        for row in data["accounts"]:
+            if isinstance(row, dict) and row.get("ok") and not row.get("staleCache"):
+                aid = str(row.get("accountId") or "")
+                if aid:
+                    cache_by_id[aid] = row
+        now = time.time()
+        snapshots = []
+        measured_profiles = {}
+        for account_id, choices in logins.items():
+            cached = cache_by_id.get(account_id)
+            if cached is None:
+                return None
+            observed = cached.get("observedAt")
+            if not finite_number(observed) or not (0 <= now - observed <= max_age_seconds):
+                return None
+            raw_windows = cached.get("windows")
+            if not isinstance(raw_windows, list) or not raw_windows:
+                return None
+            windows = []
+            for w in raw_windows:
+                if not isinstance(w, dict):
+                    continue
+                used = w.get("usedPercent")
+                if not finite_number(used):
+                    continue
+                reset = w.get("resetAtEpoch")
+                if reset is None and "resetsAt" in w:
+                    try:
+                        reset = timestamp(w["resetsAt"])
+                    except Exception:
+                        reset = None
+                duration_sec = w.get("windowSeconds")
+                duration_min = duration_sec / 60 if finite_number(duration_sec) else None
+                label = w.get("label") or ""
+                windows.append(QuotaWindow(used, reset, f"{provider}/{label}", duration_min))
+            if not windows:
+                return None
+            snapshots.append(AccountQuota(account_id, provider, model, observed, tuple(windows)))
+            measured_profiles[account_id] = choices[0][0]
+        if snapshots:
+            return snapshots, measured_profiles
+    except Exception:
+        return None
+    return None
+
+
 def choose_profile(backend, names):
     provider = backend.command.removeprefix("rotate-").removesuffix("-cli")
     profile, policy = selection_config(provider)
     current = backend.current_suffix()
+
+    excluded_ids = set()
+    for name in list(names):
+        if name in EXCLUDED_AUTO_PROFILES:
+            try:
+                auth = read_credentials(backend, name, provider)
+                excluded_ids.add(identity(provider, auth))
+            except Exception:
+                pass
+
     logins, aliases = {}, {}
     for name in names:
+        if name in EXCLUDED_AUTO_PROFILES:
+            continue
         try:
             auth = read_credentials(backend, name, provider)
             account_id = identity(provider, auth)
         except (UsageError, OSError, ValueError, KeyError, TypeError, AttributeError, StopIteration):
             print(f"  {name}: saved credentials are unavailable or unsupported", file=sys.stderr)
+            continue
+        if account_id in excluded_ids:
             continue
         aliases.setdefault(account_id, []).append(name)
         choices = logins.setdefault(account_id, [])
@@ -101,6 +203,21 @@ def choose_profile(backend, names):
             choices.insert(0, (name, auth))
         elif not any(saved == auth for _, saved in choices):
             choices.append((name, auth))
+
+    if not logins:
+        raise UsageError(f"no eligible saved profiles (excluded: {', '.join(sorted(EXCLUDED_AUTO_PROFILES))})")
+
+    now = time.time()
+    cached = read_cached_snapshots(provider, logins, profile.model)
+    if cached is not None:
+        cached_snapshots, cached_profiles = cached
+        cached_policy = SelectionPolicy(policy.min_remaining_percent, max(policy.max_snapshot_age_seconds, 300))
+        selected = select_account(cached_snapshots, {provider: profile}, cached_policy, now=now)
+        if selected is not None:
+            print(f"{backend.command}: checking quota from cache for {len(logins)} saved accounts", flush=True)
+            print(f"  quota: at least {selected.remaining_percent:g}% remaining")
+            return cached_profiles[selected.account_id]
+
     print(f"{backend.command}: checking quota for {len(logins)} saved accounts", flush=True)
     with ThreadPoolExecutor(max_workers=8) as pool:
         pending = {account_id: pool.submit(measure_logins, provider, choices, account_id, profile.model)
