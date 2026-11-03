@@ -9,7 +9,7 @@ shared-store symlink (Codex/Cursor/Grok/OpenCode), or GNOME Keyring (Antigravity
 | `rotate-* --delete NAME` | Confirm deletion of a detached saved profile |
 | `rotate-* --unhook` | Detach credentials before a new login |
 | `rotate-* --list` | List profiles; `*` marks current |
-| `rotate-*` | Select next profile in sorted order |
+| `rotate-*` | Select the account with the lowest eligible quota usage |
 | `rotate-* NAME` | Select a specific profile |
 | `rotate-* --kickoff [names]` | Ping all saved profiles, or the named subset |
 
@@ -25,6 +25,41 @@ unhooking a regular `auth.json`; Claude requires a token-matching saved login;
 Antigravity requires a saved current marker. Save first when necessary. Selecting
 a saved name reattaches it if login is abandoned. Avoid reinstalling while
 unhooked: installer repair can reconnect the previous profile.
+
+## Automatic account selection
+
+All six bare commands use Symphony's shared `automation/common/selection.py`
+selector within their own provider's saved profiles. They read live quota before
+switching, using the policy and Codex/Cursor profiles from
+`automation/controller/projects.json`: currently at least 20% remaining in every
+applicable window and measurements no older than 60 seconds. Codex ranks by
+weekly usage when an identified short window is strictly below 70% used; at 70%
+it includes that window in the most-depleted-window score. Other providers rank
+by their most-depleted reported window. The current account participates and can
+remain selected when it is best; one saved profile is sufficient. Aliases with
+the same known identity share a quota probe, preferring the current login and
+trying another saved login if its credentials are rejected.
+
+| Command | Quota source |
+| --- | --- |
+| `rotate-claude` | OAuth usage, including reported model-specific weekly limits |
+| `rotate-codex` | ChatGPT Codex usage and applicable model limits |
+| `rotate-cursor-cli` | Dashboard included quota for Symphony's Cursor model |
+| `rotate-grok` | Grok CLI billing credits |
+| `rotate-opencode` | OpenCode Go's per-key rolling, weekly and monthly usage |
+| `rotate-antigravity` | Code Assist quota groups, falling back to raw model buckets |
+
+Quota requests read each saved login directly without temporarily activating it,
+refreshing credentials or sending model prompts. Independent accounts are probed
+concurrently, with 15-second HTTP timeouts. Codex/Cursor consider only eligible
+local logins; automatic selection never installs remote credentials or reserves
+a cloud account. OpenCode profiles need an `opencode-go` API key; other provider
+entries alone do not establish Go capacity.
+
+Unknown, rejected, stale, reset or depleted readings are ineligible. If no account
+qualifies, the command exits 1 and retains the current credentials/selection.
+Explicit `rotate-* NAME` remains an offline choice and can select a saved profile
+without a quota check. Expired credentials must be renewed by their provider CLI.
 
 ## --kickoff
 

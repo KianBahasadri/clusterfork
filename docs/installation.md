@@ -32,8 +32,8 @@ Paths below are relative to the repository unless prefixed with `~`.
 | --- | --- |
 | `.env`, `bell.mp3`, `bash_profile.sh` | Matching files in `~/.config/clusterfork/` |
 | `shell/`, `bin/`, `notify/` | Matching trees in `~/.config/clusterfork/` |
-| `scripts/{rotate_auth,rotate_accounts,account_sessions}.py`, `scripts/codeview/` | Matching paths in `~/.config/clusterfork/scripts/` |
-| `automation/{accounts,account_client}.py`, `automation/common/{accounts,__init__}.py` | Matching paths in `~/.config/clusterfork/automation/`; preserves an existing `venv/` |
+| `scripts/{rotate_auth,rotate_accounts,rotate_usage,account_sessions,account_usage}.py`, `scripts/codeview/` | Matching paths in `~/.config/clusterfork/scripts/` |
+| `automation/{accounts,account_client}.py`, `automation/common/{accounts,selection,__init__}.py`, `automation/controller/projects.json` | Matching paths in `~/.config/clusterfork/automation/`; preserves an existing `venv/` |
 | `tmux.conf` | `~/.tmux.conf` |
 | `agents/opencode.json` | `~/.config/opencode/opencode.json` |
 | `agents/qwen.json` | `~/.qwen/settings.json` |

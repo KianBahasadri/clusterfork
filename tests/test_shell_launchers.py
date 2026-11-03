@@ -100,6 +100,31 @@ class SourcingTests(unittest.TestCase):
         self.assertNotIn("_cf_tmux command", text)
 
 
+class CcRotationTests(unittest.TestCase):
+    def test_rotation_runs_first_without_receiving_codex_arguments(self):
+        proc = run_bash('''
+source shell/codex.sh
+rotate-codex() { printf 'rotate:%s\\n' "$#"; }
+_cf_launch_codex() { printf 'launch\\n'; printf '%s\\n' "$@"; }
+cc --last 'a prompt with spaces'
+''')
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.splitlines(), [
+            "rotate:0", "launch", "tmux", "resume", "--yolo", "--last", "a prompt with spaces",
+        ])
+
+    def test_rotation_failure_stops_launch_and_preserves_exit_status(self):
+        proc = run_bash('''
+source shell/codex.sh
+rotate-codex() { printf 'rotation failed\\n' >&2; return 42; }
+_cf_launch_codex() { printf 'unexpected launch\\n'; }
+cc --last
+''')
+        self.assertEqual(proc.returncode, 42)
+        self.assertEqual(proc.stdout, "")
+        self.assertIn("rotation failed", proc.stderr)
+
+
 class MockTmuxTests(unittest.TestCase):
     """Mock tmux on PATH to verify forwarding without a real tmux server."""
 
@@ -190,6 +215,13 @@ class MockTmuxTests(unittest.TestCase):
         """Run inner bash via script -q for a pty so [[ -t 0 ]] is true."""
         if shutil.which("script") is None:
             self.skipTest("script(1) not available")
+        # Keep launcher checks offline; explicit profile changes still use the
+        # real rotator against this test's temporary credential store.
+        inner = inner.replace(
+            "source bash_profile.sh;",
+            'source bash_profile.sh; rotate-codex() { if (( $# )); then python3 scripts/rotate_auth.py codex "$@"; fi; };',
+            1,
+        )
         use_env = env or self.base_env
         use_env = {**use_env, "TERM": "xterm"}
         cmd = ["script", "-q", "-e", "-c", f"bash -c {inner!r}", "/dev/null"]

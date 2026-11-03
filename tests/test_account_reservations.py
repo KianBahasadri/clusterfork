@@ -112,9 +112,12 @@ class AccountReservationTests(unittest.TestCase):
                         self.assertNotIn("reserved", str(error.exception))
                         self.assertEqual(backend.current_suffix(), "21kb60")
                     ping.assert_not_called()
-                    for expected in ("local-a", "local-b", "local-a"):
-                        backend.select(None)
-                        self.assertEqual(backend.current_suffix(), expected)
+                    with patch("rotate_usage.choose_profile", return_value="local-b") as choose:
+                        for _ in range(3):
+                            backend.select(None)
+                            self.assertEqual(backend.current_suffix(), "local-b")
+                        self.assertEqual(choose.call_count, 3)
+                        choose.assert_called_with(backend, ["local-a", "local-b"])
                     backend.current.unlink()
                     backend.current.symlink_to("auth.json.21kb60")
                     visited = []

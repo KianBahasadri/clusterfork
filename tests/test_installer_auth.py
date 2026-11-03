@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -99,6 +100,25 @@ class InstallerSharedAuthTests(unittest.TestCase):
                 listed_local = run_wrapper("--local", "--list")
                 self.assertEqual(listed_local.returncode, 0, listed_local.stderr)
                 self.assertNotIn("21kb60", listed_local.stdout)
+                # Exercise the installed quota adapter and shared selector with
+                # no checkout imports, real credentials, HTTP or Azure calls.
+                probe = subprocess.run([sys.executable, "-I", "-c", '''
+import sys, time
+from unittest.mock import patch
+sys.path.insert(0, sys.argv[1])
+import rotate_usage, rotate_auth, account_usage
+def usage(url, token, **kwargs):
+    subject = rotate_usage.jwt_payload(token)["sub"]
+    used = 10 if subject == "local-b" else 50
+    if sys.argv[2] == "codex":
+        return {"rate_limit": {"primary_window": {"used_percent": used, "reset_at": time.time() + 3600}}}
+    return {"enabled": True, "billingCycleStart": (time.time() - 1000) * 1000,
+            "billingCycleEnd": (time.time() + 3600) * 1000, "planUsage": {"apiPercentUsed": used}}
+with patch.object(account_usage, "request_json", side_effect=usage):
+    assert rotate_auth.run([sys.argv[2]]) == 0
+assert rotate_auth.make_backend(sys.argv[2]).current_suffix() == "local-b"
+''', str(installed.parent), provider], cwd=root, env=env, capture_output=True, text=True, timeout=10)
+                self.assertEqual(probe.returncode, 0, probe.stderr)
 
     def test_grok_runtime_lock_is_not_treated_as_a_saved_profile(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -8,7 +8,7 @@
 | --- | --- |
 | `cl` | `claude --dangerously-skip-permissions --effort max`; adds `--continue` for no arguments or first positional argument |
 | `cmd` | Resolved binary with `--resume --yolo`; either caller `--yolo` or `--dangerously-skip-permissions` suppresses both defaults |
-| `cc` | `codex resume --yolo` with shared statusline |
+| `cc` | Run `rotate-codex` first, then `codex resume --yolo` with shared statusline; rotation failure stops launch |
 | `ca` | `cursor-agent --yolo` |
 | `oc` | `opencode` without continue |
 | `occ` | Claude Code on [OpenCode Go](opencode-go.md) |

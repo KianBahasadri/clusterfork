@@ -377,9 +377,9 @@ class LocalRemoteOwnershipTests(unittest.TestCase):
     def test_local_rotation_skips_cloud_reserved_profiles(self):
         with tempfile.TemporaryDirectory() as directory:
             backend, _ = self.backend(directory)
-            backend.select(None)
-            self.assertEqual(backend.current_suffix(), "local-a")
-            backend.select(None)
+            with patch("rotate_usage.choose_profile", return_value="local-b") as choose:
+                backend.select(None)
+            choose.assert_called_once_with(backend, ["local-a", "local-b"])
             self.assertEqual(backend.current_suffix(), "local-b")
 
     def test_reserved_profiles_cannot_be_selected_overwritten_deleted_or_pinged(self):

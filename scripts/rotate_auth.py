@@ -379,10 +379,16 @@ def format_suffixes(label: str, suffixes: list[str]) -> str | None:
     return f"  {label}: {' '.join(sort_names(set(suffixes)))}"
 
 
-def next_in_order(suffixes: list[str], current: str | None) -> str:
-    if current and current in suffixes:
-        return suffixes[(suffixes.index(current) + 1) % len(suffixes)]
-    return suffixes[0]
+def choose_by_usage(backend, names: list[str]) -> str:
+    if not names:
+        fail(f"{backend.command}: no saved profiles",
+             f"  Save the active account first: {backend.command} --save NAME")
+    from rotate_usage import UsageError, choose_profile
+    try:
+        return choose_profile(backend, names)
+    except UsageError as error:
+        fail(f"{backend.command}: {error}",
+             f"  Select a profile explicitly: {backend.command} NAME")
 
 
 def ping_agent(command_key: str) -> tuple[bool, str]:
@@ -575,6 +581,7 @@ def usage(command: str) -> list[str]:
         f"  {command} --unhook",
         f"  {command} --list",
         f"  {command} --kickoff [names]",
+        "  Without a name, select an account using Symphony's quota policy.",
     ]
     if command in {"rotate-codex", "rotate-cursor-cli"}:
         lines.extend([
@@ -800,14 +807,7 @@ class ClaudeBackend:
                     lines.append(extra)
                 fail(*lines)
             return requested
-        if len(names) < 2:
-            extra = format_suffixes("suffixes", names)
-            lines = [f"{self.command}: need at least two {CLAUDE_PREFIX}* files"]
-            if extra:
-                lines.append(extra)
-            lines.append(f"  Save the active account first: {self.command} --save NAME")
-            fail(*lines)
-        return next_in_order(names, self.current_suffix())
+        return choose_by_usage(self, names)
 
 
 class SharedStoreBackend:
@@ -1082,14 +1082,7 @@ class SharedStoreBackend:
                     lines.append(extra)
                 fail(*lines)
             return requested
-        if len(names) < 2:
-            extra = format_suffixes("suffixes", names)
-            lines = [f"{self.command}: need at least two {PROFILE_PREFIX}* files"]
-            if extra:
-                lines.append(extra)
-            lines.append(f"  Save the active account first: {self.command} --save NAME")
-            fail(*lines)
-        return next_in_order(names, self.current_suffix())
+        return choose_by_usage(self, names)
 
     def _restore_auth_link(self) -> None:
         relative = os.path.relpath(
@@ -1155,23 +1148,19 @@ class AntigravityBackend:
                     lines.append(extra)
                 fail(*lines)
             next_suffix = requested
-        elif len(names) < 2:
-            lines = [f"{self.command}: need at least two saved profiles"]
-            if extra:
-                lines.append(extra)
-            lines.append(f"  Save the active account first: {self.command} --save NAME")
-            fail(*lines)
         else:
             next_suffix = None
 
         current = self.current_suffix()
         if requested is None:
-            if not current or current not in lookup:
+            if current not in lookup and self._lookup(self.active_service, self.active_user) is not None:
                 fail(
-                    f"{self.command}: no current profile marker",
+                    f"{self.command}: active keyring item is not saved as a profile",
                     f"  Save the active account first: {self.command} --save NAME",
                 )
-            next_suffix = next_in_order(names, current)
+            next_suffix = choose_by_usage(self, names)
+            if current not in lookup:
+                current = None
         elif current and current not in lookup:
             print(
                 f"{self.command}: warning: current profile marker is unknown; "

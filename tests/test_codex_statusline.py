@@ -41,7 +41,7 @@ class CodexStatuslineTests(unittest.TestCase):
     def run_launch(self, *arguments):
         return subprocess.run(
             ["bash", "-c",
-             'source shell/codex.sh; _cf_tmux() { "$@"; }; "$@"',
+             'source shell/codex.sh; rotate-codex() { :; }; _cf_tmux() { "$@"; }; "$@"',
              "statusline-test", *arguments],
             cwd=REPO_ROOT, env=self.env, capture_output=True, text=True, timeout=5,
         )

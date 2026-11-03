@@ -98,26 +98,6 @@ class ValidateSuffixTests(unittest.TestCase):
                 rotate_auth.validate_suffix("cmd", name)
 
 
-class NextInOrderTests(unittest.TestCase):
-    def test_advances_within_list(self):
-        self.assertEqual(
-            rotate_auth.next_in_order(["a", "b", "c"], "a"), "b"
-        )
-
-    def test_wraps_around(self):
-        self.assertEqual(
-            rotate_auth.next_in_order(["a", "b", "c"], "c"), "a"
-        )
-
-    def test_current_not_in_list_starts_at_first(self):
-        self.assertEqual(
-            rotate_auth.next_in_order(["a", "b"], None), "a"
-        )
-        self.assertEqual(
-            rotate_auth.next_in_order(["a", "b"], "zzz"), "a"
-        )
-
-
 class SortNamesTests(unittest.TestCase):
     def test_sorts_and_dedups_via_caller(self):
         self.assertEqual(rotate_auth.sort_names(["b", "a", "b"]), ["a", "b", "b"])
@@ -554,7 +534,7 @@ class SharedStoreBackendTests(unittest.TestCase):
         self.assertTrue(auth.is_symlink())
         self.assertEqual(auth.resolve(), profile.resolve())
 
-    def test_select_cycles_through_profiles(self):
+    def test_select_installs_the_profile_chosen_by_quota(self):
         self._write_profile("alpha", '{"t": 1}')
         self._write_profile("beta", '{"t": 2}')
         backend = rotate_auth.SharedStoreBackend(
@@ -565,12 +545,10 @@ class SharedStoreBackendTests(unittest.TestCase):
             default_agent=Path(".local/share/opencode"),
             default_store=Path(".local/share/clusterfork-auth/opencode"),
         )
-        self.assertEqual(backend.select(None), 0)
-        first = backend.current_suffix()
-        self.assertIn(first, {"alpha", "beta"})
-        self.assertEqual(backend.select(None), 0)
-        second = backend.current_suffix()
-        self.assertNotEqual(first, second)
+        with patch("rotate_usage.choose_profile", return_value="beta") as choose:
+            self.assertEqual(backend.select(None), 0)
+        choose.assert_called_once_with(backend, ["alpha", "beta"])
+        self.assertEqual(backend.current_suffix(), "beta")
 
     def test_select_unknown_profile_fails(self):
         self._write_profile("alpha", "{}")

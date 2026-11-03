@@ -47,8 +47,15 @@ PY
 }
 
 codex() { _cf_launch_codex direct "$@"; }
-cc() { _cf_launch_codex tmux resume --yolo "$@"; }
+cc() {
+  # Codex launch arguments must not reach the account picker.
+  # shellcheck disable=SC2119
+  rotate-codex || return "$?"
+  _cf_launch_codex tmux resume --yolo "$@"
+}
 
+# This public command also accepts profiles and flags when called directly.
+# shellcheck disable=SC2120
 rotate-codex() {
   python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/rotate_auth.py" codex "$@"
 }
