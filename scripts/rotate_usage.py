@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import time
 from types import SimpleNamespace
@@ -170,6 +171,26 @@ def read_cached_snapshots(provider, logins, model, max_age_seconds=300):
     return None
 
 
+def codex_profiles_in_use():
+    """Read launch-time account labels from live Codex panes, including detached sessions."""
+    try:
+        result = subprocess.run(
+            ["tmux", "list-panes", "-a", "-F", "#{pane_dead}\t#{pane_current_command}\t#{window_name}"],
+            capture_output=True, text=True, timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    if result.returncode:
+        return set()
+    profiles = set()
+    for line in result.stdout.splitlines():
+        fields = line.split("\t", 2)
+        if (len(fields) == 3 and fields[0] == "0" and fields[1] == "codex"
+                and fields[2].startswith("codex - ")):
+            profiles.add(fields[2].removeprefix("codex - "))
+    return profiles
+
+
 def choose_profile(backend, names):
     provider = backend.command.removeprefix("rotate-").removesuffix("-cli")
     profile, policy = selection_config(provider)
@@ -206,6 +227,16 @@ def choose_profile(backend, names):
 
     if not logins:
         raise UsageError(f"no eligible saved profiles (excluded: {', '.join(sorted(EXCLUDED_AUTO_PROFILES))})")
+
+    if provider == "codex":
+        busy_profiles = codex_profiles_in_use()
+        busy_ids = {account_id for account_id, names in aliases.items() if busy_profiles.intersection(names)}
+        if busy_ids:
+            busy_names = sorted(name for account_id in busy_ids for name in aliases[account_id])
+            print(f"{backend.command}: skipping accounts in open Codex sessions: {', '.join(busy_names)}", flush=True)
+            logins = {account_id: choices for account_id, choices in logins.items() if account_id not in busy_ids}
+            if not logins:
+                raise UsageError("all eligible saved Codex accounts are already in use")
 
     now = time.time()
     cached = read_cached_snapshots(provider, logins, profile.model)

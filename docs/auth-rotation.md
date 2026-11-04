@@ -40,6 +40,16 @@ remain selected when it is best; one saved profile is sufficient. Aliases with
 the same known identity share a quota probe, preferring the current login and
 trying another saved login if its credentials are rejected.
 
+Bare `rotate-codex` excludes accounts already used by live Codex panes in the
+current tmux server, including detached sessions, before ranking quota. It reads
+the `codex - NAME` launch labels created by `cc`; aliases of an occupied account
+are excluded together. Dead panes and panes no longer running Codex do not count.
+If every eligible account is occupied, rotation fails without changing selection.
+Explicit profile selection still works. Detection uses existing tmux labels, so
+unlabeled/direct sessions and other tmux servers or machines are outside its scope;
+when tmux is unavailable, selection uses quota alone. It does not reserve accounts
+against simultaneous launches.
+
 | Command | Quota source |
 | --- | --- |
 | `rotate-claude` | OAuth usage, including reported model-specific weekly limits |

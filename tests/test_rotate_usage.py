@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import time
@@ -58,6 +59,7 @@ class QuotaRotationTests(unittest.TestCase):
         keyring = self.keyring
         for context in (
             patch.dict(os.environ, env), patch("sys.stdout", new=io.StringIO()), patch("sys.stderr", new=io.StringIO()),
+            patch.object(rotate_usage.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "", "")),
             patch.object(rotate_auth.AntigravityBackend, "_require_secret_tool"),
             patch.object(rotate_auth.AntigravityBackend, "_lookup", lambda self, service, user: keyring.get((service, user))),
             patch.object(rotate_auth.AntigravityBackend, "_store", lambda self, label, service, user, secret: keyring.__setitem__((service, user), secret)),
@@ -218,6 +220,46 @@ class QuotaRotationTests(unittest.TestCase):
         self.assertEqual(rotate_auth.run(["codex", "kian"]), 0)
         self.assertEqual(backend.current_suffix(), "kian")
 
+    def test_codex_skips_accounts_in_live_panes_and_chooses_best_unused_account(self):
+        panes = subprocess.CompletedProcess([], 0, "0\tcodex\tcodex - zulu\n", "")
+        reader = self.reader("codex")
+        with patch.object(rotate_usage.subprocess, "run", return_value=panes), patch.dict(account_usage.READERS, {"codex": reader}):
+            rotate_auth.run(["codex"])
+        self.assertEqual(self.backends["codex"].current_suffix(), "beta")
+        self.assertEqual(reader.call_count, 2)
+
+    def test_codex_busy_alias_blocks_every_login_for_that_account(self):
+        self.write_profile("codex", "beta", credentials("codex", "alpha"))
+        panes = subprocess.CompletedProcess([], 0, "0\tcodex\tcodex - beta\n", "")
+        reader = self.reader("codex", {"alpha": 0, "zulu": 50})
+        with patch.object(rotate_usage.subprocess, "run", return_value=panes), patch.dict(account_usage.READERS, {"codex": reader}):
+            rotate_auth.run(["codex"])
+        self.assertEqual(self.backends["codex"].current_suffix(), "zulu")
+        self.assertEqual(reader.call_count, 1)
+
+    def test_all_codex_accounts_busy_preserves_selection_without_probing(self):
+        panes = subprocess.CompletedProcess([], 0, "".join(f"0\tcodex\tcodex - {name}\n" for name in ("alpha", "beta", "zulu")), "")
+        before = self.state()
+        reader = Mock(side_effect=AssertionError("busy accounts must not be probed"))
+        with patch.object(rotate_usage.subprocess, "run", return_value=panes), patch.dict(account_usage.READERS, {"codex": reader}):
+            with self.assertRaisesRegex(rotate_auth.RotateError, "already in use"):
+                rotate_auth.run(["codex"])
+        self.assertEqual(self.state(), before)
+        reader.assert_not_called()
+
+    def test_explicit_codex_selection_can_still_choose_busy_account_offline(self):
+        with patch.object(rotate_usage.subprocess, "run", side_effect=AssertionError("explicit selection must not inspect tmux")):
+            self.assertEqual(rotate_auth.run(["codex", "beta"]), 0)
+        self.assertEqual(self.backends["codex"].current_suffix(), "beta")
+
+    def test_busy_codex_detection_does_not_affect_other_providers(self):
+        for provider in self.PROVIDERS:
+            if provider == "codex":
+                continue
+            with self.subTest(provider=provider), patch.object(rotate_usage.subprocess, "run", side_effect=AssertionError("only Codex should inspect tmux")), patch.dict(account_usage.READERS, {provider: self.reader(provider)}):
+                rotate_auth.run([provider])
+            self.assertEqual(self.backends[provider].current_suffix(), "zulu")
+
     def test_cache_snapshots_are_used_when_fresh(self):
         backend = self.backends["codex"]
         cache_dir = self.root / "conky-cache"
@@ -243,6 +285,13 @@ class QuotaRotationTests(unittest.TestCase):
         self.assertEqual(backend.current_suffix(), "beta")
         self.assertEqual(reader.call_count, 0)
 
+        # Busy filtering must also run before choosing from the fast cache path.
+        panes = subprocess.CompletedProcess([], 0, "0\tcodex\tcodex - beta\n", "")
+        with patch.dict(os.environ, {"CONKY_CACHE_DIR": str(cache_dir)}), patch.object(rotate_usage.subprocess, "run", return_value=panes), patch.dict(account_usage.READERS, {"codex": reader}):
+            backend.select(None)
+        self.assertEqual(backend.current_suffix(), "alpha")
+        reader.assert_not_called()
+
     def test_cache_fallback_to_network_when_stale_or_incomplete(self):
         backend = self.backends["codex"]
         cache_dir = self.root / "conky-cache"
@@ -261,6 +310,32 @@ class QuotaRotationTests(unittest.TestCase):
             backend.select(None)
         self.assertEqual(backend.current_suffix(), "beta")
         self.assertEqual(reader.call_count, 3)
+
+
+class CodexInUseTests(unittest.TestCase):
+    def test_only_live_codex_panes_with_account_labels_count(self):
+        panes = "\n".join((
+            "0\tcodex\tcodex - alpha",
+            "0\tcodex\tcodex - alpha",  # A linked window or another session on the same account.
+            "0\tcodex\tcodex - other.name_2-3",
+            "1\tcodex\tcodex - dead",
+            "0\tbash\tcodex - shell",
+            "0\tclaude\tclaude - another-provider",
+            "0\tcodex\tmanually renamed",
+            "malformed",
+        ))
+        result = subprocess.CompletedProcess([], 0, panes, "")
+        with patch.object(rotate_usage.subprocess, "run", return_value=result) as run:
+            self.assertEqual(rotate_usage.codex_profiles_in_use(), {"alpha", "other.name_2-3"})
+        # -a includes detached sessions; query reads metadata without capturing pane contents.
+        self.assertEqual(run.call_args.args[0][:3], ["tmux", "list-panes", "-a"])
+
+    def test_missing_tmux_no_server_and_timeout_leave_quota_selection_available(self):
+        for failure in (FileNotFoundError(), subprocess.TimeoutExpired("tmux", 2)):
+            with self.subTest(failure=type(failure).__name__), patch.object(rotate_usage.subprocess, "run", side_effect=failure):
+                self.assertEqual(rotate_usage.codex_profiles_in_use(), set())
+        with patch.object(rotate_usage.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "no server")):
+            self.assertEqual(rotate_usage.codex_profiles_in_use(), set())
 
 
 class ProviderQuotaTests(unittest.TestCase):
