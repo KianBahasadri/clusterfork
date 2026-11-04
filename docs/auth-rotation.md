@@ -31,12 +31,10 @@ unhooked: installer repair can reconnect the previous profile.
 All six bare commands use Symphony's shared `automation/common/selection.py`
 selector within their own provider's saved profiles. They read live quota before
 switching, using the policy and Codex/Cursor profiles from
-`automation/controller/projects.json`: currently at least 20% remaining in every
-applicable window and measurements no older than 60 seconds. Codex ranks by
-weekly usage when an identified short window is strictly below 70% used; at 70%
-it includes that window in the most-depleted-window score. Other providers rank
-by their most-depleted reported window. The current account participates and can
-remain selected when it is best; one saved profile is sufficient. Aliases with
+`automation/controller/projects.json` and the shared
+[provider eligibility and ranking rules](remote-development.md#agent-profiles).
+The current account participates and can remain selected when it is best; one
+saved profile is sufficient. Aliases with
 the same known identity share a quota probe, preferring the current login and
 trying another saved login if its credentials are rejected.
 

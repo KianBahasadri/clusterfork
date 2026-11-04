@@ -118,12 +118,17 @@ of list order or Cursor headroom. Existing sessions keep their provider. There i
 no complexity classifier/model substitution; Antigravity is deferred. Missing
 Cursor variant or unacknowledged selection explicitly waits.
 
-`quota_selection.py` chooses lowest usage within the first eligible provider pool.
+`automation/common/selection.py` supplies the shared eligibility and ranking logic
+for cloud workers and local account rotation, choosing lowest usage within the
+first eligible provider pool.
 For Codex with known weekly usage, ignore an identified short window (currently
 five hours) for ranking only when **strictly below 70% used**; at 70% include it in
 the most-depleted-window score. Missing weekly metadata stays conservative;
-unknown never means zero. Eligibility checks every window, requiring at least
-20% remaining, snapshots no older than 60 seconds and one active task/account.
+unknown never means zero. Codex requires at least 20% remaining in its five-hour
+window; an identified weekly window needs some capacity but has no 20% reserve.
+Other providers and windows with unknown duration retain the 20% reserve.
+Eligibility still validates every reported window and excludes exhausted weekly
+limits. Snapshots must be no older than 60 seconds, with one active task/account.
 Busy, blocked, stale, unknown or exhausted accounts are excluded, including during
 replacement. No capacity records provider-specific `waiting_for_quota` reasons
 and retries after 15 minutes.

@@ -87,6 +87,32 @@ class QuotaSelectionTests(unittest.TestCase):
         # Ranking must not overstate the actual minimum headroom.
         self.assertEqual(selected.remaining_percent, 35)
 
+    def test_codex_five_hour_reserve_allows_low_but_nonzero_weekly_capacity(self):
+        for weekly in (80.001, 95, 99.999):
+            with self.subTest(weekly=weekly):
+                selected = self.choose([self.timed("available", 80, weekly)])
+                self.assertEqual(selected.account_id, "available")
+                self.assertAlmostEqual(selected.remaining_percent, 100 - weekly)
+
+    def test_codex_still_rejects_low_five_hour_or_exhausted_unknown_weekly_capacity(self):
+        for short, weekly in ((80.001, 95), (20, 100), (20, None)):
+            with self.subTest(short=short, weekly=weekly):
+                self.assertIsNone(self.choose([self.timed("unavailable", short, weekly)]))
+
+    def test_weekly_only_or_reset_snapshots_do_not_establish_codex_capacity(self):
+        base = self.timed("account", 20, 95)
+        for windows in ((base.windows[1],), (base.windows[0], replace(base.windows[1], resets_at=NOW - 1))):
+            with self.subTest(windows=windows):
+                self.assertIsNone(self.choose([replace(base, windows=windows)]))
+
+    def test_unknown_window_durations_and_cursor_retain_the_reserve(self):
+        base = self.timed("account", 20, 95)
+        unknown = replace(base, windows=(base.windows[0], replace(base.windows[1], duration_minutes=None)))
+        cursor = replace(base, agent="cursor", model=self.profiles["cursor"].model)
+        for account in (unknown, cursor):
+            with self.subTest(account=account):
+                self.assertIsNone(self.choose([account]))
+
     def test_exactly_seventy_percent_includes_the_short_window(self):
         for short, expected in ((69.999, "a"), (70, "b"), (70.001, "b")):
             with self.subTest(short=short):

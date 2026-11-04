@@ -311,6 +311,34 @@ class QuotaRotationTests(unittest.TestCase):
         self.assertEqual(backend.current_suffix(), "beta")
         self.assertEqual(reader.call_count, 3)
 
+    def test_codex_low_weekly_capacity_works_with_live_quota_and_conky_cache(self):
+        backend = self.backends["codex"]
+        cache_dir = self.root / "weekly-cache"
+        cache_dir.mkdir()
+        now = time.time()
+        values = {"alpha": (81, 1), "beta": (30, 95), "zulu": (10, 100)}
+
+        def windows(auth, model):
+            return tuple(QuotaWindow(used, now + 3600, duration_minutes=duration)
+                         for used, duration in zip(values[auth["tokens"]["account_id"]], (300, 10080)))
+
+        for cached in (False, True):
+            with self.subTest(cached=cached):
+                backend.select("alpha")
+                if cached:
+                    accounts = [{
+                        "accountId": rotate_usage.identity("codex", credentials("codex", name)),
+                        "ok": True, "observedAt": now,
+                        "windows": [{"usedPercent": used, "windowSeconds": seconds, "resetAtEpoch": now + 3600}
+                                    for used, seconds in zip(usage, (18000, 604800))],
+                    } for name, usage in values.items()]
+                    (cache_dir / "codex-usage.json").write_text(json.dumps({"accounts": accounts}))
+                reader = Mock(side_effect=AssertionError("cache must avoid HTTP") if cached else windows)
+                with patch.dict(os.environ, {"CONKY_CACHE_DIR": str(cache_dir)}), patch.dict(account_usage.READERS, {"codex": reader}):
+                    self.assertEqual(rotate_auth.run(["codex"]), 0)
+                self.assertEqual(backend.current_suffix(), "beta")
+                self.assertEqual(reader.call_count, 0 if cached else 3)
+
 
 class CodexInUseTests(unittest.TestCase):
     def test_only_live_codex_panes_with_account_labels_count(self):

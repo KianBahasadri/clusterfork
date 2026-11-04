@@ -264,6 +264,7 @@ def choose_profile(backend, names):
                 print(f"  {', '.join(aliases[account_id])}: {error}", file=sys.stderr)
     selected = select_account(snapshots, {provider: profile}, policy, now=time.time())
     if selected is None:
-        raise UsageError(f"no account has fresh quota with at least {policy.min_remaining_percent:g}% remaining in every window")
+        reserve_scope = "the 5h window" if provider == "codex" else "every window"
+        raise UsageError(f"no account has fresh quota with at least {policy.min_remaining_percent:g}% remaining in {reserve_scope}")
     print(f"  quota: at least {selected.remaining_percent:g}% remaining")
     return measured_profiles[selected.account_id]

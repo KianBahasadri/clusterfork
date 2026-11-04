@@ -64,7 +64,7 @@ def select_account(accounts, profiles, policy, *, now):
     """Return the eligible account with the lowest usage score, or None.
 
     All windows supplied must apply to this model. Unknown, stale, reset, busy,
-    blocked, and nearly exhausted accounts are ineligible. The caller must obtain
+    blocked, exhausted, and below-reserve accounts are ineligible. The caller must obtain
     a durable account lease atomically before execution and retry selection if
     another scheduler won the lease. This function does not read credentials,
     call provider endpoints, reserve an account, or start a worker.
@@ -91,9 +91,13 @@ def select_account(accounts, profiles, policy, *, now):
         )
         if not usable:
             continue
-        # Eligibility always uses every window, independently of ranking.
+        # Codex's identified weekly limit needs capacity, but no 20% reserve.
+        # Unidentified windows retain the reserve rather than guessing their period.
         remaining = 100 - max(window.used_percent for window in account.windows)
-        if remaining < policy.min_remaining_percent:
+        reserved = tuple(window for window in account.windows
+                         if account.agent != "codex" or window.duration_minutes != 10080)
+        if (not reserved or remaining <= 0
+                or any(100 - window.used_percent < policy.min_remaining_percent for window in reserved)):
             continue
         selection = AccountSelection(account.account_id, account.agent, profile.model,
                                      profile.effort, remaining)
