@@ -6,7 +6,7 @@
     "trusted_user_ids": ["62a4e98c-29f0-4b6c-8062-ede9c6176c1d"]
   },
   "agent_selection": {
-    "strategy": "lowest_usage",
+    "strategy": "quota_priority",
     "min_remaining_percent": 20,
     "max_snapshot_age_seconds": 60,
     "max_concurrent_tasks_per_account": 1

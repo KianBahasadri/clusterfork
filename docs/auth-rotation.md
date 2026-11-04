@@ -9,7 +9,7 @@ shared-store symlink (Codex/Cursor/Grok/OpenCode), or GNOME Keyring (Antigravity
 | `rotate-* --delete NAME` | Confirm deletion of a detached saved profile |
 | `rotate-* --unhook` | Detach credentials before a new login |
 | `rotate-* --list` | List profiles; `*` marks current |
-| `rotate-*` | Select the account with the lowest eligible quota usage |
+| `rotate-*` | Select the best eligible account using the shared provider rules |
 | `rotate-* NAME` | Select a specific profile |
 | `rotate-* --kickoff [names]` | Ping all saved profiles, or the named subset |
 

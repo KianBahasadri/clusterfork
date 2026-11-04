@@ -118,7 +118,8 @@ class QuotaRotationTests(unittest.TestCase):
     def test_no_eligible_account_preserves_all_credentials_links_and_markers(self):
         before = self.state()
         for provider in self.PROVIDERS:
-            for values in ({"alpha": 81, "beta": 100, "zulu": None}, {"alpha": None, "beta": None, "zulu": None}):
+            for values in ({"alpha": 100 if provider == "codex" else 81, "beta": 100, "zulu": None},
+                           {"alpha": None, "beta": None, "zulu": None}):
                 with self.subTest(provider=provider, values=values):
                     with patch.dict(account_usage.READERS, {provider: self.reader(provider, values)}):
                         with self.assertRaisesRegex(rotate_auth.RotateError, "no account has fresh quota"):
@@ -191,9 +192,9 @@ class QuotaRotationTests(unittest.TestCase):
             self.assertEqual(backend.current_suffix(), "zulu")
             self.assertEqual(reader.call_count, 2)
 
-    def test_codex_weekly_ranking_and_seventy_percent_boundary_match_symphony(self):
+    def test_codex_weekly_ranking_has_no_seventy_percent_discontinuity(self):
         backend = self.backends["codex"]
-        for short, expected in ((69.999, "alpha"), (70, "beta"), (81, "beta")):
+        for short, expected in ((69.999, "alpha"), (70, "alpha"), (80, "alpha"), (81, "beta")):
             def windows(auth, model):
                 name = auth["tokens"]["account_id"]
                 used = {"alpha": (short, 10), "beta": (20, 30), "zulu": (0, 95)}[name]
@@ -338,6 +339,46 @@ class QuotaRotationTests(unittest.TestCase):
                     self.assertEqual(rotate_auth.run(["codex"]), 0)
                 self.assertEqual(backend.current_suffix(), "beta")
                 self.assertEqual(reader.call_count, 0 if cached else 3)
+
+    def test_codex_reset_priority_and_low_quota_fallback_work_live_and_cached(self):
+        backend = self.backends["codex"]
+        cache_dir = self.root / "priority-cache"
+        cache_dir.mkdir()
+        now = time.time()
+        scenarios = (
+            ({"alpha": (0, 10, 165), "beta": (0, 90, 3), "zulu": (0, 95, 24)}, "beta"),
+            ({"alpha": (80.001, 0, 0.5), "beta": (80, 99, 165), "zulu": (100, 0, 3)}, "beta"),
+            ({"alpha": (99, 90, 3), "beta": (90, 0, 165), "zulu": (50, 100, 3)}, "alpha"),
+        )
+        for values, expected in scenarios:
+            def windows(auth, model):
+                short, weekly, hours = values[auth["tokens"]["account_id"]]
+                return (QuotaWindow(short, now + 3600, duration_minutes=300),
+                        QuotaWindow(weekly, now + hours * 3600, duration_minutes=10080))
+            for cached in (False, True):
+                with self.subTest(expected=expected, cached=cached, values=values):
+                    backend.select("alpha")
+                    accounts = []
+                    for name, (short, weekly, hours) in values.items():
+                        accounts.append({
+                            "accountId": rotate_usage.identity("codex", credentials("codex", name)),
+                            "ok": True, "observedAt": now,
+                            "windows": [
+                                {"usedPercent": short, "windowSeconds": 18000, "resetAtEpoch": now + 3600},
+                                {"usedPercent": weekly, "windowSeconds": 604800,
+                                 "resetAtEpoch": now + hours * 3600},
+                            ],
+                        })
+                    cache_file = cache_dir / "codex-usage.json"
+                    if cached:
+                        cache_file.write_text(json.dumps({"accounts": accounts}))
+                    else:
+                        cache_file.unlink(missing_ok=True)
+                    reader = Mock(side_effect=AssertionError("cache must avoid HTTP") if cached else windows)
+                    with patch.dict(os.environ, {"CONKY_CACHE_DIR": str(cache_dir)}), patch.dict(account_usage.READERS, {"codex": reader}):
+                        self.assertEqual(rotate_auth.run(["codex"]), 0)
+                    self.assertEqual(backend.current_suffix(), expected)
+                    self.assertEqual(reader.call_count, 0 if cached else 3)
 
 
 class CodexInUseTests(unittest.TestCase):

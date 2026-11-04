@@ -337,12 +337,14 @@ class LiveQuotaShapeTests(unittest.TestCase):
                  self.assertRaises(HTTPError):
                 worker.choose_account(Broker(), config, Heartbeat(), preflight=True)
 
-    def test_short_and_weekly_limits_both_constrain_headroom(self):
+    def test_nonzero_short_and_weekly_limits_remain_available_as_a_fallback(self):
         config = Registry.load(ROOT / "automation/controller/projects.json")
         snapshot = quota_snapshot("account", "gpt-6.1-sol", {"rateLimitsByLimitId": {"codex": {
             "primary": {"usedPercent": 1, "resetsAt": time.time() + 1000},
             "secondary": {"usedPercent": 95, "resetsAt": time.time() + 10000}}}})
-        self.assertIsNone(select_account([snapshot], config.agent_profiles, config.agent_selection, now=time.time()))
+        selected = select_account([snapshot], config.agent_profiles, config.agent_selection, now=time.time())
+        self.assertEqual(selected.account_id, "account")
+        self.assertEqual(selected.remaining_percent, 5)
 
     def test_unrelated_model_limits_are_not_treated_as_available_sol_quota(self):
         with self.assertRaises(CodexError):

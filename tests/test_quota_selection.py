@@ -50,7 +50,7 @@ class QuotaSelectionTests(unittest.TestCase):
         cursor = self.account("cursor", "cursor", used=(25,))
         for ineligible in (replace(base, in_use=True), replace(base, observed_at=NOW - 61),
                            replace(base, windows=()), replace(base, blocked_until=NOW + 1),
-                           replace(base, model="unsupported"), self.account("codex", used=(81,)),
+                           replace(base, model="unsupported"), self.account("codex", used=(100,)),
                            self.account("codex", used=(None,))):
             with self.subTest(account=ineligible):
                 result = self.choose([ineligible, cursor])
@@ -76,12 +76,12 @@ class QuotaSelectionTests(unittest.TestCase):
         self.assertEqual(result.remaining_percent, 55)
         self.assertEqual(result.effort, "max")
 
-    def timed(self, identity, short, weekly):
+    def timed(self, identity, short, weekly, *, reset_hours=10000 / 3600):
         return replace(self.account(identity), windows=(
             QuotaWindow(short, NOW + 1000, "codex/primary", 300),
-            QuotaWindow(weekly, NOW + 10000, "codex/secondary", 10080)))
+            QuotaWindow(weekly, NOW + reset_hours * 3600, "codex/secondary", 10080)))
 
-    def test_below_seventy_percent_short_usage_ranks_by_weekly_usage(self):
+    def test_weekly_priority_preserves_actual_minimum_headroom(self):
         selected = self.choose([self.timed("a", 65, 10), self.timed("b", 20, 30)])
         self.assertEqual(selected.account_id, "a")
         # Ranking must not overstate the actual minimum headroom.
@@ -94,8 +94,8 @@ class QuotaSelectionTests(unittest.TestCase):
                 self.assertEqual(selected.account_id, "available")
                 self.assertAlmostEqual(selected.remaining_percent, 100 - weekly)
 
-    def test_codex_still_rejects_low_five_hour_or_exhausted_unknown_weekly_capacity(self):
-        for short, weekly in ((80.001, 95), (20, 100), (20, None)):
+    def test_codex_rejects_exhausted_or_unknown_capacity_in_either_window(self):
+        for short, weekly in ((100, 95), (20, 100), (20, None), (None, 20)):
             with self.subTest(short=short, weekly=weekly):
                 self.assertIsNone(self.choose([self.timed("unavailable", short, weekly)]))
 
@@ -105,19 +105,73 @@ class QuotaSelectionTests(unittest.TestCase):
             with self.subTest(windows=windows):
                 self.assertIsNone(self.choose([replace(base, windows=windows)]))
 
-    def test_unknown_window_durations_and_cursor_retain_the_reserve(self):
+    def test_unknown_codex_durations_use_low_priority_while_cursor_retains_the_reserve(self):
         base = self.timed("account", 20, 95)
         unknown = replace(base, windows=(base.windows[0], replace(base.windows[1], duration_minutes=None)))
         cursor = replace(base, agent="cursor", model=self.profiles["cursor"].model)
-        for account in (unknown, cursor):
-            with self.subTest(account=account):
-                self.assertIsNone(self.choose([account]))
+        self.assertEqual(self.choose([unknown]).account_id, "account")
+        self.assertEqual(self.choose([unknown, self.account("healthy", used=(50,))]).account_id, "healthy")
+        self.assertIsNone(self.choose([cursor]))
 
-    def test_exactly_seventy_percent_includes_the_short_window(self):
-        for short, expected in ((69.999, "a"), (70, "b"), (70.001, "b")):
+    def test_reset_priority_prefers_quota_expiring_soon_over_a_fresh_week(self):
+        fresh = self.timed("fresh", 0, 10, reset_hours=165)
+        expiring = self.timed("expiring", 0, 90, reset_hours=3)
+        for accounts in ([fresh, expiring], [expiring, fresh]):
+            self.assertEqual(self.choose(accounts).account_id, "expiring")
+
+    def test_reset_priority_considers_remaining_quota_not_just_earliest_reset(self):
+        fresh = self.timed("fresh", 0, 10, reset_hours=165)
+        nearly_empty = self.timed("nearly-empty", 0, 99.9, reset_hours=3)
+        self.assertEqual(self.choose([nearly_empty, fresh]).account_id, "fresh")
+
+    def test_reset_priority_uses_a_thirty_minute_floor(self):
+        later = self.timed("later", 0, 85, reset_hours=1)
+        # A one-hour floor would incorrectly prefer later's 15% to this 10%.
+        soon = self.timed("soon", 0, 90, reset_hours=0.4)
+        self.assertEqual(self.choose([later, soon]).account_id, "soon")
+        # Sub-half-hour reset times must not inflate a nearly empty account.
+        for hours in (1 / 3600, 0.1, 0.499999, 0.5):
+            with self.subTest(hours=hours):
+                tiny = self.timed("tiny", 0, 99, reset_hours=hours)
+                self.assertEqual(self.choose([tiny, later]).account_id, "later")
+
+    def test_twenty_percent_is_a_priority_boundary_not_an_eligibility_cutoff(self):
+        other = self.timed("b", 0, 90, reset_hours=165)
+        for short, expected in ((79.999, "a"), (80, "a"), (80.001, "b"), (99, "b")):
             with self.subTest(short=short):
-                self.assertEqual(self.choose([self.timed("a", short, 10),
-                                              self.timed("b", 20, 30)]).account_id, expected)
+                self.assertEqual(self.choose([self.timed("a", short, 0, reset_hours=0.5),
+                                              other]).account_id, expected)
+
+    def test_low_five_hour_accounts_remain_available_and_follow_the_same_reset_score(self):
+        fresh = self.timed("fresh", 90, 10, reset_hours=165)
+        expiring = self.timed("expiring", 99, 90, reset_hours=3)
+        selected = self.choose([fresh, expiring])
+        self.assertEqual(selected.account_id, "expiring")
+        self.assertEqual(selected.remaining_percent, 1)
+        self.assertIsNotNone(self.choose([self.timed("last", 99.999, 99.999)]))
+
+    def test_reset_priority_breaks_ties_by_short_headroom_then_stable_identity(self):
+        first = self.timed("a", 50, 90, reset_hours=3)
+        second = self.timed("b", 20, 80, reset_hours=6)
+        for accounts in ([first, second], [second, first]):
+            self.assertEqual(self.choose(accounts).account_id, "b")
+        identical = replace(second, account_id="a")
+        for accounts in ([second, identical], [identical, second]):
+            self.assertEqual(self.choose(accounts).account_id, "a")
+
+    def test_missing_weekly_reset_does_not_invent_reset_urgency(self):
+        missing = self.timed("missing", 0, 10)
+        missing = replace(missing, windows=(missing.windows[0], replace(missing.windows[1], resets_at=None)))
+        known = self.timed("known", 0, 10, reset_hours=165)
+        self.assertEqual(self.choose([missing, known]).account_id, "known")
+        self.assertEqual(self.choose([missing]).account_id, "missing")
+
+    def test_every_applicable_weekly_limit_constrains_reset_priority(self):
+        limited = self.timed("limited", 0, 0, reset_hours=0.5)
+        limited = replace(limited, windows=limited.windows + (
+            QuotaWindow(99, NOW + 165 * 3600, "model/weekly", 10080),))
+        other = self.timed("other", 0, 50, reset_hours=165)
+        self.assertEqual(self.choose([limited, other]).account_id, "other")
 
     def test_weekly_preference_preserves_all_eligibility_guards(self):
         base = self.timed("a", 65, 10)
@@ -140,9 +194,13 @@ class QuotaSelectionTests(unittest.TestCase):
                               self.account("available", used=(40,))])
         self.assertEqual(result.account_id, "available")
 
-    def test_waits_when_every_account_is_near_exhaustion(self):
-        self.assertIsNone(self.choose([self.account("low", used=(81,)),
-                                      self.account("empty", used=(100,))]))
+    def test_low_codex_capacity_is_preferred_to_cursor_and_exhausted_capacity_is_not(self):
+        cursor = self.account("cursor", "cursor", used=(0,))
+        low = self.account("low", used=(99,))
+        empty = self.account("empty", used=(100,))
+        self.assertEqual(self.choose([cursor, low, empty]).account_id, "low")
+        self.assertEqual(self.choose([cursor, empty]).account_id, "cursor")
+        self.assertIsNone(self.choose([empty]))
 
     def test_missing_stale_or_reset_data_is_not_assumed_to_mean_zero_usage(self):
         base = self.account("test")

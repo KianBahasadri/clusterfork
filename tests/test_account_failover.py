@@ -205,13 +205,17 @@ class AccountFailoverTests(unittest.TestCase):
             with self.assertRaises(worker.PublicationBlocked):
                 self.broker.publication_guard.check(token, static=False)
 
-    def test_replacement_ranking_uses_the_same_weekly_preference(self):
-        self.other_usage = (20, 30)
+    def test_replacement_ranking_prefers_quota_expiring_soon_over_a_fresh_week(self):
+        self.other_usage = (20, 10)
         inspect = self.inspect
         def quotas(home, model, effort):
             details, result = inspect(home, model, effort)
             identity = json.loads((home / "auth.json").read_text())["tokens"]["account_id"]
-            return details, limits(65, 10) if identity == "account-b" else result
+            if identity in {"account-b", "account-c"}:
+                result = limits(20, 90 if identity == "account-b" else 10)
+                hours = 3 if identity == "account-b" else 165
+                result["rateLimitsByLimitId"]["codex"]["secondary"]["resetsAt"] = fixtures.NOW + hours * 3600
+            return details, result
         with self.execution() as (root, _), patch.object(worker, "inspect_account", side_effect=quotas):
             with worker.run_codex(self.broker, self.config, self.heartbeat, root):
                 pass
@@ -373,11 +377,23 @@ class AccountFailoverTests(unittest.TestCase):
         self.assertTrue(all(not account["owner"] for account in self.f.pool.records()))
 
     def test_ineligible_replacements_end_without_starting_another_turn(self):
-        self.replacement_usage = self.other_usage = (95, 10)
+        self.replacement_usage = self.other_usage = (100, 10)
         with self.execution() as (root, _):
             with worker.run_codex(self.broker, self.config, self.heartbeat, root) as summary:
                 self.assertIsNone(summary)
         self.assertEqual(len(self.servers), 1)
+
+    def test_low_quota_replacement_resumes_when_every_available_account_is_below_reserve(self):
+        self.replacement_usage = (95, 10)
+        self.other_usage = (99, 30)
+        with self.execution() as (root, workspace):
+            with worker.run_codex(self.broker, self.config, self.heartbeat, root) as summary:
+                self.assertIn("original edits", summary)
+                self.assertEqual((workspace / "work.txt").read_text(), "existing edits\nfinished\n")
+        self.assertEqual(len(self.servers), 2)
+        segments = json.loads(execution_row(self.f)["usage_segments"])
+        self.assertEqual(segments[-1]["account_id"], self.identities[1])
+        self.assertEqual(segments[-1]["usage_before"]["windows"][0]["used_percent"], 95)
 
     def test_original_deadline_includes_replacement_selection(self):
         self.config["agent_timeout_minutes"] = 1

@@ -13,8 +13,8 @@ class SelectionPolicy:
 
     @classmethod
     def load(cls, data):
-        if data.get("strategy") != "lowest_usage":
-            raise ValueError("agent_selection strategy must be lowest_usage")
+        if data.get("strategy") != "quota_priority":
+            raise ValueError("agent_selection strategy must be quota_priority")
         if data.get("max_concurrent_tasks_per_account") != 1:
             raise ValueError("only one task may use an account at a time")
         reserve = data.get("min_remaining_percent")
@@ -60,14 +60,28 @@ def finite_number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
+def _codex_priority(windows, now):
+    weekly = tuple(window for window in windows if window.duration_minutes == 10080)
+    if not weekly:
+        # Missing period metadata falls back to lowest worst-window usage,
+        # normalized to a full week so it cannot invent reset urgency.
+        return (100 - max(window.used_percent for window in windows)) / 168
+    return min(
+        (100 - window.used_percent) / max(
+            (window.resets_at - now) / 3600 if window.resets_at is not None else 168, 0.5)
+        for window in weekly
+    )
+
+
 def select_account(accounts, profiles, policy, *, now):
-    """Return the eligible account with the lowest usage score, or None.
+    """Return the highest-priority usable account, or None.
 
     All windows supplied must apply to this model. Unknown, stale, reset, busy,
-    blocked, exhausted, and below-reserve accounts are ineligible. The caller must obtain
-    a durable account lease atomically before execution and retry selection if
-    another scheduler won the lease. This function does not read credentials,
-    call provider endpoints, reserve an account, or start a worker.
+    blocked, and exhausted accounts are ineligible. Codex's reserve is a preference;
+    other providers require it. The caller must obtain a durable account lease
+    atomically before execution and retry selection if another scheduler won the
+    lease. This function does not read credentials, call provider endpoints,
+    reserve an account, or start a worker.
     """
     if not finite_number(now):
         raise ValueError("now must be a finite Unix timestamp")
@@ -91,26 +105,25 @@ def select_account(accounts, profiles, policy, *, now):
         )
         if not usable:
             continue
-        # Codex's identified weekly limit needs capacity, but no 20% reserve.
-        # Unidentified windows retain the reserve rather than guessing their period.
         remaining = 100 - max(window.used_percent for window in account.windows)
-        reserved = tuple(window for window in account.windows
-                         if account.agent != "codex" or window.duration_minutes != 10080)
-        if (not reserved or remaining <= 0
-                or any(100 - window.used_percent < policy.min_remaining_percent for window in reserved)):
+        # Weekly Codex limits need capacity, but have no reserve preference.
+        # Unknown periods participate in the headroom preference conservatively.
+        preferred = tuple(window for window in account.windows
+                          if account.agent != "codex" or window.duration_minutes != 10080)
+        if not preferred or remaining <= 0:
+            continue
+        headroom = 100 - max(window.used_percent for window in preferred)
+        below_preferred = headroom < policy.min_remaining_percent
+        if account.agent != "codex" and below_preferred:
             continue
         selection = AccountSelection(account.account_id, account.agent, profile.model,
                                      profile.effort, remaining)
-        ranked = account.windows
-        if account.agent == "codex" and any(window.duration_minutes == 10080 for window in ranked):
-            # Only ignore identified short windows when weekly usage is known.
-            # Unknown durations and other model limits still constrain ranking.
-            ranked = tuple(window for window in ranked if not (
-                finite_number(window.duration_minutes) and 0 < window.duration_minutes < 10080
-                and window.used_percent < 70))
-        score = max(window.used_percent for window in ranked)
-        candidates.append((score, selection))
+        score = max(window.used_percent for window in account.windows)
+        if account.agent == "codex":
+            score = -_codex_priority(account.windows, now)
+        rank = ({"codex": 0, "cursor": 1}.get(account.agent, 2), below_preferred, score,
+                -headroom if account.agent == "codex" else 0, account.agent, account.account_id)
+        candidates.append((rank, selection))
     if not candidates:
         return None
-    return min(candidates, key=lambda row: (
-        {"codex": 0, "cursor": 1}.get(row[1].agent, 2), row[0], row[1].agent, row[1].account_id))[1]
+    return min(candidates, key=lambda row: row[0])[1]

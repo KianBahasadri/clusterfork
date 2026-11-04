@@ -113,23 +113,30 @@ The registry pins profiles; live model catalogs must confirm them:
 | Codex | `gpt-6.1-sol` | `max` |
 | Cursor | `grok-4.7-high` | `high`, encoded in the exact variant |
 
-New selections prefer every eligible Codex account before Cursor, independently
-of list order or Cursor headroom. Existing sessions keep their provider. There is
+New selections prefer every usable Codex account, including fallbacks below the
+preferred reserve, before Cursor regardless of list order or Cursor headroom.
+Existing sessions keep their provider. There is
 no complexity classifier/model substitution; Antigravity is deferred. Missing
 Cursor variant or unacknowledged selection explicitly waits.
 
 `automation/common/selection.py` supplies the shared eligibility and ranking logic
-for cloud workers and local account rotation, choosing lowest usage within the
-first eligible provider pool.
-For Codex with known weekly usage, ignore an identified short window (currently
-five hours) for ranking only when **strictly below 70% used**; at 70% include it in
-the most-depleted-window score. Missing weekly metadata stays conservative;
-unknown never means zero. Codex requires at least 20% remaining in its five-hour
-window; an identified weekly window needs some capacity but has no 20% reserve.
-Other providers and windows with unknown duration retain the 20% reserve.
-Eligibility still validates every reported window and excludes exhausted weekly
-limits. Snapshots must be no older than 60 seconds, with one active task/account.
-Busy, blocked, stale, unknown or exhausted accounts are excluded, including during
+for cloud workers and local account rotation under the `quota_priority` strategy.
+Within the Codex pool, accounts with at least 20% remaining in their five-hour
+window rank first; accounts below that threshold remain available as fallbacks
+while every applicable window has quota left. Identified weekly limits have no
+reserve preference. Windows with unknown duration join the short-window headroom
+preference conservatively.
+Within each group, maximize **weekly remaining percent / max(hours until weekly
+reset, 0.5)**, favouring usable quota that expires soon and preserving a fresh week.
+Multiple applicable weekly limits use the lowest such score. Ties prefer more
+short-window headroom, then stable account identity. A missing weekly reset uses
+a full week as the denominator; missing weekly duration metadata falls back to
+lowest worst-window usage normalized to a full week, without inventing urgency.
+Other providers still require the 20% reserve in every window and rank by lowest
+worst-window usage. Eligibility validates every reported window; missing short
+capacity, unknown usage and exhausted limits do not establish usable capacity.
+Snapshots must be no older than 60 seconds, with one active task/account. Busy,
+blocked, stale, reset, unknown or exhausted accounts are excluded, including during
 replacement. No capacity records provider-specific `waiting_for_quota` reasons
 and retries after 15 minutes.
 
