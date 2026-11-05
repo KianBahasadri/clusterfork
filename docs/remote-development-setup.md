@@ -69,6 +69,11 @@ The Guaranine binding installs pinned Python documentation dependencies from
 `Clusterfork validation` check. That entry point must gain infrastructure checks
 as Terraform, Ansible, and installer code are introduced.
 
+The Argument Arena binding uses the same dependency file and validation entry
+point for its initial Markdown proposal, with `Clusterfork validation` required.
+Extend that entry point and dependency setup with application tests and
+infrastructure checks as the Python discord.py bot and Terraform are added.
+
 | Action | Purpose |
 | --- | --- |
 | `discover` | Find real GitHub identity and existing Linear project/team/state UUIDs |

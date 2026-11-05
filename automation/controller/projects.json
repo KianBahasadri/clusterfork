@@ -143,6 +143,39 @@
       "required_checks": [
         "Clusterfork validation"
       ]
+    },
+    {
+      "project_id": "228f1886-f005-431f-b502-a8c76fddab68",
+      "auto_merge": true,
+      "repository": "KianBahasadri/argument-arena",
+      "workflow": "clusterfork-task.yml",
+      "ref": "main",
+      "linear_team_id": "62b50878-78f5-4a97-912e-2198fed3836a",
+      "ready_state_ids": [
+        "ace01594-2daf-44bb-9690-cb0dccc11795"
+      ],
+      "linear_states": {
+        "in_progress": "764abaaa-b22c-42bb-8d6f-0c9c67b5f138",
+        "blocked": "26518242-2ca2-486c-884c-f9a829c3988f",
+        "done": "aa75d2cb-3bba-44e4-a1c8-d875533a600a"
+      },
+      "validation_commands": [
+        [
+          "python3",
+          "-m",
+          "pip",
+          "install",
+          "--requirement",
+          "requirements-dev.txt"
+        ],
+        [
+          "bash",
+          "scripts/validate.sh"
+        ]
+      ],
+      "required_checks": [
+        "Clusterfork validation"
+      ]
     }
   ]
 }
