@@ -20,7 +20,34 @@ PY
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq python3-venv git curl caddy nodejs npm
+apt-get install -y -qq python3-venv git curl caddy nodejs npm fail2ban ufw
+if ! command -v tailscale >/dev/null 2>&1; then
+    curl -fsSL https://tailscale.com/install.sh | sh
+fi
+systemctl enable --now tailscaled >/dev/null 2>&1 || true
+
+cat << 'SYS' > /etc/sysctl.d/99-security.conf
+net.ipv4.tcp_syncookies = 1
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+SYS
+sysctl --system >/dev/null 2>&1 || true
+
+cf_iface=$(ip -brief route get 8.8.8.8 2>/dev/null | awk '{print $5}')
+if [ -n "$cf_iface" ]; then
+    ufw default deny incoming >/dev/null 2>&1 || true
+    ufw default allow outgoing >/dev/null 2>&1 || true
+    ufw allow in on tailscale0 comment 'allow full tailnet access' >/dev/null 2>&1 || true
+    ufw allow in on "$cf_iface" proto tcp to any port 80 comment 'caddy acme http' >/dev/null 2>&1 || true
+    ufw allow in on "$cf_iface" proto tcp to any port 443 comment 'caddy https' >/dev/null 2>&1 || true
+    ufw deny in on "$cf_iface" proto tcp to any port 22 comment 'block public ssh' >/dev/null 2>&1 || true
+    ufw --force enable >/dev/null 2>&1 || true
+fi
+systemctl enable --now fail2ban >/dev/null 2>&1 || true
 id clusterfork >/dev/null 2>&1 || useradd --system --home-dir /var/lib/clusterfork --shell /usr/sbin/nologin clusterfork
 
 # Only the dedicated Azure LUN is eligible. Never format a device with signatures
@@ -122,7 +149,24 @@ cf_service_state=$(systemctl show --property=ActiveState --value clusterfork-con
 test "$cf_service_state" = inactive
 ln -sfn "$cf_release" /opt/clusterfork/current
 cf_hostname=$(python3 -c 'import json; print(json.load(open("/etc/clusterfork/controller.json"))["hostname"])')
-printf '%s {\n handle /api/* {\n  reverse_proxy 127.0.0.1:8765\n }\n respond 404\n}\n' "$cf_hostname" >/etc/caddy/Caddyfile
+cat << CAD > /etc/caddy/Caddyfile
+$cf_hostname {
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+    request_body {
+        max_size 1MB
+    }
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8765
+    }
+    respond 404
+}
+CAD
 chmod 644 /etc/caddy/Caddyfile
 systemctl enable --now clusterfork-controller.service
 systemctl enable --now caddy.service

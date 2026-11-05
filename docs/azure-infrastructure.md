@@ -62,9 +62,11 @@ application-scoped; obsolete website/control-table grants are removed.
 `mexicocentral`, static address/DNS and exclusive 32 GiB managed disk at LUN 0
 without host caching. VM/address/disk have deletion/replacement protection; disk
 network export is denied. SQLite stays on its mounted local filesystem.
-Only certificate-validation HTTP and HTTPS enter. The app binds loopback behind
-Caddy; operators use Run Command/private socket. An existing public SSH key
-satisfies VM creation, but no SSH port is exposed. Outputs exclude secrets.
+Only certificate-validation HTTP and HTTPS enter through Caddy with security
+headers and request-body limits; the host enforces UFW, Fail2ban, hardened sysctls
+and full ingress over private Tailscale while blocking public SSH. The app binds
+loopback behind Caddy; operators use Run Command/private socket. An existing
+public SSH key satisfies VM creation, but no SSH port is exposed. Outputs exclude secrets.
 VM system identity has Key Vault read/ingestion grants, no Table Data Contributor;
 service startup verifies VM identity. [Controller](remote-development-controller.md)
 owns task/resource locking and dated acceptance.
