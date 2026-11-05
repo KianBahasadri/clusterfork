@@ -121,11 +121,13 @@ Cursor variant or unacknowledged selection explicitly waits.
 
 `automation/common/selection.py` supplies the shared eligibility and ranking logic
 for cloud workers and local account rotation under the `quota_priority` strategy.
-Within the Codex pool, accounts with at least 20% remaining in their five-hour
-window rank first; accounts below that threshold remain available as fallbacks
-while every applicable window has quota left. Identified weekly limits have no
-reserve preference. Windows with unknown duration join the short-window headroom
-preference conservatively.
+Within the Codex pool, untouched accounts rank first: every applicable window must
+report exactly 0% used. The quota model has no separate "window started" flag, so
+this all-zero reading is the signal used for an unstarted account. Among accounts
+with usage, those with at least 20% remaining in their five-hour window rank first;
+accounts below that threshold remain available as fallbacks while every applicable
+window has quota left. Identified weekly limits have no reserve preference. Windows
+with unknown duration join the short-window headroom preference conservatively.
 Within each group, maximize **weekly remaining percent / max(hours until weekly
 reset, 0.5)**, favouring usable quota that expires soon and preserving a fresh week.
 Multiple applicable weekly limits use the lowest such score. Ties prefer more

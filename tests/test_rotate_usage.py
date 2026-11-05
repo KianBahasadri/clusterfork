@@ -340,12 +340,14 @@ class QuotaRotationTests(unittest.TestCase):
                 self.assertEqual(backend.current_suffix(), "beta")
                 self.assertEqual(reader.call_count, 0 if cached else 3)
 
-    def test_codex_reset_priority_and_low_quota_fallback_work_live_and_cached(self):
+    def test_codex_untouched_priority_reset_ranking_and_fallback_work_live_and_cached(self):
         backend = self.backends["codex"]
         cache_dir = self.root / "priority-cache"
         cache_dir.mkdir()
         now = time.time()
         scenarios = (
+            ({"alpha": (2, 0, 165), "beta": (0, 0, 167), "zulu": (0, 95, 24)}, "beta"),
+            ({"alpha": (0, 10, 165), "beta": (0, 90, 0.5), "zulu": (0, 0, 168)}, "zulu"),
             ({"alpha": (0, 10, 165), "beta": (0, 90, 3), "zulu": (0, 95, 24)}, "beta"),
             ({"alpha": (80.001, 0, 0.5), "beta": (80, 99, 165), "zulu": (100, 0, 3)}, "beta"),
             ({"alpha": (99, 90, 3), "beta": (90, 0, 165), "zulu": (50, 100, 3)}, "alpha"),

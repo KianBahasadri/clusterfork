@@ -113,6 +113,40 @@ class QuotaSelectionTests(unittest.TestCase):
         self.assertEqual(self.choose([unknown, self.account("healthy", used=(50,))]).account_id, "healthy")
         self.assertIsNone(self.choose([cursor]))
 
+    def test_untouched_codex_accounts_take_priority_over_active_reset_windows(self):
+        untouched = self.timed("untouched", 0, 0, reset_hours=168)
+        no_reset = replace(untouched, windows=tuple(replace(window, resets_at=None)
+                                                  for window in untouched.windows))
+        for fresh in (untouched, no_reset):
+            for active in (self.timed("ricky", 2, 0, reset_hours=165),
+                           self.timed("expiring", 0, 90, reset_hours=0.5)):
+                with self.subTest(fresh=fresh, active=active):
+                    for accounts in ([active, fresh], [fresh, active]):
+                        selected = self.choose(accounts)
+                        self.assertEqual(selected.account_id, "untouched")
+                        self.assertEqual(selected.remaining_percent, 100)
+
+    def test_zero_usage_in_one_window_does_not_make_an_account_untouched(self):
+        expiring = self.timed("expiring", 20, 90, reset_hours=3)
+        for short, weekly in ((0, 10), (0.01, 0)):
+            with self.subTest(short=short, weekly=weekly):
+                active = self.timed("active", short, weekly, reset_hours=165)
+                self.assertEqual(self.choose([active, expiring]).account_id, "expiring")
+
+    def test_untouched_priority_preserves_eligibility_guards(self):
+        untouched = self.timed("untouched", 0, 0, reset_hours=168)
+        active = self.timed("active", 20, 90, reset_hours=3)
+        for ineligible in (replace(untouched, in_use=True),
+                           replace(untouched, observed_at=NOW - 61),
+                           replace(untouched, blocked_until=NOW + 1),
+                           replace(untouched, windows=()),
+                           replace(untouched, windows=(untouched.windows[1],)),
+                           replace(untouched, windows=(replace(untouched.windows[0], resets_at=NOW),
+                                                       untouched.windows[1])),
+                           self.timed("unknown", 0, None, reset_hours=168)):
+            with self.subTest(account=ineligible):
+                self.assertEqual(self.choose([ineligible, active]).account_id, "active")
+
     def test_reset_priority_prefers_quota_expiring_soon_over_a_fresh_week(self):
         fresh = self.timed("fresh", 0, 10, reset_hours=165)
         expiring = self.timed("expiring", 0, 90, reset_hours=3)

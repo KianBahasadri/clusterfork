@@ -118,10 +118,12 @@ def select_account(accounts, profiles, policy, *, now):
             continue
         selection = AccountSelection(account.account_id, account.agent, profile.model,
                                      profile.effort, remaining)
+        # All-zero usage is the quota model's signal for an untouched account.
+        untouched = account.agent == "codex" and all(window.used_percent == 0 for window in account.windows)
         score = max(window.used_percent for window in account.windows)
         if account.agent == "codex":
             score = -_codex_priority(account.windows, now)
-        rank = ({"codex": 0, "cursor": 1}.get(account.agent, 2), below_preferred, score,
+        rank = ({"codex": 0, "cursor": 1}.get(account.agent, 2), not untouched, below_preferred, score,
                 -headroom if account.agent == "codex" else 0, account.agent, account.account_id)
         candidates.append((rank, selection))
     if not candidates:
