@@ -64,6 +64,11 @@ the shared runtime. The Conky binding installs uv, Lua 5.4 and ShellCheck when
 needed, syncs locked dependencies, and sets `CI=1` for pytest so missing Lua
 fails validation rather than skipping renderer coverage.
 
+The Guaranine binding installs pinned Python documentation dependencies from
+`requirements-dev.txt` and runs `bash scripts/validate.sh`, matching its required
+`Clusterfork validation` check. That entry point must gain infrastructure checks
+as Terraform, Ansible, and installer code are introduced.
+
 | Action | Purpose |
 | --- | --- |
 | `discover` | Find real GitHub identity and existing Linear project/team/state UUIDs |
