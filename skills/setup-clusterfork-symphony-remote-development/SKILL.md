@@ -1,9 +1,9 @@
 ---
-name: setup-remote-development
-description: Enroll the current GitHub repository in Clusterfork's shared Linear remote development system, or repair an existing enrollment. Connect an explicitly selected existing Linear project, configure validation, verify the deployed controller mapping and central task workflow, and enable the project label last. Use for repository onboarding; ordinary Todo issue execution needs no setup skill.
+name: setup-clusterfork-symphony-remote-development
+description: Enroll the current GitHub repository in Clusterfork Symphony's shared Linear remote development system, or repair an existing enrollment. Connect an explicitly selected existing Linear project, configure validation, verify the deployed controller mapping and central task workflow, and enable the project label last. Use for repository onboarding; ordinary Todo issue execution needs no setup skill.
 ---
 
-# Set up remote development
+# Set up Clusterfork Symphony remote development
 
 Run once per repository, then use Linear's project label + Todo for daily work.
 Project and repository names may differ. An enrollment request authorizes setup

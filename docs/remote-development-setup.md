@@ -54,7 +54,7 @@ and Terraform; creating a new host alone does not relocate workers.
 
 ## Repository onboarding
 
-The [setup-remote-development skill](../skills/setup-remote-development/SKILL.md)
+The [setup-clusterfork-symphony-remote-development skill](../skills/setup-clusterfork-symphony-remote-development/SKILL.md)
 owns enrollment details. Run its helper from central source against an explicit
 target checkout with existing access; no per-target workflow, runtime pin or new secret.
 
