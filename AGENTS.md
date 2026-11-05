@@ -7,6 +7,7 @@ Clusterfork is a dotfile-style config installer for multiple AI coding agents.
 ## Documentation (read/write)
 
 - **Read first:** For how this repo works, start at `docs/README.md`, then open only the topic files you need. Do not re-derive behavior from filenames alone when a doc covers it.
+- **Local Python and validation:** Read [docs/conventions.md](docs/conventions.md) before running Python commands or checks.
 - **Before non-trivial changes:** Check the relevant doc so you match existing patterns.
 - **After material repository behavior changes:** Update the **one** topic file under `docs/` that owns that fact. Do not copy the same detail into AGENTS.md, README.md, or multiple docs.
 - **Skill documentation boundary:** A skill's own `skills/<name>/SKILL.md` is canonical for its detailed rules and examples. Keep `docs/skills.md` to stable summaries of each skill's purpose, scope, discovery, installation, and invocation. Do not update it for routine instruction wording, component rules, example copy, or reference-asset presentation changes.

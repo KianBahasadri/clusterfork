@@ -13,11 +13,18 @@ where appropriate. Python utilities use the standard library unless documented.
 
 ## Local validation
 
-Run from the repository root:
+Use `uv` for local Python commands, dependency installation and virtual
+environments. Run checks from the repository root with the pinned requirements:
 
 ```bash
-env -u NO_COLOR python3 -m unittest discover -s tests -v
+env -u NO_COLOR uv run --no-project \
+  --with-requirements automation/controller/requirements.txt \
+  python -m unittest discover -s tests -v
 ```
+
+Use the same `uv run` prefix for targeted tests and Python utilities. If a
+persistent environment is needed, create it with `uv venv` and install with
+`uv pip`.
 
 Unset `NO_COLOR` because it overrides the notification tests' forced ANSI output.
 Tests use temporary repositories/homes, fake credentials and mocked services.
