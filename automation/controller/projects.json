@@ -3,7 +3,9 @@
   "generation": "codex-worker-1",
   "notify_user_url": "https://linear.app/kian-finishing-zombie-granola/profiles/kian",
   "steering": {
-    "trusted_user_ids": ["62a4e98c-29f0-4b6c-8062-ede9c6176c1d"]
+    "trusted_user_ids": [
+      "62a4e98c-29f0-4b6c-8062-ede9c6176c1d"
+    ]
   },
   "agent_selection": {
     "strategy": "quota_priority",
@@ -29,15 +31,30 @@
       "ref": "main",
       "auto_merge": true,
       "agent_timeout_minutes": 300,
-      "ready_state_ids": ["ace01594-2daf-44bb-9690-cb0dccc11795"],
+      "ready_state_ids": [
+        "ace01594-2daf-44bb-9690-cb0dccc11795"
+      ],
       "linear_states": {
         "in_progress": "764abaaa-b22c-42bb-8d6f-0c9c67b5f138",
         "blocked": "26518242-2ca2-486c-884c-f9a829c3988f",
         "done": "aa75d2cb-3bba-44e4-a1c8-d875533a600a"
       },
-      "validation_commands": [["python3", "-m", "unittest", "discover", "-s", "tests", "-q"]],
+      "validation_commands": [
+        [
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tests",
+          "-q"
+        ]
+      ],
       "linear_team_id": "62b50878-78f5-4a97-912e-2198fed3836a",
-      "required_checks": ["test", "routing-runtime"]
+      "required_checks": [
+        "test",
+        "routing-runtime"
+      ]
     },
     {
       "project_id": "8a69fdae-5ed0-4751-84b4-d0dfcf737962",
@@ -92,6 +109,35 @@
       ],
       "required_checks": [
         "test"
+      ]
+    },
+    {
+      "project_id": "e1a30ab4-a3c2-42c6-a5f3-63eead40301b",
+      "auto_merge": true,
+      "repository": "klever-lab/guaranine",
+      "workflow": "clusterfork-task.yml",
+      "ref": "main",
+      "linear_team_id": "62b50878-78f5-4a97-912e-2198fed3836a",
+      "ready_state_ids": [
+        "ace01594-2daf-44bb-9690-cb0dccc11795"
+      ],
+      "linear_states": {
+        "in_progress": "764abaaa-b22c-42bb-8d6f-0c9c67b5f138",
+        "blocked": "26518242-2ca2-486c-884c-f9a829c3988f",
+        "done": "aa75d2cb-3bba-44e4-a1c8-d875533a600a"
+      },
+      "validation_commands": [
+        [
+          "npm",
+          "ci"
+        ],
+        [
+          "npm",
+          "test"
+        ]
+      ],
+      "required_checks": [
+        "Clusterfork validation"
       ]
     }
   ]
