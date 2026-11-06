@@ -83,7 +83,10 @@ def identity(provider, auth):
 
 def measure(provider, auth, account_id, model):
     try:
-        windows = READERS[provider](auth, model)
+        if provider == "codex":
+            windows = READERS[provider](auth, model, allow_exhausted=True)
+        else:
+            windows = READERS[provider](auth, model)
         return AccountQuota(account_id, provider, model, time.time(), windows), None
     except UsageError as error:
         return None, str(error)
@@ -146,15 +149,21 @@ def read_cached_snapshots(provider, logins, model, max_age_seconds=300):
             windows = []
             for w in raw_windows:
                 if not isinstance(w, dict):
+                    if provider == "codex":
+                        return None
                     continue
                 used = w.get("usedPercent")
                 if not finite_number(used):
+                    if provider == "codex":
+                        return None
                     continue
                 reset = w.get("resetAtEpoch")
                 if reset is None and "resetsAt" in w:
                     try:
                         reset = timestamp(w["resetsAt"])
                     except Exception:
+                        if provider == "codex":
+                            return None
                         reset = None
                 duration_sec = w.get("windowSeconds")
                 duration_min = duration_sec / 60 if finite_number(duration_sec) else None
@@ -189,6 +198,70 @@ def codex_profiles_in_use():
                 and fields[2].startswith("codex - ")):
             profiles.add(fields[2].removeprefix("codex - "))
     return profiles
+
+
+def probe_profiles(backend, provider, logins, aliases, model):
+    print(f"{backend.command}: checking quota for {len(logins)} saved accounts", flush=True)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        pending = {account_id: pool.submit(measure_logins, provider, choices, account_id, model)
+                   for account_id, choices in logins.items()}
+        snapshots = []
+        measured_profiles = {}
+        for account_id, future in pending.items():
+            snapshot, error, name = future.result()
+            if snapshot is not None:
+                snapshots.append(snapshot)
+                measured_profiles[account_id] = name
+            else:
+                print(f"  {', '.join(aliases[account_id])}: {error}", file=sys.stderr)
+    return snapshots, measured_profiles
+
+
+def choose_codex_profile(backend, logins, aliases, profile, policy, current):
+    busy_profiles = codex_profiles_in_use()
+    busy_ids = {account_id for account_id, names in aliases.items() if busy_profiles.intersection(names)}
+    if busy_ids:
+        busy_names = sorted(name for account_id in busy_ids for name in aliases[account_id])
+        print(f"{backend.command}: skipping accounts in open Codex sessions: {', '.join(busy_names)}", flush=True)
+
+    snapshots, measured_profiles = {}, {}
+    for busy in (False, True):
+        candidates = {account_id: choices for account_id, choices in logins.items()
+                      if (account_id in busy_ids) == busy}
+        if not candidates:
+            continue
+        # An idle winner never needs cache coverage or a probe of busy accounts.
+        cached = read_cached_snapshots("codex", candidates, profile.model,
+                                       max_age_seconds=min(300, policy.max_snapshot_age_seconds))
+        if cached is not None:
+            readings, names = cached
+            print(f"{backend.command}: checking quota from cache for {len(candidates)} saved accounts", flush=True)
+        else:
+            readings, names = probe_profiles(backend, "codex", candidates, aliases, profile.model)
+        snapshots.update((snapshot.account_id, snapshot) for snapshot in readings)
+        measured_profiles.update(names)
+        selected = select_account(readings, {"codex": profile}, policy, now=time.time())
+        if selected is not None:
+            name = names[selected.account_id]
+            print(f"  quota: at least {selected.remaining_percent:g}% remaining")
+            if busy:
+                print(f"{backend.command}: using {name}: tier 2 (busy, with fresh quota)", flush=True)
+            return name
+
+    def last_resort(account_id):
+        snapshot = snapshots.get(account_id)
+        known = snapshot is not None and bool(snapshot.windows) and all(
+            finite_number(window.used_percent) and 0 <= window.used_percent <= 100
+            for window in snapshot.windows
+        )
+        remaining = 100 - max(window.used_percent for window in snapshot.windows) if known else 0
+        name = measured_profiles.get(account_id) or min(aliases[account_id], key=lambda name: (name != current, name))
+        return (not known, -remaining, account_id in busy_ids, name != current, name)
+
+    account_id = min(logins, key=last_resort)
+    name = last_resort(account_id)[-1]
+    print(f"{backend.command}: using {name}: tier 3 (last resort, without fresh quota)", flush=True)
+    return name
 
 
 def choose_profile(backend, names):
@@ -229,14 +302,7 @@ def choose_profile(backend, names):
         raise UsageError(f"no eligible saved profiles (excluded: {', '.join(sorted(EXCLUDED_AUTO_PROFILES))})")
 
     if provider == "codex":
-        busy_profiles = codex_profiles_in_use()
-        busy_ids = {account_id for account_id, names in aliases.items() if busy_profiles.intersection(names)}
-        if busy_ids:
-            busy_names = sorted(name for account_id in busy_ids for name in aliases[account_id])
-            print(f"{backend.command}: skipping accounts in open Codex sessions: {', '.join(busy_names)}", flush=True)
-            logins = {account_id: choices for account_id, choices in logins.items() if account_id not in busy_ids}
-            if not logins:
-                raise UsageError("all eligible saved Codex accounts are already in use")
+        return choose_codex_profile(backend, logins, aliases, profile, policy, current)
 
     now = time.time()
     cached = read_cached_snapshots(provider, logins, profile.model)
@@ -249,23 +315,9 @@ def choose_profile(backend, names):
             print(f"  quota: at least {selected.remaining_percent:g}% remaining")
             return cached_profiles[selected.account_id]
 
-    print(f"{backend.command}: checking quota for {len(logins)} saved accounts", flush=True)
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        pending = {account_id: pool.submit(measure_logins, provider, choices, account_id, profile.model)
-                   for account_id, choices in logins.items()}
-        snapshots = []
-        measured_profiles = {}
-        for account_id, future in pending.items():
-            snapshot, error, name = future.result()
-            if snapshot is not None:
-                snapshots.append(snapshot)
-                measured_profiles[account_id] = name
-            else:
-                print(f"  {', '.join(aliases[account_id])}: {error}", file=sys.stderr)
+    snapshots, measured_profiles = probe_profiles(backend, provider, logins, aliases, profile.model)
     selected = select_account(snapshots, {provider: profile}, policy, now=time.time())
     if selected is None:
-        if provider == "codex":
-            raise UsageError("no account has fresh quota remaining in every applicable window")
         raise UsageError(f"no account has fresh quota with at least {policy.min_remaining_percent:g}% remaining in every window")
     print(f"  quota: at least {selected.remaining_percent:g}% remaining")
     return measured_profiles[selected.account_id]

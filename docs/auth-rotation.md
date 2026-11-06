@@ -38,15 +38,31 @@ saved profile is sufficient. Aliases with
 the same known identity share a quota probe, preferring the current login and
 trying another saved login if its credentials are rejected.
 
-Bare `rotate-codex` excludes accounts already used by live Codex panes in the
-current tmux server, including detached sessions, before ranking quota. It reads
-the `codex - NAME` launch labels created by `cc`; aliases of an occupied account
-are excluded together. Dead panes and panes no longer running Codex do not count.
-If every eligible account is occupied, rotation fails without changing selection.
-Explicit profile selection still works. Detection uses existing tmux labels, so
-unlabeled/direct sessions and other tmux servers or machines are outside its scope;
-when tmux is unavailable, selection uses quota alone. It does not reserve accounts
-against simultaneous launches.
+Bare `rotate-codex` uses the first nonempty tier below among saved profiles with
+readable credentials, excluding `kian` and its account aliases:
+
+1. Idle accounts with fresh quota accepted by the shared selector. Keep its
+   untouched-account and weekly-headroom ranking; busy accounts need no probe or
+   cache coverage when this tier has a winner.
+2. Busy accounts with fresh quota, using the same ranking. These accounts are
+   probed, or read from a fresh covering cache, only when tier 1 has no winner.
+3. Last resort: all remaining eligible profiles, including exhausted, unknown,
+   rejected, stale, reset or incomplete readings. Complete known percentages rank
+   ahead of unknown/rejected readings, then highest worst-window remaining percent
+   (including zero), idle over busy, current login alias, and stable profile name.
+   Provider exhaustion flags count as zero available quota.
+
+An eligible saved Codex profile is always selected, even when every account is
+busy or depleted. A fallback line names the profile and tier 2 or 3. The initial
+line listing accounts skipped as a first choice remains. No saved profiles, or
+no readable non-excluded profiles, still fail without changing selection.
+
+Occupancy comes from live Codex panes in the current tmux server, including
+detached sessions, using the `codex - NAME` launch labels created by `cc`. Aliases
+of an occupied account are busy together. Dead panes and panes no longer running
+Codex do not count. Unlabeled/direct sessions and other tmux servers or machines
+are outside detection's scope; when tmux is unavailable, all accounts count as
+idle. This does not reserve accounts against simultaneous launches.
 
 | Command | Quota source |
 | --- | --- |
@@ -63,14 +79,20 @@ refreshing credentials or sending model prompts. When an account usage cache
 is present, fresh (within 300 seconds), and covers the eligible logins, automatic
 selection reads the cached quota snapshots directly for sub-second speed; otherwise
 independent accounts are probed concurrently via live HTTP with 15-second timeouts.
+Codex checks coverage separately for each tier and also requires the registry's
+snapshot age limit (currently 60 seconds); incomplete Codex windows trigger a live
+probe instead of establishing fresh capacity.
 Codex/Cursor consider only eligible local logins; automatic selection never installs
 remote credentials or reserves a cloud account. OpenCode profiles need an
 `opencode-go` API key; other provider entries alone do not establish Go capacity.
 
 Automatic selection excludes the personal profile `kian` and any alias sharing its
 account identity (`ROTATE_EXCLUDE_PROFILES`), reserving it for explicit offline
-choice. Unknown, rejected, stale, reset or depleted readings are ineligible. If no account
-qualifies, the command exits 1 and retains the current credentials/selection.
+choice. For the other five providers, unknown, rejected, stale, reset or depleted
+readings are ineligible. If none qualifies with the required reserve, the command
+exits 1 and retains the current credentials/selection. Codex uses the local ladder
+above; cloud worker/controller admission remains on the strict shared selector,
+with no occupancy or depleted-quota fallback and one task per account.
 Explicit `rotate-* NAME` remains an offline choice and can select any saved profile
 without a quota check. Expired credentials must be renewed by their provider CLI.
 

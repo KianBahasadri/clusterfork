@@ -58,7 +58,7 @@ def request_json(url, token, *, body=None, headers=None):
         raise UsageError("quota request unavailable") from None
 
 
-def codex(auth, model):
+def codex(auth, model, *, allow_exhausted=False):
     tokens = auth["tokens"]
     data = request_json("https://chatgpt.com/backend-api/wham/usage", tokens["access_token"],
                         headers={"ChatGPT-Account-Id": tokens["account_id"]})
@@ -68,7 +68,8 @@ def codex(auth, model):
             buckets.append((model, extra["rate_limit"]))
     windows = []
     for name, bucket in buckets:
-        if bucket.get("allowed") is False or bucket.get("limit_reached") is True:
+        exhausted = bucket.get("allowed") is False or bucket.get("limit_reached") is True
+        if exhausted and not allow_exhausted:
             raise UsageError("account quota is exhausted")
         for key in ("primary_window", "secondary_window"):
             window = bucket.get(key)
@@ -76,6 +77,10 @@ def codex(auth, model):
                 seconds = window.get("limit_window_seconds")
                 windows.append(QuotaWindow(window.get("used_percent"), timestamp(window.get("reset_at")),
                                            f"{name}/{key}", seconds / 60 if finite_number(seconds) else None))
+        if exhausted:
+            # Local rotation retains this reading for its last resort. A provider
+            # exhaustion flag takes precedence over any positive window headroom.
+            windows.append(QuotaWindow(100, name=f"{name}/exhausted"))
     return tuple(windows)
 
 
