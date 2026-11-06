@@ -193,10 +193,19 @@ class Driver:
                 if current.active:
                     self.observe_execution(current)
                     current = self.controller.inspect(current.task_id)
-                    if (runtime_ready and current.active and current.attempt.get("retry_kind")
+                    if (current.active and current.attempt.get("retry_kind")
                             and current.attempt["retry_at"] <= self.clock()):
+                        pinned = self.controller.drain_retry_runtime(current.task_id, now=self.clock())
+                        if pinned and pinned != self.runtime_sha:
+                            continue
+                        if not runtime_ready:
+                            if not pinned:
+                                continue
+                            engine = self.runtime_route(self.route(current), pinned)
+                            if self.github.branch_sha(engine) != pinned:
+                                continue  # A deleted/moved runtime tag cannot authorize repair.
                         issue = self.linear.issue(current.issue_id)
-                        self.apply(Retry(current.task_id, self.spec(issue, self.route(current)),
+                        self.apply(Retry(current.task_id, self.spec(issue, self.route(current), runtime_sha=pinned or None),
                                          current.reason, current.attempt["retry_kind"]))
             except Rejected:
                 pass  # A newer command or an explicit hold owns the next decision.
