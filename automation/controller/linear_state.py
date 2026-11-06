@@ -45,9 +45,10 @@ def workflow(db, task_id):
 
 def human_withdrawal(db, task):
     latest, policy = intent(db, task['issue_id']), workflow(db, task['task_id'])
-    from .autonomy import enabled
+    from .autonomy import enabled, retired_states
     if (latest and policy and enabled(db)
-            and latest['transition']['to_state'] in {*policy['ready'], policy.get('in_progress'), policy.get('blocked')}
+            and latest['transition']['to_state'] in {*policy['ready'], policy.get('in_progress'),
+                                                     policy.get('blocked'), *retired_states(db)}
             and not latest['withdrawn'] and not latest['conflicted']):
         return False
     return bool(latest and policy and latest['changed_at'] >= task['review_submitted_at'] and (
@@ -71,13 +72,6 @@ def observed_eligibility(db, task, observation):
             or any(not isinstance(policy[key], str) for key in required - {'ready'})):
         raise Rejected('Invalid Linear workflow observation')
     if task:
-        previous = workflow(db, task['task_id']) or {}
-        from .autonomy import enabled
-        if (enabled(db) and not policy['blocked'] and previous.get('blocked')
-                and policy['state'] == previous['blocked']):
-            # Retain an old display state only until its Todo migration lands.
-            # It cannot become a permanent eligibility or publication gate.
-            policy = {**policy, 'blocked': previous['blocked']}
         db.execute('INSERT INTO linear_workflows VALUES (?,?) ON CONFLICT(task_id) DO UPDATE SET policy=excluded.policy',
                    (task['task_id'], json.dumps(policy)))
     if not observation.eligible or policy['type'] in {'canceled', 'completed'}:
@@ -86,8 +80,8 @@ def observed_eligibility(db, task, observation):
         return False
     if policy['state'] in policy['ready']:
         return True
-    from .autonomy import enabled
-    if enabled(db) and task and policy['state'] in {policy['blocked'], policy['in_progress']}:
+    from .autonomy import enabled, retired_states
+    if enabled(db) and task and policy['state'] in {policy['blocked'], policy['in_progress'], *retired_states(db)}:
         return True
     if not task or policy['state'] != policy['in_progress']:
         return False
@@ -128,6 +122,12 @@ def desired_state(db, task):
                  attempt.get('attempt_kind') == 'repair' and attempt.get('retry_kind') != 'capacity') else policy['ready'][0])
     epoch = identity(task['task_id'], 'linear_state', task['review_cycle'], task['current_attempt'], state,
                      task['review_attention_at'] if state == policy['blocked'] else 0)
+    if enabled(db):
+        # Returning to Todo after failure is a new projection, even if this
+        # attempt already confirmed Todo at admission. Stable retry/intent
+        # identities prevent both lost transitions and duplicate write loops.
+        epoch = identity(epoch, 'autonomous', latest['action_id'] if latest else '',
+                         attempt.get('retry_kind', ''), attempt.get('retry_at', 0))
     return epoch, state
 
 
@@ -175,10 +175,14 @@ def update_projection(db, task, command):
             db.execute("UPDATE effects SET state='done',payload=? WHERE effect_id=?", (json.dumps(payload), command.effect_id))
             return False
         observation, policy = command.observation, workflow(db, task['task_id'])
+        from .autonomy import enabled, retired_states
+        allowed = {*policy['ready'], policy['in_progress'], policy['blocked'], payload['state']}
+        if enabled(db):
+            allowed.update(retired_states(db))
         if observation.get('state') == payload['state']:
             return True  # Observation alone can acknowledge an already applied effect.
         if (observation.get('structural') is not True or observation.get('type') in {'completed', 'canceled'}
-                or observation.get('state') not in {*policy['ready'], policy['in_progress'], policy['blocked'], payload['state']}):
+                or observation.get('state') not in allowed):
             return False
         payload['issued'] = True
     payload['outcome'] = command.outcome

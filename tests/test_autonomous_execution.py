@@ -10,9 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'automation'))
 from common.policy import AUTONOMOUS_RESULT_SCHEMA, review_prompt, validate_result
 from controller.core import Controller
+from controller.autonomy import RETIRED, retired_states
 from controller.linear_state import desired_state, workflow
 from controller.model import (Admit, Assign, EvidenceChanged, Review, Role, Retry, Rejected,
-                              InboxQueued, ContextObserved, Finish, StepResult, identity)
+                              InboxQueued, ContextObserved, Finish, StepResult, ProjectionUpdated, identity)
 from controller.store import Database
 from common.routing import Registry
 from common.reporting import worker_branch
@@ -173,23 +174,29 @@ class AutomaticExecutionTests(unittest.TestCase):
         self.assertFalse(f.controller.inspect(held.task_id).eligible)
         f.external(held)
         with f.database.transaction() as db:
-            db.execute("DELETE FROM metadata WHERE key='execution:adopted-v1'")
+            db.execute("DELETE FROM metadata WHERE key='execution:adopted-v2'")
         f.controller = Controller(f.database, autonomous=True)
         adopted = f.controller.inspect(held.task_id)
         self.assertFalse(adopted.review_attention)
         self.assertNotIn('explicitly move the issue to Todo', adopted.reason)
-        # The new registry has no attention mapping. The persisted mapping is
-        # accepted only long enough to project the old issue back into Todo.
+        # The new registry has no attention mapping. A durable retired-state
+        # record keeps old intent harmless after the issue returns to Todo.
         migrated = f.apply(replace(f.issue(), workflow={'state': 'attention', 'type': 'started', 'ready': ['todo'],
                                                         'in_progress': 'progress', 'blocked': '', 'done': 'done'}))
         self.assertTrue(migrated.eligible)
         with f.database.transaction() as db:
             self.assertEqual(desired_state(db, dict(db.execute('SELECT * FROM tasks WHERE task_id=?',
                                                              (held.task_id,)).fetchone()))[1], 'todo')
-        f.apply(replace(f.issue(), workflow={'state': 'todo', 'type': 'unstarted', 'ready': ['todo'],
-                                             'in_progress': 'progress', 'blocked': '', 'done': 'done'}))
+        observed = replace(f.issue(), workflow={'state': 'todo', 'type': 'unstarted', 'ready': ['todo'],
+                                                'in_progress': 'progress', 'blocked': '', 'done': 'done'})
+        self.assertTrue(f.apply(observed).eligible)
         with f.database.transaction() as db:
             self.assertEqual(workflow(db, held.task_id)['blocked'], '')
+        f.database.close()
+        f.database = Database(f.path)
+        self.addCleanup(f.database.close)
+        f.controller = Controller(f.database)
+        self.assertTrue(f.apply(observed).eligible)
 
     def test_explicit_human_pause_still_withdraws_execution(self):
         f = self.f
@@ -203,6 +210,72 @@ class AutomaticExecutionTests(unittest.TestCase):
         self.assertFalse(stopped.review_attention)
         with self.assertRaises(Rejected):
             f.apply(Retry(view.task_id, SPEC, 'paused', 'context'))
+
+    def test_v1_false_pause_recovers_from_projection_history_without_postponing_retry(self):
+        f = self.f
+        held = self.assessment({'invalid': True})
+        deadline = held.attempt['retry_at']
+        f.external(held)
+        observation = replace(f.issue(), workflow={'state': 'todo', 'type': 'unstarted', 'ready': ['todo'],
+                                                   'in_progress': 'progress', 'blocked': '', 'done': 'done'})
+        f.apply(observation)
+        # Replay a v1 database after it lost the live blocked mapping. Its own
+        # old attention projection is proof; a human restoration is not.
+        with f.database.transaction() as db:
+            for state, human in (('attention', False), ('backlog', True), ('done', False)):
+                db.execute('INSERT INTO effects VALUES (?,?,?,?,?)',
+                           (identity(state), held.task_id, 'linear_state',
+                            json.dumps({'state': state, 'attention_at': f.now, 'human': human}), 'done'))
+            db.execute('DELETE FROM metadata WHERE key=?', (RETIRED,))
+            db.execute("DELETE FROM metadata WHERE key='execution:adopted-v2'")
+        event = {'id': held.issue_id, 'type': 'Issue', 'submission': {
+            'actor_id': 'operator', 'from_state': 'todo', 'to_state': 'attention', 'changed_at': f.now}}
+        f.apply(InboxQueued(identity(event), event))
+        self.assertEqual(f.controller.inspect(held.task_id).phase, 'held')
+        f.controller = Controller(f.database, autonomous=True)
+        resumed = f.controller.inspect(held.task_id)
+        self.assertEqual(resumed.phase, 'queued')
+        self.assertEqual(resumed.attempt['retry_at'], deadline)
+        self.assertIn('Automatic diagnosis', resumed.reason)
+        self.assertTrue(f.apply(observation).eligible)
+        with f.database.transaction() as db:
+            self.assertEqual(retired_states(db), {'attention'})
+        f.now += 1
+        pause = {'id': held.issue_id, 'type': 'Issue', 'submission': {
+            'actor_id': 'operator', 'from_state': 'todo', 'to_state': 'backlog', 'changed_at': f.now}}
+        f.apply(InboxQueued(identity(pause), pause))
+        f.controller = Controller(f.database, autonomous=True)
+        self.assertFalse(f.apply(replace(observation, workflow={**observation.workflow,
+                                                               'state': 'backlog', 'type': 'backlog'})).eligible)
+
+    def test_retry_projects_todo_again_after_initial_todo_effect_was_confirmed(self):
+        f = self.f
+        held = self.assessment({'invalid': True})
+        observation = replace(f.issue(), workflow={'state': 'todo', 'type': 'unstarted', 'ready': ['todo'],
+                                                   'in_progress': 'progress', 'blocked': '', 'done': 'done'})
+        f.apply(observation)
+        # Recreate the already-completed pre-upgrade Todo projection. Migration
+        # must create a fresh effect rather than silently reusing that receipt.
+        with f.database.transaction() as db:
+            db.execute('INSERT INTO metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                       (RETIRED, json.dumps(['attention'])))
+            old = identity(held.task_id, 'linear_state', held.review_cycle, held.attempt['attempt_id'], 'todo', 0)
+            db.execute('INSERT OR REPLACE INTO effects VALUES (?,?,?,?,?)',
+                       (old, held.task_id, 'linear_state',
+                        json.dumps({'state': 'todo', 'intent': '', 'outcome': 'confirmed'}), 'done'))
+        attention = replace(observation, workflow={**observation.workflow, 'state': 'attention', 'type': 'started'})
+        f.apply(attention)
+        with f.database.transaction() as db:
+            current = dict(db.execute('SELECT * FROM tasks WHERE task_id=?', (held.task_id,)).fetchone())
+            key, state = desired_state(db, current)
+        self.assertEqual(state, 'todo')
+        self.assertNotEqual(key, old)
+        self.assertTrue(f.apply(ProjectionUpdated(held.task_id, key, 'claimed',
+                         {'structural': True, 'state': 'attention', 'type': 'started'})))
+        f.apply(ProjectionUpdated(held.task_id, key, 'confirmed'))
+        f.apply(EvidenceChanged(held.task_id, held.attempt['attempt_id']))
+        pending = [effect for effect in f.controller.effects('linear_state') if effect['effect_id'] == key]
+        self.assertEqual(pending, [])  # Duplicate diagnosis cannot recreate writes.
 
     def test_production_routes_have_no_attention_state(self):
         registry = Registry.load(ROOT / 'automation/controller/projects.json')
