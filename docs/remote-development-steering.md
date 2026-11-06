@@ -33,6 +33,18 @@ deleting a queued/accepted comment does not change or resend its frozen text;
 post a new comment for another instruction. Empty instructions and text over
 16,000 UTF-8 bytes are rejected, as are unauthorized authors.
 
+Context validation treats a durably recorded, authorized instruction bound to the
+current coding attempt as this separate frozen instruction stream. It does not
+invalidate the run that receives it. The controller's own deterministic steering
+acknowledgements are reporting metadata. This exemption requires the durable
+receipt, matching issue/attempt and author; a textual prefix alone grants nothing.
+Ordinary comments and replies, other attempts' instructions, and actual reviewed
+contract changes still participate in context validation. References in a proven
+receipt expand the same read-only context graph; GitHub reads still require an
+enrolled repository and complete evidence. A context read racing instruction
+intake normalizes the proven receipt without rewriting its cached source or
+material digest. Existing reviewed contracts retain their bindings.
+
 One stable acknowledgement per instruction links the affected run attempt and
 changes from **queued** (no agent confirmation) to **agent accepted** only after
 Codex confirms `turn/steer`. The pinned CLI's [app-server interface](https://developers.openai.com/codex/app-server)
