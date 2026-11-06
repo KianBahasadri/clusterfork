@@ -93,6 +93,10 @@ class Context:
         """
         ids = set()
         with self.database.transaction() as db:
+            for row in db.execute('SELECT data FROM instructions WHERE issue_id=?', (issue['id'],)):
+                ack = json.loads(row[0]).get('ack_id')
+                if ack:
+                    ids.add(ack)
             tasks = db.execute("SELECT task_id FROM tasks WHERE issue_id=?", (issue["id"],)).fetchall()
             for task in tasks:
                 ids.add(comment_id(task[0], "controller-status"))
@@ -112,9 +116,30 @@ class Context:
         owned = {c["id"] for c in issue.get("comments", []) if (c.get("user") or {}).get("id") == self._reporting_actor}
         return (ids | migrated) & owned
 
+    def steering_receipts(self, view):
+        """Only durable, authorized instructions bound to this coding attempt."""
+        if not view.attempt.get('coding_started'):
+            return []
+        from .instructions import bound
+        receipts = []
+        with self.database.transaction() as db:
+            for row in db.execute("SELECT comment_id,data FROM instructions WHERE issue_id=? "
+                                  "AND state IN ('queued','delivering','accepted','uncertain')", (view.issue_id,)):
+                receipt = json.loads(row['data'])
+                if bound(receipt, view):
+                    receipts.append({**receipt, 'comment_id': row['comment_id']})
+        return receipts
+
+    def steering_ids(self, view, issue):
+        if issue['id'] != view.issue_id:
+            return set()
+        accepted = {row['comment_id']: row['author_id'] for row in self.steering_receipts(view)}
+        return {comment['id'] for comment in issue['comments'] if not comment.get('botActor')
+                and comment['id'] in accepted and (comment.get('user') or {}).get('id') == accepted[comment['id']]}
+
     def material(self, view, request, content, *, original=None):
         if request["operation"] == "issue":
-            ignore = self.reporting_ids(content)
+            ignore = self.reporting_ids(content) | self.steering_ids(view, content)
             value = {k: content.get(k) for k in ("id", "identifier", "title", "description", "project", "archivedAt", "trashed")}
             if content["id"] != view.issue_id:
                 prerequisites = {edge.get('issue', {}).get('id') for row in self.sources(view)
@@ -205,6 +230,10 @@ class Context:
 
     def graph(self, view):
         issues, pulls = {view.issue_id, view.identifier}, set()
+        for receipt in self.steering_receipts(view):
+            related, delivery = references({'description': receipt['text']})
+            issues.update(related)
+            pulls.update(delivery)
         for row in self.sources(view):
             if json.loads(row["request"])["operation"] == "issue" and row["status"] == "ok":
                 related, delivery = references(json.loads(row["content"]))
@@ -403,7 +432,14 @@ class Context:
                             continue
                     except (RequestError, ContextError) as exc:
                         raise source_failure(exc, row)
-                    if self.material(view, request, self.sanitize(content), original=json.loads(row["content"])) != row["material"]:
+                    original = json.loads(row['content'])
+                    expected = row['material']
+                    if request['operation'] == 'issue' and self.steering_ids(view, original):
+                        # The first context read can race instruction intake.
+                        # Normalize only proven steering receipts on both sides;
+                        # keep the stored snapshot, material and approval intact.
+                        expected = self.material(view, request, original, original=original)
+                    if self.material(view, request, self.sanitize(content), original=original) != expected:
                         raise source_failure(ContextError("material_evidence_changed"), row)
                 if approved and self.new_sources(view):
                     from .autonomy import enabled
