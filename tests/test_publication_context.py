@@ -117,6 +117,7 @@ class PublicationContextTests(unittest.TestCase):
     def test_unknown_or_foreign_links_do_not_inherit_our_publication_proof(self):
         for url in (self.url + '0', self.url + '?new=requirement',
                     self.url.replace('github.com', 'github.example.com'),
+                    'https://[malformed-host/pull/7',
                     'https://github.com/foreign/repository/pull/7'):
             with self.subTest(url=url):
                 self.start()

@@ -153,7 +153,7 @@ class Context:
                     repository, _, reference = pull_ref(url)
                     if repository == view.repository:
                         return reference
-                except ContextError:
+                except (ContextError, ValueError):
                     pass
             return None
 
