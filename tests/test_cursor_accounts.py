@@ -412,6 +412,81 @@ class CursorWorkerTests(unittest.TestCase):
         self.assertIn(execution_row(self.f)["assigned_account_id"], (self.first, self.second))
         self.assertTrue(all(not home.exists() for home in self.homes))
 
+    def competing_binding(self, should_claim):
+        attempts = []
+        def call(action, **data):
+            if action == 'bind_account':
+                identity = data['account_id']
+                attempts.append(identity)
+                if should_claim(identity, len(attempts)):
+                    pool = self.cursor if identity.startswith('cursor:') else self.codex
+                    pool.claim(identity.removeprefix('cursor:'), 'competing-worker')
+            return self.call(action, **data)
+        self.broker.call = call
+        return attempts
+
+    def test_account_race_tries_another_codex_identity_without_failing_the_phase(self):
+        attempts = self.competing_binding(lambda identity, ordinal: ordinal == 1)
+        with self.execution() as inspect_cursor:
+            self.assertTrue(worker.select_account_for_run(self.broker, self.config, self.heartbeat))
+        self.assertEqual(len(attempts), 2)
+        self.assertNotEqual(attempts[0], attempts[1])
+        self.assertEqual(execution_row(self.f)['assigned_account_id'], attempts[1])
+        self.assertEqual(self.codex.get(attempts[0])[0]['owner'], 'competing-worker')
+        inspect_cursor.assert_not_called()
+
+    def test_races_on_all_codex_accounts_recheck_cursor_fallback_once(self):
+        attempts = self.competing_binding(lambda identity, ordinal: not identity.startswith('cursor:'))
+        with self.execution() as inspect_cursor:
+            self.assertTrue(worker.select_account_for_run(self.broker, self.config, self.heartbeat))
+        self.assertEqual(len(attempts), 3)
+        self.assertEqual(len(set(attempts)), 3)
+        self.assertEqual(execution_row(self.f)['assigned_account_id'], self.reference)
+        self.assertEqual(inspect_cursor.call_count, 1)
+
+    def test_races_on_every_account_record_capacity_wait_without_stealing_leases(self):
+        attempts = self.competing_binding(lambda identity, ordinal: True)
+        with self.execution():
+            self.assertFalse(worker.select_account_for_run(self.broker, self.config, self.heartbeat))
+        self.assertEqual(len(attempts), 3)
+        self.assertEqual(len(set(attempts)), 3)
+        row = execution_row(self.f)
+        self.assertEqual(row['status'], 'waiting_for_quota')
+        reasons = json.loads(row['quota_wait'])
+        self.assertEqual((reasons['codex_busy'], reasons['cursor_busy']), (2, 1))
+        self.assertNotIn('assigned_account_id', row)
+        self.assertEqual(self.f.controller.inspect(self.f.view.task_id).attempt['retry_kind'], 'capacity')
+        self.assertTrue(all(not home.exists() for home in self.homes))
+        for identity in attempts:
+            pool = self.cursor if identity.startswith('cursor:') else self.codex
+            self.assertEqual(pool.get(identity.removeprefix('cursor:'))[0]['owner'], 'competing-worker')
+
+    def test_lost_binding_acknowledgement_is_idempotent_and_cannot_change_identity(self):
+        with self.execution():
+            self.assertTrue(worker.select_account_for_run(self.broker, self.config, self.heartbeat))
+        identity = execution_row(self.f)['assigned_account_id']
+        before = self.codex.get(identity)[0]
+        self.assertEqual(self.call('bind_account', account_id=identity), {'account_id': identity})
+        after = self.codex.get(identity)[0]
+        self.assertEqual((before['owner'], before['fence'], before['lease_until']),
+                         (after['owner'], after['fence'], after['lease_until']))
+        with self.assertRaises(HTTPError) as caught:
+            self.call('bind_account', account_id=self.reference)
+        self.assertEqual(caught.exception.code, 403)
+
+    def test_binding_authority_loss_does_not_become_an_account_capacity_wait(self):
+        def reject(action, **data):
+            if action == 'bind_account':
+                error = HTTPError('https://broker/bind_account', 403, 'authorization held', {}, None)
+                error.clusterfork_action = action
+                raise error
+            return self.call(action, **data)
+        self.broker.call = reject
+        with self.execution(), self.assertRaises(HTTPError) as caught:
+            worker.select_account_for_run(self.broker, self.config, self.heartbeat)
+        self.assertEqual(caught.exception.code, 403)
+        self.assertFalse(any(action == 'finish' for action, _ in self.calls))
+
     def test_busy_and_exhausted_codex_allow_cursor_without_exposing_other_credentials_to_agent(self):
         self.used = 100
         self.codex.claim(self.first, "another-worker")

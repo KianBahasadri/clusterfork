@@ -58,7 +58,7 @@ class Broker:
         principal = authorize_job(claims, view, identity_route, action)
         current_session=view.session(principal.phase)
         selecting=not current_session or (not current_session['agent_started'] and (
-            not current_session['account_id'] or action=='heartbeat'))
+            not current_session['account_id'] or action in {'heartbeat', 'bind_account'}))
         role=(Role.REVIEW_SELECT if principal==Role.REVIEW else Role.CODING_SELECT) if selecting else principal
         if role.selector and action not in SELECTOR_ACTIONS:
             raise Rejected('Initial account selection must finish before execution access')

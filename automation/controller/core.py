@@ -188,8 +188,12 @@ class Controller:
                 raise Rejected('Related context could not be validated') from None
         else:
             raise error
-        self.apply(EvidenceChanged(task_id, attempt_id), now=now)
-        raise Rejected('Related context requires a fresh readiness assessment') from None
+        from common.policy import redact_review_text
+        category = f'http_{error.status}' if isinstance(error, RequestError) else error.status
+        source = redact_review_text(getattr(error, 'context_source', 'context manifest'))[:900]
+        detail = f'Context validation {category}: {source}. Related context requires a fresh readiness assessment.'
+        self.apply(EvidenceChanged(task_id, attempt_id, detail), now=now)
+        raise Rejected(detail) from None
 
     @staticmethod
     def observes_workflow(known, policy):
@@ -503,7 +507,7 @@ class Controller:
                                                    'Reviewed context changed; approval is invalid and a fresh assessment is required.', now)
                 elif isinstance(command, EvidenceChanged):
                     self._review_attention(db, task, attempt, 'context_changed',
-                                           'Related context changed, conflicts with approval, or is unavailable; a fresh readiness assessment is required.', now)
+                                           command.detail or 'Related context changed, conflicts with approval, or is unavailable; a fresh readiness assessment is required.', now)
                 else:
                     raise Rejected("Unsupported controller command")
             # Local projection shares this commit. Export runs on a separate thread,

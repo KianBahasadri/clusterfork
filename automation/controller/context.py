@@ -20,6 +20,13 @@ def source_text(content):
     return content if isinstance(content, str) else json.dumps(content, ensure_ascii=True, sort_keys=True, indent=2)
 
 
+def source_failure(error, row):
+    """Attach a canonical source identity, never retrieved content or raw errors."""
+    request = json.loads(row['request'])
+    error.context_source = f"{request['operation']} {request.get('target', '')} [source {row['source_key']}]"
+    return error
+
+
 def rows(db, attempt):
     return [dict(r) for r in db.execute("SELECT * FROM context_sources WHERE attempt_id=? ORDER BY source_key", (attempt,))]
 
@@ -377,21 +384,27 @@ class Context:
                         if row["required"]:
                             if row['status'] == 'temporary_unavailable':
                                 raise RequestError(503)
-                            raise ContextError("required_source_unavailable")
+                            raise source_failure(ContextError("required_source_unavailable"), row)
                         continue
-                    if request["operation"] == "issue":
-                        content = linear_issue(self.linear, request["target"], check)
-                        if self._reporting_actor is None:
-                            self._reporting_actor = self.linear.viewer_id()
-                    elif request["operation"] == "pull":
-                        repo, number = self.repository(view, request["target"], repositories, check)
-                        content = repo.pull(number)
-                    else:
-                        # Immutable blobs/trees stay in the durable cache. The
-                        # owning PR recheck proves identity and continued access.
-                        continue
+                    if (approved and row['required']
+                            and row['read_until'] < len(source_text(json.loads(row['content'])))):
+                        raise source_failure(ContextError('required_source_incomplete'), row)
+                    try:
+                        if request["operation"] == "issue":
+                            content = linear_issue(self.linear, request["target"], check)
+                            if self._reporting_actor is None:
+                                self._reporting_actor = self.linear.viewer_id()
+                        elif request["operation"] == "pull":
+                            repo, number = self.repository(view, request["target"], repositories, check)
+                            content = repo.pull(number)
+                        else:
+                            # Immutable blobs/trees stay in the durable cache.
+                            # Their owning PR proves identity and continued access.
+                            continue
+                    except (RequestError, ContextError) as exc:
+                        raise source_failure(exc, row)
                     if self.material(view, request, self.sanitize(content), original=json.loads(row["content"])) != row["material"]:
-                        raise ContextError("material_evidence_changed")
+                        raise source_failure(ContextError("material_evidence_changed"), row)
                 if approved and self.new_sources(view):
                     from .autonomy import enabled
                     with self.database.transaction() as db:
@@ -408,11 +421,11 @@ class Context:
                     if not approval:
                         raise ContextError("missing_approval")
                     sealed = {r["key"]: r["material"] for r in json.loads(approval[0])}
-                    if any(r["reviewed"] and sealed.get(r["source_key"]) != r["material"] for r in self.sources(view)):
-                        raise ContextError("material_evidence_changed")
                     for row in self.sources(view):
+                        if row['reviewed'] and sealed.get(row['source_key']) != row['material']:
+                            raise source_failure(ContextError('material_evidence_changed'), row)
                         if row["required"] and row["read_until"] < len(source_text(json.loads(row["content"]))):
-                            raise ContextError("required_source_incomplete")
+                            raise source_failure(ContextError("required_source_incomplete"), row)
             check()
             with self.database.transaction() as db:
                 return revision(db, view.attempt["attempt_id"])

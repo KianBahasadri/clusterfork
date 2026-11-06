@@ -96,7 +96,7 @@ class Broker:
                                                    "request_id": CONTEXT.get()["request_id"]})
                             break
                         except (HTTPError, URLError, TimeoutError) as exc:
-                            if (action not in {"start", "checkout", "github", "context", "progress", "command", "step_result"}
+                            if (action not in {"start", "checkout", "github", "context", "progress", "command", "step_result", "bind_account"}
                                     or (isinstance(exc, HTTPError) and exc.code != 503)
                                     or attempt == len(self.retry_delays)):
                                 raise
@@ -253,7 +253,7 @@ def clean_environment():
             if key in {"PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "SYSTEMROOT"}}
 
 
-def choose_account(broker, config, worker_heartbeat, *, preflight=False, replacement=False, deadline=None):
+def choose_account(broker, config, worker_heartbeat, *, preflight=False, replacement=False, deadline=None, unavailable=()):
     profiles = ({name: AgentProfile(**profile) for name, profile in config["profiles"].items()}
                 if config.get("profiles") else {config.get("provider", "codex"): AgentProfile(config["model"], config["effort"])})
     policy = SelectionPolicy(**config["selection"])
@@ -273,6 +273,9 @@ def choose_account(broker, config, worker_heartbeat, *, preflight=False, replace
     identities = sorted(identities, key=lambda identity: account_provider(identity) == "cursor")
     for identity in identities:
         provider = account_provider(identity)
+        if identity in unavailable:
+            reasons[provider + '_busy'] = reasons.get(provider + '_busy', 0) + 1
+            continue
         if provider not in profiles or replacement and provider != "codex":
             continue
         if provider == "cursor" and select_account(snapshots, profiles, policy, now=time.time()):
@@ -316,20 +319,31 @@ def select_account_for_run(broker, config, heartbeat):
         # Retrying the selector must preserve an existing run binding.
         return True
     snapshots, profiles, policy = choose_account(broker, config, heartbeat, preflight=True)
-    selected = select_account(snapshots, profiles, policy, now=time.time())
-    if selected is None:
-        broker.call("finish", status="waiting_for_quota", quota_wait=config.get("quota_wait", {}))
-        return False
-    for delay in (1, 2, 3):
+    unavailable, refreshed = set(), False
+    while True:
+        selected = select_account(snapshots, profiles, policy, now=time.time())
+        if selected is None:
+            if unavailable and not refreshed:
+                # Initial Codex availability may have skipped Cursor inspection.
+                # Recheck once, excluding identities lost to competing workers.
+                snapshots, profiles, policy = choose_account(broker, config, heartbeat, preflight=True,
+                                                             unavailable=unavailable)
+                refreshed = True
+                continue
+            broker.call("finish", status="waiting_for_quota", quota_wait=config.get("quota_wait", {}))
+            return False
+        snapshots = [row for row in snapshots if row.account_id != selected.account_id]
         try:
             broker.call("bind_account", account_id=selected.account_id)
-            break
+            return True
         except HTTPError as exc:
-            if exc.code == 409 and delay < 3:
-                time.sleep(delay)
+            if exc.code in {404, 409} and getattr(exc, 'clusterfork_action', 'bind_account') == 'bind_account':
+                unavailable.add(selected.account_id)
+                provider = account_provider(selected.account_id)
+                reasons = config.setdefault('quota_wait', {})
+                reasons[provider + '_busy'] = reasons.get(provider + '_busy', 0) + 1
                 continue
             raise
-    return True
 
 
 @contextmanager
@@ -429,7 +443,7 @@ def run_codex(broker, config, worker_heartbeat, directory, *, validate=None):
                     broker, config, worker_heartbeat, replacement=True, deadline=deadline)
         except HTTPError as exc:
             if (exc.code in {404, 409} and not ran_agent
-                    and getattr(exc, "clusterfork_action", "claim") == "claim"):
+                    and getattr(exc, "clusterfork_action", "claim") in {"claim", "bind_account"}):
                 continue
             raise
         except CodexError:
