@@ -359,7 +359,7 @@ class Context:
         with self.lock_for(view):
             check = self.bounded(check)
             check()
-            with context_read_scope(lambda: self.check_budget(view, check)):
+            with context_read_scope(lambda: self.check_budget(view, check), after=check):
                 op = request["operation"]
                 if op != "manifest":
                     root = self.root(view, check)
@@ -430,7 +430,19 @@ class Context:
         """Compare material evidence; keep the original revisions for coding."""
         with self.lock_for(view):
             check = self.bounded(check)
-            with context_read_scope(lambda: self.check_budget(view, check)):
+            remaining = MAX_REMOTE_CALLS
+
+            def reserve():
+                nonlocal remaining
+                check()
+                if not remaining:
+                    raise ContextError('budget_exceeded')
+                remaining -= 1
+
+            # Mandatory guards must not consume the agent's discovery allowance.
+            # Each pass still has a finite call/deadline limit and checks current
+            # authority both before and after every HTTP read.
+            with context_read_scope(reserve, after=check):
                 for row in self.sources(view):
                     check()
                     request = json.loads(row["request"])

@@ -98,9 +98,12 @@ cancellation and the original worker deadline before and after retrieval.
 
 Retrieval allows 20 upstream pages per connection, 12,000 characters per tool
 page, 1 MB per source, 8 MB/100 sources per attempt (plus one bounded failure
-receipt), and 600 upstream HTTP calls including revalidation. Each fetch or
-revalidation has a 12-second budget; individual HTTP reads allow five seconds and
-2 MB. Searches allow 50 files/1 MB under the requested path; narrow the path when
+receipt), and 600 discovery HTTP attempts per task attempt. Mandatory revalidation
+has a separate limit of 600 HTTP attempts per pass, so repeated guards do not
+exhaust the allowance needed to retrieve implementation evidence. Each outbound
+attempt is counted once, including failed HTTP reads; post-read authority checks
+spend no calls. Each fetch or revalidation has a 12-second budget; HTTP reads allow
+five seconds and 2 MB. Searches allow 50 files/1 MB under the requested path; narrow the path when
 limits are reached. Partial results never establish complete evidence.
 `test_related_context.py` covers the two-repository contract and approval rules;
 `test_context_transport.py` exercises signed HTTP, native Codex MCP and Cursor ACP
