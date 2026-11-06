@@ -137,6 +137,29 @@ class Context:
         return {comment['id'] for comment in issue['comments'] if not comment.get('botActor')
                 and comment['id'] in accepted and (comment.get('user') or {}).get('id') == accepted[comment['id']]}
 
+    def publication_ids(self, view, issue):
+        """Ignore only this issue's own durably verified publication links."""
+        if issue['id'] != view.issue_id:
+            return set()
+        with self.database.transaction() as db:
+            publications = [row[0] for row in db.execute(
+                "SELECT pull_request FROM attempts WHERE task_id=? AND coding_started=1 "
+                "AND publication_checked=1 AND pull_state IN ('open','merged','closed')",
+                (view.task_id,))]
+
+        def canonical(url):
+            if isinstance(url, str):
+                try:
+                    repository, _, reference = pull_ref(url)
+                    if repository == view.repository:
+                        return reference
+                except ContextError:
+                    pass
+            return None
+
+        owned = {reference for url in publications if (reference := canonical(url))}
+        return {item['id'] for item in issue['attachments'] if canonical(item.get('url')) in owned}
+
     def material(self, view, request, content, *, original=None):
         if request["operation"] == "issue":
             ignore = self.reporting_ids(content) | self.steering_ids(view, content)
@@ -166,7 +189,9 @@ class Context:
                     known = {r["id"] for r in original["dependencies"]}
                     dependencies = [r for r in dependencies if r["type"] != "blocks" or r["id"] in known]
             value["dependencies"] = sorted(dependencies, key=lambda r: r["id"])
-            value["attachments"] = sorted(content["attachments"], key=lambda r: r["id"])
+            publication = self.publication_ids(view, content)
+            value["attachments"] = sorted((a for a in content['attachments'] if a['id'] not in publication),
+                                          key=lambda r: r['id'])
         elif request["operation"] == "pull":
             value = {k: v for k, v in content.items() if k != "updated_at"}
         else:
@@ -434,9 +459,10 @@ class Context:
                         raise source_failure(exc, row)
                     original = json.loads(row['content'])
                     expected = row['material']
-                    if request['operation'] == 'issue' and self.steering_ids(view, original):
-                        # The first context read can race instruction intake.
-                        # Normalize only proven steering receipts on both sides;
+                    if request['operation'] == 'issue' and (self.steering_ids(view, original)
+                                                           or self.publication_ids(view, original)):
+                        # The first read can race instruction/publication proof.
+                        # Normalize only durable owned receipts on both sides;
                         # keep the stored snapshot, material and approval intact.
                         expected = self.material(view, request, original, original=original)
                     if self.material(view, request, self.sanitize(content), original=original) != expected:
