@@ -43,7 +43,8 @@ class Controller:
                 if human_withdrawal(db, task):
                     continue
                 attempt = dict(db.execute('SELECT * FROM attempts WHERE attempt_id=?', (task['current_attempt'],)).fetchone() or {})
-                self._automatic_retry(db, task, attempt, 'policy_upgrade', task['reason'], 0)
+                detail = task['reason'].split('\nResolve the failure or supply the evidence,', 1)[0]
+                self._automatic_retry(db, task, attempt, 'policy_upgrade', detail, 0)
                 self._report(db, task['task_id'])
 
     def _automatic_retry(self, db, task, attempt, classification, detail, now):

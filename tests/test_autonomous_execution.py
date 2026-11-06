@@ -177,6 +177,7 @@ class AutomaticExecutionTests(unittest.TestCase):
         f.controller = Controller(f.database, autonomous=True)
         adopted = f.controller.inspect(held.task_id)
         self.assertFalse(adopted.review_attention)
+        self.assertNotIn('explicitly move the issue to Todo', adopted.reason)
         # The new registry has no attention mapping. The persisted mapping is
         # accepted only long enough to project the old issue back into Todo.
         migrated = f.apply(replace(f.issue(), workflow={'state': 'attention', 'type': 'started', 'ready': ['todo'],
