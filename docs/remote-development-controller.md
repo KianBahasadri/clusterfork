@@ -11,7 +11,7 @@ for their operational rules.
 `automation/controller/core.py` is the sole task-state writer. `apply` accepts
 typed commands from `model.py`; `inspect` returns committed views. It owns grants,
 task/attempt identity, ordering, readiness, coding progression, external stop and
-publication observations, retries, one repair budget and independent holds.
+publication observations, automatic reassessment/repair and independent holds.
 Account and instruction resources cannot independently advance task lifecycle.
 
 `store.py` uses local SQLite transactions, foreign keys, state constraints and

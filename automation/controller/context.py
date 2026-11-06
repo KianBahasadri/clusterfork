@@ -110,10 +110,17 @@ class Context:
             ignore = self.reporting_ids(content)
             value = {k: content.get(k) for k in ("id", "identifier", "title", "description", "project", "archivedAt", "trashed")}
             if content["id"] != view.issue_id:
-                value["state"] = content["state"]
+                prerequisites = {edge.get('issue', {}).get('id') for row in self.sources(view)
+                                 if row['status'] == 'ok' and json.loads(row['request'])['operation'] == 'issue'
+                                 for edge in json.loads(row['content']).get('dependencies', [])
+                                 if edge['type'] == 'blocks'}
+                if content['id'] in prerequisites:
+                    value["state"] = content["state"]
             value["comments"] = [{k: c.get(k) for k in ("id", "body", "parent", "user", "botActor")}
                                  for c in content["comments"] if c["id"] not in ignore]
-            dependencies = content["dependencies"]
+            # Nonblocking relationships discover context; they are not contracts
+            # or prerequisites. Labels and display metadata do not revoke work.
+            dependencies = [r for r in content["dependencies"] if r['type'] == 'blocks']
             if original is not None and content["id"] == view.issue_id:
                 # Coding can start while the source is fetched; use its committed
                 # phase, as the broker's authority checks do.
@@ -255,6 +262,13 @@ class Context:
                 for r in self.sources(view)]
 
     def approval_required(self, view):
+        from .autonomy import enabled
+        with self.database.transaction() as db:
+            if enabled(db):
+                return False
+        return self.new_sources(view)
+
+    def new_sources(self, view):
         sources = self.sources(view)
         pins = {json.loads(r["request"]).get("target") for r in sources
                 if r["reviewed"] and r["status"] == "ok" and json.loads(r["request"])["operation"] == "pull"}
@@ -378,8 +392,16 @@ class Context:
                         continue
                     if self.material(view, request, self.sanitize(content), original=json.loads(row["content"])) != row["material"]:
                         raise ContextError("material_evidence_changed")
-                if approved and self.approval_required(view):
-                    raise ContextError("new_evidence_requires_review")
+                if approved and self.new_sources(view):
+                    from .autonomy import enabled
+                    with self.database.transaction() as db:
+                        if enabled(db):
+                            # The agent may learn implementation details during
+                            # coding. Original evidence was just revalidated;
+                            # require complete new reads and retain their audit.
+                            seal(db, view.attempt['attempt_id'], revision(db, view.attempt['attempt_id']))
+                        else:
+                            raise ContextError("new_evidence_requires_review")
                 if approved:
                     with self.database.transaction() as db:
                         approval = db.execute("SELECT manifest FROM context_approvals WHERE attempt_id=?", (view.attempt["attempt_id"],)).fetchone()

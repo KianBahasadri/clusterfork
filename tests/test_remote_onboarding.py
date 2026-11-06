@@ -48,6 +48,7 @@ class ConfigurationTests(unittest.TestCase):
         row=updated['projects'][-1]
         self.assertEqual(row['workflow'],'clusterfork-task.yml')
         self.assertNotIn('worker_revision',row)
+        self.assertNotIn('blocked', row['linear_states'])
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             registry=root/'registry.json'
@@ -195,10 +196,10 @@ class FakeLinear:
         self.mutations = []
         self.state_rows = [{"id": s, "name": "Todo", "type": "unstarted"} for s in states()["ready"]]
         self.state_rows += [{"id": states()[key], "name": key, "type": kind}
-                            for key, kind in (("in_progress", "started"), ("blocked", "started"), ("done", "completed"))]
+                            for key, kind in (("in_progress", "started"), ("done", "completed"))]
         self.issue_labels = [{"name": name, "parent": None, "isGroup": False} for name in
                              set(onboard.STAGE_LABELS.values()) | {"clusterfork: queued", "clusterfork: selected",
-                                                                  "clusterfork: needs clarification", "clusterfork: auto-repair"}]
+                                                                  "clusterfork: auto-repair"}]
 
     def query(self, query, variables):
         connection = lambda nodes: {"nodes": copy.deepcopy(nodes), "pageInfo": {"hasNextPage": False}}

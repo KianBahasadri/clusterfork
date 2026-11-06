@@ -123,15 +123,19 @@ def validate_states(linear, project_id, team_id, states):
     if team_id not in {team["id"] for team in selected["teams"]["nodes"]}:
         raise SetupError("Select a team belonging to the explicitly selected project")
     available = {state["id"]: state for state in team_states(linear, team_id)}
-    if set(states) != {"ready", "in_progress", "blocked", "done"} or not isinstance(states["ready"], list) or not states["ready"]:
-        raise SetupError("States need ready (a nonempty UUID array), in_progress, blocked, and done")
+    required = {"ready", "in_progress", "done"}
+    if (not required <= set(states) or set(states) - {*required, 'blocked'}
+            or not isinstance(states['ready'], list) or not states['ready']):
+        raise SetupError("States need ready (a nonempty UUID array), in_progress, and done")
     expected = [(identifier, "unstarted") for identifier in states["ready"]]
-    expected += [(states["in_progress"], "started"), (states["done"], "completed"), (states["blocked"], None)]
+    expected += [(states["in_progress"], "started"), (states["done"], "completed")]
+    if 'blocked' in states:
+        expected.append((states['blocked'], None))
     for identifier, kind in expected:
         state = available.get(uuid_string(identifier))
         if not state or (kind and state["type"] != kind) or state["type"] in {"backlog", "canceled"}:
             raise SetupError("Configured states must belong to the selected team and have the intended lifecycle types")
-    if available[states["blocked"]]["type"] == "completed":
+    if 'blocked' in states and available[states["blocked"]]["type"] == "completed":
         raise SetupError("The blocked lifecycle state cannot be completed")
 
 
@@ -191,8 +195,9 @@ def prepare_configuration(data, project_id, repo, branch, team_id, states, comma
     if existing and existing["repository"].lower() != repo.lower():
         raise SetupError("This project UUID already maps to another repository; resolve that mapping explicitly")
     row = existing if existing is not None else {"project_id": uuid_string(project_id), "auto_merge": True}
+    lifecycle = ('in_progress', 'done') if result.get('autonomous') else ('in_progress', 'blocked', 'done')
     row.update(repository=repo, workflow=CONTROLLER_WORKFLOW, ref=branch, linear_team_id=uuid_string(team_id),
-               ready_state_ids=states["ready"], linear_states={k: states[k] for k in ("in_progress", "blocked", "done")},
+               ready_state_ids=states["ready"], linear_states={k: states[k] for k in lifecycle},
                validation_commands=commands,
                required_checks=list(dict.fromkeys([*row.get("required_checks", []), *checks])))
     row.pop('worker_revision',None)
@@ -402,7 +407,9 @@ def verify(checkout, registry_path, project_id, linear, *, label_id=None):
       }
     }""", {"team": row["linear_team_id"]}, "issueLabels"))
     names = Counter(label["name"] for label in labels if not label["parent"] and not label["isGroup"])
-    needed = set(STAGE_LABELS.values()) | {"clusterfork: queued", "clusterfork: selected", "clusterfork: needs clarification", "clusterfork: auto-repair"}
+    needed = set(STAGE_LABELS.values()) | {"clusterfork: queued", "clusterfork: selected", "clusterfork: auto-repair"}
+    if not registry.autonomous:
+        needed.add('clusterfork: needs clarification')
     if needed - names.keys():
         raise SetupError("A team label operator must provision independent issue labels: " + ", ".join(sorted(needed - names.keys())))
     if any(names[name] != 1 for name in needed):

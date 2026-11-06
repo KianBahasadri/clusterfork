@@ -17,12 +17,52 @@ from common.policy import REVIEW_MAX_ATTEMPTS, REVIEW_RETRY_DELAYS, review_failu
 
 
 class Controller:
-    def __init__(self, database):
+    def __init__(self, database, *, autonomous=None):
         self.database = database
+        from .autonomy import KEY, enabled
+        with database.transaction() as db:
+            if autonomous is not None:
+                db.execute('INSERT INTO metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                           (KEY, '1' if autonomous else '0'))
+            self.autonomous = enabled(db)
         from .accounts import Accounts
         self.accounts=Accounts(database)
         self._upgrade_readiness()
         self._upgrade_intents()
+        if self.autonomous:
+            self._adopt_automatic_execution()
+
+    def _adopt_automatic_execution(self):
+        """Adopt held work once; never abandon grants, leases or publication."""
+        from .linear_state import human_withdrawal
+        with self.database.transaction() as db:
+            if not db.execute("INSERT OR IGNORE INTO metadata VALUES ('execution:adopted-v1','1')").rowcount:
+                return
+            for row in db.execute("SELECT * FROM tasks WHERE phase='held' AND canceled=0").fetchall():
+                task = dict(row)
+                if human_withdrawal(db, task):
+                    continue
+                attempt = dict(db.execute('SELECT * FROM attempts WHERE attempt_id=?', (task['current_attempt'],)).fetchone() or {})
+                detail = task['reason'].split('\nResolve the failure or supply the evidence,', 1)[0]
+                self._automatic_retry(db, task, attempt, 'policy_upgrade', detail, 0)
+                self._report(db, task['task_id'])
+
+    def _automatic_retry(self, db, task, attempt, classification, detail, now):
+        from common.policy import redact_review_text
+        from .autonomy import retry_delay
+        if task['canceled']:
+            return
+        if attempt.get('retry_kind') and attempt.get('retry_decision') == 'retry':
+            return  # Duplicate receipts cannot postpone the durable retry time.
+        delay = retry_delay(attempt.get('ordinal', 1))
+        reason = (redact_review_text(detail) +
+                  f'\nAutomatic diagnosis and reassessment in {delay} seconds; no human review is required.')
+        if attempt:
+            db.execute("UPDATE attempts SET retry_kind='context',retry_at=?,failure_class=?,retry_decision='retry',review_detail=? WHERE attempt_id=?",
+                       (now + delay, classification, reason, attempt['attempt_id']))
+        owns_grant = db.execute('SELECT 1 FROM grants WHERE task_id=?', (task['task_id'],)).fetchone()
+        self._update(db, task, phase='held' if owns_grant else 'queued', reason=reason,
+                     review_attention='', review_attention_at=0)
 
     def _upgrade_intents(self):
         from .linear_state import record_intent
@@ -110,7 +150,8 @@ class Controller:
             task = self._task(db, task_id)
             attempt = self._attempt(db, task, attempt_id)
             admission(db, task, allow_hold=True)
-            if (task['review_attention'] or task['content_revision'] != json.loads(task['spec'])['content_revision']
+            if (task['review_attention'] or attempt['retry_kind']
+                    or task['content_revision'] != json.loads(task['spec'])['content_revision']
                     or task['phase'] not in {'executing', 'published'}
                     or not attempt['stopped'] or not attempt['all_stopped'] or attempt['agent_outcome'] != 'completed'):
                 raise Rejected('Publication requires current authority and verified executor completion')
@@ -206,7 +247,11 @@ class Controller:
 
     def repair_parent(self, task_id):
         with self.database.transaction() as db:
-            row=db.execute("SELECT * FROM attempts WHERE task_id=? AND coding_started=1 AND attempt_kind!='repair' ORDER BY ordinal DESC LIMIT 1",(task_id,)).fetchone()
+            predicate = ("attempt_id != (SELECT current_attempt FROM tasks WHERE task_id=?)"
+                         if self.autonomous else "attempt_kind!='repair'")
+            args = (task_id, task_id) if self.autonomous else (task_id,)
+            row=db.execute("SELECT * FROM attempts WHERE task_id=? AND coding_started=1 AND " + predicate +
+                           " ORDER BY ordinal DESC LIMIT 1", args).fetchone()
             if row is None:
                 return None
             previous=dict(row)
@@ -443,9 +488,9 @@ class Controller:
                     if (asdict(command.binding) != json.loads(task["spec"])
                             and not task['review_attention'] and not attempt['retry_kind']):
                         self._update(db, task, phase="held", reason="Reviewed task context changed; a fresh review is required.")
-                        if not attempt["coding_started"] and not attempt["retry_kind"]:
+                        if self.autonomous or not attempt["coding_started"]:
                             self._review_attention(db, task, attempt, 'context_changed',
-                                                   'Reviewed context changed before coding; approval is invalid and a fresh assessment is required.', now)
+                                                   'Reviewed context changed; approval is invalid and a fresh assessment is required.', now)
                 elif isinstance(command, EvidenceChanged):
                     self._review_attention(db, task, attempt, 'context_changed',
                                            'Related context changed, conflicts with approval, or is unavailable; a fresh readiness assessment is required.', now)
@@ -548,20 +593,20 @@ class Controller:
             raise Rejected('Task specification belongs to another repository')
         if not task["eligible"] or not task["dependencies_ready"] or db.execute("SELECT 1 FROM holds LIMIT 1").fetchone():
             raise Rejected("New admissions are held")
-        if task['review_attention']:
+        if task['review_attention'] and not self.autonomous:
             raise Rejected('The readiness budget requires an explicit human resubmission')
-        if task['review_attempts'] >= REVIEW_MAX_ATTEMPTS:
+        if task['review_attempts'] >= REVIEW_MAX_ATTEMPTS and not self.autonomous:
             attempt = self._attempt(db, task, task['current_attempt']) if task['current_attempt'] else None
             self._review_attention(db, task, attempt,
                                    'budget_exhausted', 'Readiness automatic attempt budget is exhausted.', now)
             return
         if initial:
             previous = db.execute('SELECT * FROM attempts WHERE attempt_id=?', (task['current_attempt'],)).fetchone()
-            if previous and previous['retry_kind'] == 'review' and previous['retry_at'] > now:
+            if previous and previous['retry_kind'] and previous['retry_at'] > now:
                 raise Rejected('The recorded readiness retry delay has not elapsed')
             head = db.execute("SELECT task_id FROM tasks WHERE repository=? AND phase='queued' AND eligible=1 "
                               "AND dependencies_ready=1 AND NOT EXISTS (SELECT 1 FROM attempts a "
-                              "WHERE a.attempt_id=tasks.current_attempt AND a.retry_kind='review' AND a.retry_at>?) "
+                              "WHERE a.attempt_id=tasks.current_attempt AND a.retry_kind!='' AND a.retry_at>?) "
                               "ORDER BY CASE priority WHEN 0 THEN 5 ELSE priority END,sort_order,sequence LIMIT 1",
                               (task["repository"], now)).fetchone()
             if not head or head[0] != task["task_id"]:
@@ -573,6 +618,9 @@ class Controller:
             from .authority import admission
             admission(db, task, allow_hold=True)
         ordinal = db.execute("SELECT COALESCE(MAX(ordinal),0)+1 FROM attempts WHERE task_id=?", (task["task_id"],)).fetchone()[0]
+        if self.autonomous and db.execute('SELECT 1 FROM attempts WHERE task_id=? AND coding_started=1',
+                                         (task['task_id'],)).fetchone():
+            kind = 'repair'
         db.execute("UPDATE effects SET state='done' WHERE task_id=? AND kind IN ('publication','merge') AND state='pending'",
                    (task['task_id'],))
         attempt_id = identity(task["task_id"], ordinal)
@@ -804,6 +852,14 @@ class Controller:
                      reason=command.reason or ("Waiting for CI and merge." if command.pull_request else "Waiting for verified GitHub completion."))
 
     def _review_attention(self, db, task, attempt, classification, detail, now):
+        if self.autonomous:
+            from .linear_state import human_withdrawal
+            if classification != 'human_withdrawal' or not human_withdrawal(db, task):
+                self._automatic_retry(db, task, attempt or {}, classification, detail, now)
+                return
+            self._update(db, task, phase='held', reason='Execution was explicitly paused by a workflow action.',
+                         review_attention='', review_attention_at=0)
+            return
         from common.policy import redact_review_text
         reason = redact_review_text(detail) + '\nResolve the failure or supply the evidence, then explicitly move the issue to Todo to resubmit.'
         if attempt:
@@ -815,6 +871,10 @@ class Controller:
         self._update(db, task, phase='held', reason=reason, review_attention=reason, review_attention_at=attention_at)
 
     def _schedule_review(self, db, task, attempt, classification, detail, now):
+        if self.autonomous:
+            if not attempt['retry_kind']:
+                self._automatic_retry(db, task, attempt, classification, detail, now)
+            return
         if task['review_attention'] or attempt['retry_decision'] in {'retry', 'attention'}:
             return
         if task['review_attempts'] >= REVIEW_MAX_ATTEMPTS:
@@ -891,6 +951,7 @@ class Controller:
         result = json.loads(attempt['review_result'] or 'null')
         if (attempt['execution_phase'] == 'review' and result and result.get('verdict') == 'ready'
                 and command.conclusion == 'success' and command.pull_state in {'absent', 'open'}
+                and not attempt['retry_kind']
                 and not task['review_attention'] and task['eligible'] and task['dependencies_ready']):
             self._release_stopped_credentials(db, task)
             db.execute("UPDATE attempts SET execution_phase='coding',run_id='',run_attempt=0,dispatch_status='intent',"
@@ -924,6 +985,7 @@ class Controller:
             self._release_grant(db, task)
             return
         if (prepared.get('has_changes') and command.pull_state == 'absent' and attempt['agent_outcome'] == 'completed'
+                and not attempt['retry_kind']
                 and not task['review_attention']):
             self._update(db, task, phase='executing', reason='Waiting for controller publication of the prepared commit.')
             return
@@ -963,8 +1025,11 @@ class Controller:
             return  # An unresolved PR always retains ownership and attention.
         if command.pull_state == 'open' and not command.repairable:
             self._update(db, task, phase='published', reason=command.reason or 'Waiting for PR checks and merge.')
-        elif command.repairable and not task['repair_used']:
-            if task['review_attempts'] >= REVIEW_MAX_ATTEMPTS:
+        elif command.repairable and (not task['repair_used'] or self.autonomous):
+            if self.autonomous:
+                self._automatic_retry(db, task, attempt, 'repair_required',
+                                      command.reason or 'Diagnose the failed implementation or required checks.', now)
+            elif task['review_attempts'] >= REVIEW_MAX_ATTEMPTS:
                 self._review_attention(db, task, attempt, 'budget_exhausted',
                                        'Readiness budget is exhausted; coding repair requires another assessment.', now)
             else:
@@ -974,6 +1039,16 @@ class Controller:
             self._update(db, task, phase='held', reason=task['reason'])
         else:
             self._update(db, task, phase='held', reason=command.reason or 'GitHub task failed; execution is held.')
+            if self.autonomous and task['eligible'] and not task['canceled']:
+                self._automatic_retry(db, self._task(db, task['task_id']), attempt,
+                                      'execution_failed', command.reason or 'Execution did not finish successfully.', now)
+        if self.autonomous:
+            current = self._task(db, task['task_id'])
+            retry = self._attempt(db, current, command.attempt_id)
+            if (retry['retry_kind'] and command.pull_state in {'absent', 'closed'}
+                    and current['eligible'] and not current['canceled']):
+                self._update(db, current, phase='queued')
+                self._release_grant(db, current)
 
     def _release_stopped_credentials(self, db, task):
         # The caller has verified all external attempts stopped. Clear only their
@@ -1000,16 +1075,16 @@ class Controller:
         if (command.kind not in {"startup", "capacity", "context", "repair", "review"} or command.kind != attempt["retry_kind"]
                 or attempt["retry_at"] > now or attempt["pull_state"] == "merged"):
             raise Rejected("Retry is not authorized by the recorded task policy")
-        if task['review_attention'] or task['review_attempts'] >= REVIEW_MAX_ATTEMPTS:
+        if (task['review_attention'] or task['review_attempts'] >= REVIEW_MAX_ATTEMPTS) and not self.autonomous:
             self._review_attention(db, task, attempt, 'budget_exhausted', 'Readiness automatic attempt budget is exhausted.', now)
             if attempt['pull_state'] in {'absent', 'closed'}:
                 self._release_grant(db, task)
             return
-        if command.kind in {'startup', 'context', 'review'} and (attempt['retry_decision'] != 'retry'
+        if not self.autonomous and command.kind in {'startup', 'context', 'review'} and (attempt['retry_decision'] != 'retry'
                 or not attempt['failure_class'].startswith('temporary_')):
             raise Rejected('No verified temporary execution failure authorizes this retry')
         if command.kind == "repair":
-            if task["repair_used"]:
+            if task["repair_used"] and not self.autonomous:
                 raise Rejected("The repair budget is exhausted")
             self._update(db, task, repair_used=1)
         kind="repair" if attempt["attempt_kind"]=="repair" else command.kind

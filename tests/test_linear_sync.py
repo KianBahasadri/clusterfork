@@ -324,13 +324,20 @@ class LifecycleAdapterTests(unittest.TestCase):
             path.write_text(json.dumps(data))
             with self.assertRaises(ValueError):
                 Registry.load(path)
-            for invalid in ({"blocked": original["blocked"]}, {**original, "done": original["blocked"]},
+            for invalid in ({"done": original["done"]}, {**original, "done": original["in_progress"]},
                             {**original, "done": data["projects"][0]["ready_state_ids"][0]},
                             {**original, "blocked": "not-a-uuid"}):
                 data["projects"][0]["linear_states"] = invalid
                 path.write_text(json.dumps(data))
                 with self.assertRaises(ValueError):
                     Registry.load(path)
+            data['projects'][0]['linear_states'] = original
+            path.write_text(json.dumps(data))
+            self.assertEqual(Registry.load(path).routes[PROJECT].linear_states.blocked, '')
+            data['autonomous'] = False
+            path.write_text(json.dumps(data))
+            with self.assertRaises(ValueError):
+                Registry.load(path)
 
 
 if __name__ == "__main__":

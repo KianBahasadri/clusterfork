@@ -189,6 +189,7 @@ class Broker:
         session = view.session(role.phase)
         identity = session["account_id"]
         result = {"protocol": PROTOCOL, "serial_admission": True, "task_controller": True,
+                  "autonomous": self.controller.autonomous,
                   "runtime_sha":view.spec.runtime_sha,
                   "phase": "readiness" if role.phase == "review" else "development", "sole_orchestrator": True,
                   "account_selection": role.selector, "account_id": identity or None,

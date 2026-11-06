@@ -306,7 +306,9 @@ class Driver:
         if view.phase=='queued' and not reason:
             ahead=next((v for v in self.controller.active() if v.repository==view.repository),None)
             reason=f'Waiting for {ahead.identifier} to complete.' if ahead else 'Waiting for repository admission.'
-        body = f"Clusterfork task: {'Needs attention' if view.review_attention else view.phase.value}.\n\n" + redact_review_text(reason)
+        display = 'reassessing automatically' if self.controller.autonomous and view.phase == 'held' and attempt.get('retry_kind') else (
+            'Needs attention' if view.review_attention and not self.controller.autonomous else view.phase.value)
+        body = f"Clusterfork task: {display}.\n\n" + redact_review_text(reason)
         if view.review_resubmission_pending:
             body += '\n\nHuman resubmission recorded; waiting for verified stop, credential release and publication checks.'
         session=view.session('coding')
@@ -352,7 +354,7 @@ class Driver:
                     self.comment(view.issue_id,comment_id(task_id,'auto-repair-report'),
                                  repair_report(view,self.controller.repair_parent(task_id),self.registry))
                 body = self.render(view)
-                status = execution_status(view,reviews)
+                status = execution_status(view,reviews,autonomous=self.controller.autonomous)
                 signature = hashlib.sha256(json.dumps([body,view.active,view.phase.value,
                                                        view.attempt.get("stage"),view.attempt.get('attempt_id'),
                                                        view.attempt.get('attempt_kind'),view.eligible,

@@ -14,14 +14,12 @@ guarded commit/push preparation and cleanup. `agent_session.py`, `codex_runtime.
 provider conversations. `automation/controller/projects.json` supplies states,
 branches, validation commands, merge policy, profiles and quota thresholds.
 
-Readiness reviews the issue, complete comments, repository context/rules and user
-decisions with isolated auth, read-only access, no publication token and a
-structured verdict. It reads relevant docs and identifies consequential missing
-decisions; short precise tasks can pass. It never executes repository validation.
-Model review is limited to 600 seconds within a fixed 720-second phase deadline;
-heartbeats cannot extend it. Approval binds issue, context, policy and images,
-rechecked before coding/publication. Rejection/clarification reports the decision,
-consequence and question; address it and return to Todo for another review.
+The shared controller uses [autonomous execution](remote-development-queue.md#autonomous-execution).
+Readiness inspects the request and relevant repository context in a read-only
+sandbox and records the agent's implementation assumptions. It never runs
+validation or requests human review. Model execution is limited to 600 seconds
+within a fixed 720-second phase deadline. Coding performs implementation,
+validation, guarded publication and automatic correction.
 
 ## Related Linear and GitHub context
 
@@ -69,10 +67,10 @@ dependency state, delivery link, PR state or commit changes invalidate approval.
 Controller-owned status/usage/review reports, labels, source/fetch timestamps and
 unrelated upstream branch movement do not invalidate their own context. New
 coding reads within an approved PR's pinned repository commit are permitted;
-new issues or PR evidence set `approval_required` and require fresh readiness
-before publication. Agents must stop relying on conflicting evidence. Revalidation
-failures that prove material change or lost source access hold the task under
-the existing readiness/resubmission rules. A timeout or temporary service failure instead
+new issues or PR evidence are validated and recorded automatically when
+autonomous execution is enabled. In legacy mode they set `approval_required`. Agents must stop relying on conflicting evidence. Revalidation
+failures that prove material contract change or lost source access stop stale
+execution and schedule automatic diagnosis under the queue policy. A timeout or temporary service failure instead
 returns HTTP 503 without changing approval, phase or review/repair budgets.
 Malformed responses do not establish material drift. The worker retries only
 repeatable `start`, checkout, publication-token, context-read and progress calls
@@ -173,15 +171,16 @@ receives the exact head SHA and squash method.
 
 ## Linear lifecycle
 
-`linear_states` maps In Progress, Needs attention and Done UUIDs; ready states such
-as Todo admit tasks. Reporting projects committed views; failed writes retain
+`linear_states` maps In Progress and Done UUIDs; ready states such
+as Todo admit tasks. Autonomous routes omit the legacy `blocked` mapping.
+Reporting projects committed views; failed writes retain
 intent without resetting dispatch or rerunning agents.
 
 | Observation | Linear projection |
 | --- | --- |
 | Admission/account wait | Todo, with queue/hold reason |
 | Coding, validation, publication, PR/CI | In Progress and stage |
-| Rejected review or exhausted repair | Needs attention |
+| Assessment or execution failure | Todo/In Progress, with automatic diagnosis and retry time |
 | Verified merge, or validated no-change success | Done |
 
 Human cancellation/completion is respected; [release rules](remote-development-queue.md#ownership-and-release)
@@ -199,21 +198,21 @@ do not invent timestamps. Previous actors' comments/replies survive; determinist
 replacement handles ownership conflicts, and ambiguous creates are verified before
 retry. Reports exclude credentials, environment dumps, transcripts and raw failures.
 
-## Single-attempt auto-repair
+## Automatic repair
 
-After verified stop, one repair may address coding failure, failed required checks,
-merge conflict or outdated PR base. Pending CI, cancellation, uncertain dispatch,
-readiness and dependency holds do not consume it. Repair uses the original issue/
-grant and new attempt, current context and fresh review, without a child issue.
+After verified stop, automatic repair addresses coding failure, failed required
+checks, merge conflict or an outdated PR base. Each new attempt assesses current
+context and continues the original issue without a child issue. Pending CI,
+cancellation and uncertain dispatch remain observations to resolve before execution.
 
 The private payload supplies original task, parent branch/PR, validated WIP and
 bounded scrubbed failures. Restore viable work, diagnose failures, validate and
 reuse the deterministic branch/marker. Rebased updates require explicit
-force-with-lease and bot/branch/base checks. Startup/review/capacity retries retain
-repair mode/evidence; after repair coding starts, no further coding repair is
-allowed. Failed repair holds for operator review; verified merge/no-change releases.
-The stable Auto-Repair Report mentions the configured user and links runs, PR and
-prepared commit when available.
+force-with-lease and bot/branch/base checks. Startup/assessment/capacity retries
+retain repair mode/evidence. Further failures continue automatic diagnosis under
+the durable [execution policy](remote-development-queue.md#autonomous-execution).
+The stable Auto-Repair Report links runs, PR and prepared commit when available;
+it does not request human review. Legacy registries retain their one-repair limit.
 
 ## Retries and validation
 

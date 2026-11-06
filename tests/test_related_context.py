@@ -222,7 +222,7 @@ class RelatedContextTests(unittest.TestCase):
         self.assertFalse(current.dependencies_ready or current.review_attention or current.attempt["retry_kind"])
 
     def test_added_prerequisite_does_not_exempt_material_evidence_changes(self):
-        for change in ("root_reply", "old_edge_removed", "old_edge_changed", "new_related_edge",
+        for change in ("root_reply", "old_edge_removed", "old_edge_changed",
                        "upstream_edge", "contract_withdrawn", "pr_commit"):
             with self.subTest(change=change):
                 fx = ContextFixture(self)
@@ -238,8 +238,6 @@ class RelatedContextTests(unittest.TestCase):
                     fx.dependencies[fx.root["id"]].pop(0)
                 elif change == "old_edge_changed":
                     fx.dependencies[fx.root["id"]][0]["issue"]["identifier"] = "KIAN-999"
-                elif change == "new_related_edge":
-                    fx.dependencies[fx.root["id"]][-1]["type"] = "related"
                 elif change == "upstream_edge":
                     fx.dependencies[DEPENDENCY] = fx.dependencies[fx.root["id"]][-1:]
                 elif change == "contract_withdrawn":

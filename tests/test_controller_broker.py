@@ -31,7 +31,13 @@ class ControllerBrokerTests(unittest.TestCase):
         self.database = Database(Path(directory.name)/"tasks.db")
         self.addCleanup(self.database.close)
         self.controller = Controller(self.database)
-        self.registry = Registry.load(ROOT / "automation/controller/projects.json")
+        # These compatibility fixtures exercise the legacy bounded-review API.
+        # Production enables the automatic policy; its behavior has dedicated
+        # controller/broker regression coverage in test_autonomous_execution.
+        registry = Registry.load(ROOT / "automation/controller/projects.json")
+        routes = {key: replace(route, linear_states=replace(route.linear_states,
+                  blocked='26518242-2ca2-486c-884c-f9a829c3988f')) for key, route in registry.routes.items()}
+        self.registry = replace(registry, autonomous=False, routes=routes)
         self.route = next(iter(self.registry.routes.values()))
         self.issue = {"id": "66547614-8ed4-4928-834e-aac76f01afd2", "title": "Fix the dry-run flag",
                       "description": "Do not create directories in dry-run mode.", "identifier": getattr(self,"identifier","KIAN-1"),

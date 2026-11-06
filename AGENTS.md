@@ -2,6 +2,8 @@
 
 Clusterfork is a dotfile-style config installer for multiple AI coding agents.
 
+Symphony executes submitted issues autonomously. Resolve implementation choices and fix failures without requiring human review or a Needs attention handoff. Follow the automatic execution policy in [docs/remote-development-queue.md](docs/remote-development-queue.md#autonomous-execution).
+
 **Skill scope:** When asked to modify a skill, always mean the skills in this repo (`skills/`) — never the installed/global skills under `~/.claude/skills/`, `~/.config/opencode/skills/`, or similar.
 
 ## Documentation (read/write)
