@@ -571,7 +571,7 @@ class Controller:
                 or type(command.canceled) is not bool or type(command.submission_current) is not bool):
             raise Rejected("Invalid issue observation")
         row = db.execute("SELECT * FROM tasks WHERE task_id=?", (command.task_id,)).fetchone()
-        from .linear_state import observed_eligibility
+        from .linear_state import observed_eligibility, human_withdrawal
         command = replace(command, eligible=observed_eligibility(db, dict(row) if row else None, command))
         if row is None:
             if command.workflow and not command.eligible:
@@ -604,6 +604,18 @@ class Controller:
                     reason = 'Human readiness resubmission was withdrawn; explicitly move the issue to Todo to resubmit.'
                     changes.update(phase='held', reason=reason, review_attention=reason,
                                    review_attention_at=task['review_submitted_at'])
+            if (not active and task['phase'] == 'held' and command.eligible and self.autonomous
+                    and not task['canceled'] and not human_withdrawal(db, task)):
+                previous = db.execute('SELECT * FROM attempts WHERE attempt_id=?',
+                                      (task['current_attempt'],)).fetchone()
+                if not previous or (all(previous[key] for key in ('stopped', 'all_stopped', 'publication_checked'))
+                                    and previous['pull_state'] in {'absent', 'closed'}):
+                    # A valid resume clears workflow withdrawal, but automatic
+                    # tasks have no review_attention flag to trigger Resubmit.
+                    # Rejoin only after verified stop/publication, retaining the
+                    # recorded retry deadline and attempt history.
+                    changes.update(phase='queued', reason='Automatic execution resumed.',
+                                   sequence=db.execute('SELECT COALESCE(MAX(sequence),0)+1 FROM tasks').fetchone()[0])
             if active and task["spec"]:
                 changed = json.loads(task["spec"])["content_revision"] != command.content_revision
                 attempt = db.execute('SELECT * FROM attempts WHERE attempt_id=?', (task['current_attempt'],)).fetchone()

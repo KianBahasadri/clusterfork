@@ -212,6 +212,85 @@ class AutomaticExecutionTests(unittest.TestCase):
         with self.assertRaises(Rejected):
             f.apply(Retry(view.task_id, SPEC, 'paused', 'context'))
 
+    def paused_retry(self, *, stopped=True):
+        f = self.f
+        view = self.assessment({'invalid': True})
+        self.resume_policy = {'state': 'todo', 'type': 'unstarted', 'ready': ['todo'],
+                              'in_progress': 'progress', 'blocked': '', 'done': 'done'}
+        f.issue(workflow=self.resume_policy)
+        if stopped:
+            f.external(view)
+        f.now += 1
+        self.transition(view, 'todo', 'backlog')
+        f.issue(workflow={**self.resume_policy, 'state': 'backlog', 'type': 'backlog'})
+        return f.controller.inspect(view.task_id)
+
+    def transition(self, view, before, after):
+        transition = {'actor_id': 'operator', 'from_state': before, 'to_state': after, 'changed_at': self.f.now}
+        event = {'id': view.issue_id, 'type': 'Issue', 'submission': transition}
+        self.f.apply(InboxQueued(identity(event), event))
+
+    def test_signed_resume_requeues_stopped_work_without_resetting_its_retry(self):
+        f = self.f
+        paused = self.paused_retry()
+        self.assertEqual(paused.phase, 'held')
+        self.assertFalse(paused.active or paused.eligible)
+        deadline = paused.attempt['retry_at']
+        f.now += 1
+        self.transition(paused, 'backlog', 'todo')
+        f.issue(workflow=self.resume_policy)
+        resumed = f.controller.inspect(paused.task_id)
+        self.assertEqual(resumed.phase, 'queued')
+        self.assertTrue(resumed.eligible)
+        self.assertEqual(resumed.attempt['retry_at'], deadline)
+        self.assertEqual(resumed.review_attempts, paused.review_attempts)
+        self.assertFalse(resumed.review_attention)
+        f.issue(2)
+        order = [view.task_id for view in f.controller.waiting()]
+        f.issue(workflow=self.resume_policy)
+        self.assertEqual([view.task_id for view in f.controller.waiting()], order)
+        with self.assertRaisesRegex(Rejected, 'delay has not elapsed'):
+            f.apply(Admit(paused.task_id, SPEC))
+        f.now = deadline
+        retried = f.apply(Admit(paused.task_id, SPEC))
+        self.assertEqual(retried.attempt['ordinal'], 2)
+
+    def test_a_ready_projection_without_a_new_signed_resume_cannot_undo_a_pause(self):
+        f = self.f
+        paused = self.paused_retry()
+        f.now += 1
+        f.issue(workflow=self.resume_policy)
+        current = f.controller.inspect(paused.task_id)
+        self.assertEqual(current.phase, 'held')
+        self.assertFalse(current.eligible or current.active)
+
+    def test_resuming_before_stop_proof_cannot_admit_another_attempt(self):
+        f = self.f
+        paused = self.paused_retry(stopped=False)
+        f.now += 1
+        self.transition(paused, 'backlog', 'todo')
+        f.issue(workflow=self.resume_policy)
+        current = f.controller.inspect(paused.task_id)
+        self.assertTrue(current.active)
+        self.assertFalse(current.attempt['stopped'])
+        with self.assertRaises(Rejected):
+            f.apply(Admit(current.task_id, SPEC))
+        self.assertEqual(len(f.controller.attempt_history(current.task_id)), 1)
+
+    def test_resumed_work_does_not_steal_another_tasks_repository_grant(self):
+        f = self.f
+        paused = self.paused_retry()
+        other = f.admit(2)
+        waiting = f.issue(3)
+        f.now = paused.attempt['retry_at'] + 1
+        self.transition(paused, 'backlog', 'todo')
+        f.issue(workflow=self.resume_policy)
+        current = f.controller.inspect(paused.task_id)
+        self.assertEqual(current.phase, 'queued')
+        self.assertEqual([view.task_id for view in f.controller.waiting()], [waiting.task_id, current.task_id])
+        self.assertFalse(current.active)
+        self.assertTrue(f.controller.inspect(other.task_id).active)
+
     def test_v1_false_pause_recovers_from_projection_history_without_postponing_retry(self):
         f = self.f
         held = self.assessment({'invalid': True})
