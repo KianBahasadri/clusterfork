@@ -1,5 +1,6 @@
 """Explicit enrollment, idempotent configuration, and shared caller authorization."""
 
+import base64
 import copy
 import io
 import json
@@ -9,12 +10,14 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from unittest.mock import Mock, patch
+from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "automation")]
 import onboard
 from common.policy import PROTOCOL, digest
 from common.accounts import WORKER_REPOSITORY
+from common.clients import Linear
 from call_budget import CallBudget, record_api_calls
 
 PROJECT = "11111111-1111-4111-8111-111111111111"
@@ -41,6 +44,89 @@ def configured(data=None):
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_repository_guidance_preserves_existing_text_and_symlinks_on_repeated_setup(self):
+        for layout in ("new", "agents", "claude", "symlink"):
+            with self.subTest(layout=layout), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                canonical = root / ("CLAUDE.md" if layout == "claude" else "AGENTS.md")
+                if layout != "new":
+                    canonical.write_text("# Project instructions\n\nKeep the existing CI and documentation rules.\n")
+                if layout == "symlink":
+                    (root / "CLAUDE.md").symlink_to("AGENTS.md")
+                registry = root / "registry.json"
+                initial = original_registry()
+                registry.write_text(json.dumps(initial))
+                preview = onboard.configure(root, registry, initial, PROJECT, configured(initial))
+                self.assertIn(str(canonical), preview)
+                self.assertEqual(canonical.exists(), layout != "new")
+                onboard.configure(root, registry, initial, PROJECT, configured(initial), apply=True)
+                text = canonical.read_text()
+                if layout != "new":
+                    self.assertTrue(text.startswith("# Project instructions\n\nKeep the existing CI and documentation rules.\n"))
+                for requirement in ("explicit priority", "estimate", "configured estimate scale", "follow-up", "preserve", "human review"):
+                    self.assertIn(requirement, text)
+                self.assertEqual(text.count(onboard.INSTRUCTIONS_START), 1)
+                before = canonical.stat().st_mtime_ns
+                self.assertEqual(onboard.configure(root, registry, configured(initial), PROJECT, configured(initial), apply=True), [])
+                self.assertEqual(canonical.stat().st_mtime_ns, before)
+                if layout == "symlink":
+                    self.assertTrue((root / "CLAUDE.md").is_symlink())
+                if layout == "claude":
+                    self.assertFalse((root / "AGENTS.md").exists())
+
+    def test_guidance_can_follow_the_repository_documentation_pattern_and_keep_its_link_on_rerun(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "AGENTS.md").write_text("# Rules\n\nDetailed policy belongs in docs.\n")
+            topic = root / "docs/development.md"
+            topic.parent.mkdir()
+            topic.write_text("# Development\n\nRun the existing tests.\n")
+            for path, content, _ in onboard.issue_instruction_changes(root, Path("docs/development.md")):
+                path.write_text(content)
+            self.assertIn("Symphony issue instructions](<docs/development.md>)", (root / "AGENTS.md").read_text())
+            self.assertNotIn("explicit priority", (root / "AGENTS.md").read_text())
+            self.assertTrue(topic.read_text().startswith("# Development\n\nRun the existing tests.\n"))
+            self.assertIn("explicit priority", topic.read_text())
+            self.assertEqual(onboard.issue_instruction_changes(root), [])
+
+    def test_symlinked_root_guidance_keeps_relative_topic_links_discoverable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            canonical = root / "docs/agents.md"
+            canonical.parent.mkdir()
+            canonical.write_text("# Existing rules\n")
+            (root / "AGENTS.md").symlink_to("docs/agents.md")
+            for path, content, _ in onboard.issue_instruction_changes(root, Path("docs/development.md")):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content)
+            self.assertIn("Symphony issue instructions](<development.md>)", canonical.read_text())
+            self.assertTrue((root / "AGENTS.md").is_symlink())
+            self.assertEqual(onboard.issue_instruction_changes(root), [])
+
+    def test_unsafe_or_malformed_guidance_never_causes_partial_configuration_writes(self):
+        for content in (onboard.INSTRUCTIONS_START, onboard.INSTRUCTIONS_END,
+                        onboard.INSTRUCTIONS_END + onboard.INSTRUCTIONS_START,
+                        (onboard.INSTRUCTIONS_START + onboard.INSTRUCTIONS_END) * 2):
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "AGENTS.md").write_text(content)
+                path = root / "registry.json"
+                initial = original_registry()
+                path.write_text(json.dumps(initial))
+                with self.assertRaises(onboard.SetupError):
+                    onboard.configure(root, path, initial, PROJECT, configured(initial), install_ci=True, apply=True)
+                self.assertEqual(json.loads(path.read_text()), initial)
+                self.assertFalse((root / ".github").exists())
+                self.assertEqual((root / "AGENTS.md").read_text(), content)
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as outside:
+            root = Path(directory)
+            external = Path(outside) / "AGENTS.md"
+            external.write_text("External rules stay intact.")
+            (root / "AGENTS.md").symlink_to(external)
+            with self.assertRaises(onboard.SetupError):
+                onboard.issue_instruction_changes(root)
+            self.assertEqual(external.read_text(), "External rules stay intact.")
+
     def test_central_configuration_writes_mapping_and_ci_without_a_target_worker_workflow(self):
         initial=original_registry()
         updated=onboard.prepare_configuration(initial,PROJECT,REPO,BRANCH,TEAM,states(),
@@ -57,7 +143,7 @@ class ConfigurationTests(unittest.TestCase):
             existing.parent.mkdir(parents=True)
             existing.write_text('Existing user workflow stays intact.')
             changes=onboard.configure(root,registry,initial,PROJECT,updated,install_ci=True,apply=True)
-            self.assertEqual(len(changes),2)
+            self.assertEqual(len(changes),3)
             self.assertEqual(existing.read_text(),'Existing user workflow stays intact.')
             self.assertEqual(onboard.configure(root,registry,updated,PROJECT,updated,install_ci=True,apply=True),[])
         for field in ('validation_commands','required_checks','linear_states'):
@@ -80,10 +166,10 @@ class ConfigurationTests(unittest.TestCase):
             root = Path(directory)
             path = root / "registry.json"
             path.write_text(json.dumps(initial))
-            self.assertEqual(len(onboard.configure(root, path, initial, PROJECT, updated, install_ci=True)), 2)
+            self.assertEqual(len(onboard.configure(root, path, initial, PROJECT, updated, install_ci=True)), 3)
             self.assertEqual(json.loads(path.read_text()), initial)
             onboard.configure(root, path, initial, PROJECT, updated, install_ci=True, apply=True)
-            files = [path, *root.glob(".github/workflows/*.yml")]
+            files = [path, root / "AGENTS.md", *root.glob(".github/workflows/*.yml")]
             before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in files}
             second = configured(updated)
             self.assertEqual(onboard.configure(root, path, updated, PROJECT, second, install_ci=True, apply=True), [])
@@ -190,7 +276,7 @@ class MergeTests(unittest.TestCase):
 
 
 
-class FakeLinear:
+class FakeLinear(Linear):
     def __init__(self):
         self.labels = [{"id": "unrelated", "name": "Keep this"}]
         self.mutations = []
@@ -203,6 +289,9 @@ class FakeLinear:
 
     def query(self, query, variables):
         connection = lambda nodes: {"nodes": copy.deepcopy(nodes), "pageInfo": {"hasNextPage": False}}
+        if "issueEstimationType" in query:
+            return {"team": {"issueEstimationType": "fibonacci", "issueEstimationExtended": False,
+                             "issueEstimationAllowZero": False, "inheritIssueEstimation": False}}
         if "projectAddLabel" in query:
             self.mutations.append(variables)
             self.labels.append({"id": LABEL, "name": "clusterfork-symphony"})
@@ -235,6 +324,9 @@ class EnrollmentTests(unittest.TestCase):
         self.path = self.checkout / "registry.json"
         self.data = configured()
         self.path.write_text(json.dumps(self.data))
+        for path, content, _ in onboard.issue_instruction_changes(self.checkout):
+            path.write_text(content)
+        self.published_guidance = {"AGENTS.md": (self.checkout / "AGENTS.md").read_bytes()}
         self.linear = record_api_calls(FakeLinear())
         self.health = {"missing": [], "deployment_paused": False, "serial_admission": True, "mode":"single-controller", "phase_isolation":True,
                        "registry_digest": digest(self.data), "protocol": PROTOCOL, "deployment": {"revision":PIN,"digest": "deployed-source"},
@@ -258,6 +350,12 @@ class EnrollmentTests(unittest.TestCase):
             self.addCleanup(patcher.stop)
 
     def github(self, path, **kwargs):
+        if "/contents/" in path:
+            relative = unquote(path.split("/contents/", 1)[1].split("?", 1)[0])
+            content = self.published_guidance.get(relative)
+            if content is None:
+                raise onboard.GitHubAccessError(path, 404)
+            return {"encoding": "base64", "content": base64.b64encode(content).decode()}
         if "protection/required_status_checks" in path:
             raise onboard.GitHubAccessError(path, 404)
         if path.endswith("actions/permissions"):
@@ -283,14 +381,46 @@ class EnrollmentTests(unittest.TestCase):
         self.assertEqual([issue["identifier"] for issue in result["eligible_todo"]], ["OTHER-1"])
         self.assertEqual(self.linear.mutations, [])
         with redirect_stdout(io.StringIO()) as output:
-            with CallBudget(self, linear=self.linear, exact={"linear.query": 7, "linear.project_issues": 1}):
+            with CallBudget(self, linear=self.linear, exact={"linear.query": 8, "linear.team_estimates": 1, "linear.project_issues": 1}):
                 self.assertIn("enrolled;", onboard.enroll(self.checkout, self.path, PROJECT, self.linear))
-            with CallBudget(self, linear=self.linear, exact={"linear.query": 5, "linear.project_issues": 1}):
+            with CallBudget(self, linear=self.linear, exact={"linear.query": 6, "linear.team_estimates": 1, "linear.project_issues": 1}):
                 self.assertIn("already enrolled", onboard.enroll(self.checkout, self.path, PROJECT, self.linear))
         self.assertIn("OTHER-1", output.getvalue())
         self.assertEqual(self.linear.mutations, [{"id": PROJECT, "label": LABEL}])
         self.assertEqual(self.linear.labels[0], {"id": "unrelated", "name": "Keep this"})
         self.assertEqual(self.path.read_bytes(), before)
+
+    def test_enrollment_requires_discoverable_issue_instructions(self):
+        (self.checkout / "AGENTS.md").unlink()
+        with self.assertRaisesRegex(onboard.SetupError, "persistent Symphony issue instructions"):
+            onboard.enroll(self.checkout, self.path, PROJECT, self.linear)
+        self.assertFalse(self.linear.mutations)
+
+    def test_enrollment_requires_a_configured_team_estimate_scale(self):
+        with patch.object(self.linear, "team_estimates", side_effect=ValueError("Estimates disabled")), \
+             self.assertRaisesRegex(ValueError, "Estimates disabled"):
+            onboard.enroll(self.checkout, self.path, PROJECT, self.linear)
+        self.assertFalse(self.linear.mutations)
+
+    def test_locally_prepared_guidance_does_not_prove_it_is_published(self):
+        for content in (None, b"# Previous rules\n"):
+            self.published_guidance["AGENTS.md"] = content
+            with self.subTest(content=content), self.assertRaisesRegex(onboard.SetupError, "Publish.*default branch"):
+                onboard.enroll(self.checkout, self.path, PROJECT, self.linear)
+            self.assertFalse(self.linear.mutations)
+        onboard.gh.assert_any_call(f"repos/{REPO}/contents/AGENTS.md?ref={'b' * 40}")
+
+    def test_enrollment_verifies_both_the_root_link_and_its_published_topic(self):
+        for path, content, _ in onboard.issue_instruction_changes(self.checkout, Path("docs/development.md")):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+        self.published_guidance["AGENTS.md"] = (self.checkout / "AGENTS.md").read_bytes()
+        with self.assertRaisesRegex(onboard.SetupError, "Publish.*docs/development.md"):
+            onboard.enroll(self.checkout, self.path, PROJECT, self.linear)
+        self.assertFalse(self.linear.mutations)
+        self.published_guidance["docs/development.md"] = (self.checkout / "docs/development.md").read_bytes()
+        onboard.verify(self.checkout, self.path, PROJECT, self.linear)
+        onboard.gh.assert_any_call(f"repos/{REPO}/contents/docs/development.md?ref={'b' * 40}")
 
     def test_existing_enrollment_name_is_not_duplicated_under_another_label_uuid(self):
         self.linear.labels.append({"id": "another-existing-label", "name": "clusterfork-symphony"})

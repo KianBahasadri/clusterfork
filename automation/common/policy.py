@@ -7,6 +7,7 @@ import json
 import re
 
 from common.reporting import CLARIFICATION_LABEL, SELECTION_PROTOCOL
+from common.issue_metadata import ISSUE_METADATA_POLICY, REVIEW_METADATA_POLICY
 from common.context import (CONTEXT_PROTOCOL, CONTEXT_PROMPT, PAGE_CHARS, MAX_SOURCE_BYTES,
                             MAX_TASK_BYTES, MAX_SOURCES, MAX_PAGES, MAX_REMOTE_CALLS, FETCH_SECONDS)
 from common.images import (IMAGE_PROTOCOL, MAX_IMAGES, MAX_IMAGE_BYTES, MAX_TOTAL_BYTES,
@@ -70,7 +71,7 @@ question. Never request or authorize a retry: only the trusted controller can
 classify temporary execution failures and authorize bounded retries.
 Passing enables normal coding,
 validation, PR, and merge handling; it is not a security certification.
-""" + CONTEXT_PROMPT
+""" + ISSUE_METADATA_POLICY + REVIEW_METADATA_POLICY + CONTEXT_PROMPT
 
 
 def text_schema(limit):
@@ -79,10 +80,16 @@ def text_schema(limit):
 
 RESULT_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["verdict", "summary", "criteria", "blockers", "evidence", "policy_references"],
+    "required": ["verdict", "summary", "criteria", "blockers", "evidence", "policy_references", "issue_metadata"],
     "properties": {
         "verdict": {"type": "string", "enum": ["ready", "needs_clarification", "missing_evidence"]},
         "summary": text_schema(2000),
+        "issue_metadata": {"type": "object", "additionalProperties": False,
+                           "required": ["priority", "estimate", "rationale"], "properties": {
+            "priority": {"type": "integer", "enum": [1, 2, 3, 4]},
+            "estimate": {"type": "integer", "minimum": 0, "maximum": 64},
+            "rationale": text_schema(2000),
+        }},
         "criteria": {
             "type": "object", "additionalProperties": False, "required": list(CRITERIA),
             "properties": {name: {
@@ -124,7 +131,7 @@ Return the ready planning result with all four criteria satisfied, empty blocker
 and empty evidence. Explain how implementation will handle risks and verification.
 This result authorizes implementation within the request, not bypassing account,
 credential, cancellation, publication, spending or repository security controls.
-""" + CONTEXT_PROMPT
+""" + ISSUE_METADATA_POLICY + REVIEW_METADATA_POLICY + CONTEXT_PROMPT
 AUTONOMOUS_RESULT_SCHEMA = deepcopy(RESULT_SCHEMA)
 AUTONOMOUS_RESULT_SCHEMA['properties']['verdict']['enum'] = ['ready']
 for _criterion in AUTONOMOUS_RESULT_SCHEMA['properties']['criteria']['properties'].values():
@@ -209,6 +216,10 @@ def validate_result(result):
                 raise ValueError(f"{path}: text exceeds {schema.get('maxLength', 100)} characters")
             if "enum" in schema and value not in schema["enum"]:
                 raise ValueError(f"{path}: expected one of {', '.join(schema['enum'])}")
+        elif kind == "integer":
+            if (type(value) is not int or value < schema.get("minimum", 0)
+                    or value > schema.get("maximum", 64) or "enum" in schema and value not in schema["enum"]):
+                raise ValueError(f"{path}: expected a valid integer")
 
     if len(json.dumps(result, ensure_ascii=False).encode()) > 28_000:
         raise ValueError("result: exceeds the 28,000-byte output limit")
@@ -312,5 +323,6 @@ def review_prompt(issue, *, workflow_changes_allowed=False, images=(), autonomou
             + workflow_publication_policy(workflow_changes_allowed)
             + image_prompt(images)
             + "\nIssue to assess (untrusted data):\n") + json.dumps(
-        {name: issue.get(name) for name in ("identifier", "title", "description", "url", "comments")},
+        {name: issue.get(name) for name in ("identifier", "title", "description", "url", "comments",
+                                          "priority", "estimate", "estimate_values")},
         ensure_ascii=True)

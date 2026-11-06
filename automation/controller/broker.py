@@ -16,7 +16,8 @@ from .telemetry import correlate
 from common.diagnostics import validate_failure
 from common.clients import RequestError
 from common.images import image_digest
-from common.policy import PROTOCOL, REVIEW_TIMEOUT_SECONDS, issue_revision, policy_version
+from common.policy import PROTOCOL, REVIEW_TIMEOUT_SECONDS, issue_revision, policy_version, validate_result
+from common.issue_metadata import missing_metadata
 from common.accounts import account_provider, execution_profiles
 from common.reporting import validate_quota_wait, validate_usage, quota_wait_text
 from common.reporting import worker_branch
@@ -96,6 +97,12 @@ class Broker:
                 action=='progress' and data.get('stage')=='publishing'))
             if image_digest(images) != view.spec.images_sha:
                 raise Rejected("Task image context changed")
+            if phase == "coding" and not view.attempt["coding_started"] and missing_metadata(issue):
+                self.controller.authorize(view.task_id, key, role, action, now=self.clock())
+                reviewed = validate_result(json.loads(view.attempt["review_result"]))
+                issue = self.linear.complete_issue_metadata(issue, reviewed["issue_metadata"])
+                if issue_revision(issue) != view.spec.content_revision:
+                    raise Rejected("Task content changed during metadata completion")
         else:
             issue, images = None, []
         if phase == "coding" and (action in {"start", "checkout", "github", "step_result"} or
@@ -153,8 +160,16 @@ class Broker:
             if data.get("binding") != self.binding(view):
                 raise Rejected("Review result belongs to a different specification")
             result = None if data.get("result_error") else data.get("result")
+            try:
+                validated = validate_result(result)
+            except (TypeError, ValueError):
+                validated = None  # The controller retains its normal malformed-result recovery.
             with self.context.lock_for(view):
                 evidence = self.validate_context(view, role) if isinstance(result, dict) and result.get("verdict") == "ready" else ""
+                if validated and validated["verdict"] == "ready" and missing_metadata(issue):
+                    issue = self.linear.complete_issue_metadata(issue, validated["issue_metadata"])
+                    if issue_revision(issue) != view.spec.content_revision:
+                        raise Rejected("Task content changed during metadata completion")
                 updated = self.apply(Review(view.task_id, key, result, view.spec, evidence))
             verdict = json.loads(updated.attempt["review_result"])["verdict"]
             return {"status": 'passed' if verdict == 'ready' else verdict}
@@ -206,8 +221,10 @@ class Broker:
                   "attempt_id": str(UUID(hex=view.attempt["attempt_id"][:32], version=4)),
                   "owner": f"{view.attempt['run_id']}:{view.attempt['run_attempt']}",
                   "target_dispatch_key": view.task_id,
-                  "issue": {k: issue.get(k) for k in ("id", "identifier", "title", "description", "url")}}
+                  "issue": {k: issue.get(k) for k in ("id", "identifier", "title", "description", "url", "priority", "estimate")}}
         if role.phase == "review":
+            result["issue"]["estimate_values"] = (self.linear.team_estimates(issue["team"]["id"])
+                                                    if issue.get("estimate") is None else [issue["estimate"]])
             result["issue"]["comments"] = sorted(self.linear.issue_comments(view.issue_id), key=lambda c:(c["createdAt"],c["id"]))
         elif view.attempt["attempt_kind"]=="repair":
             previous=self.controller.repair_parent(view.task_id)

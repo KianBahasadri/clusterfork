@@ -98,6 +98,39 @@ Legacy registries without the global autonomous setting retain the prior bounded
 review API for compatibility. The shared production registry enables the new
 policy; tests exercise both compatibility and autonomous execution.
 
+## Issue metadata
+
+Every Symphony issue, including agent-created and follow-up issues, requires an
+explicit priority (**1 Urgent, 2 High, 3 Normal, 4 Low**) and an estimate from its
+team's configured scale. **No priority (0)** and `estimate: null` are incomplete.
+Choose urgency and effort from the issue's scope, complexity and verification
+work; preserve existing user values. An explicit zero estimate is retained and
+may be selected when the team permits zero and the work justifies it.
+
+`Linear.create_issue` requires both fields before sending a creation mutation and
+validates the estimate against the live team settings. Linear's
+[scales](https://linear.app/docs/issue-property#scale-range-options) include
+linear, Fibonacci, exponential and T-shirt (numeric Fibonacci values), with
+optional zero and extended values. Inherited settings resolve through the
+parent team. Unavailable or disabled settings cannot establish a valid scale;
+setup checks this before enrollment without changing team configuration.
+
+For existing or manually created issues, readiness receives the current fields
+and valid estimate values. The assessment returns `issue_metadata` with a
+scope-based rationale. Before accepting a ready result, the broker validates the
+proposal, re-reads the issue, fills only missing fields, and verifies the write.
+Existing values, assignments, descriptions and labels are retained. Ambiguous
+writes reconcile through a read rather than repeating the mutation blindly.
+Missing fields cleared after approval are completed from the reviewed proposal
+again before coding starts. Metadata completion does not invalidate content
+approval or reset issue identity, FIFO identity or readiness history. Priority
+observations continue to determine queue ordering.
+
+The assessor remains read-only; only the trusted broker writes the metadata.
+Missing fields require no human-review handoff. Invalid proposals and failed
+reads/writes prevent implementation and follow automatic diagnosis/reassessment.
+The worker also supplies the creation rule to coding and repair agents.
+
 ## Issue dependencies
 
 Only incoming `blocks` sources count, including accessible unmapped issues, and

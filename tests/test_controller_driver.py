@@ -50,7 +50,7 @@ class ControllerDriverTests(unittest.TestCase):
         self.addCleanup(self.fixture.doCleanups)
         f = self.fixture
         f.issue.update(state={"id":f.route.ready_state_ids[0],"type":"unstarted"},archivedAt=None,
-                       priority=0,sortOrder=0,createdAt="2026-10-30T00:00:00Z")
+                       priority=3,sortOrder=0,createdAt="2026-10-30T00:00:00Z")
         f.issue["project"].update(archivedAt=None,labels={"nodes":[{"name":f.registry.enrollment_label}]})
         second=copy.deepcopy(f.issue)
         second.update(id=str(UUID(int=2)),identifier="KIAN-2",createdAt="2026-10-30T00:00:01Z")

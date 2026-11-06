@@ -82,6 +82,19 @@ infrastructure checks as the Python discord.py bot and Terraform are added.
 | `verify` | Check deployed mapping/runtime, workflow/tag, App grants, current CI, states/labels |
 | `enroll` | Repeat verification; add existing enrollment project label last |
 
+`discover --project-id` also reports each team's valid estimate values.
+`configure` installs the persistent [issue metadata rule](remote-development-queue.md#issue-metadata)
+in the target's existing `AGENTS.md` or `CLAUDE.md`, creating `AGENTS.md` when neither
+exists. For a repository that keeps detailed guidance elsewhere, pass
+`--instructions-file docs/development.md` (a repository-relative path): the helper
+adds the rule there and a discoverable link in the root instructions. Repeat
+setup retains that choice and updates only its marked block, preserving unrelated
+guidance and internal symlinks; identical setup writes nothing. Preview includes
+these files even when CI already exists. Publish the guidance with the setup
+changes. Verification checks the guidance at the current default-branch commit
+and requires a configured team estimate scale before enrollment; setup never
+guesses a scale or changes team settings.
+
 Read-only `/api/health?setup_project_id=UUID` returns `repository_setup` target/ref,
 current branch, App grants, workflow/tag evidence, never tokens. Enrollment requires
 committed runtime inputs/exact registry digest, grants, active workflow and passing

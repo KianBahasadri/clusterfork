@@ -55,6 +55,9 @@ controller, account pools, model pins, and quota policy.
    handoff. Symphony resolves implementation choices and failures automatically.
    Do not enroll Backlog, move issues
    to Todo, change completed issues, or guess between ambiguous lifecycle states.
+   Discovery also reports the team's valid estimate values. Use its configured
+   scale, including inherited, zero and extended settings. Estimates must be
+   enabled; never invent a scale or change team settings as a setup shortcut.
 4. Inspect the repository's actual validation conventions and CI. Choose
    reproducible validation argv arrays and meaningful required check names that
    test, lint, or build the repository. Include necessary dependency setup in the
@@ -81,10 +84,30 @@ python3 automation/onboard.py configure --checkout /path/to/target \
 ```
 
 Use `--apply` to write the previewed central `automation/controller/projects.json`
-mapping and optional validation CI. Existing required check names accumulate;
+mapping, persistent issue instructions and optional validation CI. Existing
+required check names accumulate;
 other mappings, the registry generation, model/quota policy, and unrelated files
 are preserved. Existing target worker workflows are left intact. Validation
 workflow collisions stop before writes; reconcile them explicitly.
+
+Every Symphony Linear issue must have an explicit priority (1 Urgent, 2 High,
+3 Normal, or 4 Low) and an estimate from its team's configured scale, including
+agent-created and follow-up issues. No priority (0) and a missing estimate do not
+qualify. Choose meaningful values from urgency, scope, complexity and validation
+work; preserve values the user already supplied. Use an explicit zero estimate
+only when allowed by the team and justified by the scope. Create issues with
+both fields populated. Existing/manual issues are completed autonomously by
+readiness before coding; missing metadata alone never requires human review.
+
+Carry this rule into the target's persistent, discoverable repository guidance.
+The helper defaults to existing `AGENTS.md`, then `CLAUDE.md`, or creates
+`AGENTS.md`. Inspect the target's documentation pattern first: if detailed rules
+belong in a topic file, pass `--instructions-file docs/development.md` with its
+actual owning path. The helper writes a managed block there and links it from
+the root agent instructions. Review the preview and publish these instructions
+alongside configuration and any CI changes. Preserve unrelated guidance and
+symlinks within the checkout. Repeated setup updates the same marked block and
+retains the chosen topic file without duplicate instructions or no-op writes.
 
 If suitable CI is missing, use `--install-ci` in place of `--required-check`.
 It adds `clusterfork-validation.yml` and its `Clusterfork validation` check,
@@ -134,7 +157,9 @@ python3 automation/onboard.py verify --checkout /path/to/target --project-id PRO
 Verification checks the exact deployed registry/runtime digests, protocol,
 serial admission and phase isolation, App installation grants, central Actions
 availability, central workflow content and runtime tag, controller merge policy and squash support, effective required checks,
-successful current CI, and Linear state/label availability. It lists existing
+successful current CI, published repository issue guidance at the default-branch
+commit, the team's configured estimate scale, and Linear state/label availability.
+It lists existing
 Todo candidates by identifier/title. Show this list to the user before enabling;
 dependencies, prior durable receipts, quota, and readiness review still determine
 admission. An empty Todo list is valid. Do not change issue states to manufacture
