@@ -64,9 +64,14 @@ including after a controller restart. Mutable issues/PRs are revalidated before
 accepting approval, starting coding, granting coding checkout/publication access, and
 entering coding/publication stages. Material description, human decision/reply,
 dependency state, delivery link, PR state or commit changes invalidate approval.
-Controller-owned status/usage/review reports, labels, source/fetch timestamps and
-unrelated upstream branch movement do not invalidate their own context. New
-coding reads within an approved PR's pinned repository commit are permitted;
+Controller-owned status/usage/review reports, this task's verified PR attachments
+on its own issue, labels, source/fetch timestamps and unrelated upstream branch
+movement do not invalidate their own context.
+PR attachment exemptions require durable controller publication observations;
+unverified links, other deliveries and related-issue attachments remain material.
+The original snapshots and approval digests remain unchanged when a source read
+races that observation. New coding reads within an approved PR's pinned repository
+commit are permitted;
 new issues or PR evidence are validated and recorded automatically when
 autonomous execution is enabled. In legacy mode they set `approval_required`. Agents must stop relying on conflicting evidence. Revalidation
 failures that prove material contract change or lost source access stop stale
