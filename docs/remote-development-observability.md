@@ -32,10 +32,18 @@ omits raw paths/headers. Actions summaries survive missing controller callbacks.
 ## Review and failure evidence
 
 SQLite binds content, policy, target, images and runtime to verified attempts and
-structured review results. Reviews describe readiness, not completed tests. Stable
-per-review comments preserve missing decisions/resubmission guidance; later attempts
-cannot overwrite them. Rejection moves to attention; returning to Todo requests
-another review. Reporting failures cannot repeatedly resubmit rejected reviews.
+structured review results. Assessments describe the implementation approach, not
+completed tests. Stable per-assessment comments retain run evidence; autonomous
+failures report continuing diagnosis and the durable retry delay, without requesting
+human review. [Queue policy](remote-development-queue.md#autonomous-execution) owns
+automatic reassessment and legacy compatibility. Reporting failures cannot
+repeatedly resubmit execution.
+
+Context validation failures identify the category (material change, unavailable or
+incomplete evidence, or a specific access HTTP status), canonical source target,
+and source key from the attempt manifest. These details reach the broker response
+and retained task/assessment reason. They contain no retrieved text, tokens, raw
+exception messages or HTTP bodies. A generic transport 403 is not the diagnosis.
 
 Allowlisted worker diagnostics enter the coding session; public comments use safe
 summaries. Missing callbacks retain generic reasons without invented usage/time.

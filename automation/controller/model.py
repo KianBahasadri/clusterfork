@@ -268,6 +268,7 @@ class ContextObserved:
 class EvidenceChanged:
     task_id: str
     attempt_id: str
+    detail: str = ''
 
 
 @dataclass(frozen=True)

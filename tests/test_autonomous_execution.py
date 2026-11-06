@@ -9,6 +9,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'automation'))
 from common.policy import AUTONOMOUS_RESULT_SCHEMA, review_prompt, validate_result
+from common.clients import RequestError
 from controller.core import Controller
 from controller.autonomy import RETIRED, retired_states
 from controller.linear_state import desired_state, workflow
@@ -363,13 +364,62 @@ class AutomaticContextTests(unittest.TestCase):
         fx.contract()
         fx.approve(config)
         fx.start_coding()
-        fx.dependency['description'] += ' Incompatible new contract.'
-        with self.assertRaises(Rejected):
+        fx.dependency['description'] += ' Incompatible new contract: private source contents.'
+        with self.assertRaisesRegex(Rejected, 'material_evidence_changed') as caught:
             self.complete_coding()
         held = fx.f.controller.inspect(fx.f.view.task_id)
         self.assertEqual(held.phase, 'held')
         self.assertFalse(held.review_attention)
         self.assertEqual(held.attempt['retry_kind'], 'context')
+        self.assertIn('issue KIAN-941', held.reason)
+        self.assertIn('[source ', held.reason)
+        self.assertNotIn('private source contents', held.reason)
+        self.assertNotIn('private source contents', str(caught.exception))
+
+    def test_revoked_access_reports_source_and_http_category_without_raw_response(self):
+        fx = self.fx
+        config = fx.start_review()
+        fx.contract()
+        fx.approve(config)
+        fx.start_coding()
+        fx.failed['KIAN-941'] = 403
+        with self.assertRaisesRegex(Rejected, 'http_403.*issue KIAN-941'):
+            self.complete_coding()
+        held = fx.f.controller.inspect(fx.f.view.task_id)
+        self.assertIn('http_403', held.reason)
+        self.assertIn('issue KIAN-941', held.reason)
+        self.assertFalse(held.review_attention)
+
+    def test_incomplete_new_evidence_names_source_instead_of_an_opaque_403(self):
+        fx = self.fx
+        config = fx.start_review()
+        fx.approve(config)
+        fx.start_coding()
+        fx.complete('list', role=Role.CODING)
+        response = fx.read('issue', target=DEPENDENCY, role=Role.CODING)
+        self.assertFalse(response['complete'])
+        with self.assertRaisesRegex(Rejected, 'required_source_incomplete'):
+            self.complete_coding()
+        held = fx.f.controller.inspect(fx.f.view.task_id)
+        self.assertIn(DEPENDENCY, held.reason)
+        self.assertIn(response['source_key'], held.reason)
+        self.assertFalse(held.review_attention)
+
+    def test_temporary_read_outage_does_not_falsely_revoke_the_original_attempt(self):
+        fx = self.fx
+        config = fx.start_review()
+        fx.contract()
+        fx.approve(config)
+        fx.start_coding()
+        fx.failed['KIAN-941'] = 503
+        with self.assertRaises(RequestError):
+            self.complete_coding()
+        current = fx.f.controller.inspect(fx.f.view.task_id)
+        self.assertEqual(current.phase, 'executing')
+        self.assertFalse(current.review_attention or current.attempt['retry_kind'])
+        del fx.failed['KIAN-941']
+        self.complete_coding()
+        self.assertEqual(fx.f.controller.inspect(fx.f.view.task_id).attempt['attempt_id'], fx.f.key)
 
 
 if __name__ == '__main__':
