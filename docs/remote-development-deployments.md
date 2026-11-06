@@ -29,6 +29,16 @@ retain grants. Network checks run outside transactions, preserving heartbeats.
 Outstanding controller PR/merge effects also block drain, including uncertain
 publication after the executor has stopped.
 
+An owned open PR that needs repair can continue automatic assessment/repair on
+the serving controller's already-verified immutable runtime during a rollout.
+The controller requires verified stop/publication evidence, the same runtime and
+policy, eligible prerequisites and the existing repository grant. The driver
+rechecks the pinned runtime tag before dispatch when newer source is pending.
+Only the required-runtime and rollout holds permit this continuation; operator
+or other holds still stop it. Fresh tasks and unpublished failures remain held.
+This prevents a deadlock in which deployment waits for a PR that cannot be repaired
+until deployment finishes. CI, merge and normal drain proof still apply.
+
 Terraform applies the reviewed no-delete/no-replace plan; Run Command installs
 the exact commit in a release directory after verifying VM identity and mounted
 task disk. Source is root-owned; systemd runs an unprivileged user/private socket.

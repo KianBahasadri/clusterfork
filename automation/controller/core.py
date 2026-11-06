@@ -282,6 +282,27 @@ class Controller:
             query += " ORDER BY CASE priority WHEN 0 THEN 5 ELSE priority END, sort_order, sequence"
             return tuple(self._view(db, row[0]) for row in db.execute(query, args).fetchall())
 
+    def drain_retry_runtime(self, task_id, *, now):
+        """Continue an owned open publication without admitting unrelated work."""
+        if type(now) not in (float, int) or not math.isfinite(now):
+            raise ValueError('A finite authorization timestamp is required')
+        with self.database.transaction() as db:
+            return self._drain_retry_runtime(db, self._task(db, task_id), now)
+
+    def _drain_retry_runtime(self, db, task, now):
+        holds = {row[0] for row in db.execute('SELECT owner FROM holds')}
+        if (not self.autonomous or not holds or holds - {'deployment:required-runtime', 'deployment:rollout'}
+                or task['canceled'] or not task['eligible'] or not task['dependencies_ready']
+                or not task['spec'] or not db.execute('SELECT 1 FROM grants WHERE task_id=?', (task['task_id'],)).fetchone()):
+            return ''
+        attempt = self._attempt(db, task, task['current_attempt'])
+        if (not attempt['retry_kind'] or attempt['retry_at'] > now or attempt['pull_state'] != 'open'
+                or not all(attempt[key] for key in ('stopped', 'all_stopped', 'publication_checked'))
+                or not db.execute('SELECT 1 FROM attempts WHERE task_id=? AND coding_started=1',
+                                  (task['task_id'],)).fetchone()):
+            return ''
+        return json.loads(task['spec'])['runtime_sha']
+
     def active(self):
         with self.database.transaction() as db:
             return tuple(self._view(db, r[0]) for r in db.execute("SELECT task_id FROM grants").fetchall())
@@ -605,7 +626,11 @@ class Controller:
             raise Rejected("Task specification is stale")
         if spec.target_repository and spec.target_repository.lower()!=task['repository']:
             raise Rejected('Task specification belongs to another repository')
-        if not task["eligible"] or not task["dependencies_ready"] or db.execute("SELECT 1 FROM holds LIMIT 1").fetchone():
+        held = db.execute('SELECT 1 FROM holds LIMIT 1').fetchone()
+        draining = not initial and self._drain_retry_runtime(db, task, now)
+        same_policy = task['spec'] and spec.policy_revision == json.loads(task['spec'])['policy_revision']
+        if (not task['eligible'] or not task['dependencies_ready']
+                or held and not (draining and spec.runtime_sha == draining and same_policy)):
             raise Rejected("New admissions are held")
         if task['review_attention'] and not self.autonomous:
             raise Rejected('The readiness budget requires an explicit human resubmission')
