@@ -56,6 +56,12 @@ validates the requested outcome. Unavailable live infrastructure does not block
 writing IaC or exercising it with offline fixtures. Credentials, spending,
 cancellation and publication controls still apply.
 
+An explicit workflow pause remains authoritative. Returning paused work to Todo
+rejoins the queue once source intent is valid and prior runs, credentials and
+publication are verified stopped. Resumption retains attempt history and retry
+deadlines, rejoins FIFO behind existing peers, and never takes another task's
+grant. A stale status projection cannot undo a pause.
+
 Readiness is a read-only implementation assessment. Its output schema permits
 only `ready`, satisfied criteria and empty blocker/evidence arrays, preventing
 inconsistent model output from becoming a human-action ticket. Transport,
