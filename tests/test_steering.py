@@ -43,6 +43,7 @@ class Tracker:
     def __init__(self, registry):
         route = next(iter(registry.routes.values()))
         self.current = {"id": ISSUE, "identifier": "KIAN-895", "title": "Test", "description": "",
+                        "priority": 3, "estimate": 2,
                         "project": {"id": route.project_id, "labels": {"nodes": [{"name": registry.enrollment_label}]}},
                         "state": {"id": route.linear_states.in_progress, "type": "started"}}
         self.comments, self.acks, self.writes = [], {}, []

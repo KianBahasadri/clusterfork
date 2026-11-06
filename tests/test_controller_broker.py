@@ -41,7 +41,8 @@ class ControllerBrokerTests(unittest.TestCase):
         self.route = next(iter(self.registry.routes.values()))
         self.issue = {"id": "66547614-8ed4-4928-834e-aac76f01afd2", "title": "Fix the dry-run flag",
                       "description": "Do not create directories in dry-run mode.", "identifier": getattr(self,"identifier","KIAN-1"),
-                      "project": {"id": self.route.project_id}, "url": "https://linear.app/test/issue/KIAN-1"}
+                      "project": {"id": self.route.project_id}, "url": "https://linear.app/test/issue/KIAN-1",
+                      "priority": 3, "estimate": 2, "team": {"id": "22222222-2222-4222-8222-222222222222"}}
         observed = IssueObserved(self.issue["id"], self.route.project_id, self.route.repository,
                                  self.registry.generation, self.issue["identifier"], True, True,
                                  content_revision=issue_revision(self.issue))
