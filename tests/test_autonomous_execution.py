@@ -167,6 +167,10 @@ class AutomaticExecutionTests(unittest.TestCase):
         held = self.assessment({'invalid': True})
         f.apply(replace(f.issue(), workflow={'state': 'attention', 'type': 'started', 'ready': ['todo'],
                                            'in_progress': 'progress', 'blocked': 'attention', 'done': 'done'}))
+        transition = {'actor_id': 'operator', 'from_state': 'todo', 'to_state': 'attention', 'changed_at': f.now}
+        event = {'id': held.issue_id, 'type': 'Issue', 'submission': transition}
+        f.apply(InboxQueued(identity(event), event))
+        self.assertFalse(f.controller.inspect(held.task_id).eligible)
         f.external(held)
         with f.database.transaction() as db:
             db.execute("DELETE FROM metadata WHERE key='execution:adopted-v1'")
