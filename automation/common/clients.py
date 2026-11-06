@@ -39,9 +39,9 @@ CONTEXT_READ = ContextVar("context_read", default=None)
 
 
 @contextmanager
-def context_read_scope(check):
-    """Bound context HTTP reads without changing the normal mutation transport."""
-    token = CONTEXT_READ.set(check)
+def context_read_scope(check, *, after=None):
+    """Keep request accounting separate from post-read authority checks."""
+    token = CONTEXT_READ.set((check, after or check))
     try:
         yield
     finally:
@@ -49,7 +49,8 @@ def context_read_scope(check):
 
 
 def request_json(url, *, token=None, method="GET", data=None, form=False):
-    check = CONTEXT_READ.get()
+    scope = CONTEXT_READ.get()
+    check, after = scope if scope else (None, None)
     if check:
         check()
     headers = {"Accept": "application/json", "User-Agent": "clusterfork",
@@ -66,7 +67,7 @@ def request_json(url, *, token=None, method="GET", data=None, form=False):
                 raw = response.read(2_000_001) if check else response.read()
                 if check:
                     from common.context import ContextError
-                    check()
+                    after()
                     if len(raw) > 2_000_000:
                         raise ContextError("oversized")
                 return json.loads(raw) if raw else None
