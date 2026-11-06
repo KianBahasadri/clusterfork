@@ -59,6 +59,7 @@ class Registry:
     routes: dict[str, Route]
     steering_user_ids: tuple[str, ...] = ()
     notify_user_url: str = ""
+    autonomous: bool = False
 
     @classmethod
     def load(cls, path):
@@ -68,6 +69,9 @@ class Registry:
             raise ValueError("enrollment_label must be nonempty")
         if not isinstance(generation, str) or not re.fullmatch(r"[\w.-]{1,64}", generation):
             raise ValueError("invalid generation")
+        autonomous = data.get('autonomous', False)
+        if type(autonomous) is not bool:
+            raise ValueError('autonomous must be a boolean')
         profiles = {}
         for agent, row in data["agent_profiles"].items():
             efforts = {"antigravity": {"low", "medium", "high"},
@@ -107,11 +111,14 @@ class Registry:
             linear_states = None
             if "linear_states" in row:
                 configured = row["linear_states"]
-                if not isinstance(configured, dict) or set(configured) != {"in_progress", "blocked", "done"}:
-                    raise ValueError("linear_states needs in_progress, blocked, and done")
-                linear_states = LinearStates(**{name: uuid_string(value) for name, value in configured.items()})
-                values = (linear_states.in_progress, linear_states.blocked, linear_states.done)
-                if len(set(values)) != 3 or set(values).intersection(states):
+                required = {"in_progress", "done"} if autonomous else {"in_progress", "blocked", "done"}
+                if (not isinstance(configured, dict) or not required <= set(configured)
+                        or set(configured) - {"in_progress", "blocked", "done"}):
+                    raise ValueError("linear_states needs in_progress and done; legacy execution also needs blocked")
+                linear_states = LinearStates(**{'blocked': '', **{
+                    name: uuid_string(value) for name, value in configured.items()}})
+                values = tuple(value for value in (linear_states.in_progress, linear_states.blocked, linear_states.done) if value)
+                if len(set(values)) != len(values) or set(values).intersection(states):
                     raise ValueError("Linear lifecycle states must be distinct from each other and ready states")
             commands = row.get("validation_commands", [])
             if not isinstance(commands, list) or any(
@@ -143,7 +150,7 @@ class Registry:
                 r"https://linear\.app/[A-Za-z0-9_-]+/profiles/[A-Za-z0-9_-]+", notify)):
             raise ValueError("notify_user_url must be a Linear profile HTTPS URL")
         return cls(label, generation, profiles, SelectionPolicy.load(data["agent_selection"]), routes,
-                   tuple(uuid_string(user) for user in users), notify)
+                   tuple(uuid_string(user) for user in users), notify, autonomous)
 
 
 class WebhookError(ValueError):

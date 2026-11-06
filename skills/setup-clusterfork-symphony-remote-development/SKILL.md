@@ -50,8 +50,10 @@ controller, account pools, model pins, and quota policy.
    ```
 
    Choose the intended team explicitly when several contribute to the project.
-   Record Todo state UUIDs (`unstarted`), In Progress (`started`), Needs
-   attention/Blocked, and Done (`completed`). Do not enroll Backlog, move issues
+   Record Todo state UUIDs (`unstarted`), In Progress (`started`), and Done
+   (`completed`). Do not create or require Needs attention or another human-review
+   handoff. Symphony resolves implementation choices and failures automatically.
+   Do not enroll Backlog, move issues
    to Todo, change completed issues, or guess between ambiguous lifecycle states.
 4. Inspect the repository's actual validation conventions and CI. Choose
    reproducible validation argv arrays and meaningful required check names that
@@ -73,7 +75,7 @@ the shape; replace all UUIDs and commands with the repository's real values:
 ```bash
 python3 automation/onboard.py configure --checkout /path/to/target \
   --project-id PROJECT_UUID --team-id TEAM_UUID \
-  --states-json '{"ready":["TODO_UUID"],"in_progress":"STARTED_UUID","blocked":"ATTENTION_UUID","done":"DONE_UUID"}' \
+  --states-json '{"ready":["TODO_UUID"],"in_progress":"STARTED_UUID","done":"DONE_UUID"}' \
   --validation-commands '[["npm","ci"],["npm","test"]]' \
   --required-check 'Repository tests'
 ```

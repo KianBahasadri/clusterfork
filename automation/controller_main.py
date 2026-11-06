@@ -54,7 +54,7 @@ def build(config,manifest,database,credential):
                    client_secret=secret(credential,vault,"linear-oauth-client-secret"))
             if config.get("linear_oauth_client_id") else Linear(secret(credential,vault,"linear-api-key")))
     github=GitHub(config["github_app_id"],secret(credential,vault,"github-app-private-key"))
-    controller=Controller(database)
+    controller=Controller(database, autonomous=registry.autonomous)
     controller.apply(Initialize(),now=time.time())
     instructions=Instructions(controller,registry,linear,clock=time.time)
     required=RequiredRuntime(github,manifest,deployment_run_id=config.get('deployment_run_id'))

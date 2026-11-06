@@ -1,6 +1,7 @@
 {
   "enrollment_label": "clusterfork-symphony",
   "generation": "codex-worker-1",
+  "autonomous": true,
   "notify_user_url": "https://linear.app/kian-finishing-zombie-granola/profiles/kian",
   "steering": {
     "trusted_user_ids": [
@@ -36,7 +37,6 @@
       ],
       "linear_states": {
         "in_progress": "764abaaa-b22c-42bb-8d6f-0c9c67b5f138",
-        "blocked": "26518242-2ca2-486c-884c-f9a829c3988f",
         "done": "aa75d2cb-3bba-44e4-a1c8-d875533a600a"
       },
       "validation_commands": [
@@ -68,7 +68,6 @@
       ],
       "linear_states": {
         "in_progress": "764abaaa-b22c-42bb-8d6f-0c9c67b5f138",
-        "blocked": "26518242-2ca2-486c-884c-f9a829c3988f",
         "done": "aa75d2cb-3bba-44e4-a1c8-d875533a600a"
       },
       "validation_commands": [
@@ -123,7 +122,6 @@
       ],
       "linear_states": {
         "in_progress": "764abaaa-b22c-42bb-8d6f-0c9c67b5f138",
-        "blocked": "26518242-2ca2-486c-884c-f9a829c3988f",
         "done": "aa75d2cb-3bba-44e4-a1c8-d875533a600a"
       },
       "validation_commands": [
@@ -156,7 +154,6 @@
       ],
       "linear_states": {
         "in_progress": "764abaaa-b22c-42bb-8d6f-0c9c67b5f138",
-        "blocked": "26518242-2ca2-486c-884c-f9a829c3988f",
         "done": "aa75d2cb-3bba-44e4-a1c8-d875533a600a"
       },
       "validation_commands": [

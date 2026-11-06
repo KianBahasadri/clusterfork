@@ -46,69 +46,48 @@ The stopped review then stops blocking unrelated queued tasks. An unresolved PR 
 admission. Cancellation and verified merge/no-change completion retain their
 existing evidence requirements.
 
-## Bounded readiness submissions
+## Autonomous execution
 
-A reviewer returns `ready`, `needs_clarification` for consequential missing
-decisions, or `missing_evidence` with the specific unavailable evidence, access
-failure and next action. Evidence failures need no invented product-decision
-question. Missing decisions/evidence, unsupported access and malformed results
-enter **Needs attention**, with no timed review. Reviewer prose and the legacy
-generic `retry` verdict cannot authorize another run. The versioned worker/
-controller contract rejects that legacy verdict independently of model hints.
+The committed registry enables `autonomous: true` for the shared controller.
+Submitted tasks do not require human review, clarification answers, or manual
+Todo resubmission. The agent resolves implementation choices using repository
+policy and conservative defaults, records assumptions, and implements and
+validates the requested outcome. Unavailable live infrastructure does not block
+writing IaC or exercising it with offline fixtures. Credentials, spending,
+cancellation and publication controls still apply.
 
-Only structured temporary execution failures observed by the trusted worker or
-controller authorize automatic assessment retries: a timeout, verified transport
-failure, or a temporary service response (408/429/500/502/503/504 or classified
-GraphQL service/rate-limit failure). A generic failed job or command is insufficient.
-Each explicit submission permits **three attempts total**, including failed
-dispatch/startup/execution with no model result: initial attempt, then retries
-after **5 minutes** and **15 minutes**. Dispatch uncertainty still requires stable
-identity discovery and never authorizes a resend. Retries require verified stop,
-credential/publication checks, current eligibility and deployment/operator holds
-to permit new execution; they retain admission while waiting.
+Readiness is a read-only implementation assessment. Its output schema permits
+only `ready`, satisfied criteria and empty blocker/evidence arrays, preventing
+inconsistent model output from becoming a human-action ticket. Transport,
+malformed-result, context and execution failures all enter automatic diagnosis
+and reassessment. The controller retains the concrete failure and verifies stop,
+credential release and publication ownership before another attempt.
 
-SQLite retains the submission cycle, charged attempts, failure class and retry
-decision. Restarts, deployment/runtime/generation changes, new attempt IDs,
-different error wording, context churn and reporting cannot replenish it. Context changes during
-a pending authorized retry use the same budget and latest specification. An
-approval invalidated before coding requires intervention and a fresh assessment;
-it cannot independently schedule a retry. Exhaustion clears automatic retry intent
-and enters Needs attention. Upgrades charge durable existing attempt history and
-stop unresolved legacy loops; imported history without a trustworthy submission
-boundary does not grant a fresh unattended cycle.
+The initial automatic delay is 60 seconds, doubles with the durable attempt
+ordinal, and caps at one hour. Duplicate callbacks do not move that deadline.
+Restart/deployment preserves both history and backoff. There is no terminal
+three-review or one-repair limit in autonomous mode, and no Needs attention
+projection or request to cycle Todo. Repeated external failures remain visible
+as automatic waiting; the controller does not claim they are fixed.
 
-To open one fresh cycle, resolve the feedback and explicitly move the issue from
-a non-ready state back to Todo. Only a signed human state-transition event, with
-its original action identity/time and current eligibility, authorizes resubmission.
-Duplicate/redelivered events, scans, bot lifecycle writes, labels, comments, run
-IDs and timestamps alone cannot resubmit. A human submission received before
-cleanup stays pending until safe release. Webhook intake commits the original
-transition to `linear_intents` atomically with the inbox receipt, before HTTP
-acknowledgement. This watermark survives inbox processing and restart; older
-deliveries cannot replace a newer human action. Distinct actions with equal source
-times hold authorization until an unambiguous newer action arrives. An acknowledged
-ineligible submission remains withdrawn across redelivery and re-enrollment.
-Upgrades recover retained signed receipts without replenishing budgets.
+Cooling tasks with no open publication release the repository grant only after
+all matching runs are verified stopped, credentials released and publication
+verified absent or closed. Other runnable tasks may pass them. Open or uncertain
+PRs retain ownership and are reconciled or repaired through fresh assessment.
+Completed effects and superseded attempt identities cannot be replayed into
+another execution. Existing signed roles, immutable runtime identities and
+credential fences remain authoritative.
 
-Submission processing and pending/queued revalidation use complete history for
-that issue to distinguish the controller app's Needs attention projection from a
-later human workflow action, matching the signed transition within a bounded 300-second
-window to accommodate Linear webhook-to-history timestamp skew. A delayed signed Todo event can remain eligible
-through our own projection, including an in-flight write with a lost response.
-History alone never authorizes a cycle. Missing, inconsistent or ambiguous causal
-evidence defers event acknowledgement or admission while retaining durable intent.
-Current cancellation, archive, project mapping/enrollment and dependencies still
-govern execution.
-A later withdrawal clears pending intent; returning via a scan or bot write
-cannot revive it. An accepted submission withdrawn while queued also needs a
-new human transition. Human resubmission does not reset the independent
-[single coding-repair budget](remote-development.md#single-attempt-auto-repair) or
-transfer unresolved PR ownership.
+On first activation, the controller adopts existing noncanceled held work into
+this automatic policy without resetting history, replacing credentials, dropping
+grants or assuming that a runner stopped. A held issue's old Needs attention
+state is accepted as migration metadata and replaced by normal queued/running
+feedback. New tasks are created in Todo. Operators can still cancel or explicitly
+pause work; these actions are not human-review gates and are not overridden.
 
-Unfinished prerequisites and quota waits are separate from assessment failures.
-A review account-capacity wait, or a prerequisite wait before assessment starts,
-does not spend the assessment budget; capacity retries retain the 15-minute wait.
-Repair startup/review/capacity retries retain repair mode and parent evidence.
+Legacy registries without the global autonomous setting retain the prior bounded
+review API for compatibility. The shared production registry enables the new
+policy; tests exercise both compatibility and autonomous execution.
 
 ## Issue dependencies
 
@@ -125,14 +104,18 @@ queue position and release the grant. Blockers added after coding starts do not
 interrupt that attempt's context access, coding/testing/publication stages or
 publication authorization. An added admission-only edge does not invalidate
 approval through the root issue's cached dependency metadata; original snapshots
-and approval bindings stay intact. Material changes to reviewed evidence, new
-unreviewed evidence and other authorization losses still apply. Prerequisites gate
+and approval bindings stay intact. Material changes to reviewed contracts and other authorization losses still
+apply. In autonomous mode, complete new evidence read during coding is validated
+and recorded without requesting another review; prior contracts remain checked.
+Nonblocking relations and workflow state of non-prerequisite references are
+discovery metadata rather than material contract changes. Prerequisites gate
 queued tasks and every next attempt, including retries and repair.
 Events/periodic observations discover satisfied/removed prerequisites. Rejoining
 the runnable queue preserves any pending readiness retry delay and budget.
 
-Human moves out of the ready states withdraw execution authorization, including
-a move to Needs attention during coding. A signed transition fences worker
+Explicit cancellation or a move to an unrelated paused workflow state withdraws
+execution authorization. The legacy Needs attention state does not request human
+review or withdraw autonomous work. A signed transition fences worker
 operations at intake; observations also detect a pause without waiting for its
 webhook. The controller recognizes its own In Progress projection from durable
 effects instead of treating every active issue's Needs attention state as eligible.
@@ -141,16 +124,17 @@ Pausing never proves runner stop, releases credentials or resolves an open PR.
 ## Linear feedback
 
 At most one owned execution-status label appears: `clusterfork: queued`,
-`clusterfork: selected`, `clusterfork: needs clarification`, or a stage:
+`clusterfork: selected`, or a stage:
 `clusterfork: runner initialization`, `clusterfork: account selection`,
 `clusterfork: coding`, `clusterfork: final testing and review`,
 `clusterfork: publication`, `clusterfork: PR review and CI`, `clusterfork: waiting for quota`.
 
-Precedence is unresolved clarification, current execution/PR/quota stage, selected,
-then queued. Clarification survives resubmission/temporary retries until a passing
-review. Terminal/skipped tasks have none. Queued means waiting; selected means
-grant reserved, not review passed/agent running. Rejection clears selection while
-stop is verified. Indicators never change grants, eligibility or retry policy.
+Precedence is current execution/PR/quota stage, selected, then queued.
+Terminal/skipped tasks have none. Queued means waiting; selected means
+grant reserved, not assessment passed/agent running. The old
+`clusterfork: needs clarification` label is removed by autonomous reporting;
+only legacy registries retain its review semantics.
+Indicators never change grants, eligibility or retry policy.
 `clusterfork: auto-repair` is an independent attempt-kind label.
 
 Reporting removes conflicting indicators before adding the desired one. Failed/
@@ -160,11 +144,9 @@ project enrollment. One stable comment explains dependencies, holds, run/PR link
 or the active predecessor; grant changes refresh waiters. Reporting retries retain
 identity/FIFO/dispatch and cannot start work.
 
-During an authorized readiness retry, the stable comment states the verified
-failure, delay and remaining attempts. Terminal feedback names the exact missing
-decision/evidence or execution failure and next action, preserves current/prior
-run links, and retains the existing user notification for attention-worthy review
-failures. A reporting outage never resets the budget or recreates retry intent.
+Automatic waiting feedback names the failed operation and reassessment delay,
+retains run links, and reports a continuing condition without requesting human
+review. Reporting outages do not reset backoff or recreate execution intent.
 Every workflow-state transition has its own durable effect identity, independent
 of comment/label/report revisions. Controller owns the desired state and epoch;
 the driver records intent before writing, then confirmation or uncertainty.
@@ -180,8 +162,8 @@ after a human action; reconciliation restores the latest signed human state rath
 than treating that echo as new intent. SQLite does not make remote Linear writes atomic. History reads remain targeted; settled
 historical tasks gain no per-task polling. Upgrading adopts existing acknowledged
 attention effects and live reported execution without resetting grants or budgets.
-Late failure/context feedback keeps the original held-cycle boundary; it cannot
-make an already submitted human transition look older than the failure.
+Legacy bounded-review resubmission retains its original held-cycle boundary;
+late feedback cannot make a signed human action look older than the failure.
 
 Webhook commit wakes observation; background ticks run every 30 seconds, full
 project scans every two minutes. These are intervals, not feedback latency promises.

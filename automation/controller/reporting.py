@@ -10,14 +10,14 @@ from common.reporting import CLARIFICATION_LABEL, QUEUED_LABEL, SELECTION_LABEL,
 from .workflows import ENGINE
 
 
-def execution_status(view, reviews):
+def execution_status(view, reviews, *, autonomous=False):
     """Project the single visible indicator without changing execution authority."""
     if view.phase in {'completed', 'canceled', 'skipped'}:
         return None
     # Resubmission and infrastructure retries cannot resolve earlier feedback.
     for review in reversed(reviews):
         verdict = review['result']['verdict']
-        if verdict == 'needs_clarification':
+        if verdict == 'needs_clarification' and not autonomous:
             return CLARIFICATION_LABEL
         if verdict == 'ready':
             break
@@ -38,6 +38,13 @@ def execution_status(view, reviews):
 def review_report(review,registry):
     result=review['result']
     verdict=result['verdict']
+    if getattr(registry, 'autonomous', False):
+        body = ('Clusterfork automatic assessment: ' + ('passed' if verdict == 'ready' and
+                review.get('retry_decision') != 'retry' else 'reassessing automatically') + '.\n\n' +
+                (review.get('review_detail') or result['summary']))
+        if review['run_id']:
+            body += f"\n\n[Assessment run](https://github.com/{ENGINE}/actions/runs/{review['run_id']}/attempts/{review['run_attempt']})"
+        return redact_review_text(body)
     terminal = review.get('retry_decision') == 'attention' or verdict in {
         'rejected', 'needs_clarification', 'missing_evidence', 'execution_failed', 'retry'}
     body='Clusterfork readiness review: '+('needs attention' if terminal else {
@@ -93,8 +100,11 @@ def repair_terminal(view):
 
 def repair_report(view,parent,registry):
     attempt=view.attempt
-    body=(registry.notify_user_url+'\n\n' if registry.notify_user_url else '')+'Clusterfork Auto-Repair Report\n\n'
-    body+='Outcome: '+('completed; repository queue can advance.' if view.phase=='completed' else 'held; operator review is required.')
+    body=(registry.notify_user_url+'\n\n' if registry.notify_user_url and not getattr(registry, 'autonomous', False)
+          else '')+'Clusterfork Auto-Repair Report\n\n'
+    body+='Outcome: '+('completed; repository queue can advance.' if view.phase=='completed' else
+                      'automatic diagnosis continues.' if getattr(registry, 'autonomous', False) else
+                      'held; operator review is required.')
     if parent:
         body+=f"\n\n[Original run](https://github.com/{ENGINE}/actions/runs/{parent['run_id']}/attempts/{parent['run_attempt']})"
         if parent['data'].get('failure'):

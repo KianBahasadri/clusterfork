@@ -31,7 +31,7 @@ from common.accounts import account_provider, valid_account_id
 from common.routing import AgentProfile
 from common.selection import SelectionPolicy, select_account
 from common.reporting import usage_report, worker_branch
-from common.policy import (PROTOCOL, RESULT_SCHEMA, review_prompt, workflow_publication_policy,
+from common.policy import (PROTOCOL, RESULT_SCHEMA, AUTONOMOUS_RESULT_SCHEMA, review_prompt, workflow_publication_policy,
                               MAX_CORRECTION_TURNS, MAX_FAILURE_OUTPUT_BYTES, redact_review_text)
 from publication_guard import PublicationBlocked, PublicationGuard, PublicationScanError, changed_lines
 from common.images import image_prompt, materialize_images
@@ -535,13 +535,15 @@ def review_readiness(broker, config, worker_heartbeat, directory):
                 if not select_account([fresh], profiles, policy, now=time.time()):
                     continue
                 schema, output = directory / "readiness-schema.json", directory / "readiness-result.json"
-                schema.write_text(json.dumps(RESULT_SCHEMA))
+                result_schema = AUTONOMOUS_RESULT_SCHEMA if config.get('autonomous') else RESULT_SCHEMA
+                schema.write_text(json.dumps(result_schema))
                 assessing = True
                 if provider == "cursor":
                     text = cursor_runtime.run_agent(
                         broker, config, home, Path.cwd(), review_prompt(config["issue"],
-                            workflow_changes_allowed=config.get("workflow_changes_allowed"), images=config.get("images", []))
-                        + "\nReturn only JSON matching this schema:\n" + json.dumps(RESULT_SCHEMA),
+                            workflow_changes_allowed=config.get("workflow_changes_allowed"), images=config.get("images", []),
+                            autonomous=config.get('autonomous', False))
+                        + "\nReturn only JSON matching this schema:\n" + json.dumps(result_schema),
                         clean_environment(), read_only=True, steering=False, image_paths=image_paths,
                         timeout=config["review_timeout_seconds"],
                         failure_signals=[heartbeat.failed, worker_heartbeat.failed])
@@ -558,7 +560,7 @@ def review_readiness(broker, config, worker_heartbeat, directory):
                         + [arg for value in (bridge.codex_config() if bridge else ()) for arg in ("-c", value)]
                         + [arg for path in image_paths for arg in ("--image", path)] + ["-"],
                         stdin=review_prompt(config["issue"], workflow_changes_allowed=config.get("workflow_changes_allowed"),
-                                            images=config.get("images", [])),
+                                            images=config.get("images", []), autonomous=config.get('autonomous', False)),
                         env={**clean_environment(), "CODEX_HOME": str(home)},
                         timeout=config["review_timeout_seconds"],
                         failure_signals=[heartbeat.failed, worker_heartbeat.failed])
@@ -714,6 +716,12 @@ def development_prompt(broker, config):
     prompt = (f"Implement Linear issue {issue['identifier']}: {issue['title']}\nIssue URL: {issue['url']}\n\n"
               + workflow_publication_policy(config.get("workflow_changes_allowed"))
               + CONTEXT_PROMPT + f"\n\n{issue.get('description') or ''}" + image_prompt(config.get("images", [])))
+    if config.get('autonomous'):
+        prompt += ("\n\nThe operator requires autonomous completion without human review. "
+                   "Resolve implementation choices using project conventions and conservative defaults, "
+                   "document assumptions, diagnose and fix failures, and run the required validation. "
+                   "Do not ask questions or stop at a plan. Keep real credentials out of source and tests. "
+                   "Use offline tests when live infrastructure is unavailable; never claim an unperformed deployment.")
     if config.get("repair"):
         repair = config["repair"]
         instructions = repair.get("instructions")
