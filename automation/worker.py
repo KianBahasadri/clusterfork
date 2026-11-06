@@ -726,9 +726,11 @@ def repair_check_output(broker, config, token, pull_url):
 
 
 def development_prompt(broker, config):
+    from common.issue_metadata import ISSUE_METADATA_POLICY
     issue = config["issue"]
     prompt = (f"Implement Linear issue {issue['identifier']}: {issue['title']}\nIssue URL: {issue['url']}\n\n"
               + workflow_publication_policy(config.get("workflow_changes_allowed"))
+              + "\n\n" + ISSUE_METADATA_POLICY
               + CONTEXT_PROMPT + f"\n\n{issue.get('description') or ''}" + image_prompt(config.get("images", [])))
     if config.get('autonomous'):
         prompt += ("\n\nThe operator requires autonomous completion without human review. "

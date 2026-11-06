@@ -25,7 +25,8 @@ ACCOUNT_A, ACCOUNT_B = "1" * 64, "cursor:" + "2" * 64
 def ready():
     return {"verdict": "ready", "summary": "Requirements and completion are clear.",
             "criteria": {k: {"status": "satisfied", "reason": "Explicit in issue."} for k in CRITERIA},
-            "blockers": [], "evidence": [], "policy_references": []}
+            "blockers": [], "evidence": [], "policy_references": [],
+            "issue_metadata": {"priority": 3, "estimate": 2, "rationale": "A small, routine bug fix with regression coverage."}}
 
 
 class ControllerTests(unittest.TestCase):

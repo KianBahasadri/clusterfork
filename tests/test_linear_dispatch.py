@@ -183,16 +183,19 @@ class ClientTests(unittest.TestCase):
         stored = {}
         inputs = {"id": ISSUE, "teamId": OTHER, "projectId": PROJECT, "parentId": TODO,
                   "title": "Auto-repair: KIAN-1 (worker failed)", "stateId": TODO,
-                  "priority": 2, "labelIds": [OTHER], "description": "Sanitized failure context"}
+                  "priority": 2, "estimate": 2, "labelIds": [OTHER], "description": "Sanitized failure context"}
         lost = True
         def request(url, **kwargs):
             nonlocal lost
             query, variables = kwargs["data"]["query"], kwargs["data"]["variables"]
+            if "issueEstimationType" in query:
+                return {"data": {"team": {"issueEstimationType": "linear", "issueEstimationAllowZero": False,
+                                          "issueEstimationExtended": False, "inheritIssueEstimation": False}}}
             if "issueCreate(" in query:
                 fields = variables["input"]
                 self.assertEqual(fields, inputs)
                 if fields["id"] not in stored:
-                    stored[fields["id"]] = {**issue(), "title": fields["title"]}
+                    stored[fields["id"]] = {**issue(), "title": fields["title"], "priority": 2, "estimate": 2}
                 if lost:
                     lost = False
                     raise RequestError(503)
@@ -205,11 +208,14 @@ class ClientTests(unittest.TestCase):
 
     def test_failed_issue_creation_does_not_invent_another_issue_id(self):
         def request(url, **kwargs):
+            if "issueEstimationType" in kwargs["data"]["query"]:
+                return {"data": {"team": {"issueEstimationType": "linear", "issueEstimationAllowZero": False,
+                                          "issueEstimationExtended": False, "inheritIssueEstimation": False}}}
             if "issueCreate(" in kwargs["data"]["query"]:
                 raise RequestError(503)
             return {"data": {"issue": None}}
         with self.assertRaises(RequestError):
-            Linear("test", request).create_issue({"id": ISSUE})
+            Linear("test", request).create_issue({"id": ISSUE, "teamId": OTHER, "priority": 3, "estimate": 2})
 
     def test_truncated_repair_labels_fail_closed(self):
         row = issue()
@@ -279,14 +285,16 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(RequestError):
             Linear("test", lambda *a, **kw: next(responses)).issue_dependencies(ISSUE)
 
-    def test_issue_fetch_requests_and_preserves_priority_and_sort_order(self):
+    def test_issue_fetch_requests_and_preserves_priority_estimate_and_sort_order(self):
         def request(url, **kwargs):
             self.assertRegex(kwargs["data"]["query"], r"\bpriority\b")
+            self.assertRegex(kwargs["data"]["query"], r"\bestimate\b")
             self.assertRegex(kwargs["data"]["query"], r"\bsortOrder\b")
-            return {"data": {"issue": {**issue(), "priority": 2, "sortOrder": -1.75}}}
+            return {"data": {"issue": {**issue(), "priority": 2, "estimate": 5, "sortOrder": -1.75}}}
 
         row = Linear("test", request).issue(ISSUE)
         self.assertEqual(row["priority"], 2)
+        self.assertEqual(row["estimate"], 5)
         self.assertEqual(row["sortOrder"], -1.75)
 
     def history_entry(self, number=1):

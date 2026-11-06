@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 from collections import Counter
 import copy
 import json
@@ -20,6 +22,7 @@ from urllib.request import urlopen
 from common.clients import Linear, RequestError
 from common.routing import Registry, eligibility, uuid_string
 from common.policy import PROTOCOL, digest
+from common.issue_metadata import ISSUE_METADATA_POLICY
 from common.accounts import WORKER_REPOSITORY
 from common.reporting import STAGE_LABELS
 from controller.release import local_manifest,INPUT_ROOTS
@@ -29,6 +32,8 @@ CI_WORKFLOW = "clusterfork-validation.yml"
 CI_CHECK = "Clusterfork validation"
 REGISTRY = configuration.REGISTRY
 CONTROLLER_HEALTH='https://clusterfork-controller-7604cac329.mexicocentral.cloudapp.azure.com/api/health'
+INSTRUCTIONS_START = "<!-- clusterfork:symphony-issues:start -->"
+INSTRUCTIONS_END = "<!-- clusterfork:symphony-issues:end -->"
 
 
 class SetupError(RuntimeError):
@@ -207,7 +212,50 @@ def prepare_configuration(data, project_id, repo, branch, team_id, states, comma
     return result
 
 
-def configure(checkout, registry_path, data, project_id, updated, *, install_ci=False, apply=False):
+def issue_instruction_changes(checkout, instructions_file=None, *, include_unchanged=False):
+    """Keep a discoverable, owned block while preserving the target's guidance layout."""
+    checkout = checkout.resolve()
+
+    def local(path):
+        path = path.resolve()
+        if not path.is_relative_to(checkout) or path == checkout:
+            raise SetupError("Repository instructions must resolve to a file inside the target checkout")
+        return path
+
+    root = next((checkout / name for name in ("AGENTS.md", "CLAUDE.md")
+                 if (checkout / name).exists() or (checkout / name).is_symlink()), checkout / "AGENTS.md")
+    root = local(root)
+    current = root.read_text() if root.exists() else ""
+    if instructions_file is None:
+        owned = re.search(re.escape(INSTRUCTIONS_START) + r"(.*?)" + re.escape(INSTRUCTIONS_END), current, re.S)
+        link = re.search(r"\[Symphony issue instructions\]\(<([^>]+)>\)", owned[1]) if owned else None
+        instructions_file = local(root.parent / link[1]).relative_to(checkout) if link else root.relative_to(checkout)
+    relative = Path(instructions_file)
+    if relative.is_absolute() or ".." in relative.parts or any(c in str(relative) for c in "\n\r<>"):
+        raise SetupError("Choose a repository-relative instructions file")
+    target = local(checkout / relative)
+
+    def change(path, body):
+        before = path.read_text() if path.exists() else ""
+        block = INSTRUCTIONS_START + "\n## Symphony issues\n\n" + body + "\n" + INSTRUCTIONS_END
+        starts, ends = before.count(INSTRUCTIONS_START), before.count(INSTRUCTIONS_END)
+        if starts != ends or starts > 1 or starts and before.index(INSTRUCTIONS_END) < before.index(INSTRUCTIONS_START):
+            raise SetupError("Reconcile malformed or duplicate managed Symphony instruction markers before setup")
+        if starts:
+            after = re.sub(re.escape(INSTRUCTIONS_START) + r".*?" + re.escape(INSTRUCTIONS_END),
+                           lambda _: block, before, flags=re.S)
+        else:
+            after = before + ("\n\n" if before and not before.endswith("\n") else "\n" if before else "") + block + "\n"
+        return [] if after == before and not include_unchanged else [(path, after, before)]
+
+    changes = change(target, ISSUE_METADATA_POLICY.strip())
+    if target != root:
+        changes += change(root, "Follow the [Symphony issue instructions](<" + os.path.relpath(target, root.parent) + ">).")
+    return changes
+
+
+def configure(checkout, registry_path, data, project_id, updated, *, install_ci=False, apply=False,
+              instructions_file=None):
     row = next(row for row in updated["projects"] if row["project_id"] == project_id)
     previous = next((row for row in data["projects"] if row["project_id"] == project_id), {})
     changes = []
@@ -226,6 +274,7 @@ def configure(checkout, registry_path, data, project_id, updated, *, install_ci=
         if current is not None and current != old_content:
             raise SetupError(f"Preserve and reconcile the existing {path}; it is not the expected managed workflow")
         changes.append((path, content, current))
+    changes += issue_instruction_changes(checkout, instructions_file)
     # Install files before recording their mapping. An interrupted application
     # can then finish on rerun even when only some workflow writes succeeded.
     if updated != data:
@@ -346,6 +395,9 @@ def verify(checkout, registry_path, project_id, linear, *, label_id=None):
     if (repo, branch) != (row["repository"], row["ref"]):
         raise SetupError("The explicit mapping must use this checkout's repository and default branch")
     validate_states(linear, project_id, row["linear_team_id"], {"ready": row["ready_state_ids"], **row["linear_states"]})
+    linear.team_estimates(row["linear_team_id"])
+    if issue_instruction_changes(checkout):
+        raise SetupError("Apply and publish configure's persistent Symphony issue instructions before enrollment")
     health = controller_health(project_id)
     if health.get("mode")!="single-controller":
         raise SetupError("Deploy the central task controller before enrollment")
@@ -401,6 +453,23 @@ def verify(checkout, registry_path, project_id, linear, *, label_id=None):
     successful = {name for name, passed in latest.items() if passed}
     if not required.issubset(successful):
         raise SetupError("Run meaningful configured CI successfully on the current default branch before enrollment")
+    for path, content, _ in issue_instruction_changes(checkout, include_unchanged=True):
+        relative = path.relative_to(checkout.resolve()).as_posix()
+        message = f"Publish the persistent Symphony instructions in {relative} on the default branch before enrollment"
+        try:
+            published = gh(f"repos/{repo}/contents/{quote(relative, safe='/')}?ref={head}")
+        except GitHubAccessError as exc:
+            if exc.status != 404:
+                raise
+            raise SetupError(message) from None
+        if not isinstance(published, dict) or published.get("encoding") != "base64" or not isinstance(published.get("content"), str):
+            raise SetupError(message)
+        try:
+            observed = base64.b64decode(published["content"].replace("\n", ""), validate=True).decode()
+        except (ValueError, binascii.Error, UnicodeError):
+            raise SetupError(message) from None
+        if observed != content:
+            raise SetupError(message)
     labels = list(connection(linear, """query($team: ID!, $after: String) {
       issueLabels(first: 100, after: $after, filter: {team: {id: {eq: $team}}}) {
         nodes { name parent { id } isGroup } pageInfo { hasNextPage endCursor }
@@ -466,6 +535,8 @@ def main():
     parser.add_argument("--validation-commands", type=json.loads)
     parser.add_argument("--required-check", action="append", default=[])
     parser.add_argument("--install-ci", action="store_true")
+    parser.add_argument("--instructions-file", type=Path,
+                        help="repository-relative owning guidance file; defaults to existing AGENTS.md or CLAUDE.md")
     parser.add_argument("--apply", action="store_true", help="apply local configuration or merge settings; enroll always applies last")
     parser.add_argument("--enrollment-label-id", type=uuid_string)
     args = parser.parse_args()
@@ -484,7 +555,9 @@ def main():
         if args.project_id:
             selected = project(linear, args.project_id)
             result = {"project": selected, "team_states": {team["id"]: team_states(linear, team["id"])
-                      for team in selected["teams"]["nodes"]}}
+                      for team in selected["teams"]["nodes"]},
+                      "team_estimates": {team["id"]: linear.team_estimates(team["id"])
+                                         for team in selected["teams"]["nodes"]}}
         else:
             result = {"projects": list(connection(linear, """query($after: String) {
               projects(first: 100, after: $after) { nodes { id name } pageInfo { hasNextPage endCursor } }
@@ -497,12 +570,14 @@ def main():
         if not checks:
             parser.error("choose existing --required-check names or --install-ci")
         validate_states(linear, args.project_id, args.team_id, args.states_json)
+        linear.team_estimates(args.team_id)
         data = json.loads(args.registry.read_text())
         updated = prepare_configuration(data, args.project_id, repo, branch, args.team_id, args.states_json,
                                         args.validation_commands, checks)
         print(json.dumps({"mapping": next(row for row in updated["projects"] if row["project_id"] == args.project_id),
                           "files": configure(args.checkout, args.registry, data, args.project_id, updated,
-                                             install_ci=args.install_ci, apply=args.apply),
+                                             install_ci=args.install_ci, apply=args.apply,
+                                             instructions_file=args.instructions_file),
                           "applied": args.apply, "enrolled": False}, indent=2))
     elif args.action == "verify":
         print(json.dumps(verify(args.checkout, args.registry, args.project_id, linear,

@@ -20,6 +20,7 @@ from uuid import UUID
 from common.routing import DispatchError
 from common.reporting import EXECUTION_STATUS_LABELS, worker_branch
 from common.diagnostics import failure, graphql_failure, http_operation, operation, record
+from common.issue_metadata import estimate_values, missing_metadata, validate_metadata
 
 
 class RequestError(RuntimeError):
@@ -81,7 +82,7 @@ def request_json(url, *, token=None, method="GET", data=None, form=False):
 
 
 ISSUE_FIELDS = """
-id identifier title description url archivedAt createdAt priority sortOrder
+id identifier title description url archivedAt createdAt priority estimate sortOrder
 state { id type }
 team { id }
 labels(first: 2, filter: {name: {eq: "clusterfork: auto-repair"}}) { nodes { name } pageInfo { hasNextPage } }
@@ -253,6 +254,10 @@ class Linear:
 
     def create_issue(self, fields):
         """A caller-supplied UUID makes ambiguous creates recoverable without duplicates."""
+        if missing_metadata(fields):
+            raise ValueError("Supply a meaningful priority and estimate before creating any Symphony issue, including follow-ups")
+        validate_metadata(fields, estimates=self.team_estimates(fields["teamId"]))
+        fields = {**fields, "estimate": int(fields["estimate"])}
         try:
             result = self.query("""mutation($input: IssueCreateInput!) {
               issueCreate(input: $input) { success issue { id } }
@@ -265,8 +270,58 @@ class Linear:
             existing = self.issue(fields["id"])
             if not existing:
                 raise
-            return existing
-        return self.issue(fields["id"])
+            return self.complete_issue_metadata(existing, fields)
+        return self.complete_issue_metadata(self.issue(fields["id"]), fields)
+
+    def team_estimates(self, team_id):
+        seen = set()
+        while team_id and team_id not in seen:
+            seen.add(team_id)
+            team = self.query("""query($id: String!) {
+              team(id: $id) { issueEstimationType issueEstimationExtended issueEstimationAllowZero
+                             inheritIssueEstimation parent { id } }
+            }""", {"id": team_id})["team"]
+            if not isinstance(team, dict) or type(team.get("inheritIssueEstimation")) is not bool:
+                raise ValueError("Cannot verify the team's estimate settings")
+            if not team["inheritIssueEstimation"] or "parent" in team and team["parent"] is None:
+                return estimate_values(team)
+            team_id = (team.get("parent") or {}).get("id")
+        raise ValueError("Cannot resolve the team's inherited estimate scale")
+
+    def complete_issue_metadata(self, issue, proposed):
+        """Fill only missing fields, rereading before writes and after ambiguous responses."""
+        if not issue:
+            raise RequestError()
+        if not missing_metadata(issue):
+            validate_metadata(issue)
+            return issue
+        current = self.issue(issue["id"])
+        from common.policy import issue_revision
+        if (not current or issue_revision(current) != issue_revision(issue)
+                or current.get("team") != issue.get("team")):
+            raise ValueError("Issue context changed before metadata completion; assess it again")
+        fields = {name: proposed.get(name) for name in missing_metadata(current)}
+        if not fields:
+            validate_metadata(current)
+            return current
+        validate_metadata(fields, estimates=self.team_estimates(current["team"]["id"]) if "estimate" in fields else None)
+        if "estimate" in fields:
+            fields["estimate"] = int(fields["estimate"])
+        try:
+            self.query("""mutation($id: String!, $input: IssueUpdateInput!) {
+              issueUpdate(id: $id, input: $input) { success }
+            }""", {"id": current["id"], "input": fields})
+        except RequestError:
+            verified = self.issue(current["id"])
+            if not verified or missing_metadata(verified):
+                raise
+            validate_metadata(verified)
+            return verified
+        verified = self.issue(current["id"])
+        if not verified or missing_metadata(verified):
+            raise RequestError()
+        validate_metadata(verified)
+        return verified
 
     def issue_dependencies(self, issue_id):
         """Read every incoming relation, including sources outside mapped projects.

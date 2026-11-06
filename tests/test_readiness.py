@@ -27,7 +27,8 @@ DEFAULT_RESULT = object()
 def ready():
     return {"verdict": "ready", "summary": "The intended change and verification are clear.",
             "criteria": {name: {"status": "satisfied", "reason": "Resolved by the issue and repository."}
-                         for name in CRITERIA}, "blockers": [], "evidence": [], "policy_references": []}
+                         for name in CRITERIA}, "blockers": [], "evidence": [], "policy_references": [],
+            "issue_metadata": {"priority": 3, "estimate": 2, "rationale": "A small, routine bug fix with regression coverage."}}
 
 
 def clarification(criterion="outcome"):
