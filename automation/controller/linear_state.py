@@ -122,6 +122,12 @@ def desired_state(db, task):
                  attempt.get('attempt_kind') == 'repair' and attempt.get('retry_kind') != 'capacity') else policy['ready'][0])
     epoch = identity(task['task_id'], 'linear_state', task['review_cycle'], task['current_attempt'], state,
                      task['review_attention_at'] if state == policy['blocked'] else 0)
+    if enabled(db):
+        # Returning to Todo after failure is a new projection, even if this
+        # attempt already confirmed Todo at admission. Stable retry/intent
+        # identities prevent both lost transitions and duplicate write loops.
+        epoch = identity(epoch, 'autonomous', latest['action_id'] if latest else '',
+                         attempt.get('retry_kind', ''), attempt.get('retry_at', 0))
     return epoch, state
 
 
@@ -169,10 +175,14 @@ def update_projection(db, task, command):
             db.execute("UPDATE effects SET state='done',payload=? WHERE effect_id=?", (json.dumps(payload), command.effect_id))
             return False
         observation, policy = command.observation, workflow(db, task['task_id'])
+        from .autonomy import enabled, retired_states
+        allowed = {*policy['ready'], policy['in_progress'], policy['blocked'], payload['state']}
+        if enabled(db):
+            allowed.update(retired_states(db))
         if observation.get('state') == payload['state']:
             return True  # Observation alone can acknowledge an already applied effect.
         if (observation.get('structural') is not True or observation.get('type') in {'completed', 'canceled'}
-                or observation.get('state') not in {*policy['ready'], policy['in_progress'], policy['blocked'], payload['state']}):
+                or observation.get('state') not in allowed):
             return False
         payload['issued'] = True
     payload['outcome'] = command.outcome

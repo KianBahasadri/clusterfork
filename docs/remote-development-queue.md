@@ -156,6 +156,8 @@ the driver records intent before writing, then confirmation or uncertainty.
 Before a write, the controller rechecks its lifecycle epoch, current enrollment
 facts and human watermark. Cleanup cannot replay confirmed states. Ambiguous
 writes reconcile against the observed state before repeating a mutation.
+Autonomous projections include durable retry and signed-intent identities; a
+return to Todo cannot reuse its already-confirmed admission projection.
 Targeted history remains a recovery fallback for delayed/missing transitions and
 unacknowledged attention writes. Signed events and retained projection provenance
 distinguish controller traffic from a later human withdrawal. Transitions to

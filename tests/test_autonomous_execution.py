@@ -13,7 +13,7 @@ from controller.core import Controller
 from controller.autonomy import RETIRED, retired_states
 from controller.linear_state import desired_state, workflow
 from controller.model import (Admit, Assign, EvidenceChanged, Review, Role, Retry, Rejected,
-                              InboxQueued, ContextObserved, Finish, StepResult, identity)
+                              InboxQueued, ContextObserved, Finish, StepResult, ProjectionUpdated, identity)
 from controller.store import Database
 from common.routing import Registry
 from common.reporting import worker_branch
@@ -247,6 +247,35 @@ class AutomaticExecutionTests(unittest.TestCase):
         f.controller = Controller(f.database, autonomous=True)
         self.assertFalse(f.apply(replace(observation, workflow={**observation.workflow,
                                                                'state': 'backlog', 'type': 'backlog'})).eligible)
+
+    def test_retry_projects_todo_again_after_initial_todo_effect_was_confirmed(self):
+        f = self.f
+        held = self.assessment({'invalid': True})
+        observation = replace(f.issue(), workflow={'state': 'todo', 'type': 'unstarted', 'ready': ['todo'],
+                                                   'in_progress': 'progress', 'blocked': '', 'done': 'done'})
+        f.apply(observation)
+        # Recreate the already-completed pre-upgrade Todo projection. Migration
+        # must create a fresh effect rather than silently reusing that receipt.
+        with f.database.transaction() as db:
+            db.execute('INSERT INTO metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                       (RETIRED, json.dumps(['attention'])))
+            old = identity(held.task_id, 'linear_state', held.review_cycle, held.attempt['attempt_id'], 'todo', 0)
+            db.execute('INSERT OR REPLACE INTO effects VALUES (?,?,?,?,?)',
+                       (old, held.task_id, 'linear_state',
+                        json.dumps({'state': 'todo', 'intent': '', 'outcome': 'confirmed'}), 'done'))
+        attention = replace(observation, workflow={**observation.workflow, 'state': 'attention', 'type': 'started'})
+        f.apply(attention)
+        with f.database.transaction() as db:
+            current = dict(db.execute('SELECT * FROM tasks WHERE task_id=?', (held.task_id,)).fetchone())
+            key, state = desired_state(db, current)
+        self.assertEqual(state, 'todo')
+        self.assertNotEqual(key, old)
+        self.assertTrue(f.apply(ProjectionUpdated(held.task_id, key, 'claimed',
+                         {'structural': True, 'state': 'attention', 'type': 'started'})))
+        f.apply(ProjectionUpdated(held.task_id, key, 'confirmed'))
+        f.apply(EvidenceChanged(held.task_id, held.attempt['attempt_id']))
+        pending = [effect for effect in f.controller.effects('linear_state') if effect['effect_id'] == key]
+        self.assertEqual(pending, [])  # Duplicate diagnosis cannot recreate writes.
 
     def test_production_routes_have_no_attention_state(self):
         registry = Registry.load(ROOT / 'automation/controller/projects.json')
