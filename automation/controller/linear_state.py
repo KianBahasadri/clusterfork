@@ -45,9 +45,10 @@ def workflow(db, task_id):
 
 def human_withdrawal(db, task):
     latest, policy = intent(db, task['issue_id']), workflow(db, task['task_id'])
-    from .autonomy import enabled
+    from .autonomy import enabled, retired_states
     if (latest and policy and enabled(db)
-            and latest['transition']['to_state'] in {*policy['ready'], policy.get('in_progress'), policy.get('blocked')}
+            and latest['transition']['to_state'] in {*policy['ready'], policy.get('in_progress'),
+                                                     policy.get('blocked'), *retired_states(db)}
             and not latest['withdrawn'] and not latest['conflicted']):
         return False
     return bool(latest and policy and latest['changed_at'] >= task['review_submitted_at'] and (
@@ -71,13 +72,6 @@ def observed_eligibility(db, task, observation):
             or any(not isinstance(policy[key], str) for key in required - {'ready'})):
         raise Rejected('Invalid Linear workflow observation')
     if task:
-        previous = workflow(db, task['task_id']) or {}
-        from .autonomy import enabled
-        if (enabled(db) and not policy['blocked'] and previous.get('blocked')
-                and policy['state'] == previous['blocked']):
-            # Retain an old display state only until its Todo migration lands.
-            # It cannot become a permanent eligibility or publication gate.
-            policy = {**policy, 'blocked': previous['blocked']}
         db.execute('INSERT INTO linear_workflows VALUES (?,?) ON CONFLICT(task_id) DO UPDATE SET policy=excluded.policy',
                    (task['task_id'], json.dumps(policy)))
     if not observation.eligible or policy['type'] in {'canceled', 'completed'}:
@@ -86,8 +80,8 @@ def observed_eligibility(db, task, observation):
         return False
     if policy['state'] in policy['ready']:
         return True
-    from .autonomy import enabled
-    if enabled(db) and task and policy['state'] in {policy['blocked'], policy['in_progress']}:
+    from .autonomy import enabled, retired_states
+    if enabled(db) and task and policy['state'] in {policy['blocked'], policy['in_progress'], *retired_states(db)}:
         return True
     if not task or policy['state'] != policy['in_progress']:
         return False

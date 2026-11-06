@@ -82,7 +82,10 @@ On first activation, the controller adopts existing noncanceled held work into
 this automatic policy without resetting history, replacing credentials, dropping
 grants or assuming that a runner stopped. A held issue's old Needs attention
 state is accepted as migration metadata and replaced by normal queued/running
-feedback. New tasks are created in Todo. Operators can still cancel or explicitly
+feedback. Retired state identities remain durable after the live mapping is removed,
+so old signed attention transitions cannot turn a resumed Todo item into a pause.
+Human pause/restoration effects never establish a retired state. New tasks are
+created in Todo. Operators can still cancel or explicitly
 pause work; these actions are not human-review gates and are not overridden.
 
 Legacy registries without the global autonomous setting retain the prior bounded

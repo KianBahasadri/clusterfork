@@ -30,13 +30,16 @@ class Controller:
         self._upgrade_readiness()
         self._upgrade_intents()
         if self.autonomous:
+            from .autonomy import remember_retired_states
+            with database.transaction() as db:
+                remember_retired_states(db)
             self._adopt_automatic_execution()
 
     def _adopt_automatic_execution(self):
         """Adopt held work once; never abandon grants, leases or publication."""
         from .linear_state import human_withdrawal
         with self.database.transaction() as db:
-            if not db.execute("INSERT OR IGNORE INTO metadata VALUES ('execution:adopted-v1','1')").rowcount:
+            if not db.execute("INSERT OR IGNORE INTO metadata VALUES ('execution:adopted-v2','1')").rowcount:
                 return
             for row in db.execute("SELECT * FROM tasks WHERE phase='held' AND canceled=0").fetchall():
                 task = dict(row)
@@ -45,6 +48,13 @@ class Controller:
                 attempt = dict(db.execute('SELECT * FROM attempts WHERE attempt_id=?', (task['current_attempt'],)).fetchone() or {})
                 detail = task['reason'].split('\nResolve the failure or supply the evidence,', 1)[0]
                 self._automatic_retry(db, task, attempt, 'policy_upgrade', detail, 0)
+                if not db.execute('SELECT 1 FROM grants WHERE task_id=?', (task['task_id'],)).fetchone():
+                    # A v1 false withdrawal may already have a durable deadline.
+                    # Re-adopt it without postponing that deadline or granting execution.
+                    current = self._task(db, task['task_id'])
+                    reason = (attempt.get('review_detail') if attempt.get('retry_decision') == 'retry' else '')
+                    self._update(db, current, phase='queued', reason=reason or current['reason'],
+                                 review_attention='', review_attention_at=0)
                 self._report(db, task['task_id'])
 
     def _automatic_retry(self, db, task, attempt, classification, detail, now):
