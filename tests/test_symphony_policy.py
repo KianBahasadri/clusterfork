@@ -414,7 +414,7 @@ class SymphonyAuthorityTests(unittest.TestCase):
 
 class SymphonyBrokerRetryTests(unittest.TestCase):
     def test_only_repeatable_operations_retry_temporary_failures_with_a_stable_request_identity(self):
-        for action in ('start', 'checkout', 'github', 'context', 'progress', 'command', 'step_result'):
+        for action in ('start', 'checkout', 'github', 'context', 'progress', 'command', 'step_result', 'bind_account'):
             with self.subTest(action=action):
                 broker = worker.Broker('https://clusterfork-controller-7604cac329.mexicocentral.cloudapp.azure.com/api/worker',
                                        'a' * 64, sleep=Mock(), retry_delays=(0, 0))
@@ -427,7 +427,7 @@ class SymphonyBrokerRetryTests(unittest.TestCase):
                 broker.sleep.assert_called_once_with(0)
 
     def test_ambiguous_mutations_and_authorization_denials_never_retry(self):
-        for action, status in (('claim', 503), ('bind_account', 503), ('review', 503), ('save', 503), ('github', 403)):
+        for action, status in (('claim', 503), ('bind_account', 403), ('review', 503), ('save', 503), ('github', 403)):
             with self.subTest(action=action, status=status):
                 broker = worker.Broker('https://clusterfork-controller-7604cac329.mexicocentral.cloudapp.azure.com/api/worker',
                                        'a' * 64, sleep=Mock(), retry_delays=(0, 0))

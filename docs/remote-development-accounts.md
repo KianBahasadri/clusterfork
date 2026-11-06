@@ -299,6 +299,14 @@ lease and closes pool access. Execution worker leases preempt background usage-c
 Heartbeats preserve the lease through checkout; execution
 claims that same fence. Selection cannot execute target code, validate or publish.
 
+Quota inspection is a snapshot, not a reservation. If another worker wins the
+selected account before binding, selection tries its remaining eligible identities,
+then rechecks once for provider fallback while excluding the raced accounts.
+Exhausting current capacity records a normal quota wait rather than failing setup.
+Binding acknowledgements are idempotent before agent start, including after a
+lost response; transport retries cannot switch the committed identity or create a
+second lease. Other authorization failures still reject execution.
+
 After binding, listing returns only that account and unrelated claims/saves fail.
 Agent start rechecks live quota. Release/repeated start cannot reset the binding;
 manual/partial reruns cannot inherit it. Saves/releases retain original task/run/
