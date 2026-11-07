@@ -15,7 +15,12 @@
 | `ag` | `agy --dangerously-skip-permissions` |
 | `gk` | Resolved Grok CLI; [config](agent-configs.md#grok) controls approvals |
 
-All use `_cf_tmux` and forward arguments. `codex` also applies [statusline](statusline.md#codex)
+All use `_cf_tmux` and forward arguments. `cc --profile NAME` (also
+`--profile=NAME`, `-p NAME`, and `-pNAME`) selects that saved account with
+`rotate-codex NAME` and does not pass the flag to Codex. A missing or repeated
+name fails before launch. Arguments after `--` stay with Codex, including a
+literal `--profile`. Without a profile flag, `cc` still selects automatically.
+The `codex` command applies [statusline](statusline.md#codex)
 overrides but runs directly; `command codex` bypasses it. `cl` adds Opus 4.8 via
 launch-scoped `ANTHROPIC_CUSTOM_MODEL_OPTION*`; sourcing `shell/claude.sh` exports
 `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1`. For `cmd` without existing sessions, use

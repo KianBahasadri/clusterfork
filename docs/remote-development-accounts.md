@@ -34,7 +34,7 @@ into this namespace during rotate operations and installer repair. A remote name
 can immediately be reused for a fresh local login. Consumer aliases use display
 names and remain sorted/unique.
 
-The explicit single-login migration groups saved aliases by provider identity and
+`--migrate-from-local-to-remote` groups saved aliases by provider identity and
 known token/session fingerprints. With one login, it transfers that login to the
 remote set, detaches its local selection and removes the local profile files.
 Duplicate aliases and refreshes do not create independent logins. An already
@@ -43,10 +43,26 @@ state. Registered independent local logins remain local; ambiguous unregistered
 copies fail without discarding them. This is an operator migration, not the
 default for future saves: an explicit local save stays local.
 
-Transfers journal source hashes before archiving old local copies. Retrying after
-interruption never overwrites the controller's current credentials. After verifying
-remote enrollment, migration deletes matching legacy handoff archives/backups and removes their
-metadata. It requires no provider sign-in and never copies an archive back to local.
+That transfer journals source hashes before archiving old local copies. Retrying
+after interruption never overwrites the controller's current credentials. After
+verifying remote enrollment, it deletes matching legacy handoff archives and
+backups and removes their metadata. It requires no provider sign-in and never
+copies an archive back to local.
+
+`--migrate-from-remote-to-local` transfers remote-only accounts recorded on this
+host back into local profiles. Each account is reclaimed under the same exclusive
+[reclaim](#enroll-and-reclaim) lease, writing the current cloud credentials,
+including refreshes, to local files named by the remote display names, then
+removing the remote account. Accounts with an independent local login stay
+remote. An unregistered local copy of the same account fails without removing
+the remote login. Accounts enrolled only on other hosts stay in the pool.
+Restored profiles are not selected. Interrupted reclaims retry through the
+existing journal; a pending remote deletion must finish first. No provider
+sign-in is required.
+
+The interactive menu moves only the checked profiles. Aliases of one remote
+account are one choice and move together. The explicit direction flags move
+every eligible profile.
 
 Pending remote transfers live under the private sibling directory
 `.<store-directory-name>-logins/{local,remote}/NAME/`, outside profile enumeration.

@@ -48,10 +48,56 @@ PY
 
 codex() { _cf_launch_codex direct "$@"; }
 cc() {
-  # Codex launch arguments must not reach the account picker.
-  # shellcheck disable=SC2119
-  rotate-codex || return "$?"
-  _cf_launch_codex tmux resume --yolo "$@"
+  local profile=""
+  local -a launch_args=()
+  while (( $# )); do
+    case "$1" in
+      --)
+        launch_args+=("$@")
+        break
+        ;;
+      --profile|-p)
+        if [[ -n "$profile" ]]; then
+          printf 'cc: --profile can be used only once\n' >&2
+          return 2
+        fi
+        if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+          printf 'cc: --profile requires a profile name\n' >&2
+          return 2
+        fi
+        profile="$2"
+        shift 2
+        ;;
+      --profile=*|-p?*)
+        if [[ -n "$profile" ]]; then
+          printf 'cc: --profile can be used only once\n' >&2
+          return 2
+        fi
+        if [[ "$1" == --profile=* ]]; then
+          profile="${1#--profile=}"
+        else
+          profile="${1#-p}"
+        fi
+        if [[ -z "$profile" || "$profile" == -* ]]; then
+          printf 'cc: --profile requires a profile name\n' >&2
+          return 2
+        fi
+        shift
+        ;;
+      *)
+        launch_args+=("$1")
+        shift
+        ;;
+    esac
+  done
+  # Only a profile name selects an account. Other launch arguments stay with Codex.
+  if [[ -n "$profile" ]]; then
+    rotate-codex "$profile" || return "$?"
+  else
+    # shellcheck disable=SC2119
+    rotate-codex || return "$?"
+  fi
+  _cf_launch_codex tmux resume --yolo "${launch_args[@]}"
 }
 
 # This public command also accepts profiles and flags when called directly.

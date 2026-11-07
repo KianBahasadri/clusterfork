@@ -41,7 +41,7 @@ class CodexStatuslineTests(unittest.TestCase):
     def run_launch(self, *arguments):
         return subprocess.run(
             ["bash", "-c",
-             'source shell/codex.sh; rotate-codex() { :; }; _cf_tmux() { "$@"; }; "$@"',
+             'source shell/codex.sh; rotate-codex() { printf "rotate:%s\\n" "$*" >&2; }; _cf_tmux() { "$@"; }; "$@"',
              "statusline-test", *arguments],
             cwd=REPO_ROOT, env=self.env, capture_output=True, text=True, timeout=5,
         )
@@ -67,7 +67,16 @@ class CodexStatuslineTests(unittest.TestCase):
                      ["--profile=custom"], ["-pcustom"]):
             with self.subTest(args=args):
                 self.assertEqual(self.launch("codex", *args), [*self.overrides, *args])
-                self.assertEqual(self.launch("cc", *args), [*self.overrides, "resume", "--yolo", *args])
+
+    def test_cc_profile_selects_saved_account_and_is_not_forwarded(self):
+        for args in (["-p", "custom"], ["--profile", "custom"],
+                     ["--profile=custom"], ["-pcustom"]):
+            with self.subTest(args=args):
+                proc = self.run_launch("cc", *args, "--last")
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertIn("rotate:custom", proc.stderr.splitlines())
+                self.assertEqual(json.loads(proc.stdout),
+                                 [*self.overrides, "resume", "--yolo", "--last"])
 
     def test_explicit_config_overrides_and_prompt_are_preserved(self):
         self.assertEqual(

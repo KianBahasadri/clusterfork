@@ -184,16 +184,25 @@ Local save selects the saved profile. Remote save transfers the current login an
 reattaches the previous local profile when one exists. These commands never start
 a provider sign-in.
 Remote jobs select their own account, so `--remote` accepts only
-`--save`, `--list`, `--delete` and `--migrate`. It never installs remote credentials locally for
+`--save`, `--list` and `--delete`. It never installs remote credentials locally for
 selection or kickoff. Remote operations use the existing Azure CLI operator login;
 the installed helpers need only Python's standard library.
 
 Local save registers a separate provider login automatically when the same account
 also has remote credentials. No additional registration flag is required. The
 [account ownership topic](remote-development-accounts.md#scoped-rotator-management)
-owns independence checks, names, interrupted additions and remote deletion.
-`rotate-codex --remote --migrate` (or the Cursor equivalent) transfers existing
-single-login profiles into the remote set without another provider sign-in.
+owns independence checks, names, interrupted additions, remote deletion and
+which profiles a migration moves.
+
+`rotate-codex --migrate` prompts for a direction when the terminal is interactive,
+using the same arrow-key menu as `--save`, then a checkbox list of the profiles
+that can move. Space toggles the highlighted row, `a` selects or clears every
+profile, and the `all` row does the same. Enter migrates the checked profiles.
+Leaving every box empty cancels. A non-interactive shell requires
+`--migrate-from-local-to-remote` or `--migrate-from-remote-to-local` and otherwise
+exits with the command usage. Those flags move every eligible profile and do not
+combine with `--local` or `--remote`. `rotate-cursor-cli` accepts the same
+migration flags.
 
 ## Sharing with a container
 

@@ -756,6 +756,69 @@ class InteractivePromptTests(unittest.TestCase):
                     _, status = os.waitpid(pid, 0)
                     self.assertEqual(os.waitstatus_to_exitcode(status), 42)
 
+    def test_prompt_migration_maps_menu_choice(self):
+        with patch.object(rotate_auth, "prompt_choice", return_value="remote to local") as menu:
+            self.assertEqual(rotate_auth.prompt_migration("rotate-codex"), "migrate-from-remote-to-local")
+        header, options, confirmation = menu.call_args.args
+        self.assertIn("migration direction", header)
+        self.assertEqual(options, ["local to remote", "remote to local"])
+        self.assertIn("{choice}", confirmation)
+        with patch.object(rotate_auth, "prompt_choice", return_value="local to remote"):
+            self.assertEqual(rotate_auth.prompt_migration("rotate-codex"), "migrate-from-local-to-remote")
+
+    def test_prompt_profile_selection_toggles_and_selects_all(self):
+        import os
+        import pty
+        import select
+        import time
+
+        cases = (
+            (b"\r", ""),
+            (b"\x1b[B \r", "work"),
+            (b" \r", "work,alias"),
+            (b"a\r", "work,alias"),
+            (b"a\x1b[B \r", "alias"),
+        )
+        for keys, expected in cases:
+            with self.subTest(keys=keys, expected=expected):
+                master, slave = pty.openpty()
+                pid = os.fork()
+                if pid == 0:
+                    os.close(master)
+                    os.dup2(slave, 0)
+                    os.dup2(slave, 1)
+                    os.dup2(slave, 2)
+                    if slave > 2:
+                        os.close(slave)
+                    try:
+                        selected = rotate_auth.prompt_profile_selection("rotate-codex", ["work", "alias"])
+                        sys.stdout.write("\nRESULT:" + ",".join(selected) + "\n")
+                        sys.stdout.flush()
+                        os._exit(0)
+                    except Exception:
+                        os._exit(1)
+                else:
+                    os.close(slave)
+                    time.sleep(0.02)
+                    os.write(master, keys)
+                    output = b""
+                    while True:
+                        ready, _, _ = select.select([master], [], [], 0.5)
+                        if not ready:
+                            break
+                        try:
+                            data = os.read(master, 1024)
+                            if not data:
+                                break
+                            output += data
+                        except OSError:
+                            break
+                    os.close(master)
+                    _, status = os.waitpid(pid, 0)
+                    self.assertEqual(os.waitstatus_to_exitcode(status), 0, output)
+                    normalized = output.replace(b"\r\n", b"\n")
+                    self.assertIn(f"RESULT:{expected}\n".encode(), normalized)
+
 
 
 if __name__ == "__main__":

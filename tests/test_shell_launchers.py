@@ -113,6 +113,52 @@ cc --last 'a prompt with spaces'
             "rotate:0", "launch", "tmux", "resume", "--yolo", "--last", "a prompt with spaces",
         ])
 
+    def test_profile_selects_saved_account_and_is_not_forwarded(self):
+        cases = (
+            ("--profile work", "work"),
+            ("--profile=work", "work"),
+            ("-p work", "work"),
+            ("-pwork", "work"),
+        )
+        for flags, name in cases:
+            with self.subTest(flags=flags):
+                proc = run_bash(f'''
+source shell/codex.sh
+rotate-codex() {{ printf 'rotate:%s\\n' "$*"; }}
+_cf_launch_codex() {{ printf 'launch\\n'; printf '%s\\n' "$@"; }}
+cc --last {flags} 'a prompt'
+''')
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(proc.stdout.splitlines(), [
+                    f"rotate:{name}", "launch", "tmux", "resume", "--yolo", "--last", "a prompt",
+                ])
+
+    def test_profile_after_double_dash_stays_with_codex(self):
+        proc = run_bash('''
+source shell/codex.sh
+rotate-codex() { printf 'rotate:%s\\n' "$#"; }
+_cf_launch_codex() { printf 'launch\\n'; printf '%s\\n' "$@"; }
+cc -- --profile work
+''')
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.splitlines(), [
+            "rotate:0", "launch", "tmux", "resume", "--yolo", "--", "--profile", "work",
+        ])
+
+    def test_missing_or_repeated_profile_fails_before_rotation_or_launch(self):
+        for invocation in ("cc --profile", "cc --profile --last", "cc --profile=",
+                           "cc --profile work --profile other"):
+            with self.subTest(invocation=invocation):
+                proc = run_bash(f'''
+source shell/codex.sh
+rotate-codex() {{ printf 'unexpected rotate\\n'; }}
+_cf_launch_codex() {{ printf 'unexpected launch\\n'; }}
+{invocation}
+''')
+                self.assertNotEqual(proc.returncode, 0)
+                self.assertEqual(proc.stdout, "")
+                self.assertIn("cc: --profile", proc.stderr)
+
     def test_rotation_failure_stops_launch_and_preserves_exit_status(self):
         proc = run_bash('''
 source shell/codex.sh

@@ -351,7 +351,7 @@ class ScopedRotationTests(unittest.TestCase):
                 with patch("subprocess.run", side_effect=AssertionError("signed in")), \
                      CallBudget(self, api=client, exact={"api.snapshot": 1, "api.enroll": 1,
                          "api.describe": 2, "api.get": 1}):
-                    self.command(backend, client, "--remote", "--migrate")
+                    self.command(backend, client, "--migrate-from-local-to-remote")
                 self.assertEqual(list(backend.store_dir.glob("auth.json.*")), [])
                 self.assertFalse(backend.auth.is_symlink())
                 self.assertFalse(backend.current.is_symlink())
@@ -366,7 +366,7 @@ class ScopedRotationTests(unittest.TestCase):
                 lease = pool.claim(identity, "worker")
                 pool.save(identity, "worker", lease["lease"], login(provider, "local", 1), release=True)
                 with CallBudget(self, api=client, exact={"api.snapshot": 1, "api.describe": 1, "api.get": 1}):
-                    self.command(backend, client, "--remote", "--migrate")
+                    self.command(backend, client, "--migrate-from-local-to-remote")
                 self.assertEqual(json.loads(pool.get(identity)[0]["auth"]), login(provider, "local", 1))
 
     def test_single_login_migration_keeps_independent_local_session(self):
@@ -376,7 +376,7 @@ class ScopedRotationTests(unittest.TestCase):
                 self.save_remote_login(backend, client)
                 before = self.local_state(backend)
                 with CallBudget(self, api=client, exact={"api.snapshot": 1, "api.get": 2, "api.describe": 1}):
-                    self.command(backend, client, "--remote", "--migrate")
+                    self.command(backend, client, "--migrate-from-local-to-remote")
                 self.assertEqual(self.local_state(backend), before)
                 listing = self.command(backend, client, "--list")[1]
                 self.assertRegex(listing, r"work\s+\[local\]\s+\[remote\]")
@@ -389,7 +389,7 @@ class ScopedRotationTests(unittest.TestCase):
                 backend, pools, client = self.fixture(provider, local=False)
                 self.save_remote_login(backend, client)
                 accounts.write_private(backend.store_dir / "auth.json.work", login(provider, "remote"))
-                self.command(backend, client, "--remote", "--migrate")
+                self.command(backend, client, "--migrate-from-local-to-remote")
                 self.assertEqual(set(accounts.load_remote_profiles(backend.store_dir)), {"remote:work"})
                 self.assertEqual(list(backend.store_dir.glob("auth.json.*")), [])
                 identity = pools.pools[provider].list()[0]
@@ -402,7 +402,7 @@ class ScopedRotationTests(unittest.TestCase):
                 accounts.write_private(backend.store_dir / "auth.json.second", login(provider, "second-local"))
                 before = self.local_state(backend)
                 with CallBudget(self, api=client, exact={"api.snapshot": 1}):
-                    self.command(backend, client, "--remote", "--migrate")
+                    self.command(backend, client, "--migrate-from-local-to-remote")
                 self.assertEqual(self.local_state(backend), before)
                 self.assertEqual(pools.pools[provider].list(), [])
 
@@ -412,14 +412,14 @@ class ScopedRotationTests(unittest.TestCase):
                 backend, pools, client = self.fixture(provider)
                 with patch.object(accounts, "write_private", side_effect=OSError("interrupted")), \
                      self.assertRaises(rotate_auth.RotateError):
-                    self.command(backend, client, "--remote", "--migrate")
+                    self.command(backend, client, "--migrate-from-local-to-remote")
                 self.assertTrue((backend.store_dir / "auth.json.work").exists())
                 self.assertFalse(backend.auth.is_symlink())
                 pool = pools.pools[provider]
                 identity = pool.list()[0]
                 lease = pool.claim(identity, "worker")
                 pool.save(identity, "worker", lease["lease"], login(provider, "local", 1), release=True)
-                self.command(backend, client, "--remote", "--migrate")
+                self.command(backend, client, "--migrate-from-local-to-remote")
                 self.assertEqual(json.loads(pool.get(identity)[0]["auth"]), login(provider, "local", 1))
                 self.assertEqual(list(backend.store_dir.glob("auth.json.*")), [])
                 self.assertFalse((backend.store_dir / accounts.CLOUD_DIRECTORY).exists())
@@ -434,7 +434,7 @@ class ScopedRotationTests(unittest.TestCase):
                 identity = pools.pools[provider].enroll(auth)
                 accounts.write_private(backend.store_dir / accounts.MANIFEST, {"work": {
                     "account_id": identity, "ownership": "cloud", "source_sha256": accounts.digest(path)}})
-                self.command(backend, client, "--remote", "--migrate")
+                self.command(backend, client, "--migrate-from-local-to-remote")
                 for name, session in (("work", "local"), ("remote.work", "other-local")):
                     self.provider_login(backend, provider, session)
                     self.assertEqual(self.command(backend, client, "--local", "--save", name)[0], 0)
@@ -457,11 +457,11 @@ class ScopedRotationTests(unittest.TestCase):
                         "account_id": identity, "ownership": "cloud", "source_sha256": accounts.digest(source)}})
                     if changed:
                         with self.assertRaisesRegex(rotate_auth.RotateError, "archive changed"):
-                            self.command(backend, client, "--remote", "--migrate")
+                            self.command(backend, client, "--migrate-from-local-to-remote")
                         self.assertEqual(backup.read_bytes(), original)
                         self.assertTrue((backend.store_dir / accounts.CLOUD_DIRECTORY / "work.json").exists())
                     else:
-                        self.command(backend, client, "--remote", "--migrate")
+                        self.command(backend, client, "--migrate-from-local-to-remote")
                         self.assertFalse(backup.exists())
                         self.assertFalse(backup.parent.exists())
                         self.assertFalse((backend.store_dir / accounts.CLOUD_DIRECTORY).exists())
@@ -474,6 +474,9 @@ class ScopedRotationTests(unittest.TestCase):
                 code, output = self.command(backend, client, "--help")
                 self.assertEqual(code, 0)
                 self.assertIn("--save name", output)
+                self.assertIn("--migrate-from-local-to-remote", output)
+                self.assertIn("--migrate-from-remote-to-local", output)
+                self.assertNotIn("--remote --migrate", output)
                 self.assertNotIn("--add", output)
                 self.assertNotIn("--fresh-login", output)
 
@@ -484,6 +487,9 @@ class ScopedRotationTests(unittest.TestCase):
                 before = self.local_state(backend)
                 invalid = [("--remote",), ("--remote", "work"), ("--remote", "--unhook"),
                            ("--remote", "--kickoff"), ("--remote", "--save", "work"),
+                           ("--remote", "--migrate"), ("--local", "--migrate"),
+                           ("--migrate", "work"), ("--local", "--migrate-from-local-to-remote"),
+                           ("--remote", "--migrate-from-remote-to-local"),
                            ("--local", "--remote", "--list"), ("--local", "--local", "--list"),
                            ("--add", ".."), ("--remote", "--add", "."),
                            ("--add", "work"), ("--add", "../outside"), ("--fresh-login", "--list")]
@@ -493,6 +499,191 @@ class ScopedRotationTests(unittest.TestCase):
                         with self.subTest(args=args), self.assertRaises(rotate_auth.RotateError):
                             self.command(backend, client, *args)
                 self.assertEqual(self.local_state(backend), before)
+
+    def test_remote_to_local_migration_restores_latest_tokens_and_is_repeatable(self):
+        for provider in ("codex", "cursor"):
+            with self.subTest(provider=provider):
+                backend, pools, client = self.fixture(provider)
+                with CallBudget(self, api=client, exact={"api.snapshot": 1, "api.enroll": 1,
+                                                         "api.describe": 2, "api.get": 1}):
+                    self.command(backend, client, "--migrate-from-local-to-remote")
+                pool = pools.pools[provider]
+                identity = pool.list()[0]
+                lease = pool.claim(identity, "worker")
+                pool.save(identity, "worker", lease["lease"], login(provider, "local", 1), release=True)
+                with CallBudget(self, api=client, exact={"api.claim": 1, "api.delete": 1}):
+                    code, output = self.command(backend, client, "--migrate-from-remote-to-local")
+                self.assertEqual(code, 0)
+                self.assertIn("moved 1 remote profiles to local", output)
+                self.assertEqual(json.loads((backend.store_dir / "auth.json.work").read_text()),
+                                 login(provider, "local", 1))
+                self.assertEqual(pool.list(), [])
+                self.assertEqual(accounts.load_remote_profiles(backend.store_dir, migrate=False), {})
+                self.assertFalse(backend.current.is_symlink())
+                self.assertFalse(backend.auth.is_symlink())
+                with CallBudget(self, api=client):
+                    self.command(backend, client, "--migrate-from-remote-to-local")
+                self.assertEqual(json.loads((backend.store_dir / "auth.json.work").read_text()),
+                                 login(provider, "local", 1))
+
+    def test_interrupted_remote_to_local_migration_retries(self):
+        for provider in ("codex", "cursor"):
+            with self.subTest(provider=provider):
+                backend, pools, client = self.fixture(provider)
+                self.command(backend, client, "--migrate-from-local-to-remote")
+                identity = pools.pools[provider].list()[0]
+                client.delete.side_effect = OSError("interrupted")
+                with self.assertRaisesRegex(rotate_auth.RotateError, "retry the same migration"):
+                    self.command(backend, client, "--migrate-from-remote-to-local")
+                self.assertEqual(pools.pools[provider].list(), [identity])
+                self.assertTrue((backend.store_dir / "auth.json.work").is_file())
+                client.delete.side_effect = None
+                with CallBudget(self, api=client, exact={"api.claim": 1, "api.delete": 1}):
+                    self.assertEqual(self.command(backend, client, "--migrate-from-remote-to-local")[0], 0)
+                self.assertEqual(pools.pools[provider].list(), [])
+                self.assertEqual(json.loads((backend.store_dir / "auth.json.work").read_text()),
+                                 login(provider, "local"))
+
+    def test_remote_to_local_migration_keeps_independent_local_and_refuses_copies(self):
+        for provider in ("codex", "cursor"):
+            with self.subTest(provider=provider, kind="independent"):
+                backend, pools, client = self.fixture(provider)
+                self.save_remote_login(backend, client)
+                before = self.local_state(backend)
+                identity = pools.pools[provider].list()[0]
+                with CallBudget(self, api=client):
+                    code, output = self.command(backend, client, "--migrate-from-remote-to-local")
+                self.assertEqual(code, 0)
+                self.assertIn("moved 0 remote profiles to local", output)
+                self.assertEqual(self.local_state(backend), before)
+                self.assertEqual(pools.pools[provider].list(), [identity])
+
+            with self.subTest(provider=provider, kind="same-account"):
+                backend, pools, client = self.fixture(provider)
+                self.command(backend, client, "--migrate-from-local-to-remote")
+                accounts.write_private(backend.store_dir / "auth.json.copy", login(provider, "local", 1))
+                identity = pools.pools[provider].list()[0]
+                with CallBudget(self, api=client):
+                    with self.assertRaisesRegex(rotate_auth.RotateError, "refusing to overwrite"):
+                        self.command(backend, client, "--migrate-from-remote-to-local")
+                self.assertEqual(pools.pools[provider].list(), [identity])
+                self.assertFalse((backend.store_dir / "auth.json.work").exists())
+                self.assertEqual(json.loads((backend.store_dir / "auth.json.copy").read_text()),
+                                 login(provider, "local", 1))
+
+            with self.subTest(provider=provider, kind="other-account"):
+                backend, pools, client = self.fixture(provider)
+                self.command(backend, client, "--migrate-from-local-to-remote")
+                other = login(provider, "other", account="two")
+                accounts.write_private(backend.store_dir / "auth.json.work", other)
+                identity = pools.pools[provider].list()[0]
+                with CallBudget(self, api=client):
+                    with self.assertRaisesRegex(rotate_auth.RotateError, "overwrite"):
+                        self.command(backend, client, "--migrate-from-remote-to-local")
+                self.assertEqual(pools.pools[provider].list(), [identity])
+                self.assertEqual(json.loads((backend.store_dir / "auth.json.work").read_text()), other)
+
+    def test_remote_to_local_migration_refuses_a_busy_account(self):
+        for provider in ("codex", "cursor"):
+            with self.subTest(provider=provider):
+                backend, pools, client = self.fixture(provider)
+                self.command(backend, client, "--migrate-from-local-to-remote")
+                identity = pools.pools[provider].list()[0]
+                pools.pools[provider].claim(identity, "worker")
+                with self.assertRaisesRegex(rotate_auth.RotateError, "busy"):
+                    self.command(backend, client, "--migrate-from-remote-to-local")
+                self.assertEqual(pools.pools[provider].list(), [identity])
+                self.assertFalse((backend.store_dir / "auth.json.work").exists())
+
+    def test_bare_migrate_prompts_only_in_an_interactive_terminal(self):
+        for provider in ("codex", "cursor"):
+            with self.subTest(provider=provider):
+                backend, pools, client = self.fixture(provider)
+                before = self.local_state(backend)
+                with patch.object(rotate_auth, "is_interactive", return_value=False), CallBudget(self, api=client):
+                    with self.assertRaises(rotate_auth.RotateError) as ctx:
+                        self.command(backend, client, "--migrate")
+                self.assertIn("usage:", "\n".join(ctx.exception.lines))
+                self.assertIn("--migrate-from-local-to-remote", "\n".join(ctx.exception.lines))
+                self.assertEqual(self.local_state(backend), before)
+                with patch.object(rotate_auth, "is_interactive", return_value=True), \
+                     patch.object(rotate_auth, "prompt_migration", side_effect=KeyboardInterrupt), \
+                     CallBudget(self, api=client):
+                    with self.assertRaisesRegex(rotate_auth.RotateError, "migration cancelled"):
+                        self.command(backend, client, "--migrate")
+                self.assertEqual(self.local_state(backend), before)
+                with patch.object(rotate_auth, "is_interactive", return_value=True), \
+                     patch.object(rotate_auth, "prompt_migration", return_value="migrate-from-local-to-remote"), \
+                     patch.object(rotate_auth, "prompt_profile_selection", return_value=["work"]) as picked, \
+                     CallBudget(self, api=client, exact={"api.snapshot": 1, "api.enroll": 1,
+                                                         "api.describe": 2, "api.get": 1}):
+                    self.assertEqual(self.command(backend, client, "--migrate")[0], 0)
+                self.assertEqual(picked.call_args.args[1], ["work"])
+                self.assertEqual(list(backend.store_dir.glob("auth.json.*")), [])
+                with patch.object(rotate_auth, "is_interactive", return_value=True), \
+                     patch.object(rotate_auth, "prompt_migration", return_value="migrate-from-remote-to-local"), \
+                     patch.object(rotate_auth, "prompt_profile_selection", return_value=["work"]) as picked, \
+                     CallBudget(self, api=client, exact={"api.claim": 1, "api.delete": 1}):
+                    code, output = self.command(backend, client, "--migrate")
+                self.assertEqual(picked.call_args.args[1], ["work"])
+                self.assertEqual(code, 0)
+                self.assertIn("moved 1 remote profiles to local", output)
+                self.assertEqual(json.loads((backend.store_dir / "auth.json.work").read_text()), login(provider, "local"))
+                self.assertEqual(pools.pools[provider].list(), [])
+
+    def test_interactive_migration_moves_only_checked_profiles(self):
+        for provider in ("codex", "cursor"):
+            with self.subTest(provider=provider, direction="local"):
+                backend, pools, client = self.fixture(provider)
+                accounts.write_private(backend.store_dir / "auth.json.alias", login(provider, "local"))
+                with patch.object(rotate_auth, "is_interactive", return_value=True), \
+                     patch.object(rotate_auth, "prompt_migration", return_value="migrate-from-local-to-remote"), \
+                     patch.object(rotate_auth, "prompt_profile_selection", return_value=["alias"]), \
+                     CallBudget(self, api=client, exact={"api.snapshot": 1, "api.enroll": 1,
+                                                         "api.describe": 2, "api.get": 1}):
+                    output = self.command(backend, client, "--migrate")[1]
+                self.assertIn("moved 1 single-login profiles to remote", output)
+                self.assertEqual(json.loads((backend.store_dir / "auth.json.work").read_text()), login(provider, "local"))
+                self.assertFalse((backend.store_dir / "auth.json.alias").exists())
+                self.assertEqual(set(accounts.load_remote_profiles(backend.store_dir, migrate=False)), {"remote:alias"})
+                self.assertEqual(pools.pools[provider].list(), [account_identity(login(provider, "local"), provider)])
+
+            with self.subTest(provider=provider, direction="remote"):
+                backend, pools, client = self.fixture(provider)
+                accounts.write_private(backend.store_dir / "auth.json.other", login(provider, "other", account="two"))
+                self.command(backend, client, "--migrate-from-local-to-remote")
+                kept = account_identity(login(provider, "other", account="two"), provider)
+                with patch.object(rotate_auth, "is_interactive", return_value=True), \
+                     patch.object(rotate_auth, "prompt_migration", return_value="migrate-from-remote-to-local"), \
+                     patch.object(rotate_auth, "prompt_profile_selection", return_value=["work"]) as picked, \
+                     CallBudget(self, api=client, exact={"api.claim": 1, "api.delete": 1}):
+                    output = self.command(backend, client, "--migrate")[1]
+                self.assertEqual(picked.call_args.args[1], ["other", "work"])
+                self.assertIn("moved 1 remote profiles to local", output)
+                self.assertEqual(json.loads((backend.store_dir / "auth.json.work").read_text()), login(provider, "local"))
+                self.assertFalse((backend.store_dir / "auth.json.other").exists())
+                self.assertEqual(pools.pools[provider].list(), [kept])
+                self.assertEqual(set(accounts.load_remote_profiles(backend.store_dir, migrate=False)), {"remote:other"})
+
+    def test_interactive_migration_cancel_and_empty_selection_change_nothing(self):
+        for provider in ("codex", "cursor"):
+            for selection in (KeyboardInterrupt, []):
+                with self.subTest(provider=provider, selection=selection):
+                    backend, pools, client = self.fixture(provider)
+                    before = self.local_state(backend)
+                    prompt = patch.object(rotate_auth, "prompt_profile_selection",
+                                          side_effect=selection if selection is KeyboardInterrupt else None,
+                                          return_value=selection if selection == [] else None)
+                    with patch.object(rotate_auth, "is_interactive", return_value=True), \
+                         patch.object(rotate_auth, "prompt_migration", return_value="migrate-from-local-to-remote"), \
+                         prompt, self.assertRaisesRegex(rotate_auth.RotateError, "migration cancelled"):
+                        self.command(backend, client, "--migrate")
+                    self.assertEqual(self.local_state(backend), before)
+                    self.assertEqual(pools.pools[provider].list(), [])
+
+    def test_other_agents_reject_migration_flags(self):
+        with self.assertRaisesRegex(rotate_auth.RotateError, "Codex and Cursor"):
+            rotate_auth.run(["claude", "--migrate-from-local-to-remote"])
 
 
 if __name__ == "__main__":

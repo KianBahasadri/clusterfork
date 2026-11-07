@@ -212,7 +212,17 @@ class ScopedAccounts:
         for path in present:
             path.unlink()
 
-    def migrate_single_logins(self):
+    def _prompt_profiles(self, names):
+        import rotate_auth
+        try:
+            selected = rotate_auth.prompt_profile_selection(self.backend.command, names)
+        except (KeyboardInterrupt, EOFError):
+            fail(f"{self.backend.command}: migration cancelled")
+        if not selected:
+            fail(f"{self.backend.command}: migration cancelled")
+        return selected
+
+    def migrate_single_logins(self, *, choose=False):
         """Explicit one-time transfer of accounts with only one configured login."""
         manifest = self.manifest()
         if any(record.get("reclaim") or record.get("remove") for record in manifest.values()):
@@ -224,7 +234,7 @@ class ScopedAccounts:
             auth = self.read_auth(path)
             identity = account_identity(auth, self.provider)
             groups.setdefault(identity, []).append((name, path, auth, set(login_fingerprints(auth, self.provider))))
-        moved = 0
+        planned = []
         for identity, profiles in groups.items():
             if identity in remote_ids:
                 known, _ = self.remote_login(client, identity)
@@ -253,8 +263,22 @@ class ScopedAccounts:
                 if len(sessions) != 1:
                     continue
                 transfer = profiles
-            if not transfer:
-                continue
+            if transfer:
+                planned.append((identity, transfer))
+        if choose:
+            options = sorted({name for _, transfer in planned for name, *_ in transfer})
+            if not options:
+                print(f"{self.backend.command}: no profiles to migrate")
+                self.cleanup_migrated_store()
+                return 0
+            selected = set(self._prompt_profiles(options))
+            planned = [
+                (identity, [item for item in transfer if item[0] in selected])
+                for identity, transfer in planned
+            ]
+            planned = [(identity, transfer) for identity, transfer in planned if transfer]
+        moved = 0
+        for identity, transfer in planned:
             names = [name for name, _, _, _ in transfer]
             if any(manifest.get(remote_profile_key(name), {}).get("account_id", identity) != identity for name in names):
                 raise WorkerError("Local and remote names identify different accounts; choose another remote name")
@@ -303,6 +327,69 @@ class ScopedAccounts:
                 record.pop("legacy_alias", None)
                 record.pop("source_sha256", None)
         accounts.write_private(self.store / REMOTE_MANIFEST, manifest)
+        self.cleanup_migrated_store()
+        print(f"{self.backend.command}: moved {moved} single-login profiles to remote")
+        return 0
+
+    def migrate_remote_to_local(self, *, choose=False):
+        """Transfer this host's remote-only accounts back into local profiles."""
+        manifest = self.manifest()
+        if any(record.get("remove") for record in manifest.values()):
+            raise WorkerError("Finish the pending account deletion before migrating profiles")
+        groups = {}
+        for alias, record in manifest.items():
+            if record.get("ownership", "cloud") != "cloud":
+                continue
+            groups.setdefault(record["account_id"], []).append(alias)
+        local_identities = self.local_profile_identities()
+        movable = []
+        for identity, aliases in groups.items():
+            registered = [name for name, record in manifest.items()
+                          if record.get("account_id") == identity and record.get("ownership") == "local"]
+            if registered:
+                continue
+            if any(manifest[alias].get("reclaim") for alias in aliases):
+                movable.append(aliases)
+                continue
+            conflicts = local_identities.get(identity, [])
+            if conflicts:
+                raise WorkerError(
+                    f"Local profile {conflicts[0]!r} already belongs to a remote account; refusing to overwrite it")
+            movable.append(aliases)
+        if choose:
+            labeled = []
+            for aliases in movable:
+                label = ", ".join(sorted(manifest[alias].get("display_name", alias) for alias in aliases))
+                labeled.append((label, aliases))
+            labeled.sort(key=lambda item: item[0])
+            if not labeled:
+                print(f"{self.backend.command}: no profiles to migrate")
+                self.cleanup_migrated_store()
+                return 0
+            selected = set(self._prompt_profiles([label for label, _ in labeled]))
+            movable = [aliases for label, aliases in labeled if label in selected]
+        moved = 0
+        if movable:
+            client = accounts.connect(self.provider)
+            args = SimpleNamespace(store=self.store, provider=self.provider, destination_profile=None)
+            for aliases in movable:
+                accounts.reclaim(args, manifest, client, aliases[0])
+                moved += len(aliases)
+        self.cleanup_migrated_store()
+        print(f"{self.backend.command}: moved {moved} remote profiles to local")
+        return 0
+
+    def local_profile_identities(self):
+        found = {}
+        for name, path in accounts.saved_profiles(self.store).items():
+            try:
+                auth = json.loads(path.read_text())
+                found.setdefault(account_identity(auth, self.provider), []).append(name)
+            except (OSError, ValueError, TypeError, WorkerError):
+                raise WorkerError(f"Cannot read local profile {name!r}") from None
+        return found
+
+    def cleanup_migrated_store(self):
         for name in (CLOUD_DIRECTORY, "remote-staged"):
             archive_dir = self.store / name
             if archive_dir.is_dir() and not archive_dir.is_symlink() and not any(archive_dir.iterdir()):
@@ -312,8 +399,6 @@ class ScopedAccounts:
             self.backend.current.unlink()
         if self.backend.auth.is_symlink() and not self.backend.auth.exists():
             self.backend.auth.unlink()
-        print(f"{self.backend.command}: moved {moved} single-login profiles to remote")
-        return 0
 
     def delete_remote(self, name):
         self.validate_name(name)
@@ -400,21 +485,27 @@ class ScopedAccounts:
         return self.delete_pending("local", name)
 
 
-def manage(backend, scope, action, name):
+def manage(backend, scope, action, name, *, choose=False):
     manager = ScopedAccounts(backend)
     try:
         if action == "save":
             return manager.save(scope, name)
         if action == "list":
             return manager.list_remote()
-        if action == "migrate":
-            return manager.migrate_single_logins()
+        if action == "migrate-from-local-to-remote":
+            return manager.migrate_single_logins(choose=choose)
+        if action == "migrate-from-remote-to-local":
+            return manager.migrate_remote_to_local(choose=choose)
         if action == "delete":
             return manager.delete_remote(name) if scope == "remote" else manager.delete_local(name)
     except WorkerError as error:
         fail(f"{backend.command}: {error}")
     except (OSError, ValueError, TypeError):
+        if str(action).startswith("migrate-from-"):
+            fail(f"{backend.command}: account operation did not finish; retry the same migration")
         fail(f"{backend.command}: account operation did not finish; retry with the same scope and name")
     except KeyboardInterrupt:
+        if str(action).startswith("migrate-from-"):
+            fail(f"{backend.command}: account operation interrupted; retry the same migration")
         fail(f"{backend.command}: account operation interrupted; retry with the same scope and name")
     raise AssertionError(action)

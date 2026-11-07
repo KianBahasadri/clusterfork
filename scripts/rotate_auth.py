@@ -454,73 +454,69 @@ def is_interactive() -> bool:
         return False
 
 
-def prompt_scope(command: str, name: str) -> str:
-    """Prompt user to choose between 'local' and 'remote' scope using arrow keys."""
+def _read_menu_action(fd):
+    """Read one menu key: up, down, enter, cancel, space, all, or None."""
     import select
+
+    ch = os.read(fd, 1)
+    if not ch:
+        raise EOFError
+    if ch == b"\x1b":
+        ready, _, _ = select.select([fd], [], [], 0.05)
+        if not ready:
+            return "cancel"
+        follow = os.read(fd, 1)
+        if follow not in (b"[", b"O"):
+            return None
+        ready, _, _ = select.select([fd], [], [], 0.05)
+        if not ready:
+            return None
+        arrow = os.read(fd, 1)
+        if arrow == b"A":
+            return "up"
+        if arrow == b"B":
+            return "down"
+        return None
+    if ch in (b"\r", b"\n"):
+        return "enter"
+    if ch in (b"\x03", b"\x04", b"q", b"Q"):
+        return "cancel"
+    if ch in (b"k", b"K"):
+        return "up"
+    if ch in (b"j", b"J"):
+        return "down"
+    if ch == b" ":
+        return "space"
+    if ch in (b"a", b"A"):
+        return "all"
+    return None
+
+
+def _run_menu(header: str, render_rows, on_action) -> int:
+    """Draw a menu until ``on_action`` finishes. Returns the row count still on screen."""
     import termios
     import tty
 
-    options = ["local", "remote"]
-    selected = 0
+    rows = render_rows()
     fd = sys.stdin.fileno()
-
-    header = f"{command}: select scope for {name!r} (use arrow keys, Enter to confirm):\n"
     sys.stdout.write(header)
-    for i, opt in enumerate(options):
-        prefix = " > " if i == selected else "   "
-        sys.stdout.write(f"{prefix}{opt}\n")
+    for line in rows:
+        sys.stdout.write(f"{line}\n")
     sys.stdout.flush()
-
     old_settings = termios.tcgetattr(fd)
     try:
         tty.setcbreak(fd)
         sys.stdout.write("\x1b[?25l")
         sys.stdout.flush()
-
         while True:
-            ch = os.read(fd, 1)
-            if not ch:
-                raise EOFError
-
-            action = None
-            if ch == b"\x1b":
-                r, _, _ = select.select([fd], [], [], 0.05)
-                if r:
-                    b1 = os.read(fd, 1)
-                    if b1 in (b"[", b"O"):
-                        r2, _, _ = select.select([fd], [], [], 0.05)
-                        if r2:
-                            b2 = os.read(fd, 1)
-                            if b2 == b"A":
-                                action = "up"
-                            elif b2 == b"B":
-                                action = "down"
-                else:
-                    action = "cancel"
-            elif ch in (b"\r", b"\n"):
-                action = "enter"
-            elif ch in (b"\x03", b"\x04", b"q", b"Q"):
-                action = "cancel"
-            elif ch in (b"k", b"K"):
-                action = "up"
-            elif ch in (b"j", b"J"):
-                action = "down"
-
-            if action == "up":
-                selected = max(0, selected - 1)
-            elif action == "down":
-                selected = min(len(options) - 1, selected + 1)
-            elif action == "enter":
+            action = _read_menu_action(fd)
+            if on_action(action):
                 break
-            elif action == "cancel":
-                raise KeyboardInterrupt
-
-            sys.stdout.write(f"\x1b[{len(options)}A")
-            for i, opt in enumerate(options):
-                prefix = " > " if i == selected else "   "
-                sys.stdout.write(f"\r\x1b[K{prefix}{opt}\n")
+            rows = render_rows()
+            sys.stdout.write(f"\x1b[{len(rows)}A")
+            for line in rows:
+                sys.stdout.write(f"\r\x1b[K{line}\n")
             sys.stdout.flush()
-
     finally:
         try:
             sys.stdout.write("\x1b[?25h")
@@ -531,10 +527,120 @@ def prompt_scope(command: str, name: str) -> str:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
         except (termios.error, OSError):
             pass
+    return len(rows)
 
-    sys.stdout.write(f"\x1b[{len(options) + 1}A\r\x1b[J{command}: selected scope '{options[selected]}' for {name!r}\n")
+
+def _finish_menu(row_count: int, confirmation: str) -> None:
+    sys.stdout.write(f"\x1b[{row_count + 1}A\r\x1b[J{confirmation}")
     sys.stdout.flush()
-    return options[selected]
+
+
+def prompt_choice(header: str, options: list[str], confirmation: str) -> str:
+    """Arrow-key menu. ``confirmation`` is a format string with ``{choice}``."""
+    if not options:
+        raise ValueError("Menu options are required")
+    selected = 0
+
+    def render_rows():
+        return [f"{' > ' if i == selected else '   '}{opt}" for i, opt in enumerate(options)]
+
+    def on_action(action):
+        nonlocal selected
+        if action == "up":
+            selected = max(0, selected - 1)
+        elif action == "down":
+            selected = min(len(options) - 1, selected + 1)
+        elif action == "enter":
+            return True
+        elif action == "cancel":
+            raise KeyboardInterrupt
+        return False
+
+    row_count = _run_menu(header, render_rows, on_action)
+    choice = options[selected]
+    _finish_menu(row_count, confirmation.format(choice=choice))
+    return choice
+
+
+def prompt_profile_selection(command: str, names: list[str]) -> list[str]:
+    """Checkbox list. Space toggles, ``a`` selects all, Enter migrates the checks."""
+    if not names:
+        return []
+    checked: set[str] = set()
+    cursor = 0
+    rows = ["all", *names]
+
+    def all_checked() -> bool:
+        return checked == set(names)
+
+    def render_rows():
+        lines = []
+        for index, name in enumerate(rows):
+            mark = "x" if (index == 0 and all_checked()) or (index > 0 and name in checked) else " "
+            pointer = ">" if index == cursor else " "
+            lines.append(f" {pointer} [{mark}] {name}")
+        return lines
+
+    def toggle_all():
+        if all_checked():
+            checked.clear()
+        else:
+            checked.update(names)
+
+    def on_action(action):
+        nonlocal cursor
+        if action == "up":
+            cursor = max(0, cursor - 1)
+        elif action == "down":
+            cursor = min(len(rows) - 1, cursor + 1)
+        elif action == "space":
+            if cursor == 0:
+                toggle_all()
+            else:
+                name = rows[cursor]
+                checked.symmetric_difference_update({name})
+        elif action == "all":
+            toggle_all()
+        elif action == "enter":
+            return True
+        elif action == "cancel":
+            raise KeyboardInterrupt
+        return False
+
+    row_count = _run_menu(
+        f"{command}: select profiles to migrate (space toggles, a selects all, Enter migrates):\n",
+        render_rows,
+        on_action,
+    )
+    selected = [name for name in names if name in checked]
+    if selected:
+        shown = "all profiles" if len(selected) == len(names) else ", ".join(selected)
+        _finish_menu(row_count, f"{command}: migrating {shown}\n")
+    else:
+        _finish_menu(row_count, "")
+    return selected
+
+
+def prompt_scope(command: str, name: str) -> str:
+    """Prompt user to choose between 'local' and 'remote' scope using arrow keys."""
+    return prompt_choice(
+        f"{command}: select scope for {name!r} (use arrow keys, Enter to confirm):\n",
+        ["local", "remote"],
+        f"{command}: selected scope '{{choice}}' for {name!r}\n",
+    )
+
+
+def prompt_migration(command: str) -> str:
+    """Prompt for the single-login migration direction. Returns the action name."""
+    choice = prompt_choice(
+        f"{command}: select migration direction (use arrow keys, Enter to confirm):\n",
+        ["local to remote", "remote to local"],
+        f"{command}: selected migration '{{choice}}'\n",
+    )
+    return {
+        "local to remote": "migrate-from-local-to-remote",
+        "remote to local": "migrate-from-remote-to-local",
+    }[choice]
 
 
 def print_profile_list(command: str, suffixes: list[str], current: str | None) -> int:
@@ -589,9 +695,13 @@ def usage(command: str) -> list[str]:
             f"  {command} --local --list",
             f"  {command} --remote --list",
             f"  {command} --remote --delete name",
-            f"  {command} --remote --migrate",
+            f"  {command} --migrate",
+            f"  {command} --migrate-from-local-to-remote",
+            f"  {command} --migrate-from-remote-to-local",
             "  --save selects local or remote scope interactively, or via --local/--remote.",
-            "  --remote --migrate moves existing single-login profiles to remote.",
+            "  --migrate prompts for a direction, then which profiles to move.",
+            "  --migrate-from-local-to-remote moves existing single-login profiles to remote.",
+            "  --migrate-from-remote-to-local moves this host's remote-only profiles to local.",
         ])
     return lines
 
@@ -618,10 +728,19 @@ def parse_action(command: str, args: list[str]) -> tuple[str, str | list[str] | 
         if len(args) != 1:
             fail(*usage(command))
         return "list", None
-    if first in {"--unhook", "--migrate"}:
+    if first == "--unhook":
         if len(args) != 1:
             fail(*usage(command))
-        return first[2:], None
+        return "unhook", None
+    migration = {
+        "--migrate": "migrate",
+        "--migrate-from-local-to-remote": "migrate-from-local-to-remote",
+        "--migrate-from-remote-to-local": "migrate-from-remote-to-local",
+    }.get(first)
+    if migration:
+        if len(args) != 1:
+            fail(*usage(command))
+        return migration, None
     if first == "--kickoff":
         profiles = args[1:]
         if any(n.startswith("-") or not n for n in profiles):
@@ -1449,12 +1568,25 @@ def run(argv: list[str]) -> int:
     if action == "help":
         print("\n".join(usage(backend.command)))
         return 0
-    if action == "migrate" and scope != "remote":
-        fail(f"{backend.command}: use --remote --migrate to transfer existing single-login profiles")
+    if action in {"migrate", "migrate-from-local-to-remote", "migrate-from-remote-to-local"}:
+        if backend.command not in {"rotate-codex", "rotate-cursor-cli"}:
+            fail(f"{backend.command}: local/remote account management is supported for Codex and Cursor")
+        if scope is not None:
+            fail(*usage(backend.command))
+        direction = action
+        if action == "migrate":
+            if not is_interactive():
+                fail(*usage(backend.command))
+            try:
+                direction = prompt_migration(backend.command)
+            except (KeyboardInterrupt, EOFError):
+                fail(f"{backend.command}: migration cancelled")
+        from rotate_accounts import manage
+        return manage(backend, "local", direction, None, choose=action == "migrate")
     if (scope == "remote" or action in {"save", "delete"}
             and backend.command in {"rotate-codex", "rotate-cursor-cli"}):
-        if scope == "remote" and action not in {"save", "list", "delete", "migrate"}:
-            fail(f"{backend.command}: use --remote with --save, --list, --delete or --migrate",
+        if scope == "remote" and action not in {"save", "list", "delete"}:
+            fail(f"{backend.command}: use --remote with --save, --list or --delete",
                  "  Remote jobs select their own credentials.")
         if action == "save" and scope is None:
             if not is_interactive():
