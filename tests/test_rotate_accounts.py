@@ -179,6 +179,32 @@ class ScopedRotationTests(unittest.TestCase):
                 identity = account_identity(login(provider), provider)
                 self.assertEqual(json.loads(pools.pools[provider].get(identity)[0]["auth"]), login(provider, "remote"))
 
+    def test_save_without_name_in_non_interactive_shell_fails_with_usage(self):
+        for provider in ("codex", "cursor"):
+            with self.subTest(provider=provider):
+                backend, _, client = self.fixture(provider, local=False)
+                self.provider_login(backend, provider, "local")
+                with patch("subprocess.run", side_effect=AssertionError("started provider login")), \
+                     patch.object(rotate_auth, "is_interactive", return_value=False), \
+                     CallBudget(self, api=client):
+                    with self.assertRaises(rotate_auth.RotateError) as ctx:
+                        self.command(backend, client, "--save")
+                    self.assertIn("usage:", "\n".join(ctx.exception.lines))
+
+    def test_save_without_name_in_interactive_shell_prompts_and_saves(self):
+        for provider in ("codex", "cursor"):
+            with self.subTest(provider=provider):
+                backend, _, client = self.fixture(provider, local=False)
+                self.provider_login(backend, provider, "local")
+                with patch("subprocess.run", side_effect=AssertionError("started provider login")), \
+                     patch.object(rotate_auth, "is_interactive", return_value=True), \
+                     patch.object(rotate_auth, "prompt_name", return_value="interactive-save"), \
+                     patch.object(rotate_auth, "prompt_scope", return_value="local"), \
+                     CallBudget(self, api=client):
+                    self.assertEqual(self.command(backend, client, "--save")[0], 0)
+                self.assertEqual(json.loads(backend.auth.read_text()), login(provider, "local"))
+                self.assertEqual(backend.current_suffix(), "interactive-save")
+
     def test_saving_a_refreshed_registered_local_login_keeps_its_session(self):
         for provider in ("codex", "cursor"):
             with self.subTest(provider=provider):

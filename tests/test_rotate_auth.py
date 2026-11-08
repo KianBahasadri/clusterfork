@@ -45,10 +45,9 @@ class ParseActionTests(unittest.TestCase):
         # Old bash treated `rotate-claude ""` as a bare rotate.
         self.assertEqual(rotate_auth.parse_action("cmd", [""]), ("rotate", None))
 
-    def test_save_takes_exactly_one_arg(self):
+    def test_save_parses_optional_name(self):
         self.assertEqual(rotate_auth.parse_action("cmd", ["--save", "x"]), ("save", "x"))
-        with self.assertRaises(rotate_auth.RotateError):
-            rotate_auth.parse_action("cmd", ["--save"])
+        self.assertEqual(rotate_auth.parse_action("cmd", ["--save"]), ("save", None))
         with self.assertRaises(rotate_auth.RotateError):
             rotate_auth.parse_action("cmd", ["--save", "a", "b"])
 
@@ -818,6 +817,42 @@ class InteractivePromptTests(unittest.TestCase):
                     self.assertEqual(os.waitstatus_to_exitcode(status), 0, output)
                     normalized = output.replace(b"\r\n", b"\n")
                     self.assertIn(f"RESULT:{expected}\n".encode(), normalized)
+
+    def test_prompt_name_returns_entered_name(self):
+        with patch("builtins.input", return_value="  my-profile  "):
+            self.assertEqual(rotate_auth.prompt_name("rotate-cursor-cli"), "my-profile")
+
+    def test_prompt_name_cancel(self):
+        for exc in (KeyboardInterrupt, EOFError):
+            with self.subTest(exc=exc), patch("builtins.input", side_effect=exc):
+                with self.assertRaises(rotate_auth.RotateError) as ctx:
+                    rotate_auth.prompt_name("rotate-cursor-cli")
+                self.assertIn("save cancelled", "\n".join(ctx.exception.lines))
+
+    def test_prompt_name_empty_fails(self):
+        with patch("builtins.input", return_value="   "):
+            with self.assertRaises(rotate_auth.RotateError) as ctx:
+                rotate_auth.prompt_name("rotate-cursor-cli")
+            self.assertIn("profile name is required", "\n".join(ctx.exception.lines))
+
+    def test_prompt_name_invalid_chars_fails(self):
+        with patch("builtins.input", return_value="invalid/name"):
+            with self.assertRaises(rotate_auth.RotateError) as ctx:
+                rotate_auth.prompt_name("rotate-cursor-cli")
+            self.assertIn("profile names may only contain", "\n".join(ctx.exception.lines))
+
+    def test_run_save_without_name_non_interactive_fails(self):
+        with patch.object(rotate_auth, "is_interactive", return_value=False):
+            with self.assertRaises(rotate_auth.RotateError) as ctx:
+                rotate_auth.run(["claude", "--save"])
+            self.assertIn("usage:", "\n".join(ctx.exception.lines))
+
+    def test_run_save_without_name_interactive_prompts_and_saves(self):
+        with patch.object(rotate_auth, "is_interactive", return_value=True), \
+             patch.object(rotate_auth, "prompt_name", return_value="saved-prof"), \
+             patch.object(rotate_auth.ClaudeBackend, "save", return_value=0) as mock_save:
+            self.assertEqual(rotate_auth.run(["claude", "--save"]), 0)
+            mock_save.assert_called_once_with("saved-prof")
 
 
 

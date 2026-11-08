@@ -643,6 +643,19 @@ def prompt_migration(command: str) -> str:
     }[choice]
 
 
+def prompt_name(command: str) -> str:
+    """Prompt user to enter a profile name interactively."""
+    try:
+        name = input(f"{command}: profile name: ").strip()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        fail(f"{command}: save cancelled")
+    if not name:
+        fail(f"{command}: profile name is required")
+    validate_suffix(command, name)
+    return name
+
+
 def print_profile_list(command: str, suffixes: list[str], current: str | None) -> int:
     if not suffixes:
         print(f"{command}: no saved profiles")
@@ -752,6 +765,8 @@ def parse_action(command: str, args: list[str]) -> tuple[str, str | list[str] | 
                 validate_suffix(command, name)
         return "kickoff", profiles or None  # type: ignore[return-value]
     if first == "--save":
+        if len(args) == 1:
+            return "save", None
         if len(args) != 2:
             fail(*usage(command))
         return first[2:], args[1]
@@ -1568,6 +1583,10 @@ def run(argv: list[str]) -> int:
     if action == "help":
         print("\n".join(usage(backend.command)))
         return 0
+    if action == "save" and name is None:
+        if not is_interactive():
+            fail(*usage(backend.command))
+        name = prompt_name(backend.command)
     if action in {"migrate", "migrate-from-local-to-remote", "migrate-from-remote-to-local"}:
         if backend.command not in {"rotate-codex", "rotate-cursor-cli"}:
             fail(f"{backend.command}: local/remote account management is supported for Codex and Cursor")
