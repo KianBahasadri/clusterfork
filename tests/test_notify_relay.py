@@ -162,7 +162,8 @@ class RelayHookTests(NotifyFixture):
     def test_gates_and_preferences_still_apply_before_relay(self):
         dotenv = f"CLUSTERFORK_NOTIFY_RELAY_SOCKET={self.socket}\n"
         for agent, payload in (("antigravity", '{"fullyIdle":false}'),
-                               ("grok", '{"reason":"shutdown"}')):
+                               ("grok", '{"reason":"shutdown"}'),
+                               ("cursor", '{"status":"aborted"}')):
             self.assertEqual(self.run_notifier(agent, dotenv=dotenv, stdin=payload).returncode, 0)
         self.write_prefs("codex=0\n")
         self.assertEqual(self.run_notifier(dotenv=dotenv).returncode, 0)

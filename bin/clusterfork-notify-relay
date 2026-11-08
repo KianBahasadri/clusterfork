@@ -15,7 +15,7 @@ import sys
 import time
 
 
-AGENTS = frozenset({"claude", "codex", "command-code", "grok", "antigravity", "agent", "test"})
+AGENTS = frozenset({"claude", "codex", "command-code", "grok", "antigravity", "cursor", "agent", "test"})
 CHANNELS = frozenset({"bell", "phone", "bell,phone"})
 MAX_REQUEST = 512
 MIN_INTERVAL = 10.0

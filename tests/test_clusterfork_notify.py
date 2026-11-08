@@ -272,6 +272,40 @@ class NotifierTests(NotifyFixture):
         self.assertIn("Turn complete in secret-project", args)
         self.assertEqual(self.curl_stdin.read_text(), "")
 
+    def test_cursor_notifies_on_turn_completion_and_skips_aborted(self):
+        project = self.root / "secret-project"
+        project.mkdir()
+
+        # Aborted turn must be silent
+        quiet = self.run_notifier(
+            "cursor",
+            dotenv=f"CLUSTERFORK_NTFY_URL={PHONE_URL}\n",
+            stdin=json.dumps({"status": "aborted", "workspace_roots": [str(project)]}),
+            cwd=project,
+        )
+        self.assertEqual(quiet.returncode, 0)
+        self.assertEqual((quiet.stdout, quiet.stderr), ("", ""))
+        self.assertFalse(self.mpv_log.exists())
+        self.assertFalse(self.curl_log.exists())
+
+        # Genuine turn completion notifies and extracts project name even from ~/.cursor cwd
+        wrong_cwd = self.root / ".cursor"
+        wrong_cwd.mkdir()
+        proc = self.run_notifier(
+            "cursor",
+            dotenv=f"CLUSTERFORK_NTFY_URL={PHONE_URL}\n",
+            stdin=json.dumps({"status": "completed", "workspace_roots": [str(project)]}),
+            cwd=wrong_cwd,
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual((proc.stdout, proc.stderr), ("", ""))
+        self.assertTrue(self.mpv_log.exists())
+        args = self.curl_log.read_text()
+        self.assertIn("X-Title: Cursor finished", args)
+        self.assertIn("Turn complete in secret-project", args)
+        self.assertNotIn(".cursor", args)
+        self.assertEqual(self.curl_stdin.read_text(), "")
+
 
 class HookWiringTests(unittest.TestCase):
     def test_every_existing_stop_hook_uses_shared_notifier(self):
@@ -287,6 +321,9 @@ class HookWiringTests(unittest.TestCase):
         antigravity = json.loads(
             (REPO_ROOT / "agents/antigravity-hooks.json").read_text()
         )
+        cursor = json.loads(
+            (REPO_ROOT / "agents/cursor-hooks.json").read_text()
+        )
 
         commands = [
             claude["hooks"]["Stop"][0]["hooks"][0]["command"],
@@ -294,10 +331,12 @@ class HookWiringTests(unittest.TestCase):
             grok["hooks"]["Stop"][0]["hooks"][0]["command"],
             codex["hooks"]["Stop"][0]["hooks"][0]["command"],
             antigravity["turn-bell"]["Stop"][0]["command"],
+            cursor["hooks"]["stop"][0]["command"],
         ]
         self.assertTrue(all("clusterfork-notify" in item for item in commands))
         self.assertTrue(all("mpv" not in item for item in commands))
         self.assertIn("antigravity", antigravity["turn-bell"]["Stop"][0]["command"])
+        self.assertIn("cursor", cursor["hooks"]["stop"][0]["command"])
         self.assertFalse(grok["compat"]["claude"]["hooks"])
 
     def test_codex_repo_leaves_model_unspecified(self):
@@ -334,6 +373,7 @@ class NotifyCommandTests(NotifyFixture):
             "       command-code   on\n"
             "       grok           on\n"
             "       antigravity    on\n"
+            "       cursor         on\n"
             "\n"
             "  recent notifications  ›  last 5\n"
             "\n"
@@ -352,7 +392,7 @@ class NotifyCommandTests(NotifyFixture):
         self.assertEqual(first.stdout, "  ✓  bell  off\n")
         self.assertEqual(
             (self.cf_dir / "notify-prefs").read_text(),
-            "bell=0\nphone=1\nclaude=1\ncodex=1\ncommand-code=1\ngrok=1\nantigravity=1\nvolume=100\n",
+            "bell=0\nphone=1\nclaude=1\ncodex=1\ncommand-code=1\ngrok=1\nantigravity=1\ncursor=1\nvolume=100\n",
         )
 
         silent = self.run_notifier(dotenv=f"CLUSTERFORK_NTFY_URL={PHONE_URL}\n")
@@ -383,7 +423,7 @@ class NotifyCommandTests(NotifyFixture):
         self.assertEqual(off.stdout, "  ✓  all  off\n")
         self.assertEqual(
             (self.cf_dir / "notify-prefs").read_text(),
-            "bell=0\nphone=0\nclaude=0\ncodex=0\ncommand-code=0\ngrok=0\nantigravity=0\nvolume=100\n",
+            "bell=0\nphone=0\nclaude=0\ncodex=0\ncommand-code=0\ngrok=0\nantigravity=0\ncursor=0\nvolume=100\n",
         )
         status = self.run_cli()
         self.assertTrue(status.stdout.startswith("  notify  ›  off\n"))
@@ -409,7 +449,7 @@ class NotifyCommandTests(NotifyFixture):
         self.assertIn("notify all requires on or off", missing.stderr)
 
     def test_all_agents_off_status_is_off(self):
-        for agent in ("claude", "codex", "command-code", "grok", "antigravity"):
+        for agent in ("claude", "codex", "command-code", "grok", "antigravity", "cursor"):
             proc = self.run_cli(agent, "off")
             self.assertEqual(proc.returncode, 0, proc.stderr)
         proc = self.run_cli()
@@ -623,7 +663,7 @@ class NotifyCommandTests(NotifyFixture):
         self.assertIn("       none yet\n", proc.stdout)
 
     def test_colored_status_off_state(self):
-        self.write_prefs("bell=0\nphone=0\nclaude=0\ncodex=0\ncommand-code=0\ngrok=0\nantigravity=0\nvolume=50\n")
+        self.write_prefs("bell=0\nphone=0\nclaude=0\ncodex=0\ncommand-code=0\ngrok=0\nantigravity=0\ncursor=0\nvolume=50\n")
         proc = self.run_cli(extra_env={"CLICOLOR_FORCE": "1"})
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("\033[1mnotify\033[0m  \033[90m›\033[0m  \033[1;31moff\033[0m\n", proc.stdout)

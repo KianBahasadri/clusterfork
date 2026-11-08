@@ -1,6 +1,6 @@
 # Turn-completion notifications
 
-Claude, Grok, Command Code, Codex and Antigravity Stop hooks call
+Claude, Grok, Command Code, Codex, Antigravity and Cursor Stop hooks call
 `~/.config/clusterfork/bin/clusterfork-notify <agent>`. Bell (`mpv`, then terminal
 fallback) and optional ntfy run concurrently; phone timeout is three seconds.
 Hook errors are silent, exit zero. Messages contain agent/project basename,
@@ -14,6 +14,8 @@ never transcripts/payloads. See [ntfy](notifications-ntfy.md) and [relay](notifi
   Empty/malformed payloads or a missing reason remain accepted.
 - Codex uses asynchronous root `Stop`, without `SubagentStop` or a usage-limit
   watcher; see the [coverage investigation](archive/codex-usage-limit-bell.md).
+- Cursor rejects `status == "aborted"`; project comes from `CURSOR_PROJECT_DIR`
+  or `workspace_roots[0]` because user hooks run in the config directory.
 
 ## `notify` command
 
@@ -34,7 +36,7 @@ notify log              # newest 50
 notify log 100          # 1–200
 ```
 
-Agents: `claude`, `codex`, `command-code`, `grok`, `antigravity`. Tests bypass local
+Agents: `claude`, `codex`, `command-code`, `grok`, `antigravity`, `cursor`. Tests bypass local
 switches without changing them; relay host switches still apply. Bell tests return
 on playback start; phone tests wait for server acceptance, exiting nonzero on
 missing config/failure. Acceptance does not confirm phone receipt. Interactive

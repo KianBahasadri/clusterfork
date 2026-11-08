@@ -58,8 +58,8 @@ launchers add the [native statusline](statusline.md#codex).
 
 ## Cursor
 
-`cursor-mcp.json` supplies context7 and ElevenLabs; CLI [statusline](statusline.md#cursor)
-wiring is separate.
+`cursor-hooks.json` supplies Stop; `cursor-mcp.json` supplies context7 and ElevenLabs;
+CLI [statusline](statusline.md#cursor) wiring is separate.
 
 ## MCP roster
 

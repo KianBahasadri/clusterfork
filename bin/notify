@@ -2,8 +2,8 @@
 # Toggle and show turn-completion notification prefs.
 # Sourced by clusterfork-notify for the same prefs file.
 
-NOTIFY_TARGETS=(bell phone claude codex command-code grok antigravity)
-NOTIFY_AGENTS=(claude codex command-code grok antigravity)
+NOTIFY_TARGETS=(bell phone claude codex command-code grok antigravity cursor)
+NOTIFY_AGENTS=(claude codex command-code grok antigravity cursor)
 NOTIFY_STATUS_HISTORY_LIMIT=5
 NOTIFY_LOG_HISTORY_LIMIT=50
 NOTIFY_HISTORY_RETAIN=200
@@ -357,7 +357,7 @@ ${c_bold}Usage:${c_reset}
   notify phone [on|off]       toggle or set phone push
   notify <agent> [on|off]     toggle or set one agent
                               claude, codex, command-code, grok,
-                              antigravity
+                              antigravity, cursor
   notify test [bell|phone]    play the bell and/or post a phone test
   notify log [count]          show trigger history (default 50, max 200)
 
@@ -367,7 +367,7 @@ EOF
 }
 
 notify_hint() {
-  printf '       Use: notify [all|bell|phone|claude|codex|command-code|grok|antigravity] [on|off]\n' >&2
+  printf '       Use: notify [all|bell|phone|claude|codex|command-code|grok|antigravity|cursor] [on|off]\n' >&2
   printf '            notify volume <0-100>\n' >&2
   printf '            notify test [bell|phone]\n' >&2
   printf '            notify log [1-200]\n' >&2

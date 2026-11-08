@@ -17,27 +17,30 @@
 #      repo-local statusline/ and links shared Codex statusline settings
 #   7. Overwrites ~/.cursor/mcp.json from agents/cursor-mcp.json (expands
 #      ${ENV} placeholders from the clusterfork .env)
-#   8. Overwrites ~/.commandcode/mcp.json from agents/command-code-mcp.json
+#   8. Ensures the stop turn-notification hook in ~/.cursor/hooks.json from
+#      agents/cursor-hooks.json (appends the hook if missing; preserves the
+#      rest of the file)
+#   9. Overwrites ~/.commandcode/mcp.json from agents/command-code-mcp.json
 #      (expands ${ENV} placeholders from the clusterfork .env)
-#   9. Overwrites ~/.gemini/config/mcp_config.json from agents/antigravity-mcp.json
+#  10. Overwrites ~/.gemini/config/mcp_config.json from agents/antigravity-mcp.json
 #      (expands ${ENV} placeholders from the clusterfork .env)
-#  10. Ensures telemetry is disabled in ~/.commandcode/config.json from
+#  11. Ensures telemetry is disabled in ~/.commandcode/config.json from
 #      agents/command-code.json (key only; does not replace the whole file)
-#  11. Ensures the Stop turn-notification hook in ~/.commandcode/settings.json from
+#  12. Ensures the Stop turn-notification hook in ~/.commandcode/settings.json from
 #      agents/command-code-settings.json (appends the hook if missing; preserves
 #      the rest of the file)
-#  12. Updates ~/.codex/config.toml from agents/codex.toml (merges top-level
+#  13. Updates ~/.codex/config.toml from agents/codex.toml (merges top-level
 #      settings, replaces mcp_servers and hook event tables, strips retired
 #      keys like notify, stamps trusted_hash for the Stop notifier only; Codex owns
 #      the rest of that file)
-#  13. Installs agents/claude-plugins/* into ~/.claude/skills/ as skills-dir
+#  14. Installs agents/claude-plugins/* into ~/.claude/skills/ as skills-dir
 #      plugins; agents/claude.json ships each one disabled
-#  14. Ensures ElevenLabs in ~/.claude.json mcpServers (key only; does not
+#  15. Ensures ElevenLabs in ~/.claude.json mcpServers (key only; does not
 #      replace the whole file)
-#  15. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
+#  16. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
 #      replace the whole file)
-#  16. Appends a source line to ~/.bashrc if it is not already present
-#  17. Best-effort: ensures Codex/Cursor/Grok/OpenCode auth.json links through
+#  17. Appends a source line to ~/.bashrc if it is not already present
+#  18. Best-effort: ensures Codex/Cursor/Grok/OpenCode auth.json links through
 #      ~/.local/share/clusterfork-auth/<agent>/current when profiles exist
 #
 # Usage:
@@ -102,6 +105,8 @@ CURSOR_USAGE_FETCH_SRC="$STATUSLINE_SRC_DIR/cursor/usage-fetch.py"
 CURSOR_USAGE_FETCH_DEST="$HOME/.cursor/cursor-usage-fetch.py"
 CURSOR_MCP_SRC="$AGENTS_SRC_DIR/cursor-mcp.json"
 CURSOR_MCP_DEST="$HOME/.cursor/mcp.json"
+CURSOR_HOOKS_SRC="$AGENTS_SRC_DIR/cursor-hooks.json"
+CURSOR_HOOKS_DEST="$HOME/.cursor/hooks.json"
 CURSOR_CLI_CONFIG="$HOME/.cursor/cli-config.json"
 COMMAND_CODE_MCP_SRC="$AGENTS_SRC_DIR/command-code-mcp.json"
 COMMAND_CODE_MCP_DEST="$HOME/.commandcode/mcp.json"
@@ -663,6 +668,45 @@ substep "$CURSOR_USAGE_FETCH_DEST"
 mkdir -p "$(dirname "$CURSOR_MCP_DEST")"
 python3 "$MCP_CONFIG_RENDERER" "$CURSOR_MCP_SRC" "$CURSOR_MCP_DEST" "$DOTENV_DEST" --expand
 step "cursor mcp" "$CURSOR_MCP_DEST" "$(mcp_server_names "$CURSOR_MCP_SRC")"
+
+# Cursor hooks: ensure the stop turn-notification hook in ~/.cursor/hooks.json
+[[ -f "$CURSOR_HOOKS_SRC" ]] || fail "missing $(tildify "$CURSOR_HOOKS_SRC")"
+mkdir -p "$(dirname "$CURSOR_HOOKS_DEST")"
+python3 - "$CURSOR_HOOKS_SRC" "$CURSOR_HOOKS_DEST" <<'PY'
+import json, sys
+from pathlib import Path
+
+src, dest = map(Path, sys.argv[1:])
+wanted = json.loads(src.read_text(encoding="utf-8"))
+wanted_stop = wanted.get("hooks", {}).get("stop", [])
+if dest.is_file():
+    try:
+        data = json.loads(dest.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"cursor hooks: {dest} is not valid JSON: {exc}")
+    if not isinstance(data, dict):
+        raise SystemExit(f"cursor hooks: {dest} must be a JSON object")
+else:
+    data = {"version": 1, "hooks": {}}
+
+data.setdefault("version", wanted.get("version", 1))
+hooks = data.setdefault("hooks", {})
+if not isinstance(hooks, dict):
+    raise SystemExit(f"cursor hooks: 'hooks' in {dest} must be a JSON object")
+stop = hooks.setdefault("stop", [])
+if not isinstance(stop, list):
+    raise SystemExit(f"cursor hooks: 'hooks.stop' in {dest} must be a JSON array")
+
+changed = False
+for handler in wanted_stop:
+    if handler not in stop:
+        stop.append(handler)
+        changed = True
+
+if changed or not dest.is_file():
+    dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+PY
+step "cursor hooks" "$CURSOR_HOOKS_DEST" "stop → clusterfork-notify"
 
 # Command Code MCP: same ${VAR} expansion as Cursor so secrets stay out of the repo.
 [[ -f "$COMMAND_CODE_MCP_SRC" ]] || fail "missing $(tildify "$COMMAND_CODE_MCP_SRC")"

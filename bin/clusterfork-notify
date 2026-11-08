@@ -21,7 +21,7 @@ if (( relayed )); then
   # The host relay has already validated metadata and the guest has applied
   # the Stop-event gates. Keep host switches as an additional veto.
   case "$agent" in
-    claude|codex|command-code|grok|antigravity|agent|test) ;;
+    claude|codex|command-code|grok|antigravity|cursor|agent|test) ;;
     *) exit 0 ;;
   esac
   case "${3:-}" in
@@ -41,6 +41,7 @@ case "$agent" in
   command-code) label="Command Code" ;;
   grok) label="Grok" ;;
   antigravity) label="Antigravity" ;;
+  cursor) label="Cursor" ;;
   test) label="Clusterfork test" ;;
   *) label="Agent" ;;
 esac
@@ -89,6 +90,36 @@ if reason is not None and reason != "end_turn":
 '
 }
 
+# Cursor stop fires on turn completions (status: "completed") and aborts
+# (status: "aborted"). Gate on status != "aborted". Project name comes
+# from CURSOR_PROJECT_DIR, or workspace_roots[0] from the JSON payload,
+# because user hooks run in the ~/.cursor config directory. Stdin is
+# inspected locally, never forwarded.
+cursor_gate() {
+  python3 -c '
+import json, os, sys
+project_dir = os.environ.get("CURSOR_PROJECT_DIR", "")
+raw = "" if sys.stdin.isatty() else sys.stdin.read().strip()
+if raw.startswith("{"):
+    try:
+        data = json.loads(raw)
+        if data.get("status") == "aborted":
+            sys.exit(1)
+        if not project_dir:
+            roots = data.get("workspace_roots") or []
+            if isinstance(roots, list) and roots:
+                project_dir = str(roots[0])
+    except json.JSONDecodeError:
+        pass
+name = os.path.basename(project_dir.rstrip("/")) if project_dir else ""
+if not name or name in ("", "/"):
+    name = os.path.basename(os.getcwd().rstrip("/"))
+if name in ("", "/", ".cursor"):
+    name = "workspace"
+print(name)
+'
+}
+
 if (( relayed )); then
   project="${2:-workspace}"
 elif [[ "$agent" == antigravity ]]; then
@@ -96,6 +127,8 @@ elif [[ "$agent" == antigravity ]]; then
 elif [[ "$agent" == grok ]]; then
   grok_gate 2>/dev/null || exit 0
   project="$(basename "${PWD:-workspace}")"
+elif [[ "$agent" == cursor ]]; then
+  project="$(cursor_gate 2>/dev/null)" || exit 0
 else
   project="$(basename "${PWD:-workspace}")"
 fi
