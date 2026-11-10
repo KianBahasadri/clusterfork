@@ -7,7 +7,7 @@ import json
 import math
 import re
 
-from .model import (Admit, Assign, DispatchObserved, ExternalObserved, Finish, Hold,
+from .model import (Admit, Assign, DispatchObserved, DispatchDeferred, ExternalObserved, Finish, Hold,
                     IssueObserved, Phase, Progress, Rejected, Retry, Review, Role,
                     Start, TaskSpec, TaskView, identity, SessionUpdated, EffectUpdated, Authorize, ExhaustAccount,
                     ContextObserved, InboxQueued, InboxDone, Initialize, ReportConfirmed, AccountRequest, InstructionRequest,
@@ -274,7 +274,7 @@ class Controller:
 
     def waiting(self, repository=None):
         with self.database.transaction() as db:
-            query = "SELECT task_id FROM tasks WHERE phase='queued' AND eligible=1 AND dependencies_ready=1"
+            query = "SELECT task_id FROM tasks WHERE phase='queued' AND eligible=1 AND dependencies_ready=1 AND project_paused=0"
             args = ()
             if repository is not None:
                 query += " AND repository=?"
@@ -292,7 +292,7 @@ class Controller:
     def _drain_retry_runtime(self, db, task, now):
         holds = {row[0] for row in db.execute('SELECT owner FROM holds')}
         if (not self.autonomous or not holds or holds - {'deployment:required-runtime', 'deployment:rollout'}
-                or task['canceled'] or not task['eligible'] or not task['dependencies_ready']
+                or task['canceled'] or not task['eligible'] or not task['dependencies_ready'] or task['project_paused']
                 or not task['spec'] or not db.execute('SELECT 1 FROM grants WHERE task_id=?', (task['task_id'],)).fetchone()):
             return ''
         attempt = self._attempt(db, task, task['current_attempt'])
@@ -458,6 +458,20 @@ class Controller:
                     if command.status == "rejected":
                         db.execute("UPDATE attempts SET stopped=1 WHERE attempt_id=?", (command.attempt_id,))
                         self._review_failure(db, task, attempt, command.failure, now)
+                elif isinstance(command, DispatchDeferred):
+                    effect_id = (attempt['attempt_id'] if attempt['execution_phase'] == 'review'
+                                 else identity(attempt['attempt_id'], 'coding-dispatch'))
+                    effect = db.execute("SELECT state FROM effects WHERE effect_id=? AND task_id=? AND kind='dispatch'",
+                                        (effect_id, task['task_id'])).fetchone()
+                    session = db.execute('SELECT 1 FROM sessions WHERE attempt_id=? AND phase=?',
+                                         (attempt['attempt_id'], attempt['execution_phase'])).fetchone()
+                    if (not task['project_paused'] or attempt['dispatch_status'] != 'intent' or attempt['run_id']
+                            or session or not effect or effect['state'] != 'pending'):
+                        raise Rejected('Only unsent project-paused dispatch intent can be deferred')
+                    db.execute("UPDATE attempts SET dispatch_status='rejected',stopped=1 WHERE attempt_id=?",
+                               (attempt['attempt_id'],))
+                    db.execute("UPDATE effects SET state='done' WHERE effect_id=?", (effect_id,))
+                    self._update(db, task, reason='Project remote development is paused.')
                 elif isinstance(command, Start):
                     self._start(db, task, attempt, command, now)
                 elif isinstance(command, Assign):
@@ -568,7 +582,8 @@ class Controller:
                 or not math.isfinite(command.sort_order) or not re.fullmatch(
                     r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", command.repository)
                 or type(command.eligible) is not bool or type(command.dependencies_ready) is not bool
-                or type(command.canceled) is not bool or type(command.submission_current) is not bool):
+                or type(command.canceled) is not bool or type(command.submission_current) is not bool
+                or type(command.project_paused) is not bool):
             raise Rejected("Invalid issue observation")
         row = db.execute("SELECT * FROM tasks WHERE task_id=?", (command.task_id,)).fetchone()
         from .linear_state import observed_eligibility, human_withdrawal
@@ -580,16 +595,17 @@ class Controller:
                           "AND phase NOT IN ('completed','canceled','skipped')", (command.issue_id,)).fetchone():
                 raise Rejected('An unresolved submission already owns this issue identity')
             db.execute("INSERT INTO tasks(task_id,issue_id,project_id,generation,repository,identifier,phase,"
-                       "eligible,dependencies_ready,priority,sort_order,content_revision,reason,canceled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                       "eligible,dependencies_ready,priority,sort_order,content_revision,reason,canceled,project_paused) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                        (command.task_id, command.issue_id, command.project_id, command.generation,
                         command.repository.lower(), command.identifier, "queued" if command.eligible else "skipped",
                         command.eligible, command.dependencies_ready, command.priority, command.sort_order,
-                        command.content_revision, command.reason, command.canceled))
+                        command.content_revision, command.reason, command.canceled, command.project_paused))
             if command.workflow:
                 db.execute('INSERT INTO linear_workflows VALUES (?,?)', (command.task_id, json.dumps(command.workflow)))
         else:
             task = dict(row)
             changes = dict(eligible=command.eligible, dependencies_ready=command.dependencies_ready,
+                           project_paused=command.project_paused,
                            priority=command.priority, sort_order=command.sort_order,
                            content_revision=command.content_revision, canceled=command.canceled)
             active = db.execute("SELECT 1 FROM grants WHERE task_id=?", (command.task_id,)).fetchone()
@@ -641,7 +657,7 @@ class Controller:
         held = db.execute('SELECT 1 FROM holds LIMIT 1').fetchone()
         draining = not initial and self._drain_retry_runtime(db, task, now)
         same_policy = task['spec'] and spec.policy_revision == json.loads(task['spec'])['policy_revision']
-        if (not task['eligible'] or not task['dependencies_ready']
+        if (not task['eligible'] or not task['dependencies_ready'] or task['project_paused']
                 or held and not (draining and spec.runtime_sha == draining and same_policy)):
             raise Rejected("New admissions are held")
         if task['review_attention'] and not self.autonomous:
@@ -656,7 +672,7 @@ class Controller:
             if previous and previous['retry_kind'] and previous['retry_at'] > now:
                 raise Rejected('The recorded readiness retry delay has not elapsed')
             head = db.execute("SELECT task_id FROM tasks WHERE repository=? AND phase='queued' AND eligible=1 "
-                              "AND dependencies_ready=1 AND NOT EXISTS (SELECT 1 FROM attempts a "
+                              "AND dependencies_ready=1 AND project_paused=0 AND NOT EXISTS (SELECT 1 FROM attempts a "
                               "WHERE a.attempt_id=tasks.current_attempt AND a.retry_kind!='' AND a.retry_at>?) "
                               "ORDER BY CASE priority WHEN 0 THEN 5 ELSE priority END,sort_order,sequence LIMIT 1",
                               (task["repository"], now)).fetchone()
@@ -1003,7 +1019,8 @@ class Controller:
         if (attempt['execution_phase'] == 'review' and result and result.get('verdict') == 'ready'
                 and command.conclusion == 'success' and command.pull_state in {'absent', 'open'}
                 and not attempt['retry_kind']
-                and not task['review_attention'] and task['eligible'] and task['dependencies_ready']):
+                and not task['review_attention'] and task['eligible'] and task['dependencies_ready']
+                and not task['project_paused']):
             self._release_stopped_credentials(db, task)
             db.execute("UPDATE attempts SET execution_phase='coding',run_id='',run_attempt=0,dispatch_status='intent',"
                        "stopped=0,all_stopped=0,publication_checked=0,conclusion='',stage='initializing' WHERE attempt_id=?",
@@ -1034,6 +1051,19 @@ class Controller:
                 'Pull request merged.' if command.pull_state == 'merged' else 'Verified task outcome.'))
             db.execute("UPDATE attempts SET retry_kind='',retry_at=0 WHERE attempt_id=?", (command.attempt_id,))
             self._release_grant(db, task)
+            return
+        if (task['project_paused'] and task['eligible'] and not task['canceled']
+                and not attempt['coding_started']):
+            session = db.execute("SELECT selector_started FROM sessions WHERE attempt_id=? AND phase='review'",
+                                 (command.attempt_id,)).fetchone()
+            if attempt['review_charged'] and not attempt['review_result'] and (not session or not session[0]):
+                db.execute('UPDATE tasks SET review_attempts=review_attempts-1 WHERE task_id=?', (task['task_id'],))
+                db.execute('UPDATE attempts SET review_charged=0 WHERE attempt_id=?', (command.attempt_id,))
+            releasable = command.pull_state in {'absent', 'closed'}
+            self._update(db, task, phase='queued' if releasable else 'held',
+                         reason='Project remote development is paused.')
+            if releasable:
+                self._release_grant(db, task)
             return
         if (prepared.get('has_changes') and command.pull_state == 'absent' and attempt['agent_outcome'] == 'completed'
                 and not attempt['retry_kind']
@@ -1165,4 +1195,5 @@ class Controller:
                         bool(row["eligible"]), bool(row["dependencies_ready"]), row["reason"],
                         TaskSpec(**json.loads(row["spec"])) if row["spec"] else None, dict(attempt) if attempt else {}, sessions, bool(row["canceled"]), row["content_revision"],
                         row["review_cycle"], row["review_attempts"], row["review_attention"], bool(row['pending_submission_at']), row['generation'],
-                        row['review_attention_at'], row['review_submitted_at'], json.loads(submission[0]) if submission else {})
+                        row['review_attention_at'], row['review_submitted_at'], json.loads(submission[0]) if submission else {},
+                        project_paused=bool(row['project_paused']))

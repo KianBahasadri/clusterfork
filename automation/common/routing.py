@@ -15,6 +15,16 @@ from uuid import UUID
 from common.selection import SelectionPolicy
 from common.timing import timestamps
 
+PROJECT_PAUSE_LABEL = "clusterfork-symphony-paused"
+
+
+def project_paused(issue):
+    """Only complete project labels can establish admission permission."""
+    labels = issue['project']['labels']
+    if labels.get('pageInfo', {}).get('hasNextPage'):
+        raise ValueError('Project labels are incomplete')
+    return any(label['name'] == PROJECT_PAUSE_LABEL for label in labels['nodes'])
+
 
 def uuid_string(value):
     if not isinstance(value, str) or str(UUID(value)) != value:
@@ -223,7 +233,7 @@ def webhook_event(body, headers, secret, *, now=None):
         raise WebhookError(400, "invalid webhook payload") from None
 
 
-def eligibility(issue, registry, *, additional_state_ids=()):
+def eligibility(issue, registry, *, additional_state_ids=(), allow_paused=False):
     """Return (route, reason) using current Linear state, never webhook snapshots."""
     project = issue.get("project")
     if not project:
@@ -236,6 +246,8 @@ def eligibility(issue, registry, *, additional_state_ids=()):
     labels = project["labels"]["nodes"]
     if not any(label["name"] == registry.enrollment_label for label in labels):
         return None, "project_not_enrolled"
+    if project_paused(issue) and not allow_paused:
+        return None, "project_paused"
     if issue["state"].get("type") == "canceled":
         return None, "canceled"
     if issue["state"]["id"] not in (*route.ready_state_ids, *additional_state_ids):

@@ -19,6 +19,20 @@ labels cannot enroll projects. Unseen ineligible issues create no task/comment;
 known ineligible waiters lose queued markers. Completed identities stay complete
 for that generation. Waiting consumes no runner/account.
 
+To pause a project, add the **project label** `clusterfork-symphony-paused`
+alongside `clusterfork-symphony`. Remove only the pause label to resume. The
+pause overrides enrollment for new readiness/coding starts, retries and repairs;
+an issue label with the same name has no effect. Enrollment, mappings, attempt
+history and retry deadlines are retained. Other projects continue normally.
+
+Running phases keep their existing execution authority and can finish safely.
+A completed review waits instead of launching coding. Waiting tasks hold no
+runner/account or repository grant once prior execution and publication are
+verified stopped; unresolved PRs or uncertain dispatches retain ownership.
+The controller rechecks complete project labels before admission, dispatch and
+phase startup. Scans recover missed project events; restart retains known
+pauses. Waiting-task feedback explains the pause.
+
 One transaction checks runnable head, reserves the unique grant and creates
 attempt/dispatch intent; external dispatch follows. Claimed/uncertain outcomes
 require stable-identity discovery; an absent run listing never permits resend.

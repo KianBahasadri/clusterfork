@@ -36,6 +36,8 @@ def authorize(db, task, attempt, role, action, now, accounts):
         raise Rejected('The controller has not dispatched this execution phase')
     session = db.execute('SELECT * FROM sessions WHERE attempt_id=? AND phase=?',
                          (attempt['attempt_id'], role.phase)).fetchone()
+    if task['project_paused'] and not session:
+        raise Rejected('Project remote development is paused')
     # These queries run before Start creates the phase session. Start itself
     # still verifies the exact successful GitHub review job in Controller.
     if action in {'start', 'validate_context'}:

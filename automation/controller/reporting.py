@@ -14,6 +14,8 @@ def execution_status(view, reviews, *, autonomous=False):
     """Project the single visible indicator without changing execution authority."""
     if view.phase in {'completed', 'canceled', 'skipped'}:
         return None
+    if view.project_paused and (not view.active or view.attempt.get('retry_kind') or view.attempt.get('stopped')):
+        return None
     # Resubmission and infrastructure retries cannot resolve earlier feedback.
     for review in reversed(reviews):
         verdict = review['result']['verdict']

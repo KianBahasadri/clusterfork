@@ -284,7 +284,7 @@ class SymphonyCausalityTests(unittest.TestCase):
         scenario.driver.report()
         self.assertEqual(f.linear.set_state.call_count, writes)
         self.assertFalse(f.controller.effects('linear_state'))
-        self.assertEqual(f.database.connection.execute('PRAGMA user_version').fetchone()[0], 12)
+        self.assertEqual(f.database.connection.execute('PRAGMA user_version').fetchone()[0], 13)
 
 
 class SymphonyAuthorityTests(unittest.TestCase):

@@ -67,10 +67,11 @@ secrets and verifies the expected VM resource identity before serving.
 
 ## Deployment and migration
 
-SQLite schema 12 retains each phase's GitHub run identity and durable executor
-commands/results. Upgrades retain task, grant, lease, approval and human-intent
-history; existing phase identities are adopted from their recorded attempt.
-Startup recovers intent from the retained authenticated inbox. Older controller binaries reject schema 12;
+SQLite schema 13 retains each phase's GitHub run identity, durable executor
+commands/results and the observed project admission pause. Upgrades retain
+task, grant, lease, approval and human-intent history; existing phase identities
+are adopted from their recorded attempt. Startup recovers intent from the retained
+authenticated inbox. Older controller binaries reject schema 13;
 rollback requires a compatible binary or restoration of the pre-upgrade database
 after the normal deployment drain. [Queue policy](remote-development-queue.md#linear-feedback)
 owns adoption of existing Linear projection acknowledgements.

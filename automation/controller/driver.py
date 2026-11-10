@@ -8,13 +8,13 @@ import time
 from types import SimpleNamespace
 
 from .authorization import release_ref
-from .model import (Admit, ContextObserved, DispatchObserved, EffectUpdated, ExternalObserved,
+from .model import (Admit, ContextObserved, DispatchObserved, DispatchDeferred, EffectUpdated, ExternalObserved,
                     Hold, InboxDone, IssueObserved, Rejected, Retry, TaskSpec, identity, ReportConfirmed, Resubmit, ProjectionUpdated,
                     MergeRequested)
 from .images import Images
 from .workflows import ENGINE, WORKFLOW
 from .reporting import attempt_reports,execution_status,repair_terminal,repair_report,review_report
-from common.routing import DispatchError, dependency_status, eligibility
+from common.routing import DispatchError, dependency_status, eligibility, project_paused
 from common.images import image_digest
 from common.publication import comment_id, failed_required_checks, pull_outcome, merge_ready
 from common.policy import issue_revision, policy_version, redact_review_text
@@ -58,7 +58,9 @@ class Driver:
         if submission_current is None:
             submission_current = True
             if issue and known and known.review_submission and (
-                    known.review_resubmission_pending or known.phase == 'queued'):
+                    known.review_resubmission_pending or known.phase == 'queued'
+                    or known.phase == 'reviewing' and not known.session('review')
+                    and issue.get('state', {}).get('id') != known.review_submission.get('to_state')):
                 route = self.registry.routes.get(known.project_id)
                 if route and route.linear_states:
                     issue, submission_current = self.controller.submission_snapshot(
@@ -87,7 +89,11 @@ class Driver:
             return None
         # Structural facts and raw workflow state cross the Controller seam.
         # The adapter does not decide whether a state is our own status echo.
-        route, reason = eligibility(issue, self.registry, additional_state_ids=(issue.get('state', {}).get('id'),))
+        route, reason = eligibility(issue, self.registry, additional_state_ids=(issue.get('state', {}).get('id'),),
+                                    allow_paused=True)
+        paused = project_paused(issue) if route else False
+        if paused and known is None:
+            return None
         if route != mapped and (known is None or known.task_id!=identity(generation,mapped.project_id,issue['id'])):
             return known
         workflow = {'state': issue['state']['id'], 'type': issue['state'].get('type', ''),
@@ -105,7 +111,7 @@ class Driver:
                                        not dependency_reason, issue.get("priority", 0) or 0,
                                        float(issue.get("sortOrder", 0) or 0), issue_revision(issue),
                                        dependency_reason or ("" if route else reason), issue.get("state",{}).get("type")=="canceled",
-                                       submission_current, workflow))
+                                       submission_current, workflow, project_paused=paused))
 
     def refresh(self, view):
         issue = self.linear.issue(view.issue_id)
@@ -204,7 +210,7 @@ class Driver:
                             engine = self.runtime_route(self.route(current), pinned)
                             if self.github.branch_sha(engine) != pinned:
                                 continue  # A deleted/moved runtime tag cannot authorize repair.
-                        issue = self.linear.issue(current.issue_id)
+                        issue = self.refresh(current)
                         self.apply(Retry(current.task_id, self.spec(issue, self.route(current), runtime_sha=pinned or None),
                                          current.reason, current.attempt["retry_kind"]))
             except Rejected:
@@ -236,6 +242,21 @@ class Driver:
             if effect["state"] != "pending":
                 continue  # A claimed effect is discovered; never sent again.
             view = self.controller.inspect(effect["task_id"])
+            try:
+                self.observe_issue(self.linear.issue(view.issue_id), known=view)
+                view = self.controller.inspect(view.task_id)
+            except Exception as exc:
+                logging.warning('Dispatch refresh deferred (%s)', type(exc).__name__)
+                continue
+            if view.project_paused:
+                # Only unclaimed intent is known never to have reached GitHub.
+                # Normal external reconciliation still verifies stop and PRs.
+                self.apply(DispatchDeferred(view.task_id, view.attempt['attempt_id']))
+                continue
+            if not view.eligible:
+                self.apply(DispatchObserved(view.task_id, view.attempt['attempt_id'], 'rejected'))
+                self.apply(EffectUpdated(view.task_id, effect['effect_id'], 'done'))
+                continue
             self.apply(EffectUpdated(view.task_id, effect["effect_id"], "claimed"))
             diagnostic = {}
             try:
@@ -318,6 +339,8 @@ class Driver:
         display = 'reassessing automatically' if self.controller.autonomous and view.phase == 'held' and attempt.get('retry_kind') else (
             'Needs attention' if view.review_attention and not self.controller.autonomous else view.phase.value)
         body = f"Clusterfork task: {display}.\n\n" + redact_review_text(reason)
+        if view.project_paused:
+            body += '\n\nProject remote development is paused by `clusterfork-symphony-paused`; new attempts wait until it is removed.'
         if view.review_resubmission_pending:
             body += '\n\nHuman resubmission recorded; waiting for verified stop, credential release and publication checks.'
         session=view.session('coding')

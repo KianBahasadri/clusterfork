@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS tasks (
  repository TEXT NOT NULL, identifier TEXT NOT NULL,
  phase TEXT NOT NULL CHECK(phase IN ('queued','reviewing','ready','executing','published','held','completed','skipped','canceled')),
  eligible INTEGER NOT NULL CHECK(eligible IN (0,1)),
+ project_paused INTEGER NOT NULL DEFAULT 0 CHECK(project_paused IN (0,1)),
  dependencies_ready INTEGER NOT NULL CHECK(dependencies_ready IN (0,1)),
  priority INTEGER NOT NULL CHECK(priority BETWEEN 0 AND 4), sort_order REAL NOT NULL,
  content_revision TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
@@ -140,7 +141,7 @@ CREATE TABLE IF NOT EXISTS execution_steps (
  inputs TEXT NOT NULL DEFAULT '{}', result TEXT,
  UNIQUE(attempt_id,ordinal)
 );
-PRAGMA user_version=12;
+PRAGMA user_version=13;
 """
 
 
@@ -163,7 +164,7 @@ class Database:
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA synchronous=FULL")
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
+        if version not in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13):
             self.close()
             raise Rejected("Unsupported task database version")
         if version == 1:
@@ -221,6 +222,11 @@ class Database:
                            "run_attempt=(SELECT run_attempt FROM attempts a WHERE a.attempt_id=sessions.attempt_id)")
                 db.execute("UPDATE attempts SET execution_phase='coding' WHERE EXISTS "
                            "(SELECT 1 FROM sessions s WHERE s.attempt_id=attempts.attempt_id AND s.phase='coding')")
+        if version and version < 13:
+            with self.transaction() as db:
+                if 'project_paused' not in {r['name'] for r in db.execute('PRAGMA table_info(tasks)')}:
+                    db.execute('ALTER TABLE tasks ADD COLUMN project_paused INTEGER NOT NULL DEFAULT 0 '
+                               'CHECK(project_paused IN (0,1))')
         self.connection.executescript(SCHEMA)
 
     @contextmanager

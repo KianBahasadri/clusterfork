@@ -64,6 +64,7 @@ class IssueObserved:
     canceled: bool = False
     submission_current: bool = True
     workflow: dict = field(default_factory=dict)
+    project_paused: bool = False
 
     @property
     def task_id(self):
@@ -105,6 +106,12 @@ class DispatchObserved:
     attempt_id: str
     status: str  # accepted/rejected/unknown; never retry an unknown dispatch
     failure: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class DispatchDeferred:
+    task_id: str
+    attempt_id: str
 
 
 @dataclass(frozen=True)
@@ -316,7 +323,7 @@ class InstructionRequest:
     data: dict = field(default_factory=dict,repr=False)
 
 
-Command = (IssueObserved | Admit | DispatchObserved | Resubmit | Start | Assign | Review | Progress |
+Command = (IssueObserved | Admit | DispatchObserved | DispatchDeferred | Resubmit | Start | Assign | Review | Progress |
            StepResult | PublicationResolved | MergeRequested | EffectFailed |
            Finish | ExternalObserved | Retry | Hold | SessionUpdated | EffectUpdated | Authorize |
            ExhaustAccount | ContextObserved | EvidenceChanged | InboxQueued | InboxDone | Initialize | ReportConfirmed | ProjectionUpdated | AccountRequest | InstructionRequest)
@@ -348,6 +355,7 @@ class TaskView:
     review_attention_at: float = 0
     review_submitted_at: float = 0
     review_submission: dict = field(default_factory=dict)
+    project_paused: bool = False
 
     def session(self, phase):
         return next((dict(s) for s in self.sessions if s["phase"] == phase), None)
