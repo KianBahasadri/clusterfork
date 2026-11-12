@@ -1,5 +1,6 @@
 """Tests for codeview.scan: git history/files/deps scanners against a real
 throwaway repo, plus exclusion rules."""
+import os
 import subprocess
 import tempfile
 import unittest
@@ -42,6 +43,21 @@ class TempRepoTestCase(unittest.TestCase):
 
 
 class HistoryScanTests(TempRepoTestCase):
+    def test_history_preserves_exact_commit_metadata(self):
+        timestamp = "2026-01-02T03:04:05+05:30"
+        subject = 'A complete subject, with "quotes"\t' + "x" * 140
+        with mock.patch.dict(os.environ, {
+            "GIT_AUTHOR_DATE": timestamp, "GIT_COMMITTER_DATE": timestamp,
+        }):
+            self.commit({"a.py": "pass\n"}, subject)
+        history = scan.scan_history(self.repo, scan.RepoShape())
+        commit = history["commits"][0]
+        self.assertEqual(commit["sha"], run(
+            ["git", "rev-parse", "HEAD"], self.repo).strip())
+        self.assertEqual(commit["date"], timestamp)
+        self.assertEqual(commit["subject"], subject)
+        self.assertEqual(history["churn"]["files"][0]["last_date"], timestamp)
+
     def test_cumulative_totals_and_dirs(self):
         self.commit({"a/main.py": "x = 1\n"}, "c1")
         self.commit({"a/util.py": "y = 2\nz=3\n"}, "c2")
@@ -99,7 +115,7 @@ class HistoryScanTests(TempRepoTestCase):
                 "last_date": run(
                     ["git", "log", "-1", "--format=%cI", "--", "a.py"],
                     self.repo,
-                ).strip()[:16],
+                ).strip(),
             },
         )
         self.assertEqual(

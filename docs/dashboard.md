@@ -48,9 +48,27 @@ refreshes on boot, HEAD changes and roughly each watch minute; missing gh/auth/
 GitHub origin/checks hides it. Dates use short months and 12-hour times.
 
 Palette (`Ctrl+K`, `⌘K`, `Ctrl+Space`) changes view/theme and exports Markdown or
-browser print/PDF. `Alt+1`–`Alt+6` select core tabs; hashes track `#history`, `#m:skills`.
+browser print/PDF. `Alt+1`–`Alt+0` select the first ten tabs in display order,
+including modules; `Alt+Shift+1`–`Alt+Shift+6` select tabs 11–16. Hashes track
+`#history`, `#m:skills`.
 `Alt+Left` and `Alt+Right` cycle through all tabs in display order, wrapping at
 either end, when focus is outside an editable field.
+Touch drags on the tab strip or panel slide between adjacent tabs; vertical
+scrolling, nested controls, and horizontally scrolling data keep their gestures.
+Details and reference dialogs keep keyboard focus and page shortcuts stay
+inactive until closed; Spotlight continues to handle its command shortcuts.
+
+History's chart opens a native explorer with commit-range presets, sliders and
+exact numeric range entry, zoom/pan, line/area and axis controls, sample pinning,
+and a sortable exact-data table. CSV exports the selected range in displayed
+table order, or the full scanned dataset in original commit order. Cumulative
+totals are net line changes within the scanned window; they are not absolute
+repository size when earlier commits fall outside that window. Cached history
+retains full commit hashes, timestamps with offsets, and subjects; the explorer
+and CSV normalize timestamps to UTC.
+
+Files and Churn rows open the file profile in a dialog. Closing it restores the
+originating row and preserves the table's filters and sort order.
 
 ## Caches and watching
 

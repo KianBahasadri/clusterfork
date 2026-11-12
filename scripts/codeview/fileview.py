@@ -32,7 +32,7 @@ def _stats(repo: Path, rel: str, line_count: int | None) -> dict:
         repo)
     if last:
         sha, author, date, subject = last.strip().split(_SEP, 3)
-        stats["last_commit"] = {"sha": sha[:8], "author": author,
+        stats["last_commit"] = {"sha": sha, "author": author,
                                 "date": date, "subject": subject}
 
     dates = scan.try_git(["log", "--format=%aI", "--", rel], repo)

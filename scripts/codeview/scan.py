@@ -14,7 +14,7 @@ from pathlib import Path
 from codeview import metrics
 
 CODEVIEW_DIR_NAME = ".codeview"
-SCAN_SCHEMA_VERSION = 2
+SCAN_SCHEMA_VERSION = 3
 MAX_CHURN_FILES = 200
 
 # Excluded from the LOC snapshot by suffix or directory component.
@@ -140,7 +140,7 @@ def scan_history(repo: Path, shape: RepoShape) -> dict:
             if not chunk.strip():
                 continue
             lines = chunk.splitlines()
-            head_parts = lines[0].split("\t")
+            head_parts = lines[0].split("\t", 2)
             if len(head_parts) < 3:
                 continue
             sha, date, subject = head_parts[0], head_parts[1], head_parts[2]
@@ -180,7 +180,7 @@ def scan_history(repo: Path, shape: RepoShape) -> dict:
                 file_row["additions"] += additions
                 file_row["deletions"] += deletions
                 file_row["churn"] += changed
-                file_row["last_date"] = date[:16]
+                file_row["last_date"] = date
                 touched_files.add(path)
 
                 dir_row = churn_dirs.setdefault(top, {
@@ -190,7 +190,7 @@ def scan_history(repo: Path, shape: RepoShape) -> dict:
                 dir_row["additions"] += additions
                 dir_row["deletions"] += deletions
                 dir_row["churn"] += changed
-                dir_row["last_date"] = date[:16]
+                dir_row["last_date"] = date
                 touched_dirs.add(top)
             for path in touched_files:
                 churn_files[path]["commits"] += 1
@@ -199,7 +199,7 @@ def scan_history(repo: Path, shape: RepoShape) -> dict:
             total += delta
             all_dirs.update(chunk_dirs)
             commits.append({
-                "sha": sha[:8], "date": date[:16], "subject": subject[:120],
+                "sha": sha, "date": date, "subject": subject,
                 "delta": delta, "total": total, "dirs": chunk_dirs,
             })
     file_rows = sorted(

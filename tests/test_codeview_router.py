@@ -163,6 +163,8 @@ class ServerBootTestCase(unittest.TestCase):
         self.assertEqual(data["lang"], "Python")
         self.assertEqual(data["stats"]["commits"], 1)
         self.assertEqual(data["stats"]["last_commit"]["subject"], "c1")
+        self.assertEqual(data["stats"]["last_commit"]["sha"],
+                         git(["rev-parse", "HEAD"], self.repo).strip())
         self.assertFalse(data["binary"])
         self.assertTrue(data["metrics"]["analyzed"])
         self.assertEqual(data["metrics"]["total_lines"], 1)

@@ -256,7 +256,7 @@ function shaButton(sha, title = "Copy commit hash") {
   const full = String(sha || "");
   const short = compactSha(full);
   return `<button type="button" class="meta-tag meta-tag-copy" data-copy="${esc(full)}"
-    aria-label="Copy commit hash ${esc(full)}" title="${esc(title)}">${esc(short)}</button>`;
+    aria-label="Copy commit hash ${esc(full)}"${short === full ? ` title="${esc(title)}"` : ""}>${esc(short)}</button>`;
 }
 
 document.addEventListener("click", e => {
@@ -271,14 +271,34 @@ document.addEventListener("click", e => {
 
 let hashTooltipTimer = 0;
 let hashTooltipEl = null;
+let hashTooltipTrigger = null;
 
 function hideHashTooltip() {
   window.clearTimeout(hashTooltipTimer);
   if (!hashTooltipEl) return;
-  const owner = document.querySelector(`[aria-describedby="${hashTooltipEl.id}"]`);
-  owner?.removeAttribute("aria-describedby");
+  hashTooltipTrigger?.removeAttribute("aria-describedby");
   hashTooltipEl.remove();
   hashTooltipEl = null;
+  hashTooltipTrigger = null;
+}
+
+function positionHashTooltip() {
+  if (!hashTooltipEl) return;
+  if (!hashTooltipTrigger?.isConnected) { hideHashTooltip(); return; }
+  const bubble = hashTooltipEl;
+  const viewport = window.visualViewport;
+  const vx = viewport?.offsetLeft || 0, vy = viewport?.offsetTop || 0;
+  const width = viewport?.width || window.innerWidth, height = viewport?.height || window.innerHeight;
+  bubble.style.maxWidth = `${Math.min(360, width - 24)}px`;
+  const rect = hashTooltipTrigger.getBoundingClientRect();
+  const tw = bubble.offsetWidth, th = bubble.offsetHeight;
+  let left = rect.left + (rect.width - tw) / 2;
+  let top = rect.top - th - 8;
+  left = Math.min(Math.max(vx + 12, left), vx + width - tw - 12);
+  if (top < vy + 12) top = rect.bottom + 8;
+  top = Math.max(vy + 12, Math.min(top, vy + height - th - 12));
+  bubble.style.left = `${left}px`;
+  bubble.style.top = `${top}px`;
 }
 
 function showHashTooltip(trigger) {
@@ -290,18 +310,17 @@ function showHashTooltip(trigger) {
   bubble.id = "hash-tooltip";
   bubble.setAttribute("role", "tooltip");
   bubble.textContent = full;
-  document.body.appendChild(bubble);
+  (trigger.closest("dialog[open]") || document.body).appendChild(bubble);
   hashTooltipEl = bubble;
+  hashTooltipTrigger = trigger;
   trigger.setAttribute("aria-describedby", bubble.id);
-  const rect = trigger.getBoundingClientRect();
-  const tw = bubble.offsetWidth, th = bubble.offsetHeight;
-  let left = rect.left + (rect.width - tw) / 2;
-  let top = rect.top - th - 8;
-  left = Math.min(Math.max(12, left), window.innerWidth - tw - 12);
-  if (top < 12) top = rect.bottom + 8;
-  bubble.style.left = `${left}px`;
-  bubble.style.top = `${top}px`;
+  positionHashTooltip();
 }
+
+window.addEventListener("scroll", positionHashTooltip, true);
+window.addEventListener("resize", positionHashTooltip);
+window.visualViewport?.addEventListener("scroll", positionHashTooltip);
+window.visualViewport?.addEventListener("resize", positionHashTooltip);
 
 document.addEventListener("pointerenter", e => {
   const btn = e.target.closest?.(".meta-tag-copy");
@@ -408,6 +427,11 @@ function makeTableSortable(table) {
   });
   apply();
   return {
+    reset() {
+      sorts = [];
+      columns.forEach(column => { column.direction = null; });
+      apply();
+    },
     refresh() {
       original = [...table.querySelectorAll("tbody tr")];
       apply();
@@ -415,17 +439,19 @@ function makeTableSortable(table) {
   };
 }
 
+const rowActivationControllers = new Map();
+
 function bindRowActivation(table, onActivate) {
-  table._rowAbort?.abort();
+  rowActivationControllers.get(table.id)?.abort();
   const ac = new AbortController();
-  table._rowAbort = ac;
+  rowActivationControllers.set(table.id, ac);
   const { signal } = ac;
   const rows = () => [...table.querySelectorAll("tbody tr")]
     .filter(r => r.style.display !== "none");
   const buttons = () => rows().map(r => r.querySelector(".table-row-trigger")).filter(Boolean);
 
   function setTabStops(active) {
-    buttons().forEach(btn => { btn.tabIndex = btn === active ? 0 : -1; });
+    table.querySelectorAll(".table-row-trigger").forEach(btn => { btn.tabIndex = btn === active ? 0 : -1; });
   }
   const first = buttons()[0];
   if (first) setTabStops(first);
@@ -437,7 +463,7 @@ function bindRowActivation(table, onActivate) {
       if (e.target.closest("button, a, input")) return;
       if (window.getSelection()?.toString()) return;
       const btn = tr.querySelector(".table-row-trigger");
-      if (btn) onActivate(btn);
+      if (btn) { btn.focus({ preventScroll: true }); onActivate(btn); }
     }, { signal });
   });
   table.querySelectorAll(".table-row-trigger").forEach(btn => {
@@ -452,6 +478,7 @@ function bindRowActivation(table, onActivate) {
     }, { signal });
   });
   table.addEventListener("keydown", e => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
     const btn = e.target.closest(".table-row-trigger");
     if (!btn || !["ArrowUp", "ArrowDown"].includes(e.key)) return;
     const list = buttons();
@@ -462,11 +489,24 @@ function bindRowActivation(table, onActivate) {
     list[i].focus();
     list[i].scrollIntoView({ block: "nearest" });
   }, { signal });
-  document.addEventListener("mousedown", e => {
+  function clearSelection() {
+    table.querySelectorAll("tbody tr").forEach(r => r.classList.remove("is-selected"));
+  }
+  document.addEventListener("pointerdown", e => {
     if (!table.contains(e.target)) {
-      table.querySelectorAll("tbody tr").forEach(r => r.classList.remove("is-selected"));
+      clearSelection();
+      if (table.contains(document.activeElement)) document.activeElement.blur();
     }
   }, { signal });
+  table.addEventListener("focusout", e => {
+    if (!table.contains(e.relatedTarget)) clearSelection();
+  }, { signal });
+  return {
+    refresh() {
+      const list = buttons();
+      setTabStops(list.find(btn => btn.tabIndex === 0) || list[0]);
+    },
+  };
 }
 
 function bindSearch(input, onFilter) {
@@ -481,190 +521,6 @@ function bindSearch(input, onFilter) {
     input.dispatchEvent(new Event("input"));
     input.focus();
   });
-}
-
-// ---------------------------------------------------------------- charts --
-
-const CHART_PAD = { l: 52, r: 12, t: 8, b: 24 };
-let chartHoverAbort = null;
-
-function chartScale(values, width, height) {
-  const vmax = Math.max(1, ...values), vmin = Math.min(0, ...values);
-  const iw = Math.max(1, width - CHART_PAD.l - CHART_PAD.r);
-  const ih = Math.max(1, height - CHART_PAD.t - CHART_PAD.b);
-  const n = values.length;
-  return {
-    vmax, vmin, iw, ih, n, width, height,
-    x: i => CHART_PAD.l + (n <= 1 ? iw / 2 : (i / (n - 1)) * iw),
-    y: v => CHART_PAD.t + ih - ((v - vmin) / (vmax - vmin || 1)) * ih,
-  };
-}
-
-function renderHistorySvg(commits, width, height) {
-  const values = commits.map(c => c.total);
-  const scale = chartScale(values, width, height);
-  const { vmax, vmin, n, x, y } = scale;
-  let out = `<svg class="chart-svg" width="${width}" height="${height}"
-    viewBox="0 0 ${width} ${height}" role="presentation">`;
-  for (let g = 0; g <= 4; g++) {
-    const gy = CHART_PAD.t + (scale.ih * g) / 4;
-    const val = Math.round(vmax - (scale.ih * g) / 4 * (vmax - vmin) / scale.ih);
-    out += `<line class="chart-grid-line" x1="${CHART_PAD.l}" y1="${gy}"
-      x2="${width - CHART_PAD.r}" y2="${gy}"></line>`;
-    out += `<text class="chart-axis-text" x="${CHART_PAD.l - 6}" y="${gy + 4}"
-      text-anchor="end">${fmt(val)}</text>`;
-  }
-  const pts = values.map((v, i) => `${x(i)},${y(v)}`).join(" ");
-  out += `<polygon class="chart-area"
-    points="${x(0)},${y(vmin)} ${pts} ${x(n - 1)},${y(vmin)}"></polygon>`;
-  out += `<polyline class="chart-series" points="${pts}"></polyline>`;
-  const tickEvery = Math.max(1, Math.ceil(n / 6));
-  commits.forEach((c, i) => {
-    if (i % tickEvery !== 0) return;
-    const s = String(c.date);
-    const short = MONTHS[+s.slice(5, 7) - 1]
-      ? `${MONTHS[+s.slice(5, 7) - 1]} ${+s.slice(8, 10)}` : s;
-    out += `<text class="chart-axis-text" x="${x(i)}" y="${height - 6}"
-      text-anchor="middle">${short}</text>`;
-  });
-  out += `<line class="chart-crosshair" hidden x1="0" x2="0" y1="0" y2="0"></line>
-    <circle class="chart-point" r="4" hidden cx="-20" cy="-20"></circle></svg>`;
-  return { html: out, scale };
-}
-
-function bindHistoryChart(wrap, commits) {
-  if (!wrap || !commits.length) return;
-  const frame = wrap.querySelector(".chart-frame");
-  const surface = wrap.querySelector(".chart-surface");
-  const tip = wrap.querySelector(".chart-tooltip");
-  const live = wrap.querySelector("[aria-live]");
-  if (!frame || !surface || !tip) return;
-
-  chartHoverAbort?.abort();
-  chartHoverAbort = new AbortController();
-  const { signal } = chartHoverAbort;
-
-  let scale = null;
-  let last = -1;
-  let pinned = -1;
-  let hovering = false;
-
-  function draw() {
-    const width = Math.max(320, Math.floor(frame.clientWidth || wrap.clientWidth || 640));
-    const height = frame.clientWidth && frame.clientWidth <= 600 ? 180 : 200;
-    const drawn = renderHistorySvg(commits, width, height);
-    surface.innerHTML = drawn.html;
-    scale = drawn.scale;
-    if (last >= 0) show(last, true);
-  }
-
-  function hide() {
-    if (pinned >= 0) return;
-    last = -1;
-    const svg = surface.querySelector("svg");
-    svg?.querySelector(".chart-crosshair")?.setAttribute("hidden", "");
-    svg?.querySelector(".chart-point")?.setAttribute("hidden", "");
-    tip.hidden = true;
-    tip.classList.remove("is-pinned");
-  }
-
-  function unpin() {
-    const i = pinned;
-    pinned = -1;
-    tip.classList.remove("is-pinned");
-    if (hovering && i >= 0) show(i);
-    else hide();
-  }
-
-  function show(i, keepTipHtml = false) {
-    if (!scale) return;
-    const c = commits[i];
-    const svg = surface.querySelector("svg");
-    const line = svg.querySelector(".chart-crosshair");
-    const dot = svg.querySelector(".chart-point");
-    const px = scale.x(i), py = scale.y(c.total);
-    line.removeAttribute("hidden");
-    line.setAttribute("x1", px);
-    line.setAttribute("x2", px);
-    line.setAttribute("y1", CHART_PAD.t);
-    line.setAttribute("y2", scale.height - CHART_PAD.b);
-    dot.removeAttribute("hidden");
-    dot.setAttribute("cx", px);
-    dot.setAttribute("cy", py);
-    if (i !== last || !keepTipHtml) {
-      last = i;
-      tip.innerHTML = `
-        <time>${esc(fmtDate(c.date))}</time>
-        <dl>
-          <dt>sha</dt><dd>${esc(c.sha)}</dd>
-          <dt>loc</dt><dd>${fmt(c.total)}</dd>
-        </dl>`;
-      if (live) live.textContent = `${fmtDate(c.date)} ${c.sha} ${fmt(c.total)} lines`;
-    }
-    const isPinned = pinned >= 0;
-    tip.classList.toggle("is-pinned", isPinned);
-    tip.hidden = false;
-    const bounds = frame.getBoundingClientRect();
-    const tw = tip.offsetWidth, th = tip.offsetHeight;
-    const ratioX = px / scale.width, ratioY = py / scale.height;
-    let left = ratioX * bounds.width + 12;
-    let topPx = ratioY * bounds.height - th - 8;
-    if (left + tw > bounds.width) left = ratioX * bounds.width - tw - 12;
-    if (left < 0) left = 0;
-    if (topPx < 0) topPx = ratioY * bounds.height + 12;
-    if (topPx + th > bounds.height) topPx = Math.max(0, bounds.height - th);
-    tip.style.left = `${left}px`;
-    tip.style.top = `${topPx}px`;
-  }
-
-  function indexFromEvent(e) {
-    if (!scale) return 0;
-    const rect = surface.querySelector("svg").getBoundingClientRect();
-    if (!rect.width) return last < 0 ? 0 : last;
-    const viewX = ((e.clientX - rect.left) / rect.width) * scale.width;
-    const n = commits.length;
-    const t = n <= 1 ? 0 : (viewX - CHART_PAD.l) / scale.iw;
-    return Math.max(0, Math.min(n - 1, Math.round(t * Math.max(n - 1, 1))));
-  }
-
-  draw();
-  const ro = new ResizeObserver(draw);
-  ro.observe(frame);
-  signal.addEventListener("abort", () => ro.disconnect());
-
-  surface.addEventListener("mousemove", e => {
-    hovering = true;
-    if (pinned >= 0) return;
-    show(indexFromEvent(e));
-  }, { signal });
-  surface.addEventListener("mouseleave", () => {
-    hovering = false;
-    hide();
-  }, { signal });
-  surface.addEventListener("click", e => {
-    if (e.target.closest(".chart-tooltip")) return;
-    const i = indexFromEvent(e);
-    if (pinned === i) { unpin(); return; }
-    pinned = i;
-    show(i);
-  }, { signal });
-  surface.addEventListener("keydown", e => {
-    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
-    e.preventDefault();
-    let i = last < 0 ? commits.length - 1 : last;
-    if (e.key === "Home") i = 0;
-    else if (e.key === "End") i = commits.length - 1;
-    else if (e.key === "ArrowLeft") i = Math.max(0, i - 1);
-    else i = Math.min(commits.length - 1, i + 1);
-    show(i);
-  }, { signal });
-  document.addEventListener("click", e => {
-    if (pinned < 0 || wrap.contains(e.target)) return;
-    unpin();
-  }, { signal });
-  document.addEventListener("keydown", e => {
-    if (e.key === "Escape" && pinned >= 0) unpin();
-  }, { signal });
 }
 
 function barRows(entries) {
@@ -753,6 +609,7 @@ async function api(path, opts) {
 }
 
 const state = { gen: null, tabs: [], active: null, scannedAt: null };
+let tabGestures = null;
 
 function updateScanTime() {
   const scan = $("#scan-time");
@@ -774,6 +631,7 @@ function tabKey(tab) {
 }
 
 function showPanel(name) {
+  tabGestures?.reset();
   state.active = name;
   document.querySelectorAll(".panel").forEach(p => {
     const active = p.dataset.panel === name;
@@ -820,6 +678,7 @@ function activateTab(key) {
 }
 
 function renderTabs(tabs) {
+  tabGestures?.reset();
   const nav = $("#tabs");
   const moduleKeys = new Set();
   for (const tab of tabs) {
@@ -979,13 +838,15 @@ async function renderHistory() {
   panel.innerHTML = `
     <div class="panel-stack">
       ${sectionHeading("Cumulative lines", `${fmt(commits.length)} commits scanned`)}
-      <div class="chart-box">
+      <div class="chart-box history-preview">
         <div class="chart-frame">
-          <div class="chart-surface" tabindex="0" role="img"
-            aria-label="Cumulative lines over commit history"></div>
+          <button type="button" class="chart-surface"
+            aria-label="Explore cumulative lines over ${fmt(commits.length)} commits"
+            aria-describedby="historyPreviewSummary"></button>
           <div class="chart-tooltip" hidden></div>
+          <div class="sr-only" aria-live="polite"></div>
         </div>
-        <div class="sr-only" aria-live="polite"></div>
+        <p class="sr-only" id="historyPreviewSummary">${fmt(commits[0].total)} to ${fmt(commits.at(-1).total)} cumulative lines in commit order, ${esc(fmtDate(commits[0].date))} to ${esc(fmtDate(commits.at(-1).date))}. Open for range controls, exact data, and CSV export.</p>
       </div>
       ${sectionHeading("Most-changed dirs")}
       ${hotDirs.length ? barRows(hotDirs) : emptyCallout("No directories", "No directory changes to show.")}
@@ -1013,7 +874,8 @@ async function renderHistory() {
         </table>
       </div>
     </div>`;
-  bindHistoryChart(panel.querySelector(".chart-box"), commits);
+  window.CodeviewHistoryChart(panel.querySelector(".chart-box"), commits,
+    { esc, fmt, fmtDate, sortHeader, makeTableSortable, downloadText, shaButton });
   makeTableSortable($("#history-table"));
 }
 
@@ -1080,7 +942,7 @@ async function renderChurn() {
               return `<tr class="${tracked ? "" : "is-muted"}" data-path="${esc(file.path)}">
                 <td class="wrap" data-sort-value="${esc(file.path)}">${tracked
                   ? `<button type="button" class="table-row-trigger" data-path="${esc(file.path)}"
-                       title="Open current file profile">${esc(file.path)}</button>`
+                       aria-label="Open current file profile ${esc(file.path)}">${esc(file.path)}</button>`
                   : `${esc(file.path)} <span class="badge badge-nominal">historical</span>`}</td>
                 <td class="num">${fmt(file.commits)}</td>
                 <td class="num" data-sort-value="${file.additions}">+${fmt(file.additions)}</td>
@@ -1102,6 +964,9 @@ async function renderChurn() {
   const input = $("#churn-filter");
   const count = panel.querySelector(".filter-count");
   const empty = $("#churn-filter-empty");
+  const rowNavigation = bindRowActivation($("#churn-table"), btn => {
+    openFile(btn.dataset.path, btn).catch(console.error);
+  });
   bindSearch(input, q => {
     const query = q.toLowerCase();
     const rows = $("#churn-table tbody").children;
@@ -1113,15 +978,12 @@ async function renderChurn() {
     }
     count.textContent = `${fmt(shown)} hotspots shown`;
     empty.hidden = shown !== 0;
+    rowNavigation.refresh();
   });
   $("#churn-filter-clear").addEventListener("click", () => {
     input.value = "";
     input.dispatchEvent(new Event("input"));
     input.focus();
-  });
-  bindRowActivation($("#churn-table"), btn => {
-    showPanel("files");
-    openFile(btn.dataset.path).catch(console.error);
   });
 }
 
@@ -1129,6 +991,10 @@ async function renderFiles() {
   const filesData = await api("/api/section/files");
   const panel = $('.panel[data-panel="files"]');
   const files = filesData.files || [];
+  if (!files.length) {
+    panel.innerHTML = emptyCallout("No tracked files", "This repository has no tracked files to inspect.");
+    return;
+  }
   const byLines = files.slice().sort((a, b) =>
     (b.lines ?? -1) - (a.lines ?? -1));
   const mt = filesData.metric_totals || {};
@@ -1167,7 +1033,7 @@ async function renderFiles() {
               return `<tr data-path="${esc(f.path)}">
                 <td class="wrap" data-sort-value="${esc(f.path)}">
                   <button type="button" class="table-row-trigger" data-path="${esc(f.path)}"
-                    title="Open file profile">${esc(f.path)}</button></td>
+                    aria-label="Open file profile ${esc(f.path)}">${esc(f.path)}</button></td>
                 <td>${esc(f.lang)}</td>
                 <td class="num" data-sort-value="${f.lines ?? ""}">${f.lines == null ? "—" : fmt(f.lines)}</td>
                 <td class="num">${fmt(m.code_lines)}</td>
@@ -1182,10 +1048,17 @@ async function renderFiles() {
           </tbody>
         </table>
       </div>
+      <div class="callout callout-info" id="file-filter-empty" hidden>
+        <strong>No matches:</strong> no files match this filter.
+        <button type="button" class="btn btn-secondary" id="file-filter-reset">Clear filter</button>
+      </div>
     </div>`;
   makeTableSortable($("#file-table"));
   const input = $("#file-filter");
   const count = panel.querySelector(".filter-count");
+  const rowNavigation = bindRowActivation($("#file-table"), btn => {
+    openFile(btn.dataset.path, btn).catch(console.error);
+  });
   bindSearch(input, q => {
     const query = q.toLowerCase();
     const rows = $("#file-table tbody").children;
@@ -1196,20 +1069,50 @@ async function renderFiles() {
       if (visible) shown++;
     }
     count.textContent = `${fmt(shown)} files shown`;
+    $("#file-filter-empty").hidden = shown !== 0;
+    rowNavigation.refresh();
   });
-  bindRowActivation($("#file-table"), btn => {
-    openFile(btn.dataset.path).catch(console.error);
+  $("#file-filter-reset").addEventListener("click", () => {
+    input.value = "";
+    input.dispatchEvent(new Event("input"));
+    input.focus();
   });
 }
 
-async function openFile(path) {
-  const panel = $('.panel[data-panel="files"]');
-  panel.innerHTML = `<div class="loading">Loading ${esc(path)}…</div>`;
-  const d = await api(`/api/file?path=${encodeURIComponent(path)}`);
-  panel.innerHTML = fileView(d);
-  $("#file-back").addEventListener("click", () =>
-    renderFiles().catch(console.error));
+const fileDialog = $("#fileDialog");
+let fileReturnFocus = null;
+let fileLoad = 0;
+
+async function openFile(path, trigger = document.activeElement) {
+  const request = ++fileLoad;
+  fileReturnFocus = trigger;
+  const body = $("#fileDialogBody");
+  $("#fileDialogTitle").textContent = path;
+  body.innerHTML = `<div class="loading">Loading ${esc(path)}…</div>`;
+  body.setAttribute("aria-busy", "true");
+  if (!fileDialog.open) fileDialog.showModal();
+  $("#btnCloseFile").focus({ preventScroll: true });
+  try {
+    const d = await api(`/api/file?path=${encodeURIComponent(path)}`);
+    if (request !== fileLoad || !fileDialog.open) return;
+    body.innerHTML = fileView(d);
+    body.querySelector(".file-code").focus({ preventScroll: true });
+  } catch (error) {
+    if (request === fileLoad && fileDialog.open) {
+      body.innerHTML = emptyCallout("Could not load file", String(error));
+    }
+  } finally {
+    if (request === fileLoad) body.removeAttribute("aria-busy");
+  }
 }
+
+$("#btnCloseFile").addEventListener("click", () => fileDialog.close());
+fileDialog.addEventListener("click", event => { if (event.target === fileDialog) fileDialog.close(); });
+fileDialog.addEventListener("close", () => {
+  fileLoad++;
+  $("#fileDialogBody").removeAttribute("aria-busy");
+  fileReturnFocus?.focus?.({ preventScroll: true });
+});
 
 function fileView(d) {
   const s = d.stats || {};
@@ -1229,18 +1132,11 @@ function fileView(d) {
   }
   return `
     <div class="file-toolbar">
-      <button type="button" class="btn btn-secondary" id="file-back">Files</button>
-      <nav aria-label="Breadcrumb">
-        <ol class="breadcrumb-nav">
-          <li>Files</li>
-          <li class="breadcrumb-sep" aria-hidden="true">/</li>
-          <li class="breadcrumb-cur" aria-current="page">${esc(d.path)}</li>
-        </ol>
-      </nav>
+      <span class="section-note">${esc(d.lang || "unknown")} · ${fmt(d.bytes)} bytes</span>
       ${d.truncated ? `<span class="badge badge-caution">Truncated</span>` : ""}
     </div>
     <div class="file-grid">
-      <div class="file-code">${code}</div>
+      <div class="file-code" tabindex="0" role="region" aria-label="${esc(d.path)} source">${code}</div>
       <aside class="file-stats">
         <div class="stats-hero">
           <div class="stats-kicker">File profile</div>
@@ -1504,7 +1400,7 @@ function destinationOptions() {
     : CORE_TABS.map(name => ({ name, kind: "core" }));
   return tabs.map((t, i) => {
     const key = tabKey(t);
-    const n = i + 1;
+    const digit = i < 10 ? (i + 1) % 10 : i - 9;
     return {
       id: `sp-tab-${key.replace(/[^a-z0-9-]/gi, "-")}`,
       mode: "jump",
@@ -1512,9 +1408,9 @@ function destinationOptions() {
       target: key,
       label: t.name,
       search: `${t.name} ${t.kind || ""} ${t.description || ""}`,
-      key: n <= 9 ? String(n) : "",
-      code: n <= 9 ? `Digit${n}` : "",
-      shift: false,
+      key: i < 16 ? String(digit) : "",
+      code: i < 16 ? `Digit${digit}` : "",
+      shift: i >= 10,
     };
   });
 }
@@ -1700,6 +1596,8 @@ function isEditingTarget(el) {
 }
 
 document.addEventListener("keydown", e => {
+  if (e.isComposing || [...document.querySelectorAll("dialog[open]")]
+    .some(dialog => dialog !== spotlightDialog)) return;
   const metaK = (e.ctrlKey || e.metaKey) && e.code === "KeyK";
   const ctrlSpace = e.ctrlKey && e.code === "Space";
   if ((metaK || ctrlSpace) && !e.altKey) {
@@ -1733,9 +1631,12 @@ document.addEventListener("keydown", e => {
     } else if (e.code === "Slash") {
       e.preventDefault();
       openShortcuts();
-    } else if (!e.shiftKey && /^Digit[1-6]$/.test(e.code)) {
-      e.preventDefault();
-      activateTab(CORE_TABS[Number(e.code.slice(-1)) - 1]);
+    } else if (/^Digit[0-9]$/.test(e.code)) {
+      const digit = Number(e.code.slice(-1));
+      if (e.shiftKey && (digit < 1 || digit > 6)) return;
+      const index = e.shiftKey ? digit + 9 : (digit + 9) % 10;
+      const tab = state.tabs[index];
+      if (tab) { e.preventDefault(); activateTab(tabKey(tab)); }
     }
   }
 });
@@ -1769,6 +1670,8 @@ renderSpotlightOptions();
     if (!b) return;
     activateTab(b.dataset.tab);
   });
+
+  tabGestures = window.CodeviewTabs($(".tab-group"), activateTab);
 
   document.addEventListener("keydown", ev => {
     if (ev.defaultPrevented || ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
