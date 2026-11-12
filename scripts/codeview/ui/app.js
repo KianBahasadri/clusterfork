@@ -1709,7 +1709,16 @@ document.addEventListener("keydown", e => {
   }
   if (isEditingTarget(e.target) && e.target !== spotlightInput) return;
   if (e.altKey && !e.ctrlKey && !e.metaKey) {
-    if (e.code === "KeyJ" && !e.shiftKey) {
+    if (!e.shiftKey && ["ArrowLeft", "ArrowRight"].includes(e.code)) {
+      const tabs = [...document.querySelectorAll("#tabs button")];
+      if (!tabs.length) return;
+      e.preventDefault();
+      const index = tabs.findIndex(tab => tab.dataset.tab === state.active);
+      const step = e.code === "ArrowRight" ? 1 : -1;
+      const next = tabs[(index + step + tabs.length) % tabs.length];
+      activateTab(next.dataset.tab);
+      next.focus();
+    } else if (e.code === "KeyJ" && !e.shiftKey) {
       e.preventDefault();
       openSpotlight("jump");
     } else if (e.code === "KeyT" && e.shiftKey) {
@@ -1762,6 +1771,7 @@ renderSpotlightOptions();
   });
 
   document.addEventListener("keydown", ev => {
+    if (ev.defaultPrevented || ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
     const current = ev.target.closest("#tabs button");
     if (!current || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(ev.key)) return;
     const tabs = [...document.querySelectorAll("#tabs button")];

@@ -49,6 +49,8 @@ GitHub origin/checks hides it. Dates use short months and 12-hour times.
 
 Palette (`Ctrl+K`, `⌘K`, `Ctrl+Space`) changes view/theme and exports Markdown or
 browser print/PDF. `Alt+1`–`Alt+6` select core tabs; hashes track `#history`, `#m:skills`.
+`Alt+Left` and `Alt+Right` cycle through all tabs in display order, wrapping at
+either end, when focus is outside an editable field.
 
 ## Caches and watching
 
