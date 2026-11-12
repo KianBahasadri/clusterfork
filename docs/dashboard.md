@@ -48,11 +48,12 @@ refreshes on boot, HEAD changes and roughly each watch minute; missing gh/auth/
 GitHub origin/checks hides it. Dates use short months and 12-hour times.
 
 Palette (`Ctrl+K`, `⌘K`, `Ctrl+Space`) changes view/theme and exports Markdown or
-browser print/PDF. `Alt+1`–`Alt+0` select the first ten tabs in display order,
-including modules; `Alt+Shift+1`–`Alt+Shift+6` select tabs 11–16. Hashes track
+browser print/PDF. `Alt+1`–`Alt+0` switch to the first ten tabs in display order,
+including modules; `Alt+Shift+1`–`Alt+Shift+6` switch to tabs 11–16. Hashes track
 `#history`, `#m:skills`.
 `Alt+Left` and `Alt+Right` cycle through all tabs in display order, wrapping at
-either end, when focus is outside an editable field.
+either end, when focus is outside an editable field. Alt shortcuts change the
+visible view without leaving a tab button focused.
 Touch drags on the tab strip or panel slide between adjacent tabs; vertical
 scrolling, nested controls, and horizontally scrolling data keep their gestures.
 Details and reference dialogs keep keyboard focus and page shortcuts stay

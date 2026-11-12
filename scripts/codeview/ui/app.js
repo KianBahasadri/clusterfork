@@ -1595,6 +1595,12 @@ function isEditingTarget(el) {
   return el.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
+function switchTabFromShortcut(key) {
+  const focusedTab = document.activeElement?.closest("#tabs button");
+  activateTab(key);
+  focusedTab?.blur();
+}
+
 document.addEventListener("keydown", e => {
   if (e.isComposing || [...document.querySelectorAll("dialog[open]")]
     .some(dialog => dialog !== spotlightDialog)) return;
@@ -1614,8 +1620,7 @@ document.addEventListener("keydown", e => {
       const index = tabs.findIndex(tab => tab.dataset.tab === state.active);
       const step = e.code === "ArrowRight" ? 1 : -1;
       const next = tabs[(index + step + tabs.length) % tabs.length];
-      activateTab(next.dataset.tab);
-      next.focus();
+      switchTabFromShortcut(next.dataset.tab);
     } else if (e.code === "KeyJ" && !e.shiftKey) {
       e.preventDefault();
       openSpotlight("jump");
@@ -1636,7 +1641,7 @@ document.addEventListener("keydown", e => {
       if (e.shiftKey && (digit < 1 || digit > 6)) return;
       const index = e.shiftKey ? digit + 9 : (digit + 9) % 10;
       const tab = state.tabs[index];
-      if (tab) { e.preventDefault(); activateTab(tabKey(tab)); }
+      if (tab) { e.preventDefault(); switchTabFromShortcut(tabKey(tab)); }
     }
   }
 });
