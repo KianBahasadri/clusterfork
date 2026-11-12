@@ -32,10 +32,11 @@ watcher/server restart. Reinstall after editing `scripts/codeview/`, or set
 
 | Tab | Contents |
 | --- | --- |
-| Overview | File/line/commit counts; directory/language lines |
+| Overview | Four headline totals, linked summaries for every tab, and top four directory/language line counts |
 | History | Cumulative LOC, commit graph, directory/recent changes over `--max-commits` (default 1000) |
 | Churn | Additions/deletions over that window; directories and up to 200 files, including deleted history |
 | Files | Tracked index, source composition, symbols/imports/estimated complexity, content and ownership/history |
+| Tree | Expandable folder hierarchy of the Files index, path filtering with ancestor context, and file profiles |
 | Deps | Root Cargo/npm/Python/Go summaries and supported lockfile inventories, not a resolution graph |
 | Server logs | In-memory 5000-line request/scan/watch/CI/boot ring; always last |
 
@@ -68,8 +69,12 @@ repository size when earlier commits fall outside that window. Cached history
 retains full commit hashes, timestamps with offsets, and subjects; the explorer
 and CSV normalize timestamps to UTC.
 
-Files and Churn rows open the file profile in a dialog. Closing it restores the
-originating row and preserves the table's filters and sort order.
+Files and Churn rows and Tree files open the file profile in a dialog. Closing
+it restores the originating row and preserves filters, sorting, and expanded
+folders. Tree supports expand/collapse all, arrow-key navigation, Home/End,
+type-to-find, and Enter/Space to toggle a folder or open a file. Its indexed
+paths follow the same exclusions as Files. Overview summaries use scanned totals
+and each custom module's description; broken modules link to their error details.
 
 ## Caches and watching
 

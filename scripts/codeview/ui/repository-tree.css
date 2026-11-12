@@ -1,0 +1,64 @@
+/* Shared tokens and controls come from app.css. */
+.tree-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 24px;
+}
+.tree-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.repository-tree, .repository-tree [role="group"] {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.repository-tree { padding: 4px; }
+.repository-tree[hidden] { display: none; }
+.repository-tree [role="treeitem"] { outline: none; min-width: 0; }
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 36px;
+  padding: 4px 8px 4px calc(8px + var(--tree-depth) * 16px);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13.5px;
+}
+.tree-row:hover { background: var(--surface-raised); }
+.repository-tree [role="treeitem"]:focus > .tree-row {
+  background: var(--surface-raised);
+  color: var(--ink-strong);
+}
+.repository-tree [role="treeitem"]:focus-visible > .tree-row {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.tree-chevron, .tree-kind { flex-shrink: 0; color: var(--muted); }
+.tree-chevron { width: 14px; height: 14px; }
+[aria-expanded="true"] > .tree-row .tree-chevron { transform: rotate(90deg); }
+.tree-chevron.is-placeholder { visibility: hidden; }
+.tree-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+}
+.tree-language { width: 80px; flex-shrink: 0; color: var(--muted); font-size: 12px; }
+.tree-meta {
+  width: 112px;
+  flex-shrink: 0;
+  color: var(--muted);
+  text-align: right;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 600px) {
+  .tree-row { min-height: 44px; gap: 4px; padding-left: calc(4px + var(--tree-depth) * 8px); }
+  .tree-language { display: none; }
+  .tree-meta { width: auto; max-width: 80px; font-size: 11px; }
+  .tree-kind { width: 14px; height: 14px; }
+}

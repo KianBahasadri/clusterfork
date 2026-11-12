@@ -571,6 +571,7 @@ class DashHandler(BaseHTTPRequestHandler):
                 {"kind": "core", "name": "history"},
                 {"kind": "core", "name": "churn"},
                 {"kind": "core", "name": "files"},
+                {"kind": "core", "name": "tree"},
                 {"kind": "core", "name": "deps"}]
         for m in mods:
             tabs.append({
@@ -592,6 +593,12 @@ class DashHandler(BaseHTTPRequestHandler):
         history = state.get("history") or {}
         deps = state.get("deps") or {}
         commits = history.get("commits") or []
+        folders = {str(parent)
+                   for file in files.get("files", [])
+                   for parent in Path(file["path"]).parents
+                   if str(parent) != "."}
+        with state.lock:
+            log_lines = len(state.logs)
         self.send_json({
             "meta": {
                 k: meta.get(k) for k in
@@ -607,9 +614,15 @@ class DashHandler(BaseHTTPRequestHandler):
             "langs": files.get("langs"),
             "tops": files.get("tops"),
             "commits_count": len(commits),
+            "churn": {k: (history.get("churn") or {}).get(k)
+                      for k in ("total", "file_count")},
+            "indexed_folders": len(folders),
+            "log_lines": log_lines,
             "dirs": history.get("dirs"),
             "ecosystems": [
-                {k: eco.get(k) for k in ("name", "manifest", "lockfile")}
+                {**{k: eco.get(k) for k in ("name", "manifest", "lockfile")},
+                 "declared_count": len(eco.get("declared") or []),
+                 "locked_count": len(eco.get("locked") or [])}
                 for eco in deps.get("ecosystems", [])],
             "modules": [
                 {"name": m["name"], "ok": m["ok"]}

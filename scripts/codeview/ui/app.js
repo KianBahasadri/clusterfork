@@ -8,7 +8,7 @@ const fmt = n => n == null ? "—" : Number(n).toLocaleString("en-US");
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const CORE_TABS = ["overview", "history", "churn", "files", "deps", "logs"];
+const CORE_TABS = ["overview", "history", "churn", "files", "tree", "deps", "logs"];
 
 function fmtDate(iso) {
   const m = String(iso || "").match(
@@ -672,6 +672,7 @@ function activateTab(key) {
   if (key === "history") renderHistory().catch(console.error);
   else if (key === "churn") renderChurn().catch(console.error);
   else if (key === "files") renderFiles().catch(console.error);
+  else if (key === "tree") renderTree().catch(console.error);
   else if (key === "deps") renderDeps().catch(console.error);
   else if (key === "logs") renderLogs().catch(console.error);
   else if (key === "overview") refresh().catch(console.error);
@@ -771,38 +772,50 @@ async function refresh() {
 
 async function renderOverview(s) {
   const panel = $('.panel[data-panel="overview"]');
-  if (s.meta?.empty_repo) {
-    panel.innerHTML = emptyCallout("Empty repository",
-      "No commits yet — make a commit and the dashboard will pick it up automatically.");
-    return;
-  }
   const mt = s.metric_totals || {};
   const langEntries = Object.entries(s.langs || {})
     .sort((a, b) => b[1].lines - a[1].lines);
   const topEntries = Object.entries(s.tops || {})
     .sort((a, b) => b[1].lines - a[1].lines);
-  const langs = langEntries.slice(0, 8);
-  const tops = topEntries.slice(0, 8).map(([k, v]) => [k === "." ? "(root)" : k, v.lines]);
+  const langs = langEntries.slice(0, 4);
+  const tops = topEntries.slice(0, 4).map(([k, v]) => [k === "." ? "(root)" : k, v.lines]);
   const langCount = langEntries.length;
-  const ecoCount = (s.ecosystems || []).length;
-  const maintainability = mt.maintainability_index == null
-    ? "—" : decimal(mt.maintainability_index);
+  const ecosystems = s.ecosystems || [];
+  const summaries = {
+    overview: `${fmt(langCount)} languages · ${fmt(mt.functions)} functions · ${fmt(mt.todo_count)} attention markers`,
+    history: `${fmt(s.commits_count)} commits scanned · Cumulative line history`,
+    churn: `${fmt(s.churn?.total)} lines changed · ${fmt(s.churn?.file_count)} files`,
+    files: `${fmt(s.total_files)} indexed files · ${fmt(s.total_lines)} physical lines`,
+    tree: `${fmt(s.indexed_folders)} folders · ${fmt(s.total_files)} indexed files`,
+    deps: ecosystems.length
+      ? `${fmt(ecosystems.reduce((n, e) => n + (e.declared_count || 0), 0))} declared · ${fmt(ecosystems.reduce((n, e) => n + (e.locked_count || 0), 0))} lock entries · ${ecosystems.map(e => e.name).join(", ")}`
+      : "No supported root manifests",
+    logs: `${fmt(s.log_lines)} buffered lines · Server activity`,
+  };
+  const viewSummaries = state.tabs.map(tab => {
+    const key = tabKey(tab);
+    const summary = tab.kind === "core" ? summaries[tab.name]
+      : tab.kind === "broken" ? "Module failed to load · Open for error details"
+      : tab.description || "Project dashboard module";
+    return `<li><a class="view-summary" href="#${esc(key)}" data-view="${esc(key)}"
+        ${key === "overview" ? 'aria-current="page"' : ""}>
+      <span class="view-summary-name">${esc(tab.name)}</span>
+      <span class="view-summary-copy">${esc(summary || "Repository view")}</span>
+    </a></li>`;
+  }).join("");
   panel.innerHTML = `
-    <div class="panel-stack">
+    <div class="panel-stack overview-compact">
       ${metricGrid([
         metric("Source lines", fmt(mt.code_lines ?? s.total_lines)),
         metric("Tracked files", fmt(s.total_files)),
         metric("Languages", fmt(langCount)),
-        metric("Functions", fmt(mt.functions)),
         metric("Commits scanned", fmt(s.commits_count)),
-        metric("Maintainability", maintainability),
-        metric("Blank lines", fmt(mt.blank_lines)),
-        metric("Comment lines", fmt(mt.comment_lines)),
-        metric("Attention markers", fmt(mt.todo_count)),
-        metric("Complexity", fmt(mt.cyclomatic_complexity)),
-        metric("Dependencies", fmt(ecoCount)),
-        metric("Modules", fmt(s.modules.length)),
       ], "overview-metrics")}
+      ${s.meta?.empty_repo ? emptyCallout("Empty repository", "No commits yet. Indexed files appear after they are added to git.") : ""}
+      <section>
+        ${sectionHeading("Repository views")}
+        <nav aria-label="View summaries"><ul class="view-summary-list">${viewSummaries}</ul></nav>
+      </section>
       <div class="rank-grid">
         <section>
           ${sectionHeading("Lines by top-level dir")}
@@ -816,6 +829,31 @@ async function renderOverview(s) {
         </section>
       </div>
     </div>`;
+  panel.querySelectorAll("[data-view]").forEach(link => {
+    link.addEventListener("click", event => {
+      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      activateTab(link.dataset.view);
+      [...$("#tabs").children].find(tab => tab.dataset.tab === link.dataset.view)?.focus();
+    });
+  });
+}
+
+let repositoryTree = null;
+async function renderTree() {
+  const panel = $('.panel[data-panel="tree"]');
+  try {
+    const data = await api("/api/section/files");
+    if (!repositoryTree) repositoryTree = window.CodeviewTree(panel,
+      { esc, fmt, iconUse, searchField, bindSearch, openFile });
+    repositoryTree.update(data.files || []);
+  } catch (error) {
+    if (!repositoryTree) {
+      panel.innerHTML = `${emptyCallout("Could not load tree", String(error))}
+        <button type="button" class="btn btn-secondary" id="tree-retry">Retry</button>`;
+      $("#tree-retry").addEventListener("click", renderTree);
+    }
+  }
 }
 
 async function renderHistory() {
@@ -1111,7 +1149,11 @@ fileDialog.addEventListener("click", event => { if (event.target === fileDialog)
 fileDialog.addEventListener("close", () => {
   fileLoad++;
   $("#fileDialogBody").removeAttribute("aria-busy");
-  fileReturnFocus?.focus?.({ preventScroll: true });
+  // Native dialogs normally restore focus immediately. The queued close event
+  // must not undo a keyboard move made just after dismissal.
+  if (document.activeElement === document.body || fileDialog.contains(document.activeElement)) {
+    fileReturnFocus?.focus?.({ preventScroll: true });
+  }
 });
 
 function fileView(d) {

@@ -8,6 +8,7 @@
 <link rel="icon" type="image/png" href="/assets/favicon.png">
 <link rel="stylesheet" href="/assets/app.css">
 <link rel="stylesheet" href="/assets/history-chart.css">
+<link rel="stylesheet" href="/assets/repository-tree.css">
 <script>
 (function () {
   var stored = null;
@@ -58,6 +59,16 @@
     </symbol>
     <symbol id="lucide-check" viewBox="0 0 24 24">
       <path d="M20 6 9 17l-5-5"></path>
+    </symbol>
+    <symbol id="lucide-chevron-right" viewBox="0 0 24 24">
+      <path d="m9 18 6-6-6-6"></path>
+    </symbol>
+    <symbol id="lucide-folder" viewBox="0 0 24 24">
+      <path d="M20 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2Z"></path>
+    </symbol>
+    <symbol id="lucide-file" viewBox="0 0 24 24">
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path>
+      <path d="M14 2v6h6"></path>
     </symbol>
     <symbol id="lucide-octagon-x" viewBox="0 0 24 24">
       <path d="m15 9-6 6"></path>
@@ -121,6 +132,10 @@
       </section>
       <section class="panel tab-panel" id="panel-files" data-panel="files"
         role="tabpanel" aria-labelledby="tab-files" hidden>
+        <div class="loading">Loading…</div>
+      </section>
+      <section class="panel tab-panel" id="panel-tree" data-panel="tree"
+        role="tabpanel" aria-labelledby="tab-tree" hidden>
         <div class="loading">Loading…</div>
       </section>
       <section class="panel tab-panel" id="panel-deps" data-panel="deps"
@@ -229,6 +244,18 @@
         <dd><kbd>Enter</kbd><kbd>Space</kbd></dd>
       </div>
       <div class="shortcut-row">
+        <dt>Move through the file tree</dt>
+        <dd><kbd>↑</kbd><kbd>↓</kbd><kbd>Home</kbd><kbd>End</kbd></dd>
+      </div>
+      <div class="shortcut-row">
+        <dt>Expand or collapse folders</dt>
+        <dd><kbd>→</kbd><kbd>←</kbd></dd>
+      </div>
+      <div class="shortcut-row">
+        <dt>Open tree file or toggle folder</dt>
+        <dd><kbd>Enter</kbd><kbd>Space</kbd></dd>
+      </div>
+      <div class="shortcut-row">
         <dt>Inspect chart samples</dt>
         <dd><kbd>←</kbd><kbd>→</kbd><kbd>Home</kbd><kbd>End</kbd></dd>
       </div>
@@ -267,6 +294,7 @@
 
 <script src="/assets/tab-navigation.js"></script>
 <script src="/assets/history-chart.js"></script>
+<script src="/assets/repository-tree.js"></script>
 <script src="/assets/app.js"></script>
 </body>
 </html>

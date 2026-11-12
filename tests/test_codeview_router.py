@@ -9,6 +9,7 @@ import time
 import unittest
 import urllib.request
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -95,6 +96,7 @@ class ServerBootTestCase(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"codeview", body)
         self.assertIn(b'data-panel="churn"', body)
+        self.assertIn(b'data-panel="tree"', body)
 
     def test_assets_traversal_guard(self):
         import urllib.error
@@ -120,6 +122,9 @@ class ServerBootTestCase(unittest.TestCase):
         self.assertIn("metric_totals", data)
         self.assertGreaterEqual(data["metric_totals"]["code_lines"], 1)
         self.assertEqual(data["commits_count"], 1)
+        self.assertEqual(data["churn"], {"total": 1, "file_count": 1})
+        self.assertEqual(data["indexed_folders"], 0)
+        self.assertGreater(data["log_lines"], 0)
         # Temp repo has no GitHub origin + no CI fetch ran: no CI to report.
         self.assertIsNone(data["ci"])
 
@@ -134,6 +139,30 @@ class ServerBootTestCase(unittest.TestCase):
                 self.assertEqual(data["churn"]["files"][0]["path"],
                                  "app.py")
 
+    def test_overview_summaries_use_indexed_paths_and_scanned_dependencies(self):
+        sections = {
+            "files": {"files": [{"path": path} for path in
+                                ("README.md", "src/a.py", "src/lib/b.py",
+                                 "src/lib/c.py", ".config/settings.json")]},
+            "history": {"commits": [{"subject": "older"},
+                                     {"subject": "latest"}],
+                        "churn": {"total": 12, "file_count": 3}},
+            "deps": {"ecosystems": [
+                {"name": "npm", "manifest": "package.json",
+                 "declared": [{"name": "a"}, {"name": "b"}],
+                 "locked": [{"name": "a"}]},
+                {"name": "python", "manifest": "pyproject.toml"}]},
+        }
+        with patch.dict(self.state.sections, sections, clear=True):
+            _, body = get(self.url("/api/summary"))
+        data = json.loads(body)
+        self.assertEqual(data["indexed_folders"], 3)
+        self.assertEqual(data["churn"], {"total": 12, "file_count": 3})
+        self.assertEqual([eco["declared_count"] for eco in data["ecosystems"]],
+                         [2, 0])
+        self.assertEqual([eco["locked_count"] for eco in data["ecosystems"]],
+                         [1, 0])
+
     def test_tabs_include_modules_and_broken_flag(self):
         _, body = get(self.url("/api/tabs"))
         tabs = json.loads(body)["tabs"]
@@ -145,7 +174,7 @@ class ServerBootTestCase(unittest.TestCase):
         self.assertIn(("logs", "core"), names_kinds)
         self.assertEqual(
             [t["name"] for t in tabs if t["kind"] == "core"],
-            ["overview", "history", "churn", "files", "deps", "logs"],
+            ["overview", "history", "churn", "files", "tree", "deps", "logs"],
         )
         # Server logs is a core tab and sits after all module tabs.
         self.assertEqual(tabs[-1]["name"], "logs")
