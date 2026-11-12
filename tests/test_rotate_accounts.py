@@ -283,6 +283,95 @@ class ScopedRotationTests(unittest.TestCase):
                 self.assertEqual(json.loads(backend.auth.read_text()), login(provider, "local"))
                 self.assertEqual(json.loads(pool.get(identity)[0]["auth"]), login(provider, "remote"))
 
+    def test_delete_without_scope_in_non_interactive_shell_requires_explicit_scope(self):
+        for provider in ("codex", "cursor"):
+            with self.subTest(provider=provider):
+                backend, pools, client = self.fixture(provider)
+                self.save_remote_login(backend, client)
+                before = self.local_state(backend)
+                manifest = (backend.store_dir / accounts.REMOTE_MANIFEST).read_bytes()
+                with patch.object(rotate_auth, "is_interactive", return_value=False), \
+                     patch("builtins.input") as confirm, CallBudget(self, api=client):
+                    with self.assertRaises(rotate_auth.RotateError) as error:
+                        self.command(backend, client, "--delete", "work")
+                self.assertIn("usage:", str(error.exception))
+                confirm.assert_not_called()
+                self.assertEqual(self.local_state(backend), before)
+                self.assertEqual((backend.store_dir / accounts.REMOTE_MANIFEST).read_bytes(), manifest)
+                identity = account_identity(login(provider), provider)
+                self.assertEqual(json.loads(pools.pools[provider].get(identity)[0]["auth"]), login(provider, "remote"))
+
+    def test_interactive_delete_asks_scope_before_confirmation_and_deletes_only_that_scope(self):
+        for provider in ("codex", "cursor"):
+            for scope in ("local", "remote"):
+                with self.subTest(provider=provider, scope=scope):
+                    backend, pools, client = self.fixture(provider)
+                    self.save_remote_login(backend, client)
+                    if scope == "local":
+                        backend.unhook()
+                    before = self.local_state(backend)
+                    profile = backend.store_dir / "auth.json.work"
+                    identity = account_identity(login(provider), provider)
+
+                    def confirm(prompt):
+                        picked.assert_called_once_with(backend.command, "work")
+                        self.assertIn("'work'", prompt)
+                        self.assertEqual(self.local_state(backend), before)
+                        self.assertEqual(json.loads(pools.pools[provider].get(identity)[0]["auth"]), login(provider, "remote"))
+                        return "yes"
+
+                    expected = {"api.claim": 1, "api.delete": 1} if scope == "remote" else {}
+                    with patch.object(rotate_auth, "is_interactive", return_value=True), \
+                         patch.object(rotate_auth, "prompt_scope", return_value=scope) as picked, \
+                         patch("builtins.input", side_effect=confirm) as confirmed, \
+                         CallBudget(self, api=client, exact=expected):
+                        self.assertEqual(self.command(backend, client, "--delete", "work")[0], 0)
+                    confirmed.assert_called_once()
+                    if scope == "local":
+                        self.assertFalse(profile.exists())
+                        self.assertEqual(json.loads(pools.pools[provider].get(identity)[0]["auth"]), login(provider, "remote"))
+                        self.assertEqual(backend.remote_profiles(), {"remote:work"})
+                    else:
+                        self.assertEqual(self.local_state(backend), before)
+                        self.assertEqual(pools.pools[provider].list(), [])
+
+    def test_cancelling_delete_scope_preserves_both_profiles_without_confirmation(self):
+        for provider in ("codex", "cursor"):
+            for interruption in (KeyboardInterrupt, EOFError):
+                with self.subTest(provider=provider, interruption=interruption):
+                    backend, pools, client = self.fixture(provider)
+                    self.save_remote_login(backend, client)
+                    before = self.local_state(backend)
+                    manifest = (backend.store_dir / accounts.REMOTE_MANIFEST).read_bytes()
+                    with patch.object(rotate_auth, "is_interactive", return_value=True), \
+                         patch.object(rotate_auth, "prompt_scope", side_effect=interruption), \
+                         patch("builtins.input") as confirm, CallBudget(self, api=client):
+                        with self.assertRaisesRegex(rotate_auth.RotateError, "deletion cancelled"):
+                            self.command(backend, client, "--delete", "work")
+                    confirm.assert_not_called()
+                    self.assertEqual(self.local_state(backend), before)
+                    self.assertEqual((backend.store_dir / accounts.REMOTE_MANIFEST).read_bytes(), manifest)
+                    identity = account_identity(login(provider), provider)
+                    self.assertEqual(json.loads(pools.pools[provider].get(identity)[0]["auth"]), login(provider, "remote"))
+
+    def test_explicit_delete_scope_skips_scope_picker_in_any_argument_position(self):
+        for provider in ("codex", "cursor"):
+            backend, _, client = self.fixture(provider)
+            self.save_remote_login(backend, client)
+            backend.unhook()
+            before = self.local_state(backend)
+            for scope in ("local", "remote"):
+                for interactive in (False, True):
+                    for args in (("--" + scope, "--delete", "work"), ("--delete", "work", "--" + scope)):
+                        with self.subTest(provider=provider, scope=scope, interactive=interactive, args=args), \
+                             patch.object(rotate_auth, "is_interactive", return_value=interactive), \
+                             patch.object(rotate_auth, "prompt_scope") as picked, \
+                             patch("builtins.input", return_value="n") as confirm, CallBudget(self, api=client):
+                            self.assertEqual(self.command(backend, client, *args)[0], 1)
+                            picked.assert_not_called()
+                            confirm.assert_called_once()
+                            self.assertEqual(self.local_state(backend), before)
+
     def test_delete_remote_preserves_local_login_and_can_be_cancelled(self):
         for provider in ("codex", "cursor"):
             with self.subTest(provider=provider):

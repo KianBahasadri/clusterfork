@@ -160,12 +160,14 @@ and reclaim rules for Codex/Cursor.
 ## Local and remote account commands
 
 Codex and Cursor accept `--local` and `--remote` in any argument position. Omitted
-scope means local for selection, deletion and kickoff. `--save` prompts interactively
-to choose between local and remote scope using keyboard navigation (Up/Down arrow
-keys and Enter); in non-interactive shells, `--save` requires an explicit `--local`
-or `--remote` flag and otherwise exits with the command usage. `--list` without a
-scope shows the host's saved profiles in both sets, labeling local/remote entries
-when remote profiles exist; names present in both sets show `[local] [remote]`.
+scope means local for selection and kickoff. `--save` and `--delete` prompt
+interactively to choose between local and remote scope using keyboard navigation
+(Up/Down arrow keys and Enter); in non-interactive shells, both require an explicit
+`--local` or `--remote` flag and otherwise exit with the command usage. Deletion
+asks for scope before its confirmation; cancelling either prompt preserves both
+sets. `--list` without a scope shows the host's saved profiles in both sets,
+labeling local/remote entries when remote profiles exist; names present in both
+sets show `[local] [remote]`.
 
 ```bash
 rotate-codex --local --save work

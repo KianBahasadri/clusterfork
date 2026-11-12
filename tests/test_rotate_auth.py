@@ -267,6 +267,10 @@ class DeleteProfileTests(unittest.TestCase):
                 files[str(path)] = ("file", path.read_bytes())
         return files, dict(self.keyring)
 
+    def _delete(self, agent, name):
+        scope = ["--local"] if agent in ("codex", "cursor") else []
+        return rotate_auth.run([agent, *scope, "--delete", name])
+
     def test_delete_inactive_profile_preserves_active_credentials(self):
         for agent, backend in self.backends.items():
             with self.subTest(agent=agent):
@@ -281,7 +285,7 @@ class DeleteProfileTests(unittest.TestCase):
 
                 self.answer.reset_mock()
                 self.answer.side_effect = confirm
-                self.assertEqual(rotate_auth.run([agent, "--delete", "beta"]), 0)
+                self.assertEqual(self._delete(agent, "beta"), 0)
                 self.answer.assert_called_once()
                 self.assertEqual(backend.suffixes(), ["alpha"])
                 self.assertEqual(backend.current_suffix(), "alpha")
@@ -299,7 +303,7 @@ class DeleteProfileTests(unittest.TestCase):
             for answer in ("", "n", "no", "anything else"):
                 with self.subTest(agent=agent, answer=answer):
                     self.answer.return_value = answer
-                    self.assertEqual(rotate_auth.run([agent, "--delete", "beta"]), 1)
+                    self.assertEqual(self._delete(agent, "beta"), 1)
                     self.assertEqual(self._snapshot(), before)
                     self.assertIn(
                         f"{backend.command}: deletion cancelled", self.output.getvalue()
@@ -311,7 +315,7 @@ class DeleteProfileTests(unittest.TestCase):
             for interruption in (EOFError, KeyboardInterrupt):
                 with self.subTest(agent=agent, interruption=interruption):
                     self.answer.side_effect = interruption
-                    self.assertEqual(rotate_auth.run([agent, "--delete", "beta"]), 1)
+                    self.assertEqual(self._delete(agent, "beta"), 1)
                     self.assertEqual(self._snapshot(), before)
 
     def test_confirmation_accepts_y_or_yes_case_insensitively(self):
@@ -322,7 +326,7 @@ class DeleteProfileTests(unittest.TestCase):
             with self.subTest(answer=answer):
                 self.answer.return_value = answer
                 profile.write_bytes(contents)
-                self.assertEqual(rotate_auth.run(["codex", "--delete", "beta"]), 0)
+                self.assertEqual(self._delete("codex", "beta"), 0)
                 self.assertFalse(profile.exists())
 
     def test_cancelling_detached_profile_delete_preserves_selection(self):
@@ -331,14 +335,14 @@ class DeleteProfileTests(unittest.TestCase):
                 self.assertEqual(rotate_auth.run([agent, "--unhook"]), 0)
                 before = self._snapshot()
                 self.answer.return_value = "n"
-                self.assertEqual(rotate_auth.run([agent, "--delete", "alpha"]), 1)
+                self.assertEqual(self._delete(agent, "alpha"), 1)
                 self.assertEqual(self._snapshot(), before)
 
     def test_delete_active_profile_refuses_without_changing_state(self):
         before = self._snapshot()
         for agent in self.AGENTS:
             with self.subTest(agent=agent), self.assertRaises(rotate_auth.RotateError) as error:
-                rotate_auth.run([agent, "--delete", "alpha"])
+                self._delete(agent, "alpha")
             self.assertIn("cannot delete active profile", str(error.exception))
             self.assertIn("--unhook", str(error.exception))
             self.assertEqual(self._snapshot(), before)
@@ -347,9 +351,9 @@ class DeleteProfileTests(unittest.TestCase):
     def test_unhook_then_delete_last_profile_clears_selection(self):
         for agent, backend in self.backends.items():
             with self.subTest(agent=agent):
-                rotate_auth.run([agent, "--delete", "beta"])
+                self._delete(agent, "beta")
                 self.assertEqual(rotate_auth.run([agent, "--unhook"]), 0)
-                self.assertEqual(rotate_auth.run([agent, "--delete", "alpha"]), 0)
+                self.assertEqual(self._delete(agent, "alpha"), 0)
                 self.assertEqual(backend.suffixes(), [])
                 self.assertIsNone(backend.current_suffix())
                 if agent == "antigravity":
@@ -367,7 +371,7 @@ class DeleteProfileTests(unittest.TestCase):
             for name in ("missing", "", "../alpha", "has space"):
                 with self.subTest(agent=agent, name=name):
                     with self.assertRaises(rotate_auth.RotateError):
-                        rotate_auth.run([agent, "--delete", name])
+                        self._delete(agent, name)
                     self.assertEqual(self._snapshot(), before)
         self.answer.assert_not_called()
 
@@ -377,7 +381,7 @@ class DeleteProfileTests(unittest.TestCase):
                 backend = self.backends[agent]
                 backend.unhook()
                 backend.auth.write_bytes(b"new unsaved login")
-                self.assertEqual(rotate_auth.run([agent, "--delete", "alpha"]), 0)
+                self.assertEqual(self._delete(agent, "alpha"), 0)
                 self.assertEqual(backend.auth.read_bytes(), b"new unsaved login")
                 self.assertFalse(backend.auth.is_symlink())
                 self.assertFalse(backend.current.is_symlink())

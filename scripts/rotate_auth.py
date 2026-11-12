@@ -707,11 +707,11 @@ def usage(command: str) -> list[str]:
             f"  {command} [--local | --remote] --save name",
             f"  {command} --local --list",
             f"  {command} --remote --list",
-            f"  {command} --remote --delete name",
+            f"  {command} [--local | --remote] --delete name",
             f"  {command} --migrate",
             f"  {command} --migrate-from-local-to-remote",
             f"  {command} --migrate-from-remote-to-local",
-            "  --save selects local or remote scope interactively, or via --local/--remote.",
+            "  --save and --delete select local or remote scope interactively, or via --local/--remote.",
             "  --migrate prompts for a direction, then which profiles to move.",
             "  --migrate-from-local-to-remote moves existing single-login profiles to remote.",
             "  --migrate-from-remote-to-local moves this host's remote-only profiles to local.",
@@ -1607,14 +1607,15 @@ def run(argv: list[str]) -> int:
         if scope == "remote" and action not in {"save", "list", "delete"}:
             fail(f"{backend.command}: use --remote with --save, --list or --delete",
                  "  Remote jobs select their own credentials.")
-        if action == "save" and scope is None:
+        if action in {"save", "delete"} and scope is None:
             if not is_interactive():
                 fail(*usage(backend.command))
             try:
                 assert isinstance(name, str)
                 scope = prompt_scope(backend.command, name)
             except (KeyboardInterrupt, EOFError):
-                fail(f"{backend.command}: save cancelled")
+                operation = "deletion" if action == "delete" else "save"
+                fail(f"{backend.command}: {operation} cancelled")
         from rotate_accounts import manage
         return manage(backend, scope or "local", action, name)
     if scope == "local" and action == "list":
