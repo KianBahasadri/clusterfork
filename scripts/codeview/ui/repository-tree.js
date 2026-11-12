@@ -64,8 +64,8 @@ window.CodeviewTree = function (panel, helpers) {
         visiblePaths.push(node.path);
         const folder = Boolean(node.children);
         const isOpen = folder && open.has(node.path);
-        const meta = folder ? `${fmt(node.count)} files`
-          : node.file.lines != null ? `${fmt(node.file.lines)} lines`
+        const meta = folder ? `${fmt(node.count)} ${node.count === 1 ? "file" : "files"}`
+          : node.file.lines != null ? `${fmt(node.file.lines)} ${node.file.lines === 1 ? "line" : "lines"}`
           : node.file.binary ? "Binary" : "Not counted";
         return `<li role="treeitem" tabindex="-1" data-path="${esc(node.path)}"
             aria-label="${esc(node.path)}" aria-level="${depth + 1}"

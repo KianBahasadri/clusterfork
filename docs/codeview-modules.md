@@ -34,6 +34,12 @@ ignoring handoff leaves rendering functional but theme unsynchronized.
 The [skill](../skills/add-codeview-module/SKILL.md) owns full templates, bootstrap,
 CSS vocabulary and workflow; follow existing target modules when available.
 
+The host replaces links to `/assets/app.css` in HTML responses with an inline
+copy of the current shared stylesheet. This keeps opaque frames styled when
+browser loopback-access rules block stylesheet requests; sandbox permissions stay
+unchanged. Module authors still use the normal stylesheet link, and their own
+inline layout styles retain their position after the shared rules.
+
 ## Reloading and validation
 
 Watcher filename/mtime changes trigger restart after about five quiet seconds,

@@ -10,6 +10,22 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from codeview import modules_rt  # noqa: E402
 
 
+class ModuleStylesTests(unittest.TestCase):
+    def test_embeds_only_host_stylesheets_in_document_order(self):
+        page = '''<!doctype html><html><head>
+<!-- Unicode makes byte offsets different: é -->
+<LINK rel='stylesheet' href='/assets/app.css' />
+<link rel="stylesheet" href="/custom.css">
+<style>.own { color: red; }</style>
+<script>var sample = '<link rel="stylesheet" href="/assets/app.css">';</script>
+</head></html>'''
+        result = modules_rt.inline_host_styles(page, ":root { --ink: black; }")
+        self.assertIn('<style data-codeview-host-styles>\n:root { --ink: black; }', result)
+        self.assertIn('<link rel="stylesheet" href="/custom.css">', result)
+        self.assertIn('var sample = \'<link rel="stylesheet" href="/assets/app.css">\';', result)
+        self.assertLess(result.index("--ink"), result.index(".own"))
+
+
 class ModuleLoadingTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

@@ -14,6 +14,7 @@ Broken modules never break boot: failures become a broken tab.
 from __future__ import annotations
 
 import importlib.util
+from html.parser import HTMLParser
 import re
 import traceback
 from pathlib import Path
@@ -21,6 +22,29 @@ from pathlib import Path
 MODULE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 ROUTE_PATH_RE = re.compile(r"^$|^/(?:[A-Za-z0-9._~-]+/?)*$")
 ALLOWED_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
+
+
+def inline_host_styles(page: str, css: str) -> str:
+    """Keep opaque module frames styled without a loopback subresource request."""
+    offsets = [0]
+    for line in page.splitlines(keepends=True):
+        offsets.append(offsets[-1] + len(line))
+    links = []
+
+    class StylesheetLinks(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            values = dict(attrs)
+            if (tag == "link" and values.get("href") == "/assets/app.css"
+                    and "stylesheet" in (values.get("rel") or "").lower().split()):
+                line, column = self.getpos()
+                start = offsets[line - 1] + column
+                links.append((start, start + len(self.get_starttag_text())))
+
+    StylesheetLinks().feed(page)
+    style = '<style data-codeview-host-styles>\n' + css.replace("</style", "<\\/style") + "\n</style>"
+    for start, end in reversed(links):
+        page = page[:start] + style + page[end:]
+    return page
 
 
 class ModuleError(Exception):

@@ -219,6 +219,18 @@ class ServerBootTestCase(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"<h1>hello tab</h1>", body)
 
+    def test_module_host_styles_work_without_loopback_subresource_access(self):
+        page = '<html><head><link rel="stylesheet" href="/assets/app.css"></head><body>Styled</body></html>'
+        for body in (page, page.encode()):
+            with self.subTest(body_type=type(body).__name__):
+                route = (True, "styled", lambda req: (200, body, "text/html; charset=utf-8"), "")
+                with patch.dict(self.httpd.app["module_routes"], {("GET", "/m/styled"): route}):
+                    status, response = get(self.url("/m/styled"))
+                self.assertEqual(status, 200)
+                self.assertIn(b"<style data-codeview-host-styles>", response)
+                self.assertIn(b"--canvas: #080b0d", response)
+                self.assertNotIn(b'<link rel="stylesheet" href="/assets/app.css">', response)
+
     def test_broken_module_landing_page_shows_error(self):
         status, body = get(self.url("/m/broken/"))
         self.assertEqual(status, 200)

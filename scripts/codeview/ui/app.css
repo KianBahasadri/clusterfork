@@ -544,7 +544,7 @@ kbd {
 @media (max-width: 420px) {
   .overview-compact .overview-metrics { width: 100%; gap: 16px; }
   .overview-compact .overview-metrics .metric-card { flex: 1 1 calc((100% - 16px) / 2); }
-  .view-summary { grid-template-columns: 72px minmax(0, 1fr); gap: 8px; }
+  .view-summary { grid-template-columns: 88px minmax(0, 1fr); gap: 8px; }
 }
 .metric-card {
   display: flex;

@@ -729,12 +729,20 @@ class DashHandler(BaseHTTPRequestHandler):
             return True
         if isinstance(body, dict):
             self.send_json(body, status)
-        elif isinstance(body, bytes):
-            self.send_body(status, body, ctype or "application/octet-stream")
         else:
-            text = str(body)
-            self.send_body(status, text.encode(),
-                           ctype or "text/html; charset=utf-8")
+            ctype = ctype or ("application/octet-stream" if isinstance(body, bytes)
+                              else "text/html; charset=utf-8")
+            payload = body if isinstance(body, bytes) else str(body).encode()
+            if ctype.split(";", 1)[0].strip().lower() == "text/html":
+                # Modern browsers block loopback subresources from opaque
+                # sandbox origins. Embed the canonical host stylesheet instead
+                # of granting frames same-origin or local-network permissions.
+                try:
+                    payload = modules_rt.inline_host_styles(
+                        payload.decode("utf-8"), (UI_DIR / "app.css").read_text()).encode()
+                except UnicodeError:
+                    pass
+            self.send_body(status, payload, ctype)
         return True
 
     def h_ui_fallback(self, verb: str, route: str):
