@@ -48,12 +48,12 @@ Preconditions:
 Shared settings every call:
 
 ```text
---print ... --model gemini-3.6-flash-high --effort high
+--print ... --model gemini-3.8-flash-high --effort high
 ```
 
-The pinned default is **Gemini 3.6 Flash (High)** (`gemini-3.6-flash-high`)
+The pinned default is **Gemini 3.8 Flash (High)** (`gemini-3.8-flash-high`)
 with reasoning effort `high`. See **Models** below for listing and switching.
-Settings may also store human-readable names like `Gemini 3.6 Flash (High)`;
+Settings may also store human-readable names like `Gemini 3.8 Flash (High)`;
 the hyphenated ids from `agy models` are preferred in scripts.
 
 ### Headless footguns (do not skip)
@@ -81,7 +81,7 @@ trap 'rm -f "$PROMPT_FILE"' EXIT
 # write the brief to $PROMPT_FILE
 cd "$REPO"
 agy --print "Read the brief at $PROMPT_FILE and respond to it fully." \
-  --model gemini-3.6-flash-high --effort high \
+  --model gemini-3.8-flash-high --effort high \
   --print-timeout 10m \
   < /dev/null
 # add --dangerously-skip-permissions, --mode plan|accept-edits,
@@ -114,14 +114,14 @@ bare-call default — pick what the situation needs.
 # Continue the most recent conversation for this workspace
 cd "$REPO"
 agy --print "Read the brief at $PROMPT_FILE and respond." \
-  --model gemini-3.6-flash-high --effort high --continue \
+  --model gemini-3.8-flash-high --effort high --continue \
   < /dev/null
 # add --dangerously-skip-permissions when the continued work must use tools
 
 # Resume a known conversation id (from a prior --output-format json run)
 cd "$REPO"
 agy --print "Read the brief at $PROMPT_FILE and respond." \
-  --model gemini-3.6-flash-high --effort high \
+  --model gemini-3.8-flash-high --effort high \
   --conversation "$CONVERSATION_ID" \
   < /dev/null
 ```
@@ -142,13 +142,13 @@ new session with the same intent and note it in the summary.
 # Judgment-oriented (plan mode; no permission bypass)
 cd "$REPO"
 agy --print "Read the brief at $PROMPT_FILE and respond. Do not modify files." \
-  --model gemini-3.6-flash-high --effort high --mode plan \
+  --model gemini-3.8-flash-high --effort high --mode plan \
   < /dev/null
 
 # Implementation / tools / images (auto-approve)
 cd "$REPO"
 agy --print "Read the brief at $PROMPT_FILE and respond." \
-  --model gemini-3.6-flash-high --effort high \
+  --model gemini-3.8-flash-high --effort high \
   --dangerously-skip-permissions \
   --print-timeout 15m \
   < /dev/null
@@ -171,7 +171,7 @@ judgment.
 
 ## Models
 
-Default: `--model gemini-3.6-flash-high --effort high`. Keep this unless the
+Default: `--model gemini-3.8-flash-high --effort high`. Keep this unless the
 user asks for a different model/effort or context clearly calls for it.
 
 List available models for this account:
@@ -183,10 +183,10 @@ agy models
 Switch with `--model <id>`. Effort is a separate flag: `--effort low|medium|high`.
 Ids currently look like:
 
-- `gemini-3.6-flash-high` / `gemini-3.6-flash-medium` / `gemini-3.6-flash-low`
-- `gemini-3.5-flash-high` / `gemini-3.5-flash-medium` / `gemini-3.5-flash-low`
-- `gemini-3.1-pro-high` / `gemini-3.1-pro-low`
-- `claude-sonnet-4-6` / `claude-opus-4-6-thinking`
+- `gemini-3.8-flash-high` / `gemini-3.8-flash-medium` / `gemini-3.8-flash-low`
+- `gemini-4-argon-high` / `gemini-4-argon-medium` / `gemini-4-argon-low`
+- `claude-sonnet-5-5-high` / `claude-sonnet-5-5-medium` / `claude-sonnet-5-5-low`
+- `claude-opus-5-5-high` / `claude-opus-5-5-medium` / `claude-opus-5-5-low`
 - `gpt-oss-120b-medium`
 
 If the user names a model you cannot resolve, run `agy models` and pick the
@@ -296,7 +296,7 @@ PROMPT
 
 cd "$REPO"
 agy --print "Read the brief at $PROMPT_FILE and respond to it fully." \
-  --model gemini-3.6-flash-high --effort high \
+  --model gemini-3.8-flash-high --effort high \
   --dangerously-skip-permissions \
   --print-timeout 10m \
   --output-format json \

@@ -95,17 +95,19 @@ class CustomModulesTests(unittest.TestCase):
         skills = {r["name"] for r in data["skills"]}
         self.assertIn("commit_and_push", skills)
         self.assertIn("design-guide", skills)
-        self.assertIn("ask-claude", skills)
-        self.assertIn("ask-codex", skills)
+        self.assertEqual(
+            {name for name in skills if name.startswith("ask-")},
+            {"ask-codex", "ask-cursor", "ask-antigravity"},
+        )
         by_skill = {r["name"]: r["runs"] for r in data["skills"]}
         self.assertNotEqual(by_skill["generate_docs"], ">")
         self.assertIn("AGENTS.md", by_skill["generate_docs"])
         self.assertNotEqual(by_skill["create-github-action-tests"], ">")
         self.assertIn("GitHub Actions", by_skill["create-github-action-tests"])
         counts = data["counts"]
-        self.assertGreaterEqual(counts["Skills"], 16)
-        self.assertEqual(counts["Delegation"], 6)
-        self.assertEqual(counts["Workflow & Design"], counts["Skills"] - 6)
+        self.assertGreaterEqual(counts["Skills"], 15)
+        self.assertEqual(counts["Delegation"], 3)
+        self.assertEqual(counts["Workflow & Design"], counts["Skills"] - 3)
 
     def test_skills_page_renders_skills_table(self):
         mods = modules_rt.load_modules(REPO_ROOT / ".codeview" / "modules")
@@ -115,7 +117,9 @@ class CustomModulesTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("charset=utf-8", ctype)
         self.assertIn("commit_and_push", body)
-        self.assertIn("ask-claude", body)
+        self.assertIn("ask-codex", body)
+        for name in ("ask-claude", "ask-grok", "ask-opencode"):
+            self.assertNotIn(name, body)
         self.assertIn(">Skills</h2>", body)
         self.assertIn("skills-board", body)
         self.assertIn("skills-filter", body)

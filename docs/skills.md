@@ -23,6 +23,9 @@ its directory and loads skills with its native `skill` tool. See the
 [OpenCode discovery reference](https://opencode.ai/docs/skills).
 
 Work on this repository's `skills/`, then reinstall to distribute edits.
+Disabled definitions are kept in `disabled-skills/`, outside the installer's
+source tree and the dashboard's active inventory. Move a definition's directory
+back into `skills/` and reinstall to enable it again.
 `agents/claude-plugins/` also installs directories into Claude's skills tree;
 those are [MCP plugins](agent-configs.md#skills-directory-mcp-plugins), not
 shared `SKILL.md` skills.
@@ -43,17 +46,22 @@ The links below open the complete rules, including any approval requirements.
 | [setup-clusterfork-symphony-remote-development](../skills/setup-clusterfork-symphony-remote-development/SKILL.md) | Enrolls a GitHub repository and an explicitly selected Linear project in Clusterfork Symphony's shared remote development system; `/setup-clusterfork-symphony-remote-development` |
 | [design-guide](../skills/design-guide/SKILL.md) | Exact interface specifications and runnable component/dashboard references for building or reviewing UI |
 | [conservative-academic-prose-sweep](../skills/conservative-academic-prose-sweep/SKILL.md) | Removes embellishment and unsupported claims from technical or academic prose while preserving meaning and limitations |
-| [ask-claude](../skills/ask-claude/SKILL.md) | Gets headless help from Claude on difficult work; `/ask-claude` |
 | [ask-codex](../skills/ask-codex/SKILL.md) | Gets headless help from Codex on difficult work; `/ask-codex` |
 | [ask-cursor](../skills/ask-cursor/SKILL.md) | Gets headless help from Cursor Agent on difficult work; `/ask-cursor` |
-| [ask-grok](../skills/ask-grok/SKILL.md) | Gets headless help from Grok, including image work; `/ask-grok` |
-| [ask-opencode](../skills/ask-opencode/SKILL.md) | Gets headless help from OpenCode with a self-delegation guard; `/ask-opencode` |
 | [ask-antigravity](../skills/ask-antigravity/SKILL.md) | Gets headless help from Antigravity, including image work; `/ask-antigravity` |
 | [improve-codebase-architecture](../skills/improve-codebase-architecture/SKILL.md) | Presents module-deepening candidates in an HTML report, then interviews through a choice; explicit `/improve-codebase-architecture` |
 | [codebase-design](../skills/codebase-design/SKILL.md) | Vocabulary and principles for deep modules, interfaces, seams, and testability; selected during design work |
 | [domain-modeling](../skills/domain-modeling/SKILL.md) | Sharpens terminology and maintains `CONTEXT.md` and ADRs during design |
 | [grilling](../skills/grilling/SKILL.md) | Reusable interview loop for stress-testing plans and decisions |
 | [decide](../skills/decide/SKILL.md) | Forms and explains an independent recommendation when asked to decide |
+
+Disabled skills:
+
+| Skill | Purpose |
+| --- | --- |
+| [ask-claude](../disabled-skills/ask-claude/SKILL.md) | Gets headless help from Claude on difficult work |
+| [ask-grok](../disabled-skills/ask-grok/SKILL.md) | Gets headless help from Grok, including image work |
+| [ask-opencode](../disabled-skills/ask-opencode/SKILL.md) | Gets headless help from OpenCode with a self-delegation guard |
 
 The architecture, codebase-design, domain-modeling, and grilling skills retain
 provenance links to [mattpocock/skills](https://github.com/mattpocock/skills) in

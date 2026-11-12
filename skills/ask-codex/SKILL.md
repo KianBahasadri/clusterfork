@@ -41,7 +41,7 @@ Preconditions:
 Shared settings every call:
 
 ```text
--m gpt-5.6-sol -c model_reasoning_effort=xhigh -c approval_policy=never
+-m gpt-6.1-sol -c model_reasoning_effort=max -c approval_policy=never
 ```
 
 I/O pattern:
@@ -97,7 +97,7 @@ Resume constraints (verified on current `codex exec resume`):
 ```bash
 # Resume (sandbox via -c; shell cwd = repo)
 cd "$REPO"
-codex exec resume --last -m gpt-5.6-sol -c model_reasoning_effort=xhigh \
+codex exec resume --last -m gpt-6.1-sol -c model_reasoning_effort=max \
   -c approval_policy=never -c 'sandbox_mode="read-only"' \
   -o "$OUT_FILE" - < "$PROMPT_FILE"
 # or sandbox_mode="workspace-write" / "danger-full-access" from context
@@ -120,17 +120,17 @@ New session forms:
 
 ```bash
 # Read-only
-codex exec -m gpt-5.6-sol -c model_reasoning_effort=xhigh \
+codex exec -m gpt-6.1-sol -c model_reasoning_effort=max \
   -c approval_policy=never -s read-only \
   -C "$REPO" -o "$OUT_FILE" - < "$PROMPT_FILE"
 
 # Workspace writes (typical implementation)
-codex exec -m gpt-5.6-sol -c model_reasoning_effort=xhigh \
+codex exec -m gpt-6.1-sol -c model_reasoning_effort=max \
   -c approval_policy=never -s workspace-write \
   -C "$REPO" -o "$OUT_FILE" - < "$PROMPT_FILE"
 
 # Full access (only when broader access is required)
-codex exec -m gpt-5.6-sol -c model_reasoning_effort=xhigh \
+codex exec -m gpt-6.1-sol -c model_reasoning_effort=max \
   -c approval_policy=never -s danger-full-access \
   -C "$REPO" -o "$OUT_FILE" - < "$PROMPT_FILE"
 ```

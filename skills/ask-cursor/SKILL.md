@@ -46,10 +46,10 @@ Preconditions:
 Shared settings every call:
 
 ```text
---print --model cursor-grok-4.5-high --trust
+--print --model grok-4.7-high --trust
 ```
 
-The pinned default is **Grok 4.5 High** (`cursor-grok-4.5-high`). See
+The pinned default is **Grok 4.7 High** (`grok-4.7-high`). See
 **Models** below for how to list models and switch when the user asks.
 
 I/O pattern (file-first — the prompt is a positional arg, and `--print` mode
@@ -62,7 +62,7 @@ REPO="$(pwd)"
 PROMPT_FILE="$(mktemp "${REPO}/.ask-cursor-brief.XXXXXX")"
 trap 'rm -f "$PROMPT_FILE"' EXIT
 # write the brief to $PROMPT_FILE
-cursor-agent --print --model cursor-grok-4.5-high --trust \
+cursor-agent --print --model grok-4.7-high --trust \
   --workspace "$REPO" \
   "Read the brief at $PROMPT_FILE and respond to it fully."
 # add --yolo, --mode ask|--mode plan|--plan, --resume|--continue,
@@ -91,11 +91,11 @@ bare-call default — pick what the situation needs.
 
 ```bash
 # Continue previous session (most recent chat for this workspace)
-cursor-agent --print --model cursor-grok-4.5-high --trust \
+cursor-agent --print --model grok-4.7-high --trust \
   --workspace "$REPO" --continue "Read the brief at $PROMPT_FILE and respond."
 
 # Resume a known session id (from a prior --output-format json run's session_id)
-cursor-agent --print --model cursor-grok-4.5-high --trust \
+cursor-agent --print --model grok-4.7-high --trust \
   --workspace "$REPO" --resume "$SESSION_ID" "Read the brief at $PROMPT_FILE and respond."
 ```
 
@@ -124,12 +124,12 @@ approval. For any run that must write or run shell unattended, add `--yolo`.
 
 ```bash
 # Judgment-oriented (read-only; no force-approve)
-cursor-agent --print --model cursor-grok-4.5-high --trust --mode ask \
+cursor-agent --print --model grok-4.7-high --trust --mode ask \
   --workspace "$REPO" \
   "Read the brief at $PROMPT_FILE and respond. Do not modify files."
 
 # Implementation handoff (write/shell auto-approved)
-cursor-agent --print --model cursor-grok-4.5-high --trust --yolo \
+cursor-agent --print --model grok-4.7-high --trust --yolo \
   --workspace "$REPO" \
   "Read the brief at $PROMPT_FILE and implement the requested changes."
 ```
@@ -150,7 +150,7 @@ judgment.
 
 ## Models
 
-Default: `cursor-grok-4.5-high` (Cursor Grok 4.5, high reasoning effort). Keep
+Default: `grok-4.7-high` (Cursor Grok 4.7, high reasoning effort). Keep
 this unless the user asks for a different model/effort or context clearly
 calls for it.
 
@@ -164,7 +164,7 @@ cursor-agent models             # subcommand form, same output
 Switch the model with `--model <id>`. Cursor model ids carry the effort tier
 in the name, e.g.:
 
-- `cursor-grok-4.5-medium` / `cursor-grok-4.5-low` — same Grok 4.5, lower effort
+- `grok-4.7-medium` / `grok-4.7-low` — same Grok 4.7, lower effort
 - `gpt-5.6-sol-high` / `gpt-5.6-sol-xhigh` / `gpt-5.6-sol-max` — GPT-5.6 Sol tiers
 - `claude-opus-5-thinking-high` / `claude-opus-5-thinking-xhigh` — thinking models
 - `kimi-k3-high` — Kimi K3
