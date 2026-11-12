@@ -86,7 +86,30 @@ status unchanged: force `reload` or startup `--reindex`. `--no-watch` disables u
 
 ## Clusterfork tabs and extensions
 
-Tracked `.codeview/modules/` tabs: `scripts.py` for launchers/rotation/PATH/scripts/
-configs, `skills.py` for skills/slash commands, `statusline.py` for scripts/fetchers/
-previews. [Codeview modules](codeview-modules.md) owns API, frames, theme and reload;
+Tracked `.codeview/modules/` tabs: `deployments.py` for Terraform resources and
+retail cost estimates, `scripts.py` for launchers/rotation/PATH/scripts/configs,
+`skills.py` for skills/slash commands, `statusline.py` for scripts/fetchers/previews.
+[Codeview modules](codeview-modules.md) owns API, frames, theme and reload;
 the [add-codeview-module skill](../skills/add-codeview-module/SKILL.md) owns templates/workflow.
+
+Deployments discovers local `.tf`/`.tf.json` directories outside dependency and
+cache trees and runs only `terraform state pull` against their existing backends.
+It distinguishes state records, state-only/deposed instances, declarations missing
+from readable state, and unverified declarations when state access fails. This is
+the last Terraform snapshot, not a live cloud refresh. Resource details expose
+allowlisted identifiers, sizing, networking, retention, access relationships, and
+common tags; raw state, outputs, credentials, and marked-sensitive attributes are
+never rendered. Missing Terraform/backend access leaves configuration visible.
+
+Azure estimates use paginated public USD Consumption rates from the
+[Azure Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices).
+The fixed subtotal includes supported regular Linux compute, its managed OS disk,
+managed data disks, and Standard IPv4 allocations. VM hours are editable; disks
+and IPs assume a full 730-hour month. Source queries and rate dates are inspectable.
+Blob capacity, standard vault operations, and Analytics Logs ingestion show unit
+rates, with usage unknown; dependent resources point to their parent cost rather
+than counting it again. Unsupported SKUs and failed/ambiguous rate lookups remain
+unpriced. The subtotal excludes usage charges, free allowances, discounts, taxes,
+and other unmodeled meters. In-memory inventory caches for 60 seconds and successful
+prices for 24 hours (failures five minutes); Refresh bypasses both. No cloud writes,
+backend initialization, refresh, plan, or apply runs from the tab.

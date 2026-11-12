@@ -1,9 +1,10 @@
-"""Tests for clusterfork's custom codeview modules: scripts, skills, statusline."""
+"""Tests for clusterfork's custom codeview modules and shared theme handoff."""
 import importlib.util
 import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -13,6 +14,7 @@ from codeview import modules_rt  # noqa: E402
 SCRIPTS_PATH = REPO_ROOT / ".codeview" / "modules" / "scripts.py"
 SKILLS_PATH = REPO_ROOT / ".codeview" / "modules" / "skills.py"
 STATUSLINE_PATH = REPO_ROOT / ".codeview" / "modules" / "statusline.py"
+DEPLOYMENTS_PATH = REPO_ROOT / ".codeview" / "modules" / "deployments.py"
 
 
 def load_module(name: str, path: Path):
@@ -29,14 +31,17 @@ class CustomModulesTests(unittest.TestCase):
         self.assertIn("scripts", names)
         self.assertIn("skills", names)
         self.assertIn("statusline", names)
+        self.assertIn("deployments", names)
         self.assertNotIn("kit", names)
-        self.assertEqual(len(mods), 3)
+        self.assertEqual(len(mods), 4)
         self.assertTrue(names["scripts"]["ok"], names["scripts"]["error"])
         self.assertTrue(names["skills"]["ok"], names["skills"]["error"])
         self.assertTrue(names["statusline"]["ok"], names["statusline"]["error"])
+        self.assertTrue(names["deployments"]["ok"], names["deployments"]["error"])
         self.assertIn(("GET", "/m/scripts"), names["scripts"]["routes"])
         self.assertIn(("GET", "/m/skills"), names["skills"]["routes"])
         self.assertIn(("GET", "/m/statusline"), names["statusline"]["routes"])
+        self.assertIn(("GET", "/m/deployments"), names["deployments"]["routes"])
 
     def test_scripts_scan_includes_launchers_bins_scripts_configs(self):
         mod = load_module("scripts", SCRIPTS_PATH)
@@ -171,7 +176,7 @@ class ThemeHandoffTests(unittest.TestCase):
 
     APP_JS = REPO_ROOT / "scripts" / "codeview" / "ui" / "app.js"
     INDEX = REPO_ROOT / "scripts" / "codeview" / "ui" / "index.html"
-    MODULES = (SCRIPTS_PATH, SKILLS_PATH, STATUSLINE_PATH)
+    MODULES = (SCRIPTS_PATH, SKILLS_PATH, STATUSLINE_PATH, DEPLOYMENTS_PATH)
 
     def test_host_sends_theme_to_module_frames(self):
         js = self.APP_JS.read_text(encoding="utf-8")
@@ -186,7 +191,11 @@ class ThemeHandoffTests(unittest.TestCase):
         for path in self.MODULES:
             with self.subTest(module=path.name):
                 mod = load_module(path.stem, path)
-                page = mod.render(mod.scan(REPO_ROOT))
+                if path == DEPLOYMENTS_PATH:
+                    with patch.object(mod, "read_state", return_value=(None, "Unavailable")):
+                        page = mod.render(mod.scan(REPO_ROOT))
+                else:
+                    page = mod.render(mod.scan(REPO_ROOT))
                 self.assertIn('URLSearchParams(location.search).get("theme")',
                               page)
                 self.assertIn('addEventListener("message"', page)
