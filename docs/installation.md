@@ -94,3 +94,5 @@ rules. Notification preferences and history are runtime files and are not reset.
 The install is repeatable but is not a transaction: a later error can leave
 earlier steps installed. Fix the reported problem and rerun it. Output lists
 destinations, hooks, MCP names, merged keys, and skills as each step completes.
+The completion summary gives shell commands and skills their own sections;
+skills appear in aligned rows with short descriptions from their metadata.

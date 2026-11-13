@@ -1196,18 +1196,43 @@ printf '    %-5s %-18s %s\n' codeview "bin/codeview" "start|stop|restart|reload|
 printf '    %-5s %-18s %s\n' "rotate-*" "rotate_auth.py" "[name] --save name --delete name --unhook --list --kickoff [names]"
 printf '    %-5s %-18s %s\n' "" "Codex/Cursor" "[--local|--remote] --save name; --remote --list/--delete name"
 
-# Skills: list each subdirectory name under skills/.
-skills=()
-if [[ -d "$SKILLS_SRC_DIR" ]]; then
-  for d in "$SKILLS_SRC_DIR"/*/; do
-    [[ -d "$d" ]] || continue
-    skills+=("$(basename "$d")")
-  done
-fi
-if (( ${#skills[@]} > 0 )); then
-  printf '\n  Skills\n'
-  printf '    %s\n' "${skills[*]}"
-fi
+# Skills: one aligned row per skill, with a short description from its metadata.
+python3 - "$SKILLS_SRC_DIR" <<'PY'
+from pathlib import Path
+import shutil
+import sys
+import textwrap
+
+skills = sorted(Path(sys.argv[1]).glob("*/SKILL.md"))
+if skills:
+    name_width = min(32, max(len(skill.parent.name) for skill in skills))
+    columns = shutil.get_terminal_size(fallback=(120, 24)).columns
+    description_width = max(24, columns - name_width - 6)
+    print("\n  Skills")
+    for skill in skills:
+        header = skill.read_text(encoding="utf-8", errors="replace").partition("\n---")[0]
+        description = []
+        collecting = False
+        for line in header.splitlines():
+            if line.startswith("description:"):
+                value = line.partition(":")[2].strip()
+                collecting = value in {">", ">-", ">+", "|", "|-", "|+"}
+                if not collecting:
+                    description.append(value)
+                    break
+            elif collecting:
+                if line and not line[0].isspace():
+                    break
+                description.append(line.strip())
+        summary = " ".join(" ".join(description).split()).strip("\"'")
+        summary = summary.partition(". ")[0].rstrip(".")
+        summary = textwrap.shorten(summary, width=description_width, placeholder="…")
+        name = skill.parent.name
+        if len(name) > name_width:
+            print(f"    {name}")
+            name = ""
+        print(f"    {name:<{name_width}}  {summary}")
+PY
 
 printf '\n  ✓  done\n\n'
 printf '  Restart your shell or run:\n'
