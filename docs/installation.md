@@ -96,3 +96,5 @@ earlier steps installed. Fix the reported problem and rerun it. Output lists
 destinations, hooks, MCP names, merged keys, and skills as each step completes.
 The completion summary gives shell commands and skills their own sections;
 skills appear in aligned rows with short descriptions from their metadata.
+The skill list shows `[enabled]` entries first and `[disabled]` entries second,
+with a blank line between the groups.

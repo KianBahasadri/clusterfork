@@ -1196,20 +1196,27 @@ printf '    %-5s %-18s %s\n' codeview "bin/codeview" "start|stop|restart|reload|
 printf '    %-5s %-18s %s\n' "rotate-*" "rotate_auth.py" "[name] --save name --delete name --unhook --list --kickoff [names]"
 printf '    %-5s %-18s %s\n' "" "Codex/Cursor" "[--local|--remote] --save name; --remote --list/--delete name"
 
-# Skills: one aligned row per skill, with a short description from its metadata.
-python3 - "$SKILLS_SRC_DIR" <<'PY'
+# Skills: enabled and disabled groups, with short descriptions from metadata.
+python3 - "$SKILLS_SRC_DIR" "$REPO_DIR/disabled-skills" <<'PY'
 from pathlib import Path
 import shutil
 import sys
 import textwrap
 
-skills = sorted(Path(sys.argv[1]).glob("*/SKILL.md"))
+skills = []
+for status, directory in (("enabled", sys.argv[1]), ("disabled", sys.argv[2])):
+    skills.extend((status, skill) for skill in sorted(Path(directory).glob("*/SKILL.md")))
 if skills:
-    name_width = min(32, max(len(skill.parent.name) for skill in skills))
+    name_width = min(32, max(len(skill.parent.name) for _, skill in skills))
+    tag_width = len("[disabled]")
     columns = shutil.get_terminal_size(fallback=(120, 24)).columns
-    description_width = max(24, columns - name_width - 6)
+    description_width = max(24, columns - name_width - tag_width - 7)
     print("\n  Skills")
-    for skill in skills:
+    previous_status = None
+    for status, skill in skills:
+        if previous_status is not None and status != previous_status:
+            print()
+        previous_status = status
         header = skill.read_text(encoding="utf-8", errors="replace").partition("\n---")[0]
         description = []
         collecting = False
@@ -1228,10 +1235,11 @@ if skills:
         summary = summary.partition(". ")[0].rstrip(".")
         summary = textwrap.shorten(summary, width=description_width, placeholder="…")
         name = skill.parent.name
+        tag = f"[{status}]"
         if len(name) > name_width:
-            print(f"    {name}")
-            name = ""
-        print(f"    {name:<{name_width}}  {summary}")
+            print(f"    {tag:<{tag_width}} {name}")
+            tag, name = "", ""
+        print(f"    {tag:<{tag_width}} {name:<{name_width}}  {summary}")
 PY
 
 printf '\n  ✓  done\n\n'
