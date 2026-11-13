@@ -739,7 +739,8 @@ class DashHandler(BaseHTTPRequestHandler):
                 # of granting frames same-origin or local-network permissions.
                 try:
                     payload = modules_rt.inline_host_styles(
-                        payload.decode("utf-8"), (UI_DIR / "app.css").read_text()).encode()
+                        payload.decode("utf-8"), (UI_DIR / "app.css").read_text(),
+                        (UI_DIR / "explorer.js").read_text()).encode()
                 except UnicodeError:
                     pass
             self.send_body(status, payload, ctype)

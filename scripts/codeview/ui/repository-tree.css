@@ -3,7 +3,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 12px 24px;
 }
 .tree-actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -13,7 +13,7 @@
   padding: 0;
   min-width: 0;
 }
-.repository-tree { padding: 4px; }
+.repository-tree { padding: 4px; max-width: 960px; }
 .repository-tree[hidden] { display: none; }
 .repository-tree [role="treeitem"] { outline: none; min-width: 0; }
 .tree-row {

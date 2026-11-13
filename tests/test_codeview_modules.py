@@ -25,6 +25,17 @@ class ModuleStylesTests(unittest.TestCase):
         self.assertIn('var sample = \'<link rel="stylesheet" href="/assets/app.css">\';', result)
         self.assertLess(result.index("--ink"), result.index(".own"))
 
+    def test_shared_controls_are_inline_and_cannot_close_the_script_element(self):
+        page = '<html><head><link rel="stylesheet" href="/assets/app.css"></head></html>'
+        result = modules_rt.inline_host_styles(page, "body {}", 'const value = "</script>";')
+        self.assertIn('<script data-codeview-host-controls>', result)
+        self.assertIn('const value = "<\\/script>";', result)
+        self.assertEqual(result.count("</script>"), 1)
+
+    def test_shared_controls_require_the_host_stylesheet_link(self):
+        page = '<html><body><table></table></body></html>'
+        self.assertEqual(modules_rt.inline_host_styles(page, "body {}", "window.controls = true;"), page)
+
 
 class ModuleLoadingTests(unittest.TestCase):
     def setUp(self):

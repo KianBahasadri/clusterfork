@@ -229,6 +229,8 @@ class ServerBootTestCase(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertIn(b"<style data-codeview-host-styles>", response)
                 self.assertIn(b"--canvas: #080b0d", response)
+                self.assertIn(b"<script data-codeview-host-controls>", response)
+                self.assertIn(b"window.CodeviewUI", response)
                 self.assertNotIn(b'<link rel="stylesheet" href="/assets/app.css">', response)
 
     def test_broken_module_landing_page_shows_error(self):

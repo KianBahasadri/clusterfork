@@ -155,11 +155,11 @@ def render(data: dict) -> str:
   }}
   .skills-board [data-skills-wide] {{ grid-column: 1 / -1; }}
   .skills-board .table-container {{ width: 100%; }}
-  .skills-board .data-table {{ width: 100%; }}
+  .skills-board .data-table {{ width: max-content; max-width: 100%; }}
   .skills-board .data-table td.wrap {{ white-space: normal; }}
 </style>
 </head>
-<body>
+<body data-codeview-collections>
 <div class="dashboard-layout">
   <header class="dashboard-heading">
     <div class="dashboard-title">

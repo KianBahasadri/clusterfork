@@ -440,17 +440,17 @@ def render(data: dict) -> str:
   .statusline-search {{ max-width: 320px; margin: 0; }}
   .statusline-board {{
     display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 20px 24px;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 480px), 1fr));
+    gap: 16px 24px;
     align-items: start;
   }}
   .terminal-box {{
-    background: var(--color-bg-alt, #0d1117);
-    border: 1px solid var(--color-border, #30363d);
-    border-radius: var(--radius-md, 6px);
-    padding: 14px 16px;
+    background: var(--surface);
+    border: 0;
+    border-radius: var(--radius);
+    padding: 8px 10px;
     margin-bottom: 12px;
-    font-family: var(--font-mono, monospace);
+    font-family: var(--mono);
     font-size: 13px;
     line-height: 1.5;
     overflow-x: auto;
@@ -459,53 +459,35 @@ def render(data: dict) -> str:
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
     margin-bottom: 8px;
-    font-family: var(--font-sans, system-ui);
+    font-family: var(--ui);
     font-size: 12px;
-    color: var(--color-text-muted, #8b949e);
+    color: var(--muted);
   }}
-  .terminal-title {{ font-weight: 600; color: var(--color-text, #c9d1d9); }}
+  .terminal-title {{ font-weight: 600; color: var(--ink-strong); }}
   .terminal-line {{
-    padding: 8px 12px;
-    background: var(--color-bg-elevated, #161b22);
-    border: 1px solid var(--color-border, #21262d);
+    padding: 4px 0;
+    background: transparent;
+    border: 0;
     border-radius: 4px;
     white-space: pre-wrap;
     word-break: break-word;
   }}
-  .term-model {{ font-weight: 600; color: #f0f6fc; }}
-  .term-sep {{ color: #484f58; margin: 0 3px; }}
-  .term-dim {{ color: #8b949e; }}
-  .term-tag {{ color: #58a6ff; }}
-  .term-green {{ color: #3fb950; font-weight: 500; }}
-  .term-yellow {{ color: #d29922; font-weight: 500; }}
-  .term-red {{ color: #f85149; font-weight: 500; }}
-  .badge-installed {{
-    display: inline-block;
-    padding: 2px 6px;
-    border-radius: 4px;
-    font-size: 11px;
-    font-weight: 600;
-    background: rgba(63, 185, 80, 0.15);
-    color: #3fb950;
-    border: 1px solid rgba(63, 185, 80, 0.4);
-  }}
-  .badge-missing {{
-    display: inline-block;
-    padding: 2px 6px;
-    border-radius: 4px;
-    font-size: 11px;
-    font-weight: 600;
-    background: rgba(248, 81, 73, 0.15);
-    color: #f85149;
-    border: 1px solid rgba(248, 81, 73, 0.4);
-  }}
+  .term-model {{ font-weight: 600; color: var(--ink-strong); }}
+  .term-sep {{ color: var(--faint); margin: 0 4px; }}
+  .term-dim {{ color: var(--muted); }}
+  .term-tag {{ color: var(--ink); }}
+  .term-green {{ color: var(--good); font-weight: 500; }}
+  .term-yellow {{ color: var(--caution); font-weight: 500; }}
+  .term-red {{ color: var(--danger); font-weight: 500; }}
   .statusline-board .table-container {{ width: 100%; }}
-  .statusline-board .data-table {{ width: 100%; }}
+  .statusline-board .data-table {{ width: max-content; max-width: 100%; }}
   .statusline-board .data-table td.wrap {{ white-space: normal; }}
 </style>
 </head>
-<body>
+<body data-codeview-collections>
 <div class="dashboard-layout">
   <header class="dashboard-heading">
     <div class="dashboard-title">
@@ -611,8 +593,8 @@ def render(data: dict) -> str:
 
 def installed_badge(installed: bool) -> str:
     if installed:
-        return '<span class="badge-installed">installed</span>'
-    return '<span class="badge-missing">not installed</span>'
+        return '<span class="badge badge-good">installed</span>'
+    return '<span class="badge badge-nominal">not installed</span>'
 
 
 def copy_btn(name: str) -> str:

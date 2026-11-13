@@ -436,7 +436,7 @@ def render(data: dict) -> str:
 .deployments-resource {{ min-width: 0; border-bottom: 1px solid var(--line); }}
 .deployments-resource:last-child {{ border-bottom: 0; }}
 .deployments-resource[hidden] {{ display: none; }}
-.deployments-resource > summary {{ display: grid; grid-template-columns: 16px minmax(0, 1fr) 120px 160px; gap: 12px; align-items: center; min-height: 56px; padding: 8px 4px; cursor: pointer; list-style: none; border-radius: var(--radius-sm); }}
+.deployments-resource > summary {{ display: grid; grid-template-columns: 16px minmax(0, 1fr) 120px 160px; gap: 12px; align-items: center; min-height: 36px; padding: 4px; cursor: pointer; list-style: none; border-radius: var(--radius-sm); }}
 .deployments-resource > summary::-webkit-details-marker {{ display: none; }}
 .deployments-resource > summary:hover {{ background: var(--surface-raised); }}
 .deployments-resource[open] .deployments-chevron {{ transform: rotate(90deg); }}
@@ -458,6 +458,9 @@ def render(data: dict) -> str:
 .deployments-charge {{ display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; margin-bottom: 12px; min-width: 0; font-size: 13px; }}
 .deployments-charge .deployments-copy {{ justify-self: start; }}
 .deployments-charge small {{ color: var(--muted); overflow-wrap: anywhere; }}
+.deployments-notes > summary {{ font-size: 12px; color: var(--muted); cursor: pointer; }}
+.deployments-board {{ max-width: 1240px; }}
+@media (max-width: 600px), (pointer: coarse) {{ .deployments-resource > summary {{ min-height: 44px; }} }}
 #deployments-history .toast-history-item {{ grid-template-columns: minmax(0, 1fr); }}
 @media (min-width: 421px) and (max-width: 900px) {{
   .deployments-metrics {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }}
@@ -481,21 +484,26 @@ def render(data: dict) -> str:
     <div class="dashboard-context"><time datetime="{esc(data['checked_at'])}">Read {esc(datetime.fromisoformat(data['checked_at']).strftime('%b %d %Y %I:%M %p'))} UTC</time></div>
   </header>
   <div class="metric-grid deployments-metrics">{metrics}</div>
-  <ul class="deployments-stacks">{stack_rows or '<li>No local Terraform configuration found.</li>'}</ul>
+  <details class="deployments-notes"><summary>Snapshot sources · {len(stacks)} stacks</summary>
+    <ul class="deployments-stacks">{stack_rows or '<li>No local Terraform configuration found.</li>'}</ul></details>
   <p class="deployments-note">Terraform state snapshot; fixed USD estimates only. Usage charges and unpriced resources are excluded.</p>
   <div class="deployments-toolbar">
     <div class="form-group"><label class="form-label" for="deployments-filter">Filter resources</label><div class="input-with-action"><svg class="icon input-leading-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.34-4.34"></path></svg><input class="input-field" type="search" id="deployments-filter" autocomplete="off"><button type="button" class="input-clear-btn" id="deployments-clear" aria-label="Clear resource filter" title="Clear resource filter" hidden><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"></path></svg></button></div></div>
     <div class="form-group deployments-hours"><label class="form-label" for="deployments-hours">VM hours/month</label><input class="input-field" type="number" id="deployments-hours" min="0" max="744" step="1" value="730" aria-describedby="deployments-hours-error"><span class="deployments-error" id="deployments-hours-error" role="alert" hidden>Enter a whole number from 0 to 744</span></div>
     <form method="get"><input type="hidden" name="theme" id="deployments-theme"><input type="hidden" name="refresh" value="1"><button type="submit" class="btn btn-secondary">Refresh inventory and prices</button></form>
   </div>
-  <div class="deployments-toolbar">
+  <div class="deployments-toolbar" id="deployments-filter-controls">
     {stack_filters}{state_filters}
+    <button type="button" class="btn btn-quiet" id="deployments-expand">Expand visible</button>
+    <button type="button" class="btn btn-quiet" id="deployments-collapse">Collapse all</button>
     <span class="section-note" id="deployments-count" aria-live="polite">{len(rows):,} resources shown</span>
   </div>
   <section class="deployments-board" aria-label="Terraform resources">{inventory}</section>
   <div class="callout callout-info" id="deployments-empty" {'hidden' if rows else ''}><strong>No matches:</strong> no resources match these filters. <button type="button" class="btn btn-secondary" id="deployments-reset">Clear filters</button></div>
+  <details class="deployments-notes"><summary>Pricing basis and exclusions</summary>
   <p class="deployments-note">USD public pay-as-you-go rates from Azure Retail Prices. Disks and allocated IPs remain provisioned for the full month. Blob capacity, vault operations, log ingestion/retention, disk transactions, egress, backups, taxes, and negotiated discounts are not added without usage data. Rates cache for 24 hours; inventory caches for 60 seconds. Refresh bypasses both caches.</p>
   <p class="deployments-note">Pricing source: {esc(PRICE_DOC)}</p>
+  </details>
 </div>
 <div class="toast-container" id="deployments-toasts" aria-live="polite"></div>
 <dialog class="modal-dialog" id="deployments-history" aria-labelledby="deployments-history-title"><div class="modal-header"><h2 class="modal-title" id="deployments-history-title">Notification history</h2><button type="button" class="btn-icon" id="deployments-history-close" aria-label="Close" title="Close"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"></path></svg></button></div><div class="modal-body"><ul class="toast-history-list" id="deployments-history-list"></ul></div></dialog>
@@ -503,6 +511,20 @@ def render(data: dict) -> str:
 (function () {{
   var rows = Array.from(document.querySelectorAll(".deployments-resource"));
   var input = document.getElementById("deployments-filter"), clear = document.getElementById("deployments-clear"), stack = document.getElementById("deployments-stack"), state = document.getElementById("deployments-state");
+  var dropdowns = [];
+  var resourceOrder = "Name";
+  function orderResources() {{
+    var currentHours = Number(document.getElementById("deployments-hours").value);
+    rows.slice().sort(function (a, b) {{
+      if (resourceOrder === "Monthly cost") {{
+        var one = a.hasAttribute("data-monthly") ? Number(a.dataset.monthly) + Number(a.dataset.hourly) * (currentHours - 730) : -1;
+        var two = b.hasAttribute("data-monthly") ? Number(b.dataset.monthly) + Number(b.dataset.hourly) * (currentHours - 730) : -1;
+        return two - one;
+      }}
+      var selector = resourceOrder === "Resource type" ? ".deployments-type" : ".deployments-name";
+      return a.querySelector(selector).textContent.localeCompare(b.querySelector(selector).textContent);
+    }}).forEach(function (row) {{ document.querySelector(".deployments-board").appendChild(row); }});
+  }}
   function filter() {{
     var query = input.value.trim().toLowerCase(), count = 0, selectedStack = stack.querySelector(":checked").value, selectedState = state.querySelector(":checked").value;
     clear.hidden = !input.value;
@@ -512,7 +534,24 @@ def render(data: dict) -> str:
     }});
     document.getElementById("deployments-count").textContent = count.toLocaleString("en-US") + (count === 1 ? " resource shown" : " resources shown");
     document.getElementById("deployments-empty").hidden = count !== 0;
+    dropdowns.forEach(function (item) {{ item.control.setValue(item.group.querySelector(":checked").value); }});
   }}
+  if (window.CodeviewUI) {{
+    [stack, state].forEach(function (group) {{
+      var choices = Array.from(group.querySelectorAll("input")).map(function (radio) {{ return {{ value: radio.value, label: radio.parentElement.textContent.trim() }}; }});
+      var control = CodeviewUI.picker(group.querySelector("legend").textContent, choices, "", function (value) {{
+        Array.from(group.querySelectorAll("input")).forEach(function (radio) {{ radio.checked = radio.value === value; }});
+        group.dispatchEvent(new Event("input"));
+      }});
+      dropdowns.push({{ group: group, control: control }}); group.before(control); group.hidden = true;
+    }});
+    document.getElementById("deployments-filter-controls").prepend(CodeviewUI.picker("Order", ["Name", "Monthly cost", "Resource type"], "Name", function (value) {{
+      resourceOrder = value; orderResources();
+    }}));
+  }}
+  document.getElementById("deployments-expand").onclick = function () {{ rows.forEach(function (row) {{ if (!row.hidden) row.open = true; }}); }};
+  orderResources();
+  document.getElementById("deployments-collapse").onclick = function () {{ rows.forEach(function (row) {{ row.open = false; }}); }};
   [input, stack, state].forEach(function (el) {{ el.addEventListener("input", filter); }});
   clear.addEventListener("click", function () {{ input.value = ""; input.dispatchEvent(new Event("input")); input.focus(); }});
   document.getElementById("deployments-reset").addEventListener("click", function () {{ input.value = ""; stack.querySelector("input").checked = state.querySelector("input").checked = true; filter(); input.focus(); }});
@@ -533,6 +572,7 @@ def render(data: dict) -> str:
     document.querySelectorAll("[data-compute-rate]").forEach(function (charge) {{
       charge.textContent = "$" + (Number(charge.dataset.computeRate) * value).toFixed(2) + " for " + value + " VM hours";
     }});
+    orderResources();
   }});
   document.getElementById("deployments-theme").value = document.documentElement.dataset.theme;
   document.querySelector("form").addEventListener("submit", function () {{

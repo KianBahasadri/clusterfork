@@ -34,11 +34,15 @@ ignoring handoff leaves rendering functional but theme unsynchronized.
 The [skill](../skills/add-codeview-module/SKILL.md) owns full templates, bootstrap,
 CSS vocabulary and workflow; follow existing target modules when available.
 
-The host replaces links to `/assets/app.css` in HTML responses with an inline
-copy of the current shared stylesheet. This keeps opaque frames styled when
-browser loopback-access rules block stylesheet requests; sandbox permissions stay
-unchanged. Module authors still use the normal stylesheet link, and their own
-inline layout styles retain their position after the shared rules.
+The host replaces links to `/assets/app.css` in HTML responses with inline copies
+of the current shared stylesheet and `explorer.js` controls. This keeps opaque
+frames functional when browser loopback-access rules block subresource requests;
+sandbox permissions stay unchanged. Module authors still use the normal stylesheet
+link, and their own inline layout styles retain their position after the shared rules.
+Shared controls are available as `window.CodeviewUI`. Adding
+`data-codeview-collections` to the body opts into table sorting, pagination,
+exports, section filtering, row inspection, and clipboard feedback. Modules without
+that attribute retain control of their tables.
 
 ## Reloading and validation
 

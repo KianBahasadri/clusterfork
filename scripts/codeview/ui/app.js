@@ -5,6 +5,7 @@
 const $ = (sel, root) => (root || document).querySelector(sel);
 const $$ = (sel, root) => [...(root || document).querySelectorAll(sel)];
 const fmt = n => n == null ? "—" : Number(n).toLocaleString("en-US");
+const UI = window.CodeviewUI;
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -222,27 +223,32 @@ toastHistoryDialog.addEventListener("close", () => {
 });
 
 async function copyText(value) {
-  const text = String(value || "");
+  const text = String(value ?? "");
+  const trigger = document.activeElement;
+  const dialog = trigger?.closest("dialog");
+  let copied = false;
   try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.setAttribute("readonly", "");
-      ta.style.position = "fixed";
-      ta.style.left = "-9999px";
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      ta.remove();
-    }
-    spawnToast("Copied to clipboard");
-    return true;
-  } catch {
-    spawnToast("Could not copy to clipboard", true);
-    return false;
+    await navigator.clipboard.writeText(text);
+    copied = true;
+  } catch { /* selection fallback also works inside native dialogs */ }
+  if (!copied) {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.cssText = "position:fixed;opacity:0";
+    (dialog || document.body).appendChild(area);
+    area.select();
+    try { copied = document.execCommand("copy"); } catch { copied = false; }
+    finally { area.remove(); trigger?.focus?.({ preventScroll: true }); }
   }
+  const message = copied ? "Copied to clipboard" : "Could not copy to clipboard";
+  spawnToast(message, !copied);
+  if (dialog) {
+    let status = dialog.querySelector(".copy-status");
+    if (!status) { status = document.createElement("p"); status.className = "stats-note copy-status"; status.setAttribute("role", "status"); dialog.appendChild(status); }
+    status.textContent = message;
+  }
+  return copied;
 }
 
 // ----------------------------------------------------------- hash / copy --
@@ -409,6 +415,7 @@ function makeTableSortable(table) {
         ? `Sort priority ${priority + 1} of ${sorts.length}, ${column.direction}`
         : "Unsorted";
     });
+    table.dispatchEvent(new Event("codeview:sorted"));
   }
 
   columns.forEach(column => {
@@ -424,6 +431,11 @@ function makeTableSortable(table) {
       }
       apply();
     });
+  });
+  table.addEventListener("codeview:columns", () => {
+    sorts = sorts.filter(column => !column.header.hidden);
+    columns.forEach(column => { if (column.header.hidden) column.direction = null; });
+    apply();
   });
   apply();
   return {
@@ -447,7 +459,7 @@ function bindRowActivation(table, onActivate) {
   rowActivationControllers.set(table.id, ac);
   const { signal } = ac;
   const rows = () => [...table.querySelectorAll("tbody tr")]
-    .filter(r => r.style.display !== "none");
+    .filter(r => !r.hidden && r.style.display !== "none");
   const buttons = () => rows().map(r => r.querySelector(".table-row-trigger")).filter(Boolean);
 
   function setTabStops(active) {
@@ -501,6 +513,10 @@ function bindRowActivation(table, onActivate) {
   table.addEventListener("focusout", e => {
     if (!table.contains(e.relatedTarget)) clearSelection();
   }, { signal });
+  table.addEventListener("codeview:rows", () => {
+    const list = buttons();
+    setTabStops(list.find(btn => btn.tabIndex === 0) || list[0]);
+  }, { signal });
   return {
     refresh() {
       const list = buttons();
@@ -523,20 +539,22 @@ function bindSearch(input, onFilter) {
   });
 }
 
-function barRows(entries) {
+function barRows(entries, interactive = false) {
   const max = Math.max(1, ...entries.map(e => Math.abs(e[1])));
+  const tag = interactive ? "button" : "div";
   return `<div class="rank-list">${entries.map(([label, value]) => `
-    <div class="rank-row">
+    <${tag} class="rank-row"${interactive ? ` type="button" data-rank="${esc(label)}"` : ""}>
       <span class="rank-label" title="${esc(label)}">${esc(label)}</span>
-      <div class="rank-track"><div class="rank-fill"
-        style="width:${Math.max(1, (Math.abs(value) / max) * 100)}%"></div></div>
+      <span class="rank-track"><span class="rank-fill" style="display:block;
+        width:${Math.max(1, (Math.abs(value) / max) * 100)}%"></span></span>
       <span class="rank-value">${fmt(value)}</span>
-    </div>`).join("")}</div>`;
+    </${tag}>`).join("")}</div>`;
 }
 
-function metric(label, value) {
-  return `<div class="metric-card"><span class="metric-label">${esc(label)}</span>
-    <span class="metric-num">${value}</span></div>`;
+function metric(label, value, view = "") {
+  const tag = view ? "button" : "div";
+  return `<${tag} class="metric-card${view ? " metric-action" : ""}"${view ? ` type="button" data-view="${esc(view)}"` : ""}>
+    <span class="metric-label">${esc(label)}</span><span class="metric-num">${value}</span></${tag}>`;
 }
 
 function metricGrid(cards, className = "") {
@@ -557,8 +575,8 @@ function statRows(rows) {
   }).join("")}</dl>`;
 }
 
-function statGroup(title, body) {
-  return `<details class="stats-group" open>
+function statGroup(title, body, expanded = false) {
+  return `<details class="stats-group"${expanded ? " open" : ""}>
     <summary>${esc(title)}</summary>
     <div class="stats-group-body">${body}</div>
   </details>`;
@@ -669,14 +687,22 @@ function loadModuleTab(name) {
 
 function activateTab(key) {
   showPanel(key);
-  if (key === "history") renderHistory().catch(console.error);
-  else if (key === "churn") renderChurn().catch(console.error);
-  else if (key === "files") renderFiles().catch(console.error);
-  else if (key === "tree") renderTree().catch(console.error);
-  else if (key === "deps") renderDeps().catch(console.error);
-  else if (key === "logs") renderLogs().catch(console.error);
-  else if (key === "overview") refresh().catch(console.error);
+  const render = { overview: refresh, history: renderHistory, churn: renderChurn,
+    files: renderFiles, tree: renderTree, deps: renderDeps, logs: renderLogs }[key];
+  if (!render) return;
+  const panel = document.querySelector(`.panel[data-panel="${key}"]`);
+  panel.setAttribute("aria-busy", "true");
+  render().catch(error => {
+    panel.innerHTML = `<div class="callout callout-danger"><strong>Could not load ${esc(key)}:</strong>
+      ${esc(error.message)} <button type="button" class="btn btn-secondary" data-retry>Retry</button></div>`;
+    panel.querySelector("[data-retry]").onclick = () => activateTab(key);
+  }).finally(() => panel.removeAttribute("aria-busy"));
 }
+
+window.addEventListener("hashchange", () => {
+  const key = location.hash.slice(1);
+  if (state.tabs.some(tab => tabKey(tab) === key)) activateTab(key);
+});
 
 function renderTabs(tabs) {
   tabGestures?.reset();
@@ -772,6 +798,16 @@ async function refresh() {
 
 async function renderOverview(s) {
   const panel = $('.panel[data-panel="overview"]');
+  const [historyData, filesData] = await Promise.all([
+    api("/api/section/history").catch(() => ({})),
+    api("/api/section/files").catch(() => ({})),
+  ]);
+  const allFiles = filesData.files || [];
+  const tracked = new Set(allFiles.map(file => file.path));
+  const hotspots = (historyData.churn?.files || []).filter(file => tracked.has(file.path)).slice(0, 5);
+  const attention = allFiles.filter(file => file.metrics?.todo_count > 0)
+    .sort((a, b) => b.metrics.todo_count - a.metrics.todo_count).slice(0, 5);
+  const recent = (historyData.commits || []).slice(-8).reverse();
   const mt = s.metric_totals || {};
   const langEntries = Object.entries(s.langs || {})
     .sort((a, b) => b[1].lines - a[1].lines);
@@ -806,28 +842,45 @@ async function renderOverview(s) {
   panel.innerHTML = `
     <div class="panel-stack overview-compact">
       ${metricGrid([
-        metric("Source lines", fmt(mt.code_lines ?? s.total_lines)),
-        metric("Tracked files", fmt(s.total_files)),
-        metric("Languages", fmt(langCount)),
-        metric("Commits scanned", fmt(s.commits_count)),
+        metric("Source lines", fmt(mt.code_lines ?? s.total_lines), "files"),
+        metric("Tracked files", fmt(s.total_files), "tree"),
+        metric("Languages", fmt(langCount), "files"),
+        metric("Commits scanned", fmt(s.commits_count), "history"),
       ], "overview-metrics")}
       ${s.meta?.empty_repo ? emptyCallout("Empty repository", "No commits yet. Indexed files appear after they are added to git.") : ""}
-      <section>
-        ${sectionHeading("Repository views")}
-        <nav aria-label="View summaries"><ul class="view-summary-list">${viewSummaries}</ul></nav>
-      </section>
+      <div class="overview-board">
       <div class="rank-grid">
         <section>
           ${sectionHeading("Lines by top-level dir")}
-          ${tops.length ? barRows(tops) : emptyCallout("No directories", "No top-level directories to show.")}
+          <div data-overview-directories>${tops.length ? barRows(tops, true) : emptyCallout("No directories", "No top-level directories to show.")}</div>
         </section>
         <section>
           ${sectionHeading("Lines by language")}
           ${langs.length
-            ? barRows(langs.map(([k, v]) => [k, v.lines]))
+            ? `<div data-overview-languages>${barRows(langs.map(([k, v]) => [k, v.lines]), true)}</div>`
             : emptyCallout("No languages", "No languages detected.")}
         </section>
       </div>
+      <section>
+        ${sectionHeading("Churn hotspots")}
+        <ul class="compact-list">${hotspots.map(file => `<li><button type="button" class="compact-record" data-file="${esc(file.path)}"
+          aria-label="Inspect ${esc(file.path)}"><span class="record-copy" title="${esc(file.path)}">${esc(file.path)}</span>
+          <span class="record-meta">${fmt(file.churn)} lines</span></button></li>`).join("") || '<li class="stats-note">No textual file changes.</li>'}</ul>
+        <h2 class="stats-subhead">Attention markers</h2>
+        <ul class="compact-list">${attention.map(file => `<li><button type="button" class="compact-record" data-file="${esc(file.path)}"
+          aria-label="Inspect ${esc(file.path)}"><span class="record-copy" title="${esc(file.path)}">${esc(file.path)}</span>
+          <span class="record-meta">${fmt(file.metrics.todo_count)} markers</span></button></li>`).join("") || '<li class="stats-note">No TODO, FIXME, or HACK markers.</li>'}</ul>
+      </section>
+      <section>
+        ${sectionHeading("Recent commits")}
+        <ul class="compact-list">${recent.map(commit => `<li><button type="button" class="compact-record" data-commit="${esc(commit.sha)}"
+          aria-label="Inspect ${esc(commit.subject)}"><span class="record-copy" title="${esc(commit.subject)}">${esc(commit.subject)}</span>
+          <span class="record-meta">${commit.delta >= 0 ? "+" : ""}${fmt(commit.delta)}</span></button></li>`).join("") || '<li class="stats-note">No commits yet.</li>'}</ul>
+      </section>
+      </div>
+      <details class="overview-views"><summary>Repository views · ${state.tabs.length}</summary>
+        <nav aria-label="View summaries"><ul class="view-summary-list">${viewSummaries}</ul></nav>
+      </details>
     </div>`;
   panel.querySelectorAll("[data-view]").forEach(link => {
     link.addEventListener("click", event => {
@@ -836,6 +889,18 @@ async function renderOverview(s) {
       activateTab(link.dataset.view);
       [...$("#tabs").children].find(tab => tab.dataset.tab === link.dataset.view)?.focus();
     });
+  });
+  panel.querySelectorAll("[data-overview-directories] [data-rank]").forEach(button => {
+    button.onclick = () => browseFiles("Directory", button.dataset.rank);
+  });
+  panel.querySelectorAll("[data-overview-languages] [data-rank]").forEach(button => {
+    button.onclick = () => browseFiles("Language", button.dataset.rank);
+  });
+  panel.querySelectorAll("[data-file]").forEach(button => {
+    button.onclick = () => openFile(button.dataset.file, button);
+  });
+  panel.querySelectorAll("[data-commit]").forEach(button => {
+    button.onclick = () => inspectCommit(recent.find(commit => commit.sha === button.dataset.commit), button);
   });
 }
 
@@ -872,9 +937,11 @@ async function renderHistory() {
   }
   const hotDirs = Object.entries(dirSets)
     .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 6);
-  const recent = commits.slice().reverse().slice(0, 100);
+  const recent = commits.slice().reverse();
   panel.innerHTML = `
-    <div class="panel-stack">
+    <div class="analysis-layout history-layout">
+    <aside class="analysis-sidebar">
+    <section>
       ${sectionHeading("Cumulative lines", `${fmt(commits.length)} commits scanned`)}
       <div class="chart-box history-preview">
         <div class="chart-frame">
@@ -886,9 +953,15 @@ async function renderHistory() {
         </div>
         <p class="sr-only" id="historyPreviewSummary">${fmt(commits[0].total)} to ${fmt(commits.at(-1).total)} cumulative lines in commit order, ${esc(fmtDate(commits[0].date))} to ${esc(fmtDate(commits.at(-1).date))}. Open for range controls, exact data, and CSV export.</p>
       </div>
+    </section>
+    <section>
       ${sectionHeading("Most-changed dirs")}
-      ${hotDirs.length ? barRows(hotDirs) : emptyCallout("No directories", "No directory changes to show.")}
+      ${hotDirs.length ? barRows(hotDirs, true) : emptyCallout("No directories", "No directory changes to show.")}
+    </section>
+    </aside>
+    <section class="analysis-main">
       ${sectionHeading("Recent commits")}
+      <div class="collection-toolbar" id="history-toolbar">${searchField("history-filter", "Filter commits")}</div>
       <div class="table-container" role="region" aria-label="Recent commits">
         <table class="data-table" id="history-table">
           <caption class="sr-only">Recent commits in the scanned window</caption>
@@ -901,20 +974,39 @@ async function renderHistory() {
           </tr></thead>
           <tbody>
             ${recent.map(c => `
-              <tr>
+              <tr data-commit="${esc(c.sha)}">
                 <td data-sort-value="${esc(c.date)}">${esc(fmtDate(c.date))}</td>
                 <td data-sort-value="${esc(c.sha)}">${shaButton(c.sha)}</td>
-                <td class="wrap">${esc(c.subject)}</td>
+                <td class="wrap"><button type="button" class="table-row-trigger" data-commit="${esc(c.sha)}"
+                  aria-label="Inspect commit ${esc(c.subject)}">${esc(c.subject)}</button></td>
                 <td class="num" data-sort-value="${c.delta}">${c.delta >= 0 ? "+" : ""}${fmt(c.delta)}</td>
                 <td class="num">${fmt(c.total)}</td>
               </tr>`).join("")}
           </tbody>
         </table>
       </div>
-    </div>`;
+    </section></div>`;
   window.CodeviewHistoryChart(panel.querySelector(".chart-box"), commits,
     { esc, fmt, fmtDate, sortHeader, makeTableSortable, downloadText, shaButton });
   makeTableSortable($("#history-table"));
+  UI.collection($("#history-table"), { toolbar: $("#history-toolbar"), search: $("#history-filter"), label: "commits" });
+  bindSearch($("#history-filter"), () => {});
+  bindRowActivation($("#history-table"), button => {
+    inspectCommit(commits.find(commit => commit.sha === button.dataset.commit), button);
+  });
+  panel.querySelectorAll("[data-rank]").forEach(button => button.onclick = () => {
+    nextChurnDirectory = button.dataset.rank;
+    activateTab("churn");
+  });
+}
+
+function inspectCommit(commit, trigger) {
+  UI.inspect(commit.subject, `${statRows([
+    ["Date", fmtDate(commit.date)], ["Net lines", fmt(commit.delta)],
+    ["Cumulative lines", fmt(commit.total)],
+  ])}<p class="inspection-description">${shaButton(commit.sha)}</p>
+    <h3 class="stats-subhead">Net change by directory</h3>
+    ${Object.keys(commit.dirs || {}).length ? barRows(Object.entries(commit.dirs)) : '<p class="stats-note">No textual directory changes.</p>'}`, trigger);
 }
 
 async function renderChurn() {
@@ -952,16 +1044,17 @@ async function renderChurn() {
         metric("Files changed", fmt(churn.file_count)),
         metric("Highest file churn", fmt(top.churn)),
       ])}
-      <section>
+      <div class="analysis-layout">
+      <aside class="analysis-sidebar"><section>
         ${sectionHeading("Churn by top-level dir")}
         ${dirs.length
-          ? barRows(dirs.map(d => [d.name, d.churn]))
+          ? barRows(dirs.map(d => [d.name, d.churn]), true)
           : emptyCallout("No directories", "No directories to show.")}
-      </section>
+      </section></aside>
+      <section class="analysis-main">
       ${sectionHeading("Highest-churn files")}
-      <div class="filter-row">
+      <div class="collection-toolbar" id="churn-toolbar">
         ${searchField("churn-filter", "Filter hotspots")}
-        <span class="filter-count" aria-live="polite">${fmt(hotspots.length)} hotspots shown</span>
       </div>
       <div class="table-container" role="region" aria-label="Highest code-churn files">
         <table class="data-table" id="churn-table">
@@ -977,11 +1070,11 @@ async function renderChurn() {
           <tbody>
             ${hotspots.map(file => {
               const tracked = trackedPaths.has(file.path);
-              return `<tr class="${tracked ? "" : "is-muted"}" data-path="${esc(file.path)}">
-                <td class="wrap" data-sort-value="${esc(file.path)}">${tracked
-                  ? `<button type="button" class="table-row-trigger" data-path="${esc(file.path)}"
-                       aria-label="Open current file profile ${esc(file.path)}">${esc(file.path)}</button>`
-                  : `${esc(file.path)} <span class="badge badge-nominal">historical</span>`}</td>
+              return `<tr class="${tracked ? "" : "is-muted"}" data-path="${esc(file.path)}" data-current="${tracked}"
+                  data-directory="${esc(file.path.includes("/") ? file.path.split("/")[0] : "(root)")}">
+                <td class="wrap" data-sort-value="${esc(file.path)}"><button type="button" class="table-row-trigger" data-path="${esc(file.path)}"
+                  aria-label="Inspect ${esc(file.path)}">${esc(file.path)}</button>
+                  ${tracked ? "" : '<span class="badge badge-nominal">historical</span>'}</td>
                 <td class="num">${fmt(file.commits)}</td>
                 <td class="num" data-sort-value="${file.additions}">+${fmt(file.additions)}</td>
                 <td class="num" data-sort-value="${file.deletions}">−${fmt(file.deletions)}</td>
@@ -992,37 +1085,49 @@ async function renderChurn() {
           </tbody>
         </table>
       </div>
-      <div class="callout callout-info" id="churn-filter-empty" hidden>
-        <strong>No matches:</strong> no hotspots match this filter.
-        <button type="button" class="btn btn-secondary" id="churn-filter-clear">Clear filter</button>
-      </div>
+      </section></div>
     </div>`;
 
   makeTableSortable($("#churn-table"));
   const input = $("#churn-filter");
-  const count = panel.querySelector(".filter-count");
-  const empty = $("#churn-filter-empty");
-  const rowNavigation = bindRowActivation($("#churn-table"), btn => {
-    openFile(btn.dataset.path, btn).catch(console.error);
+  const controls = UI.collection($("#churn-table"), {
+    toolbar: $("#churn-toolbar"), search: input, label: "hotspots", filters: [
+      { label: "Directory", all: "All directories", options: (churn.dirs || []).map(dir => dir.name),
+        match: (row, value) => row.dataset.directory === value },
+      { label: "Files", all: "Current + historical", options: ["Current", "Historical"],
+        match: (row, value) => row.dataset.current === String(value === "Current") },
+    ],
+    onUpdate: (rows, chosen) => panel.querySelectorAll("[data-rank]").forEach(button => {
+      button.setAttribute("aria-pressed", String(button.dataset.rank === chosen.get("Directory")));
+    }),
   });
-  bindSearch(input, q => {
-    const query = q.toLowerCase();
-    const rows = $("#churn-table tbody").children;
-    let shown = 0;
-    for (let i = 0; i < rows.length; i++) {
-      const visible = !query || rows[i].textContent.toLowerCase().includes(query);
-      rows[i].style.display = visible ? "" : "none";
-      if (visible) shown++;
+  bindSearch(input, () => {});
+  bindRowActivation($("#churn-table"), btn => {
+    if (trackedPaths.has(btn.dataset.path)) openFile(btn.dataset.path, btn).catch(console.error);
+    else {
+      const file = hotspots.find(file => file.path === btn.dataset.path);
+      UI.inspect(file.path, `<p class="stats-note">Historical file in the scanned commit window.</p>${statRows([
+        ["Commits", fmt(file.commits)], ["Lines added", fmt(file.additions)],
+        ["Lines deleted", fmt(file.deletions)], ["Churn", fmt(file.churn)],
+        ["Last change", fmtDate(file.last_date)],
+      ])}`, btn);
     }
-    count.textContent = `${fmt(shown)} hotspots shown`;
-    empty.hidden = shown !== 0;
-    rowNavigation.refresh();
   });
-  $("#churn-filter-clear").addEventListener("click", () => {
-    input.value = "";
-    input.dispatchEvent(new Event("input"));
-    input.focus();
+  panel.querySelectorAll("[data-rank]").forEach(button => button.onclick = () => {
+    controls.setFilter("Directory", button.dataset.rank);
   });
+  if (nextChurnDirectory) {
+    controls.setFilter("Directory", nextChurnDirectory === "." ? "(root)" : nextChurnDirectory);
+    nextChurnDirectory = null;
+  }
+}
+
+let nextFileFilter = null;
+let nextChurnDirectory = null;
+
+function browseFiles(label, value) {
+  nextFileFilter = { label, value };
+  activateTab("files");
 }
 
 async function renderFiles() {
@@ -1046,9 +1151,8 @@ async function renderFiles() {
         metric("Functions", fmt(mt.functions)),
         metric("Attention markers", fmt(mt.todo_count)),
       ])}
-      <div class="filter-row">
+      <div class="collection-toolbar" id="file-toolbar">
         ${searchField("file-filter", "Filter files")}
-        <span class="filter-count" aria-live="polite">${fmt(byLines.length)} files shown</span>
       </div>
       <div class="table-container" role="region" aria-label="Tracked files">
         <table class="data-table" id="file-table">
@@ -1068,7 +1172,9 @@ async function renderFiles() {
           <tbody>
             ${byLines.map(f => {
               const m = f.metrics || {};
-              return `<tr data-path="${esc(f.path)}">
+              return `<tr data-path="${esc(f.path)}" data-lang="${esc(f.lang)}"
+                data-directory="${esc(f.path.includes("/") ? f.path.split("/")[0] : "(root)")}"
+                data-markers="${m.todo_count || 0}" data-complexity="${m.cyclomatic_complexity || 0}">
                 <td class="wrap" data-sort-value="${esc(f.path)}">
                   <button type="button" class="table-row-trigger" data-path="${esc(f.path)}"
                     aria-label="Open file profile ${esc(f.path)}">${esc(f.path)}</button></td>
@@ -1086,35 +1192,33 @@ async function renderFiles() {
           </tbody>
         </table>
       </div>
-      <div class="callout callout-info" id="file-filter-empty" hidden>
-        <strong>No matches:</strong> no files match this filter.
-        <button type="button" class="btn btn-secondary" id="file-filter-reset">Clear filter</button>
-      </div>
     </div>`;
   makeTableSortable($("#file-table"));
   const input = $("#file-filter");
-  const count = panel.querySelector(".filter-count");
-  const rowNavigation = bindRowActivation($("#file-table"), btn => {
+  bindRowActivation($("#file-table"), btn => {
     openFile(btn.dataset.path, btn).catch(console.error);
   });
-  bindSearch(input, q => {
-    const query = q.toLowerCase();
-    const rows = $("#file-table tbody").children;
-    let shown = 0;
-    for (let i = 0; i < rows.length; i++) {
-      const visible = !query || rows[i].textContent.toLowerCase().includes(query);
-      rows[i].style.display = visible ? "" : "none";
-      if (visible) shown++;
-    }
-    count.textContent = `${fmt(shown)} files shown`;
-    $("#file-filter-empty").hidden = shown !== 0;
-    rowNavigation.refresh();
+  const controls = UI.collection($("#file-table"), {
+    toolbar: $("#file-toolbar"), search: input, label: "files", filters: [
+      { label: "Language", all: "All languages", options: [...new Set(files.map(file => file.lang))].sort(),
+        match: (row, value) => row.dataset.lang === value },
+      { label: "Directory", all: "All directories", options: [...new Set(files.map(file =>
+        file.path.includes("/") ? file.path.split("/")[0] : "(root)"))].sort(),
+        match: (row, value) => row.dataset.directory === value },
+      { label: "Attention", all: "All files", options: ["Has markers", "Complexity ≥ 20"],
+        match: (row, value) => value === "Has markers" ? Number(row.dataset.markers) > 0 : Number(row.dataset.complexity) >= 20 },
+    ], presets: [
+      { value: "summary", label: "Summary", columns: [0, 1, 2, 3, 8] },
+      { value: "structure", label: "Structure", columns: [0, 1, 6, 7, 8] },
+      { value: "composition", label: "Composition", columns: [0, 2, 3, 4, 5, 9] },
+      { value: "all", label: "All metrics", columns: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] },
+    ],
   });
-  $("#file-filter-reset").addEventListener("click", () => {
-    input.value = "";
-    input.dispatchEvent(new Event("input"));
-    input.focus();
-  });
+  bindSearch(input, () => {});
+  if (nextFileFilter) {
+    controls.setFilter(nextFileFilter.label, nextFileFilter.value);
+    nextFileFilter = null;
+  }
 }
 
 const fileDialog = $("#fileDialog");
@@ -1134,6 +1238,37 @@ async function openFile(path, trigger = document.activeElement) {
     const d = await api(`/api/file?path=${encodeURIComponent(path)}`);
     if (request !== fileLoad || !fileDialog.open) return;
     body.innerHTML = fileView(d);
+    body.querySelector('[data-source-action="path"]').onclick = () => copyText(d.path);
+    body.querySelector('[data-source-action="copy"]').onclick = () => copyText(d.content || "");
+    body.querySelector('[data-source-action="download"]').onclick = () => UI.download(d.path.split("/").pop(), d.content || "");
+    let matches = [];
+    let cursor = -1;
+    const search = body.querySelector("#source-filter");
+    const status = body.querySelector("#source-matches");
+    function findNext(direction) {
+      if (!matches.length) return;
+      cursor = (cursor + direction + matches.length) % matches.length;
+      matches[cursor].scrollIntoView({ block: "center", inline: "nearest" });
+      status.textContent = `${cursor + 1} of ${matches.length} matching lines`;
+    }
+    bindSearch(search, query => {
+      matches = [];
+      body.querySelectorAll(".source-line").forEach(line => {
+        const hit = Boolean(query) && line.querySelector(".source-text").textContent.toLowerCase().includes(query.toLowerCase());
+        line.classList.toggle("is-match", hit);
+        if (hit) matches.push(line);
+      });
+      cursor = -1;
+      status.textContent = query ? `${matches.length} matching lines` : "";
+      body.querySelector('[data-source-action="next"]').disabled = matches.length === 0;
+      body.querySelector('[data-source-action="previous"]').disabled = matches.length === 0;
+      if (matches.length) findNext(1);
+    });
+    search.onkeydown = event => {
+      if (event.key === "Enter") { event.preventDefault(); findNext(event.shiftKey ? -1 : 1); }
+    };
+    body.querySelector('[data-source-action="next"]').onclick = () => findNext(1);
+    body.querySelector('[data-source-action="previous"]').onclick = () => findNext(-1);
     body.querySelector(".file-code").focus({ preventScroll: true });
   } catch (error) {
     if (request === fileLoad && fileDialog.open) {
@@ -1146,6 +1281,9 @@ async function openFile(path, trigger = document.activeElement) {
 
 $("#btnCloseFile").addEventListener("click", () => fileDialog.close());
 fileDialog.addEventListener("click", event => { if (event.target === fileDialog) fileDialog.close(); });
+fileDialog.addEventListener("keydown", event => {
+  if (event.key === "Escape" && !event.defaultPrevented) { event.preventDefault(); fileDialog.close(); }
+});
 fileDialog.addEventListener("close", () => {
   fileLoad++;
   $("#fileDialogBody").removeAttribute("aria-busy");
@@ -1161,7 +1299,6 @@ function fileView(d) {
   const m = d.metrics || {};
   const h = m.halstead || {};
   const lc = s.last_commit;
-  const fileName = String(d.path || "").split("/").pop();
   const markerSummary = Object.entries(m.todo_markers || {})
     .map(([name, count]) => `${name} ${fmt(count)}`).join(" · ") || "none";
   let code;
@@ -1170,20 +1307,28 @@ function fileView(d) {
   } else {
     const lines = (d.content ?? "").split("\n");
     code = `<pre>${lines.map((l, i) =>
-      `<span class="ln">${i + 1}</span>${esc(l)}`).join("\n")}</pre>`;
+      `<span class="source-line" data-line="${i + 1}"><span class="ln">${i + 1}</span><span class="source-text">${esc(l) || " "}</span></span>`).join("")}</pre>`;
   }
   return `
     <div class="file-toolbar">
       <span class="section-note">${esc(d.lang || "unknown")} · ${fmt(d.bytes)} bytes</span>
       ${d.truncated ? `<span class="badge badge-caution">Truncated</span>` : ""}
+      <div class="source-actions">
+        <button type="button" class="btn btn-quiet" data-source-action="path">Copy path</button>
+        <button type="button" class="btn btn-quiet" data-source-action="copy"${d.binary ? " disabled" : ""}>Copy ${d.truncated ? "preview" : "source"}</button>
+        <button type="button" class="btn btn-quiet" data-source-action="download"${d.binary ? " disabled" : ""}>Download ${d.truncated ? "preview" : "source"}</button>
+      </div>
+    </div>
+    <div class="collection-toolbar source-find">
+      ${searchField("source-filter", "Find in source")}
+      <button type="button" class="btn-icon" data-source-action="previous" aria-label="Previous match" title="Previous match" disabled>${UI.icon("left")}</button>
+      <button type="button" class="btn-icon" data-source-action="next" aria-label="Next match" title="Next match" disabled>${UI.icon("right")}</button>
+      <span class="filter-count" id="source-matches" aria-live="polite"></span>
     </div>
     <div class="file-grid">
       <div class="file-code" tabindex="0" role="region" aria-label="${esc(d.path)} source">${code}</div>
       <aside class="file-stats">
         <div class="stats-hero">
-          <div class="stats-kicker">File profile</div>
-          <div class="stats-title">${esc(fileName || "file")}</div>
-          <div class="stats-sub">${esc(d.lang || "unknown")} · ${fmt(d.bytes)} bytes</div>
           <div class="stats-note">${esc(m.analysis || "metrics unavailable")}</div>
         </div>
         ${statGroup("Source composition", statRows([
@@ -1195,7 +1340,7 @@ function fileView(d) {
           ["inline comments", fmt(m.inline_comment_lines)],
           ["comment blocks", fmt(m.comment_blocks)],
           ["string lines", fmt(m.string_lines)],
-        ]))}
+        ]), true)}
         ${statGroup("Structure", statRows([
           ["functions", fmt(m.functions)],
           ["classes", fmt(m.classes)],
@@ -1289,17 +1434,78 @@ function fileView(d) {
     </div>`;
 }
 
-async function renderLogs() {
-  const data = await api("/api/logs");
+const logState = { follow: true, lines: [], event: "", limit: 500, visible: [] };
+
+async function renderLogs(force = false) {
   const panel = $('.panel[data-panel="logs"]');
-  const lines = data.logs || [];
-  panel.innerHTML = `
-    <div class="panel-stack">
-      ${sectionHeading("Server logs", `${fmt(lines.length)} lines · newest last`)}
-      <pre class="log-view">${lines.length ? lines.map(esc).join("\n") : "—"}</pre>
+  if (!logState.follow && !force && panel.querySelector(".log-lines")) return;
+  const data = await api("/api/logs");
+  logState.lines = data.logs || [];
+  if (!panel.querySelector(".log-lines")) {
+    panel.innerHTML = `<div class="panel-stack">
+      <div class="collection-toolbar log-toolbar" id="log-toolbar">
+        ${searchField("log-filter", "Filter log messages")}
+        <button type="button" class="btn btn-secondary" id="log-follow" aria-pressed="true">Pause live</button>
+        <button type="button" class="btn btn-quiet" id="log-refresh">Refresh</button>
+        <button type="button" class="btn btn-quiet" id="log-copy">Copy visible</button>
+        <button type="button" class="btn btn-quiet" id="log-download">Download</button>
+      </div>
+      <span class="filter-count" id="log-count" aria-live="polite"></span>
+      <div class="log-lines" role="region" aria-label="Server log messages" tabindex="0"></div>
     </div>`;
-  const view = panel.querySelector(".log-view");
-  view.scrollTop = view.scrollHeight;
+    const toolbar = $("#log-toolbar");
+    toolbar.insertBefore(UI.picker("Events", ["All events", "Requests", "Scans", "Watcher", "Errors / failures"], "All events", value => {
+      logState.event = value; paintLogs();
+    }), $("#log-follow"));
+    toolbar.insertBefore(UI.picker("Window", [{ value: 100, label: "Latest 100" }, { value: 500, label: "Latest 500" },
+      { value: 5000, label: "All buffered lines" }], logState.limit, value => { logState.limit = value; paintLogs(); }), $("#log-follow"));
+    bindSearch($("#log-filter"), paintLogs);
+    $("#log-follow").onclick = () => {
+      logState.follow = !logState.follow;
+      $("#log-follow").textContent = logState.follow ? "Pause live" : "Resume live";
+      $("#log-follow").setAttribute("aria-pressed", String(logState.follow));
+      if (logState.follow) renderLogs(true);
+    };
+    $("#log-refresh").onclick = () => renderLogs(true);
+    $("#log-copy").onclick = () => copyText(logState.visible.join("\n"));
+    $("#log-download").onclick = () => UI.download("codeview-logs.txt", logState.visible.join("\n"));
+    panel.querySelector(".log-lines").onclick = event => {
+      const button = event.target.closest("[data-log-index]");
+      if (!button) return;
+      const line = logState.visible[Number(button.dataset.logIndex)];
+      const dialog = UI.inspect("Log entry", `<pre class="inspection-code">${esc(line)}</pre>
+        <button type="button" class="btn btn-secondary" data-log-copy>Copy entry</button>`, button);
+      dialog.querySelector("[data-log-copy]").onclick = () => copyText(line);
+    };
+    panel.querySelector(".log-lines").onkeydown = event => {
+      const item = event.target.closest("[data-log-index]");
+      if (!item || !["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const items = [...panel.querySelectorAll("[data-log-index]")];
+      let index = items.indexOf(item);
+      index = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+        : Math.max(0, Math.min(items.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)));
+      items.forEach((button, offset) => { button.tabIndex = offset === index ? 0 : -1; });
+      items[index].focus();
+    };
+  }
+  paintLogs();
+}
+
+function paintLogs() {
+  const panel = $('.panel[data-panel="logs"]');
+  const query = $("#log-filter").value.trim().toLowerCase();
+  const patterns = { Requests: /\b(GET|POST|PUT|DELETE|PATCH)\b/, Scans: /scan|cache|reload/i,
+    Watcher: /watch|restart|generation/i, "Errors / failures": /error|fail|exception|traceback/i };
+  const matched = logState.lines.filter(line => (!query || line.toLowerCase().includes(query))
+    && (!patterns[logState.event] || patterns[logState.event].test(line)));
+  logState.visible = matched.slice(-logState.limit);
+  $("#log-count").textContent = `${fmt(logState.visible.length)} of ${fmt(matched.length)} matching lines · newest last`;
+  const view = panel.querySelector(".log-lines");
+  view.innerHTML = logState.visible.map((line, index) => `<button type="button" class="log-line" data-log-index="${index}" tabindex="${index === 0 ? 0 : -1}"
+    data-level="${/error|fail|exception|traceback/i.test(line) ? "error" : /warn/i.test(line) ? "warning" : "info"}"
+    aria-label="Inspect log entry ${index + 1}">${esc(line)}</button>`).join("") || '<p class="stats-note">No log messages match these filters.</p>';
+  if (logState.follow) view.scrollTop = view.scrollHeight;
 }
 
 async function renderDeps() {
@@ -1309,46 +1515,54 @@ async function renderDeps() {
     panel.innerHTML = emptyCallout("No manifests", "No dependency manifests found in this repo.");
     return;
   }
-  panel.innerHTML = `<div class="panel-stack">${deps.ecosystems.map((eco, i) => {
-    const declared = eco.declared || [], locked = eco.locked || [];
-    const lockedByRoot = {};
-    for (const l of locked) {
-      lockedByRoot[l.name] = lockedByRoot[l.name] || l.version;
-    }
-    const lockNote = eco.lockfile ? `lock ${eco.lockfile}` : "no lockfile";
-    return `
-      <section>
-        ${sectionHeading(`${eco.name} · ${eco.manifest}`, lockNote)}
-        <div class="table-container" role="region" aria-label="${esc(eco.name)} dependencies">
-          <table class="data-table" id="deps-table-${i}">
-            <caption class="sr-only">${esc(eco.name)} declared dependencies</caption>
-            <thead><tr>
-              ${sortHeader("dependency", "text")}
-              ${sortHeader("kind", "text")}
-              ${sortHeader("declared", "text")}
-              ${sortHeader("locked version", "text")}
-            </tr></thead>
-            <tbody>
-              ${declared.map(d => `
-                <tr>
-                  <td class="wrap">${esc(d.name)}</td>
-                  <td>${esc(d.kind)}</td>
-                  <td class="wrap">${esc(d.req)}</td>
-                  <td>${lockedByRoot[d.name]
-                    ? `<span class="meta-tag">${esc(lockedByRoot[d.name])}</span>`
-                    : `<span class="badge badge-caution">not in lock</span>`}</td>
-                </tr>`).join("") || `<tr><td colspan="4">—</td></tr>`}
-            </tbody>
-          </table>
-        </div>
-        ${locked.length > declared.length
-          ? `<p class="stats-note">${fmt(locked.length - declared.length)} more locked packages not directly declared.</p>`
-          : ""}
-      </section>`;
-  }).join("")}</div>`;
-  deps.ecosystems.forEach((_, i) => {
-    const table = $(`#deps-table-${i}`);
-    if (table.querySelector("tbody tr td")) makeTableSortable(table);
+  const packages = [];
+  deps.ecosystems.forEach((eco, ecosystem) => {
+    const declared = eco.declared || [];
+    const locked = eco.locked || [];
+    const names = new Set(declared.map(item => item.name));
+    declared.forEach(item => packages.push({ ...item, eco, ecosystem, scope: "Declared",
+      versions: [...new Set(locked.filter(entry => entry.name === item.name).map(entry => entry.version))] }));
+    locked.filter(item => !names.has(item.name)).forEach(item => packages.push({ ...item, eco, ecosystem,
+      scope: "Lock only", kind: "lock entry", req: "—", versions: [item.version] }));
+  });
+  panel.innerHTML = `<div class="panel-stack dependency-board">
+    ${metricGrid([
+      metric("Ecosystems", fmt(deps.ecosystems.length)),
+      metric("Declared entries", fmt(packages.filter(item => item.scope === "Declared").length)),
+      metric("Lock-only entries", fmt(packages.filter(item => item.scope === "Lock only").length)),
+    ])}
+    <div class="collection-toolbar" id="deps-toolbar">${searchField("deps-filter", "Filter packages")}</div>
+    <div class="table-container" role="region" aria-label="Dependency inventory">
+      <table class="data-table" id="deps-table"><caption class="sr-only">Declared and scanned lockfile entries</caption>
+      <thead><tr>${sortHeader("package", "text")}${sortHeader("ecosystem", "text")}${sortHeader("kind", "text")}
+        ${sortHeader("requirement", "text")}${sortHeader("locked version", "text")}</tr></thead>
+      <tbody>${packages.map((item, index) => `<tr data-package="${index}" data-ecosystem="${item.ecosystem}"
+        data-scope="${item.scope}" data-missing="${Boolean(item.eco.lockfile && !item.versions.length)}">
+        <td><button type="button" class="table-row-trigger" data-package="${index}" aria-label="Inspect ${esc(item.name)}">${esc(item.name)}</button></td>
+        <td>${esc(item.eco.name)}</td><td>${esc(item.kind)}</td><td class="wrap">${esc(item.req)}</td>
+        <td>${item.versions.length ? `<span class="meta-tag">${esc(item.versions.join(", "))}</span>`
+          : `<span class="badge badge-${item.eco.lockfile ? "caution" : "nominal"}">${item.eco.lockfile ? "not in scanned lock" : "no lockfile"}</span>`}</td>
+      </tr>`).join("")}</tbody></table>
+    </div>
+    <p class="stats-note">Lock inventories include up to 500 entries per ecosystem. Lock-only entries are not a dependency graph.</p>
+  </div>`;
+  const table = $("#deps-table");
+  makeTableSortable(table);
+  UI.collection(table, { toolbar: $("#deps-toolbar"), search: $("#deps-filter"), label: "packages", filters: [
+    { label: "Ecosystem", all: "All ecosystems", options: deps.ecosystems.map((eco, index) => ({ value: String(index), label: eco.name })),
+      match: (row, value) => row.dataset.ecosystem === value },
+    { label: "Scope", all: "Declared + locked", options: ["Declared", "Lock only", "Missing lock entry"],
+      match: (row, value) => value === "Missing lock entry" ? row.dataset.missing === "true" : row.dataset.scope === value },
+  ] });
+  bindSearch($("#deps-filter"), () => {});
+  bindRowActivation(table, button => {
+    const item = packages[Number(button.dataset.package)];
+    const dialog = UI.inspect(item.name, statRows([
+      ["Ecosystem", item.eco.name], ["Scope", item.scope], ["Kind", item.kind], ["Requirement", item.req],
+      ["Locked versions", item.versions.join(", ") || "unavailable"],
+      ["Manifest", item.eco.manifest], ["Lockfile", item.eco.lockfile || "none"],
+    ]) + '<button type="button" class="btn btn-secondary" data-package-copy>Copy package name</button>', button);
+    dialog.querySelector("[data-package-copy]").onclick = () => copyText(item.name);
   });
 }
 

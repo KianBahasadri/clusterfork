@@ -24,7 +24,7 @@ ROUTE_PATH_RE = re.compile(r"^$|^/(?:[A-Za-z0-9._~-]+/?)*$")
 ALLOWED_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
 
 
-def inline_host_styles(page: str, css: str) -> str:
+def inline_host_styles(page: str, css: str, script: str = "") -> str:
     """Keep opaque module frames styled without a loopback subresource request."""
     offsets = [0]
     for line in page.splitlines(keepends=True):
@@ -42,6 +42,8 @@ def inline_host_styles(page: str, css: str) -> str:
 
     StylesheetLinks().feed(page)
     style = '<style data-codeview-host-styles>\n' + css.replace("</style", "<\\/style") + "\n</style>"
+    if script:
+        style += '<script data-codeview-host-controls>\n' + script.replace("</script", "<\\/script") + "\n</script>"
     for start, end in reversed(links):
         page = page[:start] + style + page[end:]
     return page

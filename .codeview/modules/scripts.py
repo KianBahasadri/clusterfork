@@ -330,14 +330,14 @@ def render(data: dict) -> str:
   }}
   .scripts-board [data-scripts-wide] {{ grid-column: 1 / -1; }}
   .scripts-board .table-container {{ width: 100%; }}
-  .scripts-board .data-table {{ width: 100%; }}
+  .scripts-board .data-table {{ width: max-content; max-width: 100%; }}
   .scripts-board .data-table td.wrap {{ white-space: normal; }}
   @media (max-width: 900px) {{
     .scripts-board {{ grid-template-columns: minmax(0, 1fr); }}
   }}
 </style>
 </head>
-<body>
+<body data-codeview-collections>
 <div class="dashboard-layout">
   <header class="dashboard-heading">
     <div class="dashboard-title">

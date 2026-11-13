@@ -15,6 +15,7 @@ window.CodeviewTree = function (panel, helpers) {
   let matchingFiles = 0;
   let typeahead = "";
   let lastTyped = 0;
+  let order = "Name";
 
   panel.innerHTML = `<div class="panel-stack">
     <div class="tree-toolbar">
@@ -34,8 +35,21 @@ window.CodeviewTree = function (panel, helpers) {
   const tree = panel.querySelector('[role="tree"]');
   const input = panel.querySelector("#tree-filter");
   const empty = panel.querySelector("#tree-empty");
+  panel.querySelector(".tree-actions").before(window.CodeviewUI.picker("Order", ["Name", "Lines"], order, value => {
+    order = value;
+    sortNodes();
+    render(false);
+  }));
   const activeExpansion = () => query ? filteredExpanded : expanded;
   const items = () => [...tree.querySelectorAll('[role="treeitem"]')];
+
+  function sortNodes() {
+    const compare = (a, b) => Boolean(b.children) - Boolean(a.children)
+      || (order === "Lines" ? b.lines - a.lines : 0)
+      || a.name.localeCompare(b.name, "en", { numeric: true, sensitivity: "base" });
+    roots.sort(compare);
+    for (const node of nodes.values()) if (node.children) node.children.sort(compare);
+  }
 
   function filter() {
     included = query ? new Set() : null;
@@ -212,21 +226,19 @@ window.CodeviewTree = function (panel, helpers) {
           path = path ? `${path}/${name}` : name;
           let node = nodes.get(path);
           if (!node) {
-            node = { name, path, parent, count: 0 };
+            node = { name, path, parent, count: 0, lines: 0 };
             if (index < parts.length - 1) node.children = [];
             else node.file = file;
             nodes.set(path, node);
             children.push(node);
           }
           node.count++;
+          node.lines += file.lines || 0;
           parent = node;
           children = node.children;
         });
       }
-      const compare = (a, b) => Boolean(b.children) - Boolean(a.children)
-        || a.name.localeCompare(b.name, "en", { numeric: true, sensitivity: "base" });
-      roots.sort(compare);
-      for (const node of nodes.values()) if (node.children) node.children.sort(compare);
+      sortNodes();
       expanded = new Set([...expanded].filter(path => nodes.get(path)?.children));
       filter();
       render();
