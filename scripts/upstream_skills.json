@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "skills": [
+    {
+      "name": "code-simplifier",
+      "repository": "anthropics/claude-plugins-official",
+      "branch": "main",
+      "prompt_path": "plugins/code-simplifier/agents/code-simplifier.md",
+      "license_path": "plugins/code-simplifier/LICENSE",
+      "format": "claude-agent"
+    },
+    {
+      "name": "deslop",
+      "repository": "cursor/plugins",
+      "branch": "main",
+      "prompt_path": "cursor-team-kit/skills/deslop/SKILL.md",
+      "license_path": "cursor-team-kit/LICENSE",
+      "format": "skill"
+    }
+  ]
+}

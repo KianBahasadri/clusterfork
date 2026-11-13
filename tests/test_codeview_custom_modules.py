@@ -98,6 +98,8 @@ class CustomModulesTests(unittest.TestCase):
         mod = load_module("skills", SKILLS_PATH)
         data = mod.scan(REPO_ROOT)
         skills = {r["name"] for r in data["skills"]}
+        expected = {path.parent.name for path in (REPO_ROOT / "skills").glob("*/SKILL.md")}
+        self.assertEqual(skills, expected)
         self.assertIn("commit_and_push", skills)
         self.assertIn("design-guide", skills)
         self.assertEqual(
@@ -110,7 +112,7 @@ class CustomModulesTests(unittest.TestCase):
         self.assertNotEqual(by_skill["create-github-action-tests"], ">")
         self.assertIn("GitHub Actions", by_skill["create-github-action-tests"])
         counts = data["counts"]
-        self.assertGreaterEqual(counts["Skills"], 15)
+        self.assertEqual(counts["Skills"], len(expected))
         self.assertEqual(counts["Delegation"], 3)
         self.assertEqual(counts["Workflow & Design"], counts["Skills"] - 3)
 

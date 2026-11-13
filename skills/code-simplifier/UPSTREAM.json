@@ -1,0 +1,12 @@
+{
+  "name": "code-simplifier",
+  "repository": "anthropics/claude-plugins-official",
+  "branch": "main",
+  "prompt_path": "plugins/code-simplifier/agents/code-simplifier.md",
+  "license_path": "plugins/code-simplifier/LICENSE",
+  "format": "claude-agent",
+  "commit": "893173fb82a7184fcf3f08ae55930016d84fd588",
+  "prompt_sha256": "2a51e8d210580d9f66ac2ed1226c41f9374565fc275da30d7bb95f65c2cc87bb",
+  "license_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+  "adapter_version": 1
+}

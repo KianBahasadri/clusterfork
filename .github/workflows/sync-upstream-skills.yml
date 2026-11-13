@@ -1,0 +1,76 @@
+name: Sync upstream skills
+
+on:
+  schedule:
+    - cron: '23 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-upstream-skills
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'KianBahasadri/clusterfork' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Refresh upstream prompts and licenses
+        id: sync
+        run: |
+          python3 scripts/sync_upstream_skills.py
+          {
+            echo 'paths<<UPSTREAM_SKILL_PATHS'
+            for skill in code-simplifier deslop; do
+              if [[ -f "skills/$skill/SKILL.md" ]]; then
+                printf 'skills/%s/\n' "$skill"
+              fi
+            done
+            echo 'UPSTREAM_SKILL_PATHS'
+          } >> "$GITHUB_OUTPUT"
+      - name: Validate snapshots and sync behavior
+        run: |
+          python3 scripts/sync_upstream_skills.py --check
+          python3 -m unittest discover -s tests -p 'test_upstream_skills.py' -v
+          git diff --check
+      - name: Create or update the sync pull request
+        id: pr
+        if: steps.sync.outputs.paths != ''
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
+        with:
+          token: ${{ github.token }}
+          branch: automation/sync-upstream-skills
+          base: ${{ github.event.repository.default_branch }}
+          delete-branch: true
+          add-paths: ${{ steps.sync.outputs.paths }}
+          commit-message: 'chore: sync upstream skills'
+          title: 'chore: sync upstream skills'
+          body: |
+            Refresh Anthropic's code-simplifier and Cursor's deslop from their upstream main branches.
+
+            Each UPSTREAM.json records the source commit and file hashes. Cursor's prompt is copied unchanged; Anthropic's prompt body is unchanged, with Claude-only model metadata removed for shared skill discovery. Upstream licenses are included.
+
+            The sync job validates the generated snapshots and runs the offline sync tests. The existing test workflow is dispatched explicitly, and auto-merge waits for the repository's required checks.
+      # GITHUB_TOKEN pushes do not trigger push workflows. Dispatch CI explicitly
+      # so protected main receives the normal required checks without another secret.
+      - name: Run required CI and enable auto-merge
+        if: steps.pr.outputs.pull-request-number != '' && steps.pr.outputs.pull-request-operation != 'closed'
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.pull-request-number }}
+          PR_HEAD: ${{ steps.pr.outputs.pull-request-head-sha }}
+        run: |
+          gh workflow run test.yml --ref automation/sync-upstream-skills
+          gh pr merge "$PR_NUMBER" --auto --squash --match-head-commit "$PR_HEAD"

@@ -1,0 +1,12 @@
+{
+  "name": "deslop",
+  "repository": "cursor/plugins",
+  "branch": "main",
+  "prompt_path": "cursor-team-kit/skills/deslop/SKILL.md",
+  "license_path": "cursor-team-kit/LICENSE",
+  "format": "skill",
+  "commit": "05b49176bc9e00d8e9e3dbf136fa76631cd6468a",
+  "prompt_sha256": "2f7b7def74af7ed11f5b44b4d32f0f91fca8c5d1f92bf2171e8d12fd33a0f810",
+  "license_sha256": "702f5f331b56aff0e33d8c7826df5202559f894145eb70355c6477b55b5bb8a0",
+  "adapter_version": 1
+}
