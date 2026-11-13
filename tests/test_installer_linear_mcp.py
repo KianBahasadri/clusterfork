@@ -120,6 +120,67 @@ class InstallerLinearMCPTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         return proc.stdout.rstrip("\n")
 
+    def test_codex_attention_hooks_install_trusted_and_notify(self):
+        self.write_dotenv()
+        config_path = self.home / self.paths["codex"]
+        config_path.parent.mkdir(parents=True)
+        disabled_key = f"{config_path}:permission_request:0:0"
+        config_path.write_text(
+            f'[hooks.state.{json.dumps(disabled_key)}]\n'
+            'enabled = false\ntrusted_hash = "stale"\n'
+            '[hooks.state."fixture-other-hook"]\ntrusted_hash = "keep-me"\n'
+        )
+        self.install()
+        first = config_path.read_bytes()
+        self.install()
+        self.assertEqual(config_path.read_bytes(), first)
+        hooks = tomllib.loads(first.decode())["hooks"]
+        state = hooks["state"]
+        self.assertFalse(state[disabled_key]["enabled"])
+        self.assertNotEqual(state[disabled_key]["trusted_hash"], "stale")
+        self.assertEqual(state["fixture-other-hook"]["trusted_hash"], "keep-me")
+
+        mock_bin = self.root / "bin"
+        mock_bin.mkdir()
+        bell_log = self.root / "bell.log"
+        mpv = mock_bin / "mpv"
+        mpv.write_text('#!/bin/sh\nprintf "bell\\n" >> "$FIXTURE_BELL_LOG"\n')
+        mpv.chmod(0o755)
+        cf_dir = self.home / ".config/clusterfork"
+        (cf_dir / "notify-prefs").write_text("phone=0\n")
+        hook_env = {
+            **self.env,
+            "PATH": f"{mock_bin}:{self.env['PATH']}",
+            "FIXTURE_BELL_LOG": str(bell_log),
+            "CLUSTERFORK_DIR": str(cf_dir),
+            "CLUSTERFORK_ENV_FILE": str(cf_dir / ".env"),
+            "CLUSTERFORK_NOTIFY_RELAY_SOCKET": "",
+        }
+        cases = (
+            ("Stop", "stop", {}),
+            ("PostModelRequest", "post_model_request", {
+                "status": "failed", "error": "You've hit your usage limit."
+            }),
+            ("PermissionRequest", "permission_request", {"tool_name": "Bash"}),
+            ("PreToolUse", "pre_tool_use", {"tool_name": "request_user_input"}),
+        )
+        for event, event_name, extra in cases:
+            with self.subTest(event=event):
+                self.assertRegex(
+                    state[f"{config_path}:{event_name}:0:0"]["trusted_hash"],
+                    r"^sha256:[0-9a-f]{64}$",
+                )
+                handler = hooks[event][0]["hooks"][0]
+                proc = subprocess.run(
+                    ["bash", "-c", handler["command"]], cwd=self.root, env=hook_env,
+                    input=json.dumps({"hook_event_name": event, "cwd": str(self.root), **extra}),
+                    capture_output=True, text=True, timeout=5,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual((proc.stdout, proc.stderr), ("", ""))
+                self.assertEqual(bell_log.read_text(), "bell\n")
+                bell_log.unlink()
+
     def test_shared_key_uses_client_secret_resolution_without_shell_or_recursive_expansion(self):
         key = 'fixture-linear-$(touch EXECUTED)-`touch EXECUTED`-${MISSING}-"quoted"-\\slash'
         self.write_dotenv(key)

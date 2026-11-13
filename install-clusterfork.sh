@@ -31,7 +31,7 @@
 #      the rest of the file)
 #  13. Updates ~/.codex/config.toml from agents/codex.toml (merges top-level
 #      settings, replaces mcp_servers and hook event tables, strips retired
-#      keys like notify, stamps trusted_hash for the Stop notifier only; Codex owns
+#      keys like notify, stamps trusted_hash for the notification hooks; Codex owns
 #      the rest of that file)
 #  14. Installs agents/claude-plugins/* into ~/.claude/skills/ as skills-dir
 #      plugins; agents/claude.json ships each one disabled
@@ -811,7 +811,7 @@ step "command code hooks" "$COMMAND_CODE_SETTINGS_DEST" "Stop → clusterfork-no
 
 # Codex config: update top-level settings, replace mcp_servers and hook event
 # tables from agents/codex.toml, strip retired clusterfork keys (notify), and
-# stamp trusted_hash for the Stop notifier only (other hooks.state entries kept).
+# stamp trusted_hash for the notification hooks (other hooks.state entries kept).
 # Other settings (model, approvals, per-project trust levels written by Codex)
 # are preserved.
 [[ -f "$CODEX_CONFIG_SRC" ]] || fail "missing $(tildify "$CODEX_CONFIG_SRC")"
@@ -979,27 +979,37 @@ table_section = "\n".join(kept_tables).strip("\n")
 parts = [p for p in [top_section, table_section, src_tables_block] if p]
 result = "\n\n".join(parts) + "\n"
 
-# Stamp trust for the clusterfork Stop notifier only. hooks.state is Codex-managed;
-# keep any other entries and overwrite just dest:stop:0:0.
-stop_groups = (wanted.get("hooks") or {}).get("Stop") or []
-if not (
-    stop_groups
-    and stop_groups[0].get("hooks")
-    and stop_groups[0]["hooks"][0].get("type") == "command"
-    and stop_groups[0]["hooks"][0].get("command")
-):
-    raise SystemExit("codex config: agents/codex.toml must define [[hooks.Stop]] command hook")
-stop_handler = stop_groups[0]["hooks"][0]
-stop_key = codex_hook_trust.stop_hook_state_key(dest_path)
-stop_hash = codex_hook_trust.trust_hash_for_stop_handler(stop_handler)
+# Stamp trust for the clusterfork notification hooks only. hooks.state is
+# Codex-managed; preserve other entries and each notifier's enabled setting.
 before_state = {}
 if isinstance((before.get("hooks") or {}).get("state"), dict):
     before_state = {
         k: dict(v) for k, v in before["hooks"]["state"].items() if isinstance(v, dict)
     }
-stop_entry = dict(before_state.get(stop_key) or {})
-stop_entry["trusted_hash"] = stop_hash
-before_state[stop_key] = stop_entry
+notifier_hashes = {}
+for event, event_name in (
+    ("Stop", "stop"),
+    ("PostModelRequest", "post_model_request"),
+    ("PermissionRequest", "permission_request"),
+    ("PreToolUse", "pre_tool_use"),
+):
+    groups = (wanted.get("hooks") or {}).get(event) or []
+    if not (
+        groups
+        and groups[0].get("hooks")
+        and groups[0]["hooks"][0].get("type") == "command"
+        and groups[0]["hooks"][0].get("command")
+    ):
+        raise SystemExit(f"codex config: agents/codex.toml must define [[hooks.{event}]] command hook")
+    handler = groups[0]["hooks"][0]
+    key = codex_hook_trust.hook_state_key(dest_path, event_name)
+    trusted_hash = codex_hook_trust.trust_hash_for_handler(
+        event_name, handler, matcher=groups[0].get("matcher")
+    )
+    entry = dict(before_state.get(key) or {})
+    entry["trusted_hash"] = trusted_hash
+    before_state[key] = entry
+    notifier_hashes[key] = trusted_hash
 state_block = codex_hook_trust.format_hooks_state_toml(before_state)
 if state_block:
     result = result.rstrip() + "\n\n" + state_block
@@ -1023,9 +1033,10 @@ for tbl in wanted_tables:
         continue
     if after.get(tbl) != wanted.get(tbl):
         raise SystemExit(f"codex config: table [{tbl}] was not installed cleanly into {dest_path}")
-after_stop = ((after.get("hooks") or {}).get("state") or {}).get(stop_key) or {}
-if after_stop.get("trusted_hash") != stop_hash:
-    raise SystemExit(f"codex config: Stop hook trusted_hash was not installed into {dest_path}")
+for key, trusted_hash in notifier_hashes.items():
+    after_entry = ((after.get("hooks") or {}).get("state") or {}).get(key) or {}
+    if after_entry.get("trusted_hash") != trusted_hash:
+        raise SystemExit(f"codex config: hook trusted_hash for {key} was not installed into {dest_path}")
 for k in dropped_top_keys:
     if k in after:
         raise SystemExit(f"codex config: retired key '{k}' was not removed from {dest_path}")
@@ -1039,7 +1050,7 @@ for k, v in before.items():
 if result != current:
     dest_path.write_text(result, encoding="utf-8")
 PY
-step "codex config" "$CODEX_CONFIG_DEST" "Stop → clusterfork-notify; mcp_servers: $(python3 -c 'import sys, tomllib; print(", ".join(tomllib.load(open(sys.argv[1], "rb")).get("mcp_servers", {})))' "$CODEX_CONFIG_SRC")"
+step "codex config" "$CODEX_CONFIG_DEST" "Stop / needs attention → clusterfork-notify; mcp_servers: $(python3 -c 'import sys, tomllib; print(", ".join(tomllib.load(open(sys.argv[1], "rb")).get("mcp_servers", {})))' "$CODEX_CONFIG_SRC")"
 
 # The dev box mounts the auth store read-only. Install the shared status-line
 # settings on its writable host; each environment only needs a relative link.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared turn-completion notifier: ring locally and optionally publish to ntfy.
+# Shared agent notifier: ring locally and optionally publish to ntfy.
 
 set -u
 
@@ -120,8 +120,43 @@ print(name)
 '
 }
 
+# Codex can need a person before Stop runs: approvals, questions, and root
+# usage-limit failures. Inspect supported hook payloads locally, never the
+# transcript. Successful requests, transient failures and child errors stay quiet.
+codex_attention_gate() {
+  python3 -c '
+import json, os, sys
+try:
+    data = json.load(sys.stdin)
+except (ValueError, OSError):
+    sys.exit(1)
+if not isinstance(data, dict):
+    sys.exit(1)
+event = data.get("hook_event_name")
+if event == "PostModelRequest":
+    if data.get("status") != "failed":
+        sys.exit(1)
+    if data.get("agent_id") is not None or data.get("agent_type") is not None:
+        sys.exit(1)
+    error = data.get("error")
+    if not isinstance(error, str) or not error.replace("’", "\x27").startswith("You\x27ve hit your usage limit"):
+        sys.exit(1)
+elif event == "PreToolUse":
+    if data.get("tool_name") not in ("request_user_input", "request_user_input_async"):
+        sys.exit(1)
+elif event != "PermissionRequest":
+    sys.exit(1)
+cwd = data.get("cwd")
+if not isinstance(cwd, str) or not cwd:
+    cwd = os.getcwd()
+print(os.path.basename(cwd.rstrip("/")) or "workspace")
+'
+}
+
 if (( relayed )); then
   project="${2:-workspace}"
+elif [[ "$agent" == codex && "${2:-}" == --attention ]]; then
+  project="$(codex_attention_gate 2>/dev/null)" || exit 0
 elif [[ "$agent" == antigravity ]]; then
   project="$(antigravity_gate 2>/dev/null)" || exit 0
 elif [[ "$agent" == grok ]]; then
@@ -158,7 +193,11 @@ if [[ "${NOTIFY_PREF[bell]}" == 1 ]]; then
   channels+=(bell)
 fi
 if [[ "${NOTIFY_PREF[phone]}" == 1 ]]; then
-  notify_post_ntfy "$label finished" "Turn complete in $project" &
+  if [[ "$agent" == codex ]]; then
+    notify_post_ntfy "$label needs attention" "Check $label in $project" &
+  else
+    notify_post_ntfy "$label finished" "Turn complete in $project" &
+  fi
   pids+=("$!")
   channels+=(phone)
 fi

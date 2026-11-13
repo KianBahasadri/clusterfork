@@ -49,3 +49,25 @@ enabled = false
   type = "command"
   command = "${HOME}/.config/clusterfork/bin/clusterfork-notify codex"
   async = true
+
+# Failed requests bypass Stop. Filter PostModelRequest locally for root
+# usage-limit failures; other attempts do not need attention.
+[[hooks.PostModelRequest]]
+  [[hooks.PostModelRequest.hooks]]
+  type = "command"
+  command = "${HOME}/.config/clusterfork/bin/clusterfork-notify codex --attention"
+  async = true
+
+# Approvals and questions can wait for a person before the turn ends.
+[[hooks.PermissionRequest]]
+  [[hooks.PermissionRequest.hooks]]
+  type = "command"
+  command = "${HOME}/.config/clusterfork/bin/clusterfork-notify codex --attention"
+  async = true
+
+[[hooks.PreToolUse]]
+  matcher = "^request_user_input(_async)?$"
+  [[hooks.PreToolUse.hooks]]
+  type = "command"
+  command = "${HOME}/.config/clusterfork/bin/clusterfork-notify codex --attention"
+  async = true

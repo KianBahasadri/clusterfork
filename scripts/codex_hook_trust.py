@@ -1,4 +1,4 @@
-"""Codex Stop-hook trust hash (matches codex-rs hooks discovery).
+"""Codex command-hook trust hash (matches codex-rs hooks discovery).
 
 Codex records trust in ~/.codex/config.toml as:
 
@@ -7,7 +7,7 @@ Codex records trust in ~/.codex/config.toml as:
 
 The hash is SHA-256 of canonical JSON of the normalized hook identity, not
 the raw TOML text. Timeout defaults to 600s when omitted, matching Codex's
-Stop-hook normalizer.
+command-hook normalizer.
 """
 
 from __future__ import annotations
@@ -16,9 +16,6 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any
-
-
-STOP_STATE_SUFFIX = "stop:0:0"
 
 
 def canonical_json(value: Any) -> Any:
@@ -36,37 +33,47 @@ def version_for_identity(identity: dict[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(serialized).hexdigest()
 
 
-def stop_command_trust_hash(
-    command: str, *, runs_async: bool = True, timeout_sec: int = 600
+def command_trust_hash(
+    event_name: str,
+    command: str,
+    *,
+    runs_async: bool = True,
+    timeout_sec: int = 600,
+    matcher: str | None = None,
 ) -> str:
     timeout_sec = max(int(timeout_sec), 1)
-    return version_for_identity(
-        {
-            "event_name": "stop",
-            "hooks": [
-                {
-                    "async": bool(runs_async),
-                    "command": command,
-                    "timeout": timeout_sec,
-                    "type": "command",
-                }
-            ],
-        }
-    )
+    identity = {
+        "event_name": event_name,
+        "hooks": [
+            {
+                "async": bool(runs_async),
+                "command": command,
+                "timeout": timeout_sec,
+                "type": "command",
+            }
+        ],
+    }
+    if matcher is not None:
+        identity["matcher"] = matcher
+    return version_for_identity(identity)
 
 
-def stop_hook_state_key(config_path: str | Path) -> str:
-    return f"{config_path}:{STOP_STATE_SUFFIX}"
+def hook_state_key(config_path: str | Path, event_name: str) -> str:
+    return f"{config_path}:{event_name}:0:0"
 
 
-def trust_hash_for_stop_handler(handler: dict[str, Any]) -> str:
+def trust_hash_for_handler(
+    event_name: str, handler: dict[str, Any], *, matcher: str | None = None
+) -> str:
     timeout = handler.get("timeout")
     if timeout is None:
         timeout = 600
-    return stop_command_trust_hash(
+    return command_trust_hash(
+        event_name,
         handler["command"],
         runs_async=bool(handler.get("async", False)),
         timeout_sec=timeout,
+        matcher=matcher,
     )
 
 

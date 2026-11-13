@@ -76,7 +76,7 @@ class NotifyFixture(unittest.TestCase):
     def run_notifier(
         self,
         source: str = "codex",
-        *,
+        *args: str,
         dotenv: str = "",
         stdin: str = "",
         extra_env: dict[str, str] | None = None,
@@ -84,7 +84,7 @@ class NotifyFixture(unittest.TestCase):
     ) -> subprocess.CompletedProcess[str]:
         self.env_file.write_text(dotenv, encoding="utf-8")
         return subprocess.run(
-            [str(NOTIFIER), source],
+            [str(NOTIFIER), source, *args],
             cwd=cwd or REPO_ROOT,
             input=stdin,
             capture_output=True,
@@ -305,6 +305,132 @@ class NotifierTests(NotifyFixture):
         self.assertIn("Turn complete in secret-project", args)
         self.assertNotIn(".cursor", args)
         self.assertEqual(self.curl_stdin.read_text(), "")
+
+
+class CodexAttentionTests(NotifyFixture):
+    def payload(self, **overrides):
+        return {
+            "hook_event_name": "PostModelRequest",
+            "session_id": "fixture-session",
+            "turn_id": "fixture-turn",
+            "model": "fixture-model",
+            "cwd": str(self.root / "secret-project"),
+            "status": "failed",
+            "error": (
+                "You've hit your usage limit. Upgrade to Pro "
+                "(https://chatgpt.com/explore/pro), visit "
+                "https://chatgpt.com/settings/usage to purchase more credits "
+                "or try again at 11:53 PM."
+            ),
+            **overrides,
+        }
+
+    def test_usage_limit_uses_existing_bell_phone_and_history(self):
+        payload = self.payload()
+        proc = self.run_notifier(
+            "codex", "--attention",
+            dotenv=f"CLUSTERFORK_NTFY_URL={PHONE_URL}\n",
+            stdin=json.dumps(payload),
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual((proc.stdout, proc.stderr), ("", ""))
+        self.assertIn(str(self.cf_dir / "bell.mp3"), self.mpv_log.read_text())
+        self.assertIn("X-Title: Codex needs attention", self.curl_log.read_text())
+        self.assertIn("Check Codex in secret-project", self.curl_log.read_text())
+        self.assertEqual(self.curl_stdin.read_text(), "")
+        history = self.notify_history.read_text()
+        self.assertIn("\tcodex\tbell,phone\n", history)
+        for private in (payload["error"], payload["session_id"], payload["turn_id"]):
+            self.assertNotIn(private, self.curl_log.read_text() + history)
+
+    def test_non_limit_requests_and_subagents_stay_silent(self):
+        changes = (
+            {"status": "completed"},
+            {"status": "cancelled"},
+            {"status": None},
+            {"hook_event_name": "Stop"},
+            {"hook_event_name": "PreToolUse", "tool_name": "exec_command"},
+            {"error": "Rate limit reached; retrying in 1 second"},
+            {"error": "network connection lost"},
+            {"error": "context window exceeded"},
+            {"error": None},
+            {"error": {"message": "You've hit your usage limit"}},
+            {"agent_id": "fixture-subagent"},
+            {"agent_type": "worker"},
+        )
+        for change in changes:
+            with self.subTest(change=change):
+                proc = self.run_notifier(
+                    "codex", "--attention",
+                    dotenv=f"CLUSTERFORK_NTFY_URL={PHONE_URL}\n",
+                    stdin=json.dumps(self.payload(**change)),
+                )
+                self.assertEqual(proc.returncode, 0)
+                self.assertEqual((proc.stdout, proc.stderr), ("", ""))
+                self.assertFalse(self.mpv_log.exists())
+                self.assertFalse(self.curl_log.exists())
+                self.assertFalse(self.notify_history.exists())
+
+    def test_missing_or_malformed_payload_stays_silent(self):
+        for raw in ("", "{", "null", "[]", '"You\'ve hit your usage limit"', "{}"):
+            with self.subTest(raw=raw):
+                proc = self.run_notifier("codex", "--attention", stdin=raw)
+                self.assertEqual(proc.returncode, 0)
+                self.assertEqual((proc.stdout, proc.stderr), ("", ""))
+                self.assertFalse(self.mpv_log.exists())
+                self.assertFalse(self.curl_log.exists())
+                self.assertFalse(self.notify_history.exists())
+
+    def test_usage_limit_respects_codex_and_channel_switches(self):
+        self.write_prefs("codex=0\n")
+        proc = self.run_notifier(
+            "codex", "--attention", stdin=json.dumps(self.payload()),
+            dotenv=f"CLUSTERFORK_NTFY_URL={PHONE_URL}\n",
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertFalse(self.mpv_log.exists())
+        self.assertFalse(self.curl_log.exists())
+        self.assertFalse(self.notify_history.exists())
+
+        self.write_prefs("bell=0\nphone=1\n")
+        proc = self.run_notifier(
+            "codex", "--attention", stdin=json.dumps(self.payload()),
+            dotenv=f"CLUSTERFORK_NTFY_URL={PHONE_URL}\n",
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertFalse(self.mpv_log.exists())
+        self.assertTrue(self.curl_log.exists())
+        self.assertIn("\tcodex\tphone\n", self.notify_history.read_text())
+
+    def test_usage_limit_accepts_codex_typographic_apostrophe(self):
+        proc = self.run_notifier(
+            "codex", "--attention",
+            stdin=json.dumps(self.payload(error="You’ve hit your usage limit.")),
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertTrue(self.mpv_log.exists())
+
+    def test_approval_and_question_hooks_notify_including_subagents(self):
+        self.write_prefs("phone=0\n")
+        events = (
+            {"hook_event_name": "PermissionRequest", "tool_name": "Bash"},
+            {"hook_event_name": "PermissionRequest", "tool_name": "mcp__fixture__write"},
+            {"hook_event_name": "PreToolUse", "tool_name": "request_user_input"},
+            {"hook_event_name": "PreToolUse", "tool_name": "request_user_input_async"},
+        )
+        for event in events:
+            for subagent in ({}, {"agent_id": "fixture-child", "agent_type": "worker"}):
+                with self.subTest(event=event, subagent=subagent):
+                    proc = self.run_notifier(
+                        "codex", "--attention",
+                        stdin=json.dumps({"cwd": str(REPO_ROOT), **event, **subagent}),
+                    )
+                    self.assertEqual(proc.returncode, 0)
+                    self.assertEqual((proc.stdout, proc.stderr), ("", ""))
+                    self.assertTrue(self.mpv_log.exists())
+                    self.assertIn("\tcodex\tbell\n", self.notify_history.read_text())
+                    self.mpv_log.unlink()
+                    self.notify_history.unlink()
 
 
 class HookWiringTests(unittest.TestCase):

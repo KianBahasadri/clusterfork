@@ -1,4 +1,4 @@
-# Turn-completion notifications
+# Agent notifications
 
 Claude, Grok, Command Code, Codex, Antigravity and Cursor Stop hooks call
 `~/.config/clusterfork/bin/clusterfork-notify <agent>`. Bell (`mpv`, then terminal
@@ -12,8 +12,19 @@ never transcripts/payloads. See [ntfy](notifications-ntfy.md) and [relay](notifi
   comes from `workspacePaths[0]` because hooks run in the config directory.
 - Grok rejects explicit reasons other than `end_turn`, including shutdown.
   Empty/malformed payloads or a missing reason remain accepted.
-- Codex uses asynchronous root `Stop`, without `SubagentStop` or a usage-limit
-  watcher; see the [coverage investigation](archive/codex-usage-limit-bell.md).
+- Codex uses asynchronous root `Stop` for completions and `PostModelRequest`
+  for failed root requests with Codex's `You've hit your usage limit` message
+  (straight or typographic apostrophe).
+  `PermissionRequest` also notifies for approvals, and `PreToolUse` matches
+  `request_user_input` and `request_user_input_async` for questions. Approvals
+  and questions from subagents also need a person; their completions and request
+  failures stay quiet. All use the same notifier and channel switches; Codex
+  phone alerts say "Codex needs attention" for both completions and waits. These
+  [supported hooks](https://learn.chatgpt.com/docs/hooks), verified with Codex
+  0.167.0, do not expose a universal pause/terminal-error event. Other request
+  failures and cancellations stay quiet, avoiding alerts on automatic retries.
+  No transcript watcher is installed. The earlier
+  [coverage investigation](archive/codex-usage-limit-bell.md) predates this hook.
 - Cursor rejects `status == "aborted"`; project comes from `CURSOR_PROJECT_DIR`
   or `workspace_roots[0]` because user hooks run in the config directory.
 
