@@ -222,15 +222,17 @@ def choose_codex_profile(backend, logins, aliases, profile, policy, current):
     busy_ids = {account_id for account_id, names in aliases.items() if busy_profiles.intersection(names)}
     if busy_ids:
         busy_names = sorted(name for account_id in busy_ids for name in aliases[account_id])
-        print(f"{backend.command}: skipping accounts in open Codex sessions: {', '.join(busy_names)}", flush=True)
+        print(f"{backend.command}: accounts in open Codex sessions: {', '.join(busy_names)}", flush=True)
 
     snapshots, measured_profiles = {}, {}
+    selected = None
     for busy in (False, True):
         candidates = {account_id: choices for account_id, choices in logins.items()
                       if (account_id in busy_ids) == busy}
         if not candidates:
             continue
-        # An idle winner never needs cache coverage or a probe of busy accounts.
+        # A healthy idle winner outranks every busy account. Below the reserve,
+        # collect busy readings too, then apply the same ranking to the full pool.
         cached = read_cached_snapshots("codex", candidates, profile.model,
                                        max_age_seconds=min(300, policy.max_snapshot_age_seconds))
         if cached is not None:
@@ -240,13 +242,17 @@ def choose_codex_profile(backend, logins, aliases, profile, policy, current):
             readings, names = probe_profiles(backend, "codex", candidates, aliases, profile.model)
         snapshots.update((snapshot.account_id, snapshot) for snapshot in readings)
         measured_profiles.update(names)
-        selected = select_account(readings, {"codex": profile}, policy, now=time.time())
-        if selected is not None:
-            name = names[selected.account_id]
-            print(f"  quota: at least {selected.remaining_percent:g}% remaining")
-            if busy:
-                print(f"{backend.command}: using {name}: tier 2 (busy, with fresh quota)", flush=True)
-            return name
+        selected = select_account(snapshots.values(), {"codex": profile}, policy, now=time.time(),
+                                  occupied_account_ids=busy_ids)
+        if selected is not None and selected.meets_reserve:
+            break
+
+    if selected is not None:
+        name = measured_profiles[selected.account_id]
+        print(f"  quota: at least {selected.remaining_percent:g}% remaining")
+        if selected.account_id in busy_ids:
+            print(f"{backend.command}: using {name}: tier 2 (busy, with fresh quota)", flush=True)
+        return name
 
     def last_resort(account_id):
         snapshot = snapshots.get(account_id)

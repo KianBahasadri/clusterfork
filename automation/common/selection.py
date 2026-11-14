@@ -54,6 +54,7 @@ class AccountSelection:
     model: str
     effort: str
     remaining_percent: float
+    meets_reserve: bool
 
 
 def finite_number(value):
@@ -73,7 +74,7 @@ def _codex_priority(windows, now):
     )
 
 
-def select_account(accounts, profiles, policy, *, now):
+def select_account(accounts, profiles, policy, *, now, occupied_account_ids=()):
     """Return the highest-priority usable account, or None.
 
     All windows supplied must apply to this model. Unknown, stale, reset, busy,
@@ -82,6 +83,9 @@ def select_account(accounts, profiles, policy, *, now):
     atomically before execution and retry selection if another scheduler won the
     lease. This function does not read credentials, call provider endpoints,
     reserve an account, or start a worker.
+
+    Optional local occupancy is a preference after quota health, before usage
+    ranking. It never overrides the hard exclusion of an account marked in_use.
     """
     if not finite_number(now):
         raise ValueError("now must be a finite Unix timestamp")
@@ -117,13 +121,14 @@ def select_account(accounts, profiles, policy, *, now):
         if account.agent != "codex" and below_preferred:
             continue
         selection = AccountSelection(account.account_id, account.agent, profile.model,
-                                     profile.effort, remaining)
+                                     profile.effort, remaining, not below_preferred)
         # All-zero usage is the quota model's signal for an untouched account.
         untouched = account.agent == "codex" and all(window.used_percent == 0 for window in account.windows)
         score = max(window.used_percent for window in account.windows)
         if account.agent == "codex":
             score = -_codex_priority(account.windows, now)
-        rank = ({"codex": 0, "cursor": 1}.get(account.agent, 2), not untouched, below_preferred, score,
+        rank = ({"codex": 0, "cursor": 1}.get(account.agent, 2), below_preferred,
+                account.account_id in occupied_account_ids, not untouched, score,
                 -headroom if account.agent == "codex" else 0, account.agent, account.account_id)
         candidates.append((rank, selection))
     if not candidates:

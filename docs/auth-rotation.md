@@ -38,23 +38,27 @@ saved profile is sufficient. Aliases with
 the same known identity share a quota probe, preferring the current login and
 trying another saved login if its credentials are rejected.
 
-Bare `rotate-codex` uses the first nonempty tier below among saved profiles with
-readable credentials, excluding `kian` and its account aliases:
+Bare `rotate-codex` ranks saved profiles with readable credentials, excluding
+`kian` and its account aliases. Fresh usable readings share one ranking: the
+configured five-hour reserve preference comes first, then idle over busy, then
+the shared untouched-account and weekly-reset ranking. A healthy busy account
+therefore beats a nearly depleted idle account. Weekly limits still need only
+positive capacity; they do not need the five-hour reserve.
 
-1. Idle accounts with fresh quota accepted by the shared selector. Keep its
-   untouched-account and weekly-headroom ranking; busy accounts need no probe or
-   cache coverage when this tier has a winner.
-2. Busy accounts with fresh quota, using the same ranking. These accounts are
-   probed, or read from a fresh covering cache, only when tier 1 has no winner.
-3. Last resort: all remaining eligible profiles, including exhausted, unknown,
-   rejected, stale, reset or incomplete readings. Complete known percentages rank
-   ahead of unknown/rejected readings, then highest worst-window remaining percent
-   (including zero), idle over busy, current login alias, and stable profile name.
-   Provider exhaustion flags count as zero available quota.
+Idle accounts are checked first. A winner meeting the reserve can be selected
+without probing busy accounts or requiring their cache coverage, because no busy
+reading can outrank it. Otherwise, busy readings join the same candidate pool
+before selection; below-reserve accounts remain usable fallbacks.
+
+When no fresh usable reading exists, the last resort includes exhausted, unknown,
+rejected, stale, reset or incomplete readings. Complete known percentages rank
+ahead of unknown/rejected readings, then highest worst-window remaining percent
+(including zero), idle over busy, current login alias, and stable profile name.
+Provider exhaustion flags count as zero available quota.
 
 An eligible saved Codex profile is always selected, even when every account is
-busy or depleted. A fallback line names the profile and tier 2 or 3. The initial
-line listing accounts skipped as a first choice remains. No saved profiles, or
+busy or depleted. A fallback line names the profile and tier 2 or 3. An initial
+line lists accounts in open Codex sessions. No saved profiles, or
 no readable non-excluded profiles, still fail without changing selection.
 
 Occupancy comes from live Codex panes in the current tmux server, including
@@ -79,9 +83,9 @@ refreshing credentials or sending model prompts. When an account usage cache
 is present, fresh (within 300 seconds), and covers the eligible logins, automatic
 selection reads the cached quota snapshots directly for sub-second speed; otherwise
 independent accounts are probed concurrently via live HTTP with 15-second timeouts.
-Codex checks coverage separately for each tier and also requires the registry's
-snapshot age limit (currently 60 seconds); incomplete Codex windows trigger a live
-probe instead of establishing fresh capacity.
+Codex checks coverage separately for idle and busy accounts and also requires the
+registry's snapshot age limit (currently 60 seconds); incomplete Codex windows
+trigger a live probe instead of establishing fresh capacity.
 Codex/Cursor consider only eligible local logins; automatic selection never installs
 remote credentials or reserves a cloud account. OpenCode profiles need an
 `opencode-go` API key; other provider entries alone do not establish Go capacity.

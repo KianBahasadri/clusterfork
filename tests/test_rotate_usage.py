@@ -106,7 +106,8 @@ class QuotaRotationTests(unittest.TestCase):
         accounts = [{
             "accountId": rotate_usage.identity("codex", credentials("codex", name)),
             "ok": True, "observedAt": now - 30 if observed is None else observed,
-            "windows": [{"usedPercent": used, "windowSeconds": 18000, "resetAtEpoch": now + 3600}],
+            "windows": [{"usedPercent": value, "windowSeconds": seconds, "resetAtEpoch": now + 3600}
+                        for value, seconds in zip(used if isinstance(used, tuple) else (used,), (18000, 604800))],
         } for name, used in values.items()]
         (cache_dir / "codex-usage.json").write_text(json.dumps({"accounts": accounts}))
         return {"CONKY_CACHE_DIR": str(cache_dir)}
@@ -314,8 +315,25 @@ class QuotaRotationTests(unittest.TestCase):
                     self.assertEqual(rotate_auth.run(["codex"]), 0)
                 self.assertEqual(self.backends["codex"].current_suffix(), "zulu")
                 self.assertEqual(reader.call_count, 3)
-                self.assertIn("skipping accounts in open Codex sessions: beta, zulu", sys.stdout.getvalue())
+                self.assertIn("accounts in open Codex sessions: beta, zulu", sys.stdout.getvalue())
                 self.assertIn("using zulu: tier 2 (busy, with fresh quota)", sys.stdout.getvalue())
+
+    def test_codex_healthy_busy_account_beats_nearly_exhausted_idle_accounts(self):
+        backend = self.backends["codex"]
+        for idle_usage in (80.001, 99, 99.999, 100):
+            for cached in (False, True):
+                with self.subTest(idle_usage=idle_usage, cached=cached):
+                    backend.select("alpha")
+                    values = {"alpha": (idle_usage, 91), "beta": (1, 81), "zulu": (100, 92)}
+                    env = self.codex_cache(values) if cached else {}
+                    def windows(auth, model, **kwargs):
+                        return tuple(QuotaWindow(used, time.time() + 3600, duration_minutes=duration)
+                                     for used, duration in zip(values[auth["tokens"]["account_id"]], (300, 10080)))
+                    reader = Mock(side_effect=AssertionError("fresh cache must avoid HTTP") if cached else windows)
+                    with patch.dict(os.environ, env), patch.object(rotate_usage, "codex_profiles_in_use", return_value={"beta"}), patch.dict(account_usage.READERS, {"codex": reader}):
+                        self.assertEqual(rotate_auth.run(["codex"]), 0)
+                    self.assertEqual(backend.current_suffix(), "beta")
+                    self.assertEqual(reader.call_count, 0 if cached else 3)
 
     def test_codex_busy_fresh_cache_wins_after_idle_exhaustion_or_missing_cache(self):
         for idle_cached in (False, True):
@@ -341,6 +359,29 @@ class QuotaRotationTests(unittest.TestCase):
             self.assertEqual(rotate_auth.run(["codex"]), 0)
         self.assertEqual(self.backends["codex"].current_suffix(), "beta")
         reader.assert_not_called()
+
+    def test_codex_idle_reserve_boundary_does_not_need_busy_cache_coverage(self):
+        env = self.codex_cache({"alpha": (80, 99.9), "zulu": (100, 0)})
+        reader = Mock(side_effect=AssertionError("healthy idle winner must avoid HTTP"))
+        with patch.dict(os.environ, env), patch.object(rotate_usage, "codex_profiles_in_use", return_value={"beta"}), patch.dict(account_usage.READERS, {"codex": reader}):
+            self.assertEqual(rotate_auth.run(["codex"]), 0)
+        self.assertEqual(self.backends["codex"].current_suffix(), "alpha")
+        reader.assert_not_called()
+
+    def test_codex_low_idle_quota_remains_available_after_busy_probe_fails(self):
+        for cached in (False, True):
+            with self.subTest(cached=cached):
+                env = self.codex_cache({"alpha": (99, 91), "zulu": (100, 0)}) if cached else {}
+                def windows(auth, model, **kwargs):
+                    name = auth["tokens"]["account_id"]
+                    if name == "beta":
+                        raise account_usage.UsageError("quota request unavailable")
+                    return (QuotaWindow(99 if name == "alpha" else 100),)
+                reader = Mock(side_effect=windows)
+                with patch.dict(os.environ, env), patch.object(rotate_usage, "codex_profiles_in_use", return_value={"beta"}), patch.dict(account_usage.READERS, {"codex": reader}):
+                    self.assertEqual(rotate_auth.run(["codex"]), 0)
+                self.assertEqual(self.backends["codex"].current_suffix(), "alpha")
+                self.assertEqual(reader.call_count, 1 if cached else 3)
 
     def test_codex_exhausted_ties_prefer_idle_then_current_then_profile_name(self):
         backend = self.backends["codex"]

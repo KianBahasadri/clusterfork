@@ -1,6 +1,7 @@
 """Quota selection behavior with fixed models and multiple independent accounts."""
 
 from dataclasses import replace
+from itertools import permutations
 from pathlib import Path
 import sys
 import unittest
@@ -183,6 +184,42 @@ class QuotaSelectionTests(unittest.TestCase):
         self.assertEqual(selected.account_id, "expiring")
         self.assertEqual(selected.remaining_percent, 1)
         self.assertIsNotNone(self.choose([self.timed("last", 99.999, 99.999)]))
+
+    def test_quota_preference_beats_local_occupancy_regardless_of_policy_or_order(self):
+        for reserve in (20, 40, 65):
+            policy = replace(self.policy, min_remaining_percent=reserve)
+            healthy = self.timed("healthy", 100 - reserve, 99.9, reset_hours=165)
+            low = self.timed("low", 100 - reserve + 0.001, 0, reset_hours=0.5)
+            empty = self.timed("empty", 100, 0, reset_hours=0.5)
+            for accounts in permutations((low, empty, healthy)):
+                with self.subTest(reserve=reserve, order=[row.account_id for row in accounts]):
+                    result = select_account(accounts, self.profiles, policy, now=NOW,
+                                            occupied_account_ids={"healthy"})
+                    self.assertEqual(result.account_id, "healthy")
+                    self.assertTrue(result.meets_reserve)
+                    self.assertAlmostEqual(result.remaining_percent, 0.1)
+
+    def test_local_occupancy_preference_applies_within_each_quota_group(self):
+        for short in (20, 99):
+            idle = self.timed("idle", short, 95, reset_hours=165)
+            busy = self.timed("busy", short, 0, reset_hours=0.5)
+            for accounts in ([busy, idle], [idle, busy]):
+                with self.subTest(short=short, order=[row.account_id for row in accounts]):
+                    result = select_account(accounts, self.profiles, self.policy, now=NOW,
+                                            occupied_account_ids={"busy"})
+                    self.assertEqual(result.account_id, "idle")
+                    self.assertEqual(result.meets_reserve, short == 20)
+
+    def test_local_occupancy_keeps_hard_eligibility_guards(self):
+        available = self.timed("available", 20, 95)
+        base = self.timed("unavailable", 0, 0)
+        for ineligible in (replace(base, in_use=True), replace(base, observed_at=NOW - 61),
+                           replace(base, blocked_until=NOW + 1), replace(base, windows=()),
+                           self.timed("unavailable", 100, 0), self.timed("unavailable", 0, None)):
+            with self.subTest(ineligible=ineligible):
+                result = select_account([ineligible, available], self.profiles, self.policy, now=NOW,
+                                        occupied_account_ids={"available"})
+                self.assertEqual(result.account_id, "available")
 
     def test_reset_priority_breaks_ties_by_short_headroom_then_stable_identity(self):
         first = self.timed("a", 50, 90, reset_hours=3)
