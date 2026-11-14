@@ -5,7 +5,7 @@
 input=$(cat)
 
 # Keep ~/.cursor/.usage-cache.json fresh (auto/api monthly usage).
-printf '%s' "$input" | python3 "$HOME/.cursor/cursor-usage-fetch.py" >/dev/null 2>&1 &
+printf '%s' "$input" | python3 -S "$HOME/.cursor/cursor-usage-fetch.py" >/dev/null 2>&1 &
 
 mapfile -t F < <(
   echo "$input" | jq -r '

@@ -79,6 +79,6 @@ gk() {
 }
 
 rotate-grok() {
-  python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/rotate_auth.py" grok "$@"
+  python3 -S "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/rotate_auth.py" grok "$@"
 }
 

@@ -776,6 +776,29 @@ class MockTmuxTests(unittest.TestCase):
         self.assertIn("-s proj-1", log)
         self.assertNotIn("-A", log)
 
+    def test_tmux_explicit_label_and_standalone_label_helper(self):
+        self.log.unlink(missing_ok=True)
+        self._script_run("'source bash_profile.sh; _cf_tmux --label \"custom - tab\" echo hi'", env=self.base_env)
+        self.assertIn("-n custom - tab", self._log())
+
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        tmp_home = Path(td.name)
+        codex_home = tmp_home / "label_codex_home"
+        store_dir = tmp_home / "label_store" / "codex"
+        store_dir.mkdir(parents=True)
+        codex_home.mkdir()
+        (store_dir / "auth.json.ida").write_text("{}")
+        (store_dir / "current").symlink_to("auth.json.ida")
+        (codex_home / "auth.json").symlink_to(store_dir / "current")
+        proc = subprocess.run(
+            ["python3", "-S", str(REPO_ROOT / "bin/clusterfork-tmux-label"), "codex"],
+            capture_output=True, text=True,
+            env={**self.base_env, "CODEX_HOME": str(codex_home)},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "codex - ida")
+
 
 if __name__ == "__main__":
     unittest.main()

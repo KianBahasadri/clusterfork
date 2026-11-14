@@ -976,22 +976,29 @@ class SharedStoreBackend:
     def suffixes(self) -> list[str]:
         return suffixes_from(self.store_dir, PROFILE_PREFIX)
 
-    def remote_profiles(self) -> set[str]:
+    def _remote_manifest(self) -> tuple[set[str], dict]:
         if self.command not in {"rotate-codex", "rotate-cursor-cli"}:
-            return set()
+            return set(), {}
         try:
             manifest = normalize_profile_scopes(self.store_dir)
             if not manifest:
-                return set()
-            return {name for name, record in manifest.items() if record.get("ownership", "cloud") == "cloud"}
+                return set(), {}
+            remote = {
+                name for name, record in manifest.items()
+                if record.get("ownership", "cloud") == "cloud"
+            }
+            return remote, manifest
         except (OSError, ValueError, TypeError):
             fail(f"{self.command}: cannot read remote account ownership; refusing local rotation")
+            raise AssertionError
+
+    def remote_profiles(self) -> set[str]:
+        return self._remote_manifest()[0]
 
     def local_profiles(self, requested: str | None = None) -> list[str]:
-        remote = self.remote_profiles()
+        remote, manifest = self._remote_manifest()
         names = self.suffixes()
         if self.command in {"rotate-codex", "rotate-cursor-cli"}:
-            manifest = load_remote_profiles(self.store_dir)
             provider = "cursor" if self.command == "rotate-cursor-cli" else "codex"
             eligible = ([name for name in names if profile_is_local(self.store_dir, name, manifest, provider)]
                         if manifest else names)
@@ -1012,10 +1019,9 @@ class SharedStoreBackend:
         return suffix or None
 
     def list_profiles(self) -> int:
-        remote = self.remote_profiles()
+        remote, manifest = self._remote_manifest()
         current = self.current_suffix() if self.current.is_symlink() else None
         if remote:
-            manifest = load_remote_profiles(self.store_dir)
             remote_names = {
                 manifest.get(k, {}).get("display_name", k.removeprefix("remote:"))
                 for k in remote

@@ -4,17 +4,24 @@
 import json
 import os
 from pathlib import Path
+import re
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from rotate_auth import (  # noqa: E402
-    ClaudeBackend,
-    PROFILE_PREFIX,
-    SharedStoreBackend,
-    SUFFIX_RE,
-    env_path,
-    make_backend,
-)
+SUFFIX_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+PROFILE_PREFIX = "auth.json."
+CLAUDE_PREFIX = ".credentials.json."
+
+SHARED_STORES = {
+    "codex": ("ROTATE_CODEX_CODEX_DIR", "ROTATE_CODEX_AUTH_STORE_DIR", ".codex", ".local/share/clusterfork-auth/codex"),
+    "cursor": ("ROTATE_CURSOR_DIR", "ROTATE_CURSOR_AUTH_STORE_DIR", ".config/cursor", ".local/share/clusterfork-auth/cursor"),
+    "grok": ("ROTATE_GROK_DIR", "ROTATE_GROK_AUTH_STORE_DIR", ".grok", ".local/share/clusterfork-auth/grok"),
+    "opencode": ("ROTATE_OPENCODE_DIR", "ROTATE_OPENCODE_AUTH_STORE_DIR", ".local/share/opencode", ".local/share/clusterfork-auth/opencode"),
+}
+
+
+def env_path(name, default):
+    value = os.environ.get(name)
+    return Path(value) if value else default
 
 
 def read_json(path):
@@ -25,34 +32,75 @@ def read_json(path):
     return data if isinstance(data, dict) else {}
 
 
-def account_name(agent):
-    if agent == "cmd":
-        return read_json(Path.home() / ".commandcode/auth.json").get("userName")
+def _claude_token(path):
+    oauth = read_json(path).get("claudeAiOauth")
+    if isinstance(oauth, dict):
+        token = oauth.get("accessToken")
+        if isinstance(token, str) and token:
+            return token
+    return None
 
-    backend = make_backend("opencode" if agent == "occ" else agent)
-    if isinstance(backend, ClaudeBackend):
-        backend.claude_dir = env_path("CLAUDE_CONFIG_DIR", backend.claude_dir)
-        backend.active = backend.claude_dir / ".credentials.json"
-        name = backend.current_suffix()
-        if name:
-            return name
+
+def _prefixed_names(directory, prefix):
+    if not directory.is_dir():
+        return []
+    names = []
+    try:
+        with os.scandir(directory) as it:
+            for entry in it:
+                if entry.name.startswith(prefix) and len(entry.name) > len(prefix):
+                    try:
+                        if entry.is_file(follow_symlinks=True) or entry.is_symlink():
+                            names.append(entry.name[len(prefix):])
+                    except OSError:
+                        continue
+    except OSError:
+        return []
+    return sorted(names)
+
+
+def account_name(agent):
+    home = Path.home()
+    if agent == "cmd":
+        return read_json(home / ".commandcode/auth.json").get("userName")
+
+    if agent == "claude":
+        claude_dir = env_path("CLAUDE_CONFIG_DIR", env_path("ROTATE_CLAUDE_DIR", home / ".claude"))
+        token = _claude_token(claude_dir / ".credentials.json")
+        if token:
+            for name in _prefixed_names(claude_dir, CLAUDE_PREFIX):
+                path = claude_dir / f"{CLAUDE_PREFIX}{name}"
+                if path.is_file() and _claude_token(path) == token:
+                    return name
         # Claude records the selected account separately from its tokens.
-        state = (backend.claude_dir / ".claude.json" if os.environ.get("CLAUDE_CONFIG_DIR")
-                 else Path.home() / ".claude.json")
+        state = (claude_dir / ".claude.json" if os.environ.get("CLAUDE_CONFIG_DIR")
+                 else home / ".claude.json")
         account = read_json(state).get("oauthAccount")
         if isinstance(account, dict):
             return account.get("emailAddress")
         return None
-    if isinstance(backend, SharedStoreBackend):
-        auth = backend.auth
-        if agent == "codex":
-            auth = env_path("CODEX_HOME", backend.agent_dir) / "auth.json"
+
+    if agent == "antigravity":
+        state_dir = env_path("ROTATE_ANTIGRAVITY_STATE_DIR", home / ".gemini/antigravity-cli/rotate-auth")
+        current_file = state_dir / "current"
+        if current_file.is_file():
+            raw = current_file.read_text(encoding="utf-8").splitlines()
+            name = raw[0] if raw else ""
+            return name if SUFFIX_RE.fullmatch(name) else None
+        return None
+
+    store_key = "opencode" if agent == "occ" else agent
+    if store_key in SHARED_STORES:
+        agent_env, store_env, default_agent, default_store = SHARED_STORES[store_key]
+        agent_dir = env_path(agent_env, home / default_agent)
+        store_dir = env_path(store_env, home / default_store)
+        auth = env_path("CODEX_HOME", agent_dir) / "auth.json" if agent == "codex" else agent_dir / "auth.json"
         if agent == "occ":
             auth = env_path("OCC_OPENCODE_AUTH_FILE", auth)
             key = os.environ.get("OPENCODE_API_KEY")
             if key:
-                for name in backend.suffixes():
-                    saved = read_json(backend.store_dir / f"{PROFILE_PREFIX}{name}")
+                for name in _prefixed_names(store_dir, PROFILE_PREFIX):
+                    saved = read_json(store_dir / f"{PROFILE_PREFIX}{name}")
                     go = saved.get("opencode-go")
                     if isinstance(go, dict) and go.get("key") == key:
                         return name
@@ -72,11 +120,11 @@ def account_name(agent):
             }
             return next(iter(emails)) if len(emails) == 1 else None
         return None
-    return backend.current_suffix()
+
+    return None
 
 
-def main():
-    agent = sys.argv[1]
+def format_label(agent):
     try:
         name = account_name(agent)
     except (OSError, UnicodeError, ValueError, RuntimeError):
@@ -86,7 +134,11 @@ def main():
         name = "".join(c for c in name if c.isprintable() and c != "#").strip()
     else:
         name = ""
-    print(f"{agent} - {name or 'unknown'}")
+    return f"{agent} - {name or 'unknown'}"
+
+
+def main():
+    print(format_label(sys.argv[1]))
 
 
 if __name__ == "__main__":

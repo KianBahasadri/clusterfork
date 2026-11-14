@@ -1,9 +1,10 @@
 _cf_tmux() (
-  local agent="" kv
+  local agent="" label="" kv
   local -a launch_env=() tmux_env=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --agent) agent="$2"; shift 2 ;;
+      --label) label="$2"; shift 2 ;;
       -e) launch_env+=("$2"); tmux_env+=(-e "$2"); shift 2 ;;
       --) shift; break ;;
       *) break ;;
@@ -13,13 +14,15 @@ _cf_tmux() (
     for kv in "${launch_env[@]}"; do export "$kv"; done
     exec "$@"
   fi
-  local base name orig i label branch
+  local base name orig i branch
   agent="${agent:-${1##*/}}"
   case "$agent" in
     cursor-agent) agent=cursor ;;
     agy) agent=antigravity ;;
   esac
-  label="$(python3 "$(dirname "${BASH_SOURCE[0]}")/../bin/clusterfork-tmux-label" "$agent" 2>/dev/null)" || label="$agent - unknown"
+  if [[ -z "$label" ]]; then
+    label="$(python3 -S "$(dirname "${BASH_SOURCE[0]}")/../bin/clusterfork-tmux-label" "$agent" 2>/dev/null)" || label="$agent - unknown"
+  fi
   base="$(basename "$PWD")"
   [[ "$base" == "/" || -z "$base" ]] && base="root"
   if branch="$(git -C "$PWD" branch --show-current 2>/dev/null)" && [[ -n "$branch" ]]; then

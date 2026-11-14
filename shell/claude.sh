@@ -24,5 +24,5 @@ cl() {
 }
 
 rotate-claude() {
-  python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/rotate_auth.py" claude "$@"
+  python3 -S "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/rotate_auth.py" claude "$@"
 }

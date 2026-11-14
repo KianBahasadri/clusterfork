@@ -50,7 +50,19 @@ esac
 # fullyIdle, and take the project name from workspacePaths because the hook
 # cwd is the hooks.json directory. Stdin is inspected locally, never forwarded.
 antigravity_gate() {
-  python3 -c '
+  if command -v jq >/dev/null 2>&1; then
+    jq -sr '
+      if length == 1 and (.[0] | type == "object") and .[0].fullyIdle == true then
+        ((.[0].workspacePaths | if type == "array" and length > 0 then .[0] else "" end)
+          | tostring | sub("/+$"; "") | split("/") | .[-1] // "")
+        | if . == "" or . == "/" then "workspace" else . end
+      else
+        "" | halt_error(1)
+      end
+    ' 2>/dev/null
+    return $?
+  fi
+  python3 -S -c '
 import json, os, sys
 raw = sys.stdin.read().strip()
 if not raw.startswith("{"):
@@ -75,7 +87,20 @@ print(name)
 # reason == "end_turn" so exiting Grok does not fire the completion notifier.
 # Stdin is inspected locally, never forwarded.
 grok_gate() {
-  python3 -c '
+  if command -v jq >/dev/null 2>&1; then
+    local rc=0
+    jq -sr '
+      if length == 1 and (.[0] | type == "object")
+         and .[0].reason != null and .[0].reason != "end_turn" then
+        "" | halt_error(3)
+      else
+        empty
+      end
+    ' >/dev/null 2>&1 || rc=$?
+    [[ $rc -eq 3 ]] && return 1
+    return 0
+  fi
+  python3 -S -c '
 import json, sys
 raw = sys.stdin.read().strip()
 if not raw.startswith("{"):
@@ -96,7 +121,48 @@ if reason is not None and reason != "end_turn":
 # because user hooks run in the ~/.cursor config directory. Stdin is
 # inspected locally, never forwarded.
 cursor_gate() {
-  python3 -c '
+  if command -v jq >/dev/null 2>&1; then
+    local project_dir="${CURSOR_PROJECT_DIR:-}" raw="" trimmed="" parsed="" rc=0
+    if [[ ! -t 0 ]]; then
+      raw="$(cat)"
+      trimmed="${raw#"${raw%%[![:space:]]*}"}"
+    fi
+    if [[ "$trimmed" == \{* ]]; then
+      parsed="$(printf '%s' "$raw" | jq -sr '
+        if length == 1 and (.[0] | type == "object") then
+          if .[0].status == "aborted" then
+            "" | halt_error(3)
+          else
+            (.[0].workspace_roots | if type == "array" and length > 0 then .[0] | tostring else "" end)
+          end
+        else
+          ""
+        end
+      ' 2>/dev/null)" || rc=$?
+      if (( rc == 3 )); then
+        return 1
+      elif (( rc == 0 )) && [[ -z "$project_dir" && -n "$parsed" ]]; then
+        project_dir="$parsed"
+      fi
+    fi
+    local name=""
+    if [[ -n "$project_dir" ]]; then
+      name="$project_dir"
+      while [[ "$name" == */ ]]; do name="${name%/}"; done
+      name="${name##*/}"
+    fi
+    if [[ -z "$name" || "$name" == "/" ]]; then
+      name="$(pwd -P 2>/dev/null || pwd)"
+      while [[ "$name" == */ ]]; do name="${name%/}"; done
+      name="${name##*/}"
+    fi
+    if [[ -z "$name" || "$name" == "/" || "$name" == ".cursor" ]]; then
+      name="workspace"
+    fi
+    printf '%s\n' "$name"
+    return 0
+  fi
+  python3 -S -c '
 import json, os, sys
 project_dir = os.environ.get("CURSOR_PROJECT_DIR", "")
 raw = "" if sys.stdin.isatty() else sys.stdin.read().strip()
@@ -124,7 +190,39 @@ print(name)
 # usage-limit failures. Inspect supported hook payloads locally, never the
 # transcript. Successful requests, transient failures and child errors stay quiet.
 codex_attention_gate() {
-  python3 -c '
+  if command -v jq >/dev/null 2>&1; then
+    local cwd
+    cwd="$(jq -sr '
+      if length != 1 or (.[0] | type != "object") then ("" | halt_error(1)) else .[0] end
+      | .hook_event_name as $ev
+      | (
+          if $ev == "PostModelRequest" then
+            if .status != "failed" or .agent_id != null or .agent_type != null
+               or (.error | type != "string")
+               or ((.error | gsub("\u2019"; "\u0027") | startswith("You\u0027ve hit your usage limit")) | not) then
+              "" | halt_error(1)
+            else . end
+          elif $ev == "PreToolUse" then
+            if (.tool_name == "request_user_input" or .tool_name == "request_user_input_async") | not then
+              "" | halt_error(1)
+            else . end
+          elif $ev == "PermissionRequest" then
+            .
+          else
+            "" | halt_error(1)
+          end
+        )
+      | (.cwd | if type == "string" and length > 0 then . else "" end)
+    ' 2>/dev/null)" || return 1
+    if [[ -z "$cwd" ]]; then
+      cwd="$(pwd -P 2>/dev/null || pwd)"
+    fi
+    while [[ "$cwd" == */ ]]; do cwd="${cwd%/}"; done
+    cwd="${cwd##*/}"
+    printf '%s\n' "${cwd:-workspace}"
+    return 0
+  fi
+  python3 -S -c '
 import json, os, sys
 try:
     data = json.load(sys.stdin)

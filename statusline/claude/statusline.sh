@@ -42,7 +42,7 @@ else
   # Keep ~/.claude/.usage-cache.json fresh so 5h/weekly still show under fast
   # mode (which strips rate_limits from this payload). Harvests rate_limits for
   # free when present; otherwise polls the API itself. Non-blocking.
-  printf '%s' "$input" | python3 "$HOME/.claude/claude-usage-fetch.py" >/dev/null 2>&1 &
+  printf '%s' "$input" | python3 -S "$HOME/.claude/claude-usage-fetch.py" >/dev/null 2>&1 &
 fi
 
 # One jq pass, one value per line so empty fields are preserved by mapfile.

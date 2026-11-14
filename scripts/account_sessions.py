@@ -8,58 +8,178 @@ import os
 from pathlib import Path
 import re
 import sys
+import tempfile
+
+_SCOPED_MARKER = b'"account_scoped"'
+HISTORY_INDEX_NAME = ".clusterfork-history-index.json"
+_HISTORY_INDEX_VERSION = 1
+
+
+def _iter_jsonl_files(home):
+    for name in ("sessions", "archived_sessions"):
+        directory = home / name
+        if not directory.is_dir() or directory.is_symlink():
+            continue
+        stack = [os.fspath(directory)]
+        while stack:
+            current = stack.pop()
+            try:
+                with os.scandir(current) as it:
+                    for entry in it:
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                stack.append(entry.path)
+                            elif entry.name.endswith(".jsonl") and entry.is_file(follow_symlinks=False):
+                                yield entry
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+
+
+def _stat_signature(info):
+    return [info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+
+
+def _load_history_index(index_path):
+    try:
+        fd = os.open(index_path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return {}
+    try:
+        with os.fdopen(fd, "rb") as stream:
+            data = json.load(stream)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict) or data.get("version") != _HISTORY_INDEX_VERSION:
+        return {}
+    entries = data.get("files")
+    return entries if isinstance(entries, dict) else {}
+
+
+def _save_history_index(index_path, entries):
+    if index_path.is_symlink():
+        return
+    try:
+        fd, temporary = tempfile.mkstemp(prefix=".clusterfork-history-index-", dir=index_path.parent)
+    except OSError:
+        return
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            payload = {"version": _HISTORY_INDEX_VERSION, "files": entries}
+            stream.write(json.dumps(payload, separators=(",", ":")).encode())
+        os.chmod(temporary, 0o600)
+        if not index_path.is_symlink():
+            os.replace(temporary, index_path)
+        else:
+            os.unlink(temporary)
+    except OSError:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+
+
+def _read_first_line_readonly(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        stream = os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
+    with stream:
+        return stream.readline()
 
 
 def share_codex_history(home):
     """Remove discovery scope in place, preserving creator IDs and byte offsets."""
     changed = 0
-    for directory in (home / "sessions", home / "archived_sessions"):
-        for path in directory.rglob("*.jsonl"):
-            if path.is_symlink():
+    home_str = os.fspath(home)
+    prefix_len = len(home_str) + (0 if home_str.endswith("/") else 1)
+    index_path = home / HISTORY_INDEX_NAME
+    cached_index = None
+    next_index = {}
+    index_dirty = False
+
+    for entry in _iter_jsonl_files(home):
+        if cached_index is None:
+            cached_index = _load_history_index(index_path)
+        try:
+            info = entry.stat(follow_symlinks=False)
+        except OSError:
+            continue
+        rel = entry.path[prefix_len:]
+        sig = _stat_signature(info)
+        if cached_index.get(rel) == sig:
+            next_index[rel] = sig
+            continue
+
+        try:
+            header = _read_first_line_readonly(entry.path)
+        except OSError:
+            continue
+        if _SCOPED_MARKER not in header:
+            next_index[rel] = sig
+            index_dirty = True
+            continue
+
+        try:
+            fd = os.open(entry.path, os.O_RDWR | os.O_NOFOLLOW)
+        except OSError:
+            continue
+        with os.fdopen(fd, "r+b") as stream:
+            fcntl.flock(stream, fcntl.LOCK_EX)
+            info = os.fstat(stream.fileno())
+            header = stream.readline()
+            if _SCOPED_MARKER not in header:
+                next_index[rel] = _stat_signature(info)
+                index_dirty = True
                 continue
             try:
-                stream = path.open("r+b")
-            except FileNotFoundError:
+                data = json.loads(header)
+            except ValueError:
+                next_index[rel] = _stat_signature(info)
+                index_dirty = True
                 continue
-            with stream:
-                fcntl.flock(stream, fcntl.LOCK_EX)
-                info = os.fstat(stream.fileno())
-                header = stream.readline()
-                if b'"account_scoped"' not in header:
-                    continue
-                try:
-                    data = json.loads(header)
-                except ValueError:
-                    continue
-                if not isinstance(data, dict) or data.get("type") != "session_meta":
-                    continue
-                payload = data.get("payload")
-                if not isinstance(payload, dict) or payload.get("account_scoped") is not True:
-                    continue
-                marker = re.search(
-                    rb'"account_scoped"\s*:\s*true\s*,|,\s*"account_scoped"\s*:\s*true', header)
-                if marker is None:
-                    raise ValueError(f"Unrecognized scoped session header: {path}")
-                padding = b" " * len(marker.group())
-                updated = header[:marker.start()] + padding + header[marker.end():]
-                del payload["account_scoped"]
-                if json.loads(updated) != data:
-                    raise ValueError(f"Cannot preserve session metadata: {path}")
-                record = {"path": str(path.relative_to(home)), "offset": marker.start(),
-                          "original": marker.group().decode("utf-8"),
-                          "atime_ns": info.st_atime_ns, "mtime_ns": info.st_mtime_ns}
-                backup_path = home / "clusterfork-history-scopes.jsonl"
-                descriptor = os.open(backup_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
-                with os.fdopen(descriptor, "ab") as backup:
-                    backup.write((json.dumps(record) + "\n").encode())
-                    backup.flush()
-                    os.fsync(backup.fileno())
-                if os.pwrite(stream.fileno(), padding, marker.start()) != len(padding):
-                    raise OSError(f"Incomplete session metadata update: {path}")
-                if os.fstat(stream.fileno()).st_size == info.st_size:
-                    os.utime(stream.fileno(), ns=(info.st_atime_ns, info.st_mtime_ns))
-                os.fsync(stream.fileno())
-                changed += 1
+            if not isinstance(data, dict) or data.get("type") != "session_meta":
+                next_index[rel] = _stat_signature(info)
+                index_dirty = True
+                continue
+            payload = data.get("payload")
+            if not isinstance(payload, dict) or payload.get("account_scoped") is not True:
+                next_index[rel] = _stat_signature(info)
+                index_dirty = True
+                continue
+            marker = re.search(
+                rb'"account_scoped"\s*:\s*true\s*,|,\s*"account_scoped"\s*:\s*true', header)
+            if marker is None:
+                raise ValueError(f"Unrecognized scoped session header: {entry.path}")
+            padding = b" " * len(marker.group())
+            updated = header[:marker.start()] + padding + header[marker.end():]
+            del payload["account_scoped"]
+            if json.loads(updated) != data:
+                raise ValueError(f"Cannot preserve session metadata: {entry.path}")
+            record = {"path": rel, "offset": marker.start(),
+                      "original": marker.group().decode("utf-8"),
+                      "atime_ns": info.st_atime_ns, "mtime_ns": info.st_mtime_ns}
+            backup_path = home / "clusterfork-history-scopes.jsonl"
+            descriptor = os.open(backup_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(descriptor, "ab") as backup:
+                backup.write((json.dumps(record) + "\n").encode())
+                backup.flush()
+                os.fsync(backup.fileno())
+            if os.pwrite(stream.fileno(), padding, marker.start()) != len(padding):
+                raise OSError(f"Incomplete session metadata update: {entry.path}")
+            if os.fstat(stream.fileno()).st_size == info.st_size:
+                os.utime(stream.fileno(), ns=(info.st_atime_ns, info.st_mtime_ns))
+            os.fsync(stream.fileno())
+            after = os.fstat(stream.fileno())
+            next_index[rel] = _stat_signature(after)
+            index_dirty = True
+            changed += 1
+
+    if cached_index is not None and (index_dirty or len(next_index) != len(cached_index)):
+        _save_history_index(index_path, next_index)
     return changed
 
 

@@ -47,6 +47,16 @@ _occ_api_key() {
   jq -re '.["opencode-go"].key // empty' "$auth" 2>/dev/null
 }
 
+_occ_model_limits() {
+  # Query both context and output ceilings in one jq pass on models.json.
+  local cache="${OCC_MODELS_CACHE:-$HOME/.cache/opencode/models.json}"
+  [[ -r "$cache" ]] || return 1
+  jq -r --arg m "$1" '
+    (.["opencode-go"].models[$m].limit // {}) |
+    "\(.context // "")|\(.output // "")"
+  ' "$cache" 2>/dev/null
+}
+
 _occ_context_tokens() {
   # Claude Code assumes a 200k window for models it doesn't ship metadata for,
   # which would auto-compact these sessions far too early — the working models
@@ -167,8 +177,17 @@ occ() {
     return 1
   fi
 
-  context="${OCC_MAX_CONTEXT_TOKENS:-$(_occ_context_tokens "$OCC_MODEL")}"
-  output="${OCC_MAX_OUTPUT_TOKENS:-$(_occ_output_tokens "$OCC_MODEL")}"
+  context="${OCC_MAX_CONTEXT_TOKENS:-}"
+  output="${OCC_MAX_OUTPUT_TOKENS:-}"
+  if [[ -z "$context" && -z "$output" ]]; then
+    local limits
+    if limits="$(_occ_model_limits "$OCC_MODEL")" && [[ -n "$limits" ]]; then
+      IFS='|' read -r context output <<< "$limits"
+    fi
+  else
+    [[ -z "$context" ]] && context="$(_occ_context_tokens "$OCC_MODEL")"
+    [[ -z "$output" ]] && output="$(_occ_output_tokens "$OCC_MODEL")"
+  fi
 
   (
     unset ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN

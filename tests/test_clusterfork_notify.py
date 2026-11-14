@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -305,6 +306,86 @@ class NotifierTests(NotifyFixture):
         self.assertIn("Turn complete in secret-project", args)
         self.assertNotIn(".cursor", args)
         self.assertEqual(self.curl_stdin.read_text(), "")
+
+    def test_gate_edge_cases_match_with_and_without_jq(self):
+        project = self.root / "edge-proj"
+        project.mkdir()
+        no_jq_bin = self.root / "no-jq-bin"
+        no_jq_bin.mkdir()
+        for entry in os.environ["PATH"].split(":"):
+            if not entry or not os.path.isdir(entry):
+                continue
+            for name in os.listdir(entry):
+                if name == "jq":
+                    continue
+                dst = no_jq_bin / name
+                src = os.path.join(entry, name)
+                if not dst.exists() and os.access(src, os.X_OK):
+                    os.symlink(src, dst)
+
+        path_modes: list[tuple[str, dict[str, str] | None]] = [("python_fallback", {"PATH": f"{self.mock_bin}:{no_jq_bin}"})]
+        if shutil.which("jq"):
+            path_modes.insert(0, ("jq", None))
+
+        for mode, extra in path_modes:
+            # Antigravity root path falls back to "workspace"; non-object stays silent.
+            self.mpv_log.unlink(missing_ok=True)
+            res = self.run_notifier("antigravity", stdin=json.dumps({"fullyIdle": True, "workspacePaths": ["/"]}), extra_env=extra)
+            self.assertEqual(res.returncode, 0, mode)
+            self.assertTrue(self.mpv_log.exists(), mode)
+            self.mpv_log.unlink(missing_ok=True)
+            res = self.run_notifier("antigravity", stdin="[true]", extra_env=extra)
+            self.assertFalse(self.mpv_log.exists(), mode)
+
+            # Grok malformed JSON or missing/null reason stays fail-open.
+            for payload in ("{malformed", json.dumps({"reason": None})):
+                self.mpv_log.unlink(missing_ok=True)
+                res = self.run_notifier("grok", stdin=payload, extra_env=extra, cwd=project)
+                self.assertTrue(self.mpv_log.exists(), (mode, payload))
+
+            # Cursor honors CURSOR_PROJECT_DIR unless aborted; .cursor cwd falls back to workspace.
+            self.mpv_log.unlink(missing_ok=True)
+            res = self.run_notifier(
+                "cursor",
+                stdin=json.dumps({"status": "aborted"}),
+                extra_env={"CURSOR_PROJECT_DIR": str(project), **(extra or {})},
+            )
+            self.assertFalse(self.mpv_log.exists(), mode)
+
+            self.mpv_log.unlink(missing_ok=True)
+            cursor_dir = self.root / ".cursor"
+            cursor_dir.mkdir(exist_ok=True)
+            res = self.run_notifier(
+                "cursor",
+                dotenv=f"CLUSTERFORK_NTFY_URL={PHONE_URL}\n",
+                stdin="not-json",
+                extra_env=extra,
+                cwd=cursor_dir,
+            )
+            self.assertTrue(self.mpv_log.exists(), mode)
+            self.assertIn("Turn complete in workspace", self.curl_log.read_text(), mode)
+            self.curl_log.unlink(missing_ok=True)
+
+            # Codex attention: malformed/multiple objects stay silent; empty cwd falls back to cwd.
+            self.mpv_log.unlink(missing_ok=True)
+            res = self.run_notifier(
+                "codex", "--attention",
+                stdin='{"hook_event_name":"PermissionRequest"}{"hook_event_name":"PermissionRequest"}',
+                extra_env=extra,
+            )
+            self.assertFalse(self.mpv_log.exists(), mode)
+
+            self.mpv_log.unlink(missing_ok=True)
+            res = self.run_notifier(
+                "codex", "--attention",
+                dotenv=f"CLUSTERFORK_NTFY_URL={PHONE_URL}\n",
+                stdin=json.dumps({"hook_event_name": "PermissionRequest", "cwd": ""}),
+                extra_env=extra,
+                cwd=project,
+            )
+            self.assertTrue(self.mpv_log.exists(), mode)
+            self.assertIn("Check Codex in edge-proj", self.curl_log.read_text(), mode)
+            self.curl_log.unlink(missing_ok=True)
 
 
 class CodexAttentionTests(NotifyFixture):

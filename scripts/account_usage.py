@@ -5,8 +5,6 @@ from __future__ import annotations
 from datetime import datetime
 import json
 import time
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 from common.selection import QuotaWindow, finite_number
 
@@ -31,16 +29,24 @@ def timestamp(value):
     raise UsageError("invalid quota reset time")
 
 
+# Kept at module scope so tests can patch account_usage.urlopen without eager stdlib urllib import.
+urlopen = None
+
+
 def request_json(url, token, *, body=None, headers=None):
     if not isinstance(token, str) or not token:
         raise UsageError("missing saved access token")
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, urlopen as _urlopen
+
+    opener = _urlopen if urlopen is None else urlopen
     request = Request(url, data=None if body is None else json.dumps(body).encode(), headers={
         "Authorization": f"Bearer {token}", "Accept": "application/json",
         "Content-Type": "application/json", "User-Agent": "clusterfork-account-picker",
         **(headers or {}),
     })
     try:
-        with urlopen(request, timeout=15) as response:
+        with opener(request, timeout=15) as response:
             raw = response.read(1_000_001)
         if len(raw) > 1_000_000:
             raise UsageError("quota response is too large")

@@ -4,9 +4,11 @@ import importlib.util
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
+import stat
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -127,3 +129,39 @@ class CodexHistoryTests(unittest.TestCase):
             SESSIONS.share_codex_history(self.home)
         self.assertEqual(path.read_bytes(), header + body)
         self.assertFalse((self.home / "clusterfork-history-scopes.jsonl").exists())
+
+    def test_clean_index_skips_reopening_unchanged_and_invalidates_on_ctime_or_size(self):
+        scoped, header, body = self.rollout(payload={"id": "s1", "account_scoped": True})
+        clean, clean_header, clean_body = self.rollout("sessions/2026/11/14", payload={"id": "s2"})
+
+        self.assertEqual(SESSIONS.share_codex_history(self.home), 1)
+        index_path = self.home / SESSIONS.HISTORY_INDEX_NAME
+        self.assertTrue(index_path.is_file())
+        self.assertEqual(stat.S_IMODE(index_path.stat().st_mode), 0o600)
+
+        # Second scan skips opening already-clean indexed rollouts entirely.
+        with patch.object(os, "open", wraps=os.open) as mock_open:
+            self.assertEqual(SESSIONS.share_codex_history(self.home), 0)
+        opened_rollouts = [c.args[0] for c in mock_open.call_args_list if str(c.args[0]).endswith(".jsonl")]
+        self.assertEqual(opened_rollouts, [])
+
+        # Even if a write restores original mtime, ctime_ns invalidates it.
+        saved_stat = clean.stat()
+        restored = clean_header.replace(b'"id":"s2"', b'"account_scoped":true,"id":"s2"') + clean_body
+        clean.write_bytes(restored)
+        os.utime(clean, ns=(saved_stat.st_atime_ns, saved_stat.st_mtime_ns))
+        self.assertEqual(SESSIONS.share_codex_history(self.home), 1)
+        self.assertNotIn("account_scoped", json.loads(clean.read_bytes().splitlines()[0])["payload"])
+        self.assertNotIn("account_scoped", json.loads(scoped.read_bytes().splitlines()[0])["payload"])
+
+    def test_symlinks_in_session_dirs_are_skipped(self):
+        outside = self.home / "outside.jsonl"
+        payload = {"account_scoped": True, "id": "outside-id"}
+        raw = json.dumps({"type": "session_meta", "payload": payload}).encode() + b"\n"
+        outside.write_bytes(raw)
+        sessions_dir = self.home / "sessions" / "2026" / "11" / "13"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        (sessions_dir / "rollout-link.jsonl").symlink_to(outside)
+
+        self.assertEqual(SESSIONS.share_codex_history(self.home), 0)
+        self.assertEqual(outside.read_bytes(), raw)

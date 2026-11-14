@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -201,6 +200,8 @@ def codex_profiles_in_use():
 
 
 def probe_profiles(backend, provider, logins, aliases, model):
+    from concurrent.futures import ThreadPoolExecutor
+
     print(f"{backend.command}: checking quota for {len(logins)} saved accounts", flush=True)
     with ThreadPoolExecutor(max_workers=8) as pool:
         pending = {account_id: pool.submit(measure_logins, provider, choices, account_id, model)

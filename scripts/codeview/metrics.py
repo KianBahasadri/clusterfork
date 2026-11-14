@@ -11,6 +11,7 @@ import ast
 import math
 import re
 from collections import Counter
+from functools import lru_cache
 
 
 MAX_SYMBOLS = 100
@@ -143,83 +144,113 @@ def _triple_quotes(lang: str) -> bool:
     return lang in {"Python", "Ruby"}
 
 
+_SINGLE_QUOTE_END_RE = {
+    delim: re.compile(rf"(?:[^\\{delim}]+|\\.|\\$)*({delim}|$)")
+    for delim in ("'", '"', "`")
+}
+
+
+@lru_cache(maxsize=16)
+def _normal_token_re(
+    line_markers: tuple[str, ...],
+    block_start: str | None,
+    triple: bool,
+) -> re.Pattern[str]:
+    parts: list[str] = []
+    if block_start:
+        parts.append(re.escape(block_start))
+    for marker in line_markers:
+        parts.append(re.escape(marker))
+    if triple:
+        parts.append(r"'''|\"\"\"")
+    parts.append(r"['\"`]")
+    return re.compile("|".join(parts))
+
+
 def _lex_lines(text: str, lang: str) -> tuple[list[dict], str]:
     """Strip comments and strings while retaining per-line classifications."""
     line_markers, block_style = _comment_style(lang)
+    block_start = block_style[0] if block_style else None
+    block_end_tok = block_style[1] if block_style else ""
+    line_marker_set = frozenset(line_markers)
+    token_re = _normal_token_re(line_markers, block_start, _triple_quotes(lang))
+    token_search = token_re.search
+
     block_end: str | None = None
     string_delim: str | None = None
     records: list[dict] = []
     comment_parts: list[str] = []
 
     for raw in text.splitlines():
-        code: list[str] = []
-        comments: list[str] = []
+        raw_len = len(raw)
         has_comment = False
         has_string = False
+
+        # Fast path: line starts in normal state and has no comment/string openers.
+        if block_end is None and string_delim is None:
+            first = token_search(raw)
+            if first is None:
+                records.append({
+                    "raw": raw,
+                    "analysis": raw,
+                    "comments": "",
+                    "has_comment": False,
+                    "comment_only": False,
+                    "has_string": False,
+                    "blank": not raw.strip(),
+                })
+                continue
+
+        code: list[str] = []
+        comments: list[str] = []
         i = 0
-        while i < len(raw):
-            if block_end:
+        while i < raw_len:
+            if block_end is not None:
                 end = raw.find(block_end, i)
                 if end < 0:
                     comments.append(raw[i:])
-                    i = len(raw)
-                    continue
+                    break
                 comments.append(raw[i:end])
                 i = end + len(block_end)
                 block_end = None
                 continue
 
-            if string_delim:
+            if string_delim is not None:
                 has_string = True
                 if len(string_delim) == 3:
                     end = raw.find(string_delim, i)
                     if end < 0:
-                        i = len(raw)
-                        continue
-                    i = end + len(string_delim)
+                        break
+                    i = end + 3
                     string_delim = None
                     continue
-                escaped = False
-                while i < len(raw):
-                    char = raw[i]
-                    if escaped:
-                        escaped = False
-                        i += 1
-                    elif char == "\\":
-                        escaped = True
-                        i += 1
-                    elif char == string_delim:
-                        i += 1
-                        string_delim = None
-                        break
-                    else:
-                        i += 1
+                m = _SINGLE_QUOTE_END_RE[string_delim].match(raw, i)
+                if m is None or not m.group(1):
+                    break
+                i = m.end()
+                string_delim = None
                 continue
 
-            if block_style and raw.startswith(block_style[0], i):
-                has_comment = True
-                block_end = block_style[1]
-                i += len(block_style[0])
-                continue
-            marker = next((m for m in line_markers if raw.startswith(m, i)), None)
-            if marker:
-                has_comment = True
-                comments.append(raw[i:])
+            m = token_search(raw, i)
+            if m is None:
+                code.append(raw[i:])
                 break
-
-            if raw.startswith(("'''", '"""'), i) and _triple_quotes(lang):
-                string_delim = raw[i:i + 3]
+            start = m.start()
+            if start > i:
+                code.append(raw[i:start])
+            tok = m.group()
+            if tok == block_start:
+                has_comment = True
+                block_end = block_end_tok
+                i = m.end()
+            elif tok in line_marker_set:
+                has_comment = True
+                comments.append(raw[start:])
+                break
+            else:
+                string_delim = tok
                 has_string = True
-                i += 3
-                continue
-            if raw[i] in "'\"`":
-                string_delim = raw[i]
-                has_string = True
-                i += 1
-                continue
-
-            code.append(raw[i])
-            i += 1
+                i = m.end()
 
         analysis = "".join(code)
         has_code = bool(analysis.strip()) or has_string
@@ -398,6 +429,49 @@ def _docstring_lines(node: ast.FunctionDef | ast.AsyncFunctionDef, info: dict) -
         info["docstring_lines"] += len(value.value.splitlines())
 
 
+_RE_PY_DEF = re.compile(r"^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)", re.MULTILINE)
+_RE_PY_CLASS = re.compile(r"^\s*class\s+([A-Za-z_]\w*)", re.MULTILINE)
+_RE_PY_IMPORT = re.compile(r"^\s*(?:from\s+([^\s]+)\s+import|import\s+([^\s#]+))", re.MULTILINE)
+
+_RE_JS_FN = re.compile(r"\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)?")
+_RE_JS_ARROW_NAMED = re.compile(
+    r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*"
+    r"(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>"
+)
+_RE_JS_CLASS = re.compile(r"\bclass\s+([A-Za-z_$][\w$]*)")
+_RE_JS_IMPORT = re.compile(r"^\s*import\s+(?:.+?\s+from\s+)?['\"]([^'\"]+)", re.MULTILINE)
+_RE_JS_REQUIRE = re.compile(r"\brequire\(\s*['\"]([^'\"]+)")
+_RE_JS_EXPORT = re.compile(
+    r"^\s*export\s+(?:default\s+)?(?:async\s+)?"
+    r"(?:function|class|const|let|var)\s+([A-Za-z_$][\w$]*)",
+    re.MULTILINE,
+)
+
+_RE_GO_FN = re.compile(r"^\s*func(?:\s*\([^)]*\))?\s+([A-Za-z_]\w*)", re.MULTILINE)
+_RE_GO_IMPORT = re.compile(r"^\s*import\s+[\"`]([^\"`]+)", re.MULTILINE)
+
+_RE_RUST_FN = re.compile(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)", re.MULTILINE)
+_RE_RUST_CLASS = re.compile(r"^\s*(?:pub\s+)?(?:struct|enum|trait)\s+([A-Za-z_]\w*)", re.MULTILINE)
+_RE_RUST_IMPORT = re.compile(r"^\s*(?:pub\s+)?use\s+([^;]+)", re.MULTILINE)
+
+_RE_SH_FN_PARENS = re.compile(r"^\s*(?:function\s+)?([A-Za-z_]\w*)\s*\(\s*\)", re.MULTILINE)
+_RE_SH_FN_KW = re.compile(r"^\s*function\s+([A-Za-z_]\w*)", re.MULTILINE)
+
+_RE_RB_DEF = re.compile(r"^\s*def\s+([A-Za-z_!?=]\w*[!?=]?)", re.MULTILINE)
+_RE_RB_CLASS = re.compile(r"^\s*class\s+([A-Za-z_]\w*)", re.MULTILINE)
+
+_RE_CSTYLE_FN = re.compile(
+    r"^\s*(?:(?:public|private|protected|internal|static|inline|"
+    r"virtual|final|async|extern|suspend)\s+)*"
+    r"(?:[A-Za-z_][\w:<>,\[\]*&?]*\s+)+"
+    r"([A-Za-z_]\w*)\s*\(",
+    re.MULTILINE,
+)
+_RE_KW_FUNCTION = re.compile(r"\bfunction\s+([A-Za-z_]\w*)")
+_RE_ANY_FN = re.compile(r"\b(?:function|fn|func)\s+([A-Za-z_]\w*)")
+_RE_ANY_TYPE = re.compile(r"\b(?:class|interface|struct|enum|trait)\s+([A-Za-z_]\w*)")
+
+
 def _generic_symbols(text: str, lang: str) -> dict:
     function_names: list[str] = []
     class_names: list[str] = []
@@ -405,72 +479,37 @@ def _generic_symbols(text: str, lang: str) -> dict:
     export_names: list[str] = []
 
     if lang == "Python":
-        function_names = re.findall(
-            r"^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)", text, re.MULTILINE)
-        class_names = re.findall(
-            r"^\s*class\s+([A-Za-z_]\w*)", text, re.MULTILINE)
-        import_names = re.findall(
-            r"^\s*(?:from\s+([^\s]+)\s+import|import\s+([^\s#]+))",
-            text, re.MULTILINE)
-        import_names = [a or b for a, b in import_names]
+        function_names = _RE_PY_DEF.findall(text)
+        class_names = _RE_PY_CLASS.findall(text)
+        import_names = [a or b for a, b in _RE_PY_IMPORT.findall(text)]
     elif lang in {"JavaScript", "TypeScript"}:
-        named = re.findall(
-            r"\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)?", text)
-        arrows = re.findall(
-            r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*"
-            r"(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>", text)
+        named = _RE_JS_FN.findall(text)
+        arrows = _RE_JS_ARROW_NAMED.findall(text)
         function_names = named + arrows + ["<anonymous>"] * named.count("")
-        class_names = re.findall(r"\bclass\s+([A-Za-z_$][\w$]*)", text)
-        import_names = re.findall(
-            r"^\s*import\s+(?:.+?\s+from\s+)?['\"]([^'\"]+)",
-            text, re.MULTILINE)
-        import_names += re.findall(
-            r"\brequire\(\s*['\"]([^'\"]+)", text)
-        export_names = re.findall(
-            r"^\s*export\s+(?:default\s+)?(?:async\s+)?"
-            r"(?:function|class|const|let|var)\s+([A-Za-z_$][\w$]*)",
-            text, re.MULTILINE)
+        class_names = _RE_JS_CLASS.findall(text)
+        import_names = _RE_JS_IMPORT.findall(text)
+        import_names += _RE_JS_REQUIRE.findall(text)
+        export_names = _RE_JS_EXPORT.findall(text)
     elif lang == "Go":
-        function_names = re.findall(
-            r"^\s*func(?:\s*\([^)]*\))?\s+([A-Za-z_]\w*)",
-            text, re.MULTILINE)
-        import_names = re.findall(r"^\s*import\s+[\"`]([^\"`]+)", text,
-                                  re.MULTILINE)
+        function_names = _RE_GO_FN.findall(text)
+        import_names = _RE_GO_IMPORT.findall(text)
     elif lang == "Rust":
-        function_names = re.findall(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+"
-                                    r"([A-Za-z_]\w*)", text, re.MULTILINE)
-        class_names = re.findall(r"^\s*(?:pub\s+)?(?:struct|enum|trait)\s+"
-                                 r"([A-Za-z_]\w*)", text, re.MULTILINE)
-        import_names = re.findall(r"^\s*(?:pub\s+)?use\s+([^;]+)", text,
-                                  re.MULTILINE)
+        function_names = _RE_RUST_FN.findall(text)
+        class_names = _RE_RUST_CLASS.findall(text)
+        import_names = _RE_RUST_IMPORT.findall(text)
     elif lang == "Shell":
-        function_names = re.findall(
-            r"^\s*(?:function\s+)?([A-Za-z_]\w*)\s*\(\s*\)",
-            text, re.MULTILINE)
-        function_names += re.findall(r"^\s*function\s+([A-Za-z_]\w*)",
-                                     text, re.MULTILINE)
+        function_names = _RE_SH_FN_PARENS.findall(text)
+        function_names += _RE_SH_FN_KW.findall(text)
     elif lang == "Ruby":
-        function_names = re.findall(r"^\s*def\s+([A-Za-z_!?=]\w*[!?=]?)",
-                                    text, re.MULTILINE)
-        class_names = re.findall(r"^\s*class\s+([A-Za-z_]\w*)", text,
-                                 re.MULTILINE)
+        function_names = _RE_RB_DEF.findall(text)
+        class_names = _RE_RB_CLASS.findall(text)
     elif lang in {"C", "C++", "Java", "Kotlin", "PHP", "Swift"}:
-        function_names = re.findall(
-            r"^\s*(?:(?:public|private|protected|internal|static|inline|"
-            r"virtual|final|async|extern|suspend)\s+)*"
-            r"(?:[A-Za-z_][\w:<>,\[\]*&?]*\s+)+"
-            r"([A-Za-z_]\w*)\s*\(", text, re.MULTILINE)
-        function_names += re.findall(
-            r"\bfunction\s+([A-Za-z_]\w*)", text)
-        class_names = re.findall(
-            r"\b(?:class|interface|struct|enum|trait)\s+([A-Za-z_]\w*)",
-            text)
+        function_names = _RE_CSTYLE_FN.findall(text)
+        function_names += _RE_KW_FUNCTION.findall(text)
+        class_names = _RE_ANY_TYPE.findall(text)
     else:
-        function_names = re.findall(
-            r"\b(?:function|fn|func)\s+([A-Za-z_]\w*)", text)
-        class_names = re.findall(
-            r"\b(?:class|interface|struct|enum|trait)\s+([A-Za-z_]\w*)",
-            text)
+        function_names = _RE_ANY_FN.findall(text)
+        class_names = _RE_ANY_TYPE.findall(text)
 
     return {
         "function_count": len(function_names),
@@ -482,77 +521,111 @@ def _generic_symbols(text: str, lang: str) -> dict:
     }
 
 
+_RE_CONDITIONALS = re.compile(r"\b(?:if|elif|unless|case|when|switch)\b", re.MULTILINE)
+_RE_LOOPS = re.compile(r"\b(?:for|while|loop|do)\b", re.MULTILINE)
+_RE_HANDLERS = re.compile(r"\b(?:catch|except|rescue)\b", re.MULTILINE)
+_RE_LOGICAL_OPS = re.compile(r"&&|\|\|")
+_RE_LOGICAL_WORDS = re.compile(r"\b(?:and|or)\b", re.MULTILINE)
+_RE_TERNARIES = re.compile(r"\?(?!=|\?|\.)")
+_RE_JS_FUNCTION_KW = re.compile(r"\bfunction\b", re.MULTILINE)
+_RE_JS_ARROW_OP = re.compile(r"=>", re.MULTILINE)
+_RE_IMPORTS_GENERIC = re.compile(r"^\s*(?:import|from|use|require|include|#\s*include)\b", re.MULTILINE)
+_RE_IMPORTS_PY = re.compile(r"^\s*(?:import|from)\b", re.MULTILINE)
+_RE_IMPORTS_JS = re.compile(r"^\s*import\b", re.MULTILINE)
+_RE_REQUIRE_JS = re.compile(r"\brequire\s*\(", re.MULTILINE)
+_RE_EXPORTS_GENERIC = re.compile(r"^\s*export\b", re.MULTILINE)
+_RE_EXPORTS_PY = re.compile(r"^\s*__all__\s*=", re.MULTILINE)
+_RE_DECLS = re.compile(r"^\s*(?:const|let|var|type|interface|struct|enum)\b", re.MULTILINE)
+_RE_CALLS = re.compile(r"\b[A-Za-z_$][\w$]*\s*\(")
+_RE_TYPES = re.compile(r"\b(?:struct|enum|trait|interface|type)\b", re.MULTILINE)
+_RE_LAMBDAS = re.compile(r"\blambda\b", re.MULTILINE)
+_RE_RETURNS = re.compile(r"\breturn\b", re.MULTILINE)
+_RE_RAISES = re.compile(r"\b(?:raise|throw)\b", re.MULTILINE)
+_RE_BREAKS = re.compile(r"\bbreak\b", re.MULTILINE)
+_RE_CONTINUES = re.compile(r"\bcontinue\b", re.MULTILINE)
+_RE_YIELDS = re.compile(r"\byield\b", re.MULTILINE)
+_RE_ASYNC = re.compile(r"\basync\b", re.MULTILINE)
+_RE_AWAIT = re.compile(r"\bawait\b", re.MULTILINE)
+_RE_TODO = re.compile(r"\b(TODO|FIXME|HACK|XXX|BUG|NOTE)\b", re.IGNORECASE)
+_RE_WORDS = re.compile(r"\b[\w']+\b", re.UNICODE)
+
+
 def _generic_counts(code: str, lang: str, symbols: dict) -> dict:
-    word = lambda pattern: len(re.findall(pattern, code, re.MULTILINE))
-    conditionals = word(r"\b(?:if|elif|unless|case|when|switch)\b")
-    loops = word(r"\b(?:for|while|loop|do)\b")
-    handlers = word(r"\b(?:catch|except|rescue)\b")
-    logical = len(re.findall(r"&&|\|\|", code))
+    conditionals = len(_RE_CONDITIONALS.findall(code))
+    loops = len(_RE_LOOPS.findall(code))
+    handlers = len(_RE_HANDLERS.findall(code))
+    logical = len(_RE_LOGICAL_OPS.findall(code))
     if lang in {"Python", "Ruby", "Shell"}:
-        logical += word(r"\b(?:and|or)\b")
-    ternaries = len(re.findall(r"\?(?!=|\?|\.)", code))
+        logical += len(_RE_LOGICAL_WORDS.findall(code))
+    ternaries = len(_RE_TERNARIES.findall(code))
     decisions = conditionals + loops + handlers + logical + ternaries
     function_count = symbols.get("function_count", len(symbols["function_names"]))
     # Anonymous JS functions are still functions even without a useful name.
     if lang in {"JavaScript", "TypeScript"}:
-        function_count = word(r"\bfunction\b") + word(r"=>")
-    imports = word(r"^\s*(?:import|from|use|require|include|#\s*include)\b")
+        function_count = len(_RE_JS_FUNCTION_KW.findall(code)) + len(_RE_JS_ARROW_OP.findall(code))
     if lang == "Python":
-        imports = word(r"^\s*(?:import|from)\b")
+        imports = len(_RE_IMPORTS_PY.findall(code))
+        exports = len(_RE_EXPORTS_PY.findall(code))
     elif lang in {"JavaScript", "TypeScript"}:
-        imports = word(r"^\s*import\b") + word(r"\brequire\s*\(")
-    exports = word(r"^\s*export\b")
-    if lang == "Python":
-        exports = word(r"^\s*__all__\s*=")
+        imports = len(_RE_IMPORTS_JS.findall(code)) + len(_RE_REQUIRE_JS.findall(code))
+        exports = len(_RE_EXPORTS_GENERIC.findall(code))
+    else:
+        imports = len(_RE_IMPORTS_GENERIC.findall(code))
+        exports = len(_RE_EXPORTS_GENERIC.findall(code))
     declarations = (
         function_count + symbols.get("class_count", len(symbols["class_names"]))
-        + word(r"^\s*(?:const|let|var|type|interface|struct|enum)\b")
+        + len(_RE_DECLS.findall(code))
     )
-    calls = len(re.findall(r"\b[A-Za-z_$][\w$]*\s*\(", code))
+    calls = len(_RE_CALLS.findall(code))
     calls = max(0, calls - function_count - conditionals - loops - handlers)
     return {
         "functions": function_count,
         "classes": symbols.get("class_count", len(symbols["class_names"])),
-        "types": word(r"\b(?:struct|enum|trait|interface|type)\b"),
+        "types": len(_RE_TYPES.findall(code)),
         "imports": imports,
         "exports": exports,
         "declarations": declarations,
         "call_sites": calls,
         "parameters": 0,
-        "lambdas": word(r"\blambda\b"),
+        "lambdas": len(_RE_LAMBDAS.findall(code)),
         "docstring_lines": 0,
         "conditionals": conditionals,
         "loops": loops,
         "exception_handlers": handlers,
-        "returns": word(r"\breturn\b"),
-        "raises": word(r"\b(?:raise|throw)\b"),
-        "breaks": word(r"\bbreak\b"),
-        "continues": word(r"\bcontinue\b"),
-        "yields": word(r"\byield\b"),
-        "async_keywords": word(r"\basync\b"),
-        "await_keywords": word(r"\bawait\b"),
+        "returns": len(_RE_RETURNS.findall(code)),
+        "raises": len(_RE_RAISES.findall(code)),
+        "breaks": len(_RE_BREAKS.findall(code)),
+        "continues": len(_RE_CONTINUES.findall(code)),
+        "yields": len(_RE_YIELDS.findall(code)),
+        "async_keywords": len(_RE_ASYNC.findall(code)),
+        "await_keywords": len(_RE_AWAIT.findall(code)),
         "decision_points": decisions,
     }
 
 
 def _halstead(code: str) -> dict:
-    operators: list[str] = []
-    operands: list[str] = []
-    for match in _TOKEN_RE.finditer(code):
-        kind = match.lastgroup
-        value = match.group(0)
-        if kind == "op":
-            operators.append(value)
-        elif kind == "number":
-            operands.append(value)
-        elif value.lower() in _OPERATOR_WORDS:
-            operators.append(value.lower())
+    op_set: set[str] = set()
+    val_set: set[str] = set()
+    total_operators = 0
+    total_operands = 0
+    op_words = _OPERATOR_WORDS
+    for num, ident, op in _TOKEN_RE.findall(code):
+        if op:
+            total_operators += 1
+            op_set.add(op)
+        elif ident:
+            low = ident if ident.islower() else ident.lower()
+            if low in op_words:
+                total_operators += 1
+                op_set.add(low)
+            else:
+                total_operands += 1
+                val_set.add(ident)
         else:
-            operands.append(value)
-    total_operators = len(operators)
-    total_operands = len(operands)
-    unique_operators = len(set(operators))
-    unique_operands = len(set(operands))
+            total_operands += 1
+            val_set.add(num)
+    unique_operators = len(op_set)
+    unique_operands = len(val_set)
     vocabulary = unique_operators + unique_operands
     length = total_operators + total_operands
     volume = length * math.log2(vocabulary) if vocabulary > 1 else 0
@@ -608,11 +681,8 @@ def analyze_source(text: str, lang: str = "Other") -> dict:
     code = "\n".join(r["analysis"] for r in records)
     symbols = _generic_symbols(code, lang)
     if lang in {"JavaScript", "TypeScript"}:
-        js_imports = re.findall(
-            r"^\s*import\s+(?:.+?\s+from\s+)?['\"]([^'\"]+)",
-            text, re.MULTILINE)
-        js_imports += re.findall(
-            r"\brequire\(\s*['\"]([^'\"]+)", text)
+        js_imports = _RE_JS_IMPORT.findall(text)
+        js_imports += _RE_JS_REQUIRE.findall(text)
         symbols["import_names"] = _unique_names(js_imports)
     counts = _generic_counts(code, lang, symbols)
     ast_info = None
@@ -635,7 +705,7 @@ def analyze_source(text: str, lang: str = "Other") -> dict:
             symbols["class_names"] = ast_info["class_names"]
             symbols["import_names"] = ast_info["import_names"]
             counts["declarations"] = (counts["functions"] + counts["classes"])
-            counts["async_keywords"] = len(re.findall(r"\basync\b", code))
+            counts["async_keywords"] = len(_RE_ASYNC.findall(code))
 
     halstead = _halstead(code)
     complexity = 1 + counts["decision_points"]
@@ -648,9 +718,10 @@ def analyze_source(text: str, lang: str = "Other") -> dict:
     tab_indented_lines = 0
     space_indented_lines = 0
     for line in lines:
-        prefix = re.match(r"^[ \t]*", line).group(0)
-        if not prefix:
+        indent_len = len(line) - len(line.lstrip(" \t"))
+        if not indent_len:
             continue
+        prefix = line[:indent_len]
         if "\t" in prefix:
             tab_indented_lines += 1
         if " " in prefix:
@@ -669,8 +740,9 @@ def analyze_source(text: str, lang: str = "Other") -> dict:
         brace_depth += opens
         max_brace_depth = max(max_brace_depth, brace_depth)
 
-    markers = Counter(key.upper() for key in re.findall(
-        r"\b(TODO|FIXME|HACK|XXX|BUG|NOTE)\b", comment_text, re.IGNORECASE))
+    markers = Counter(
+        key.upper() for key in _RE_TODO.findall(comment_text)
+    ) if comment_text else Counter()
     todo_count = sum(markers.values())
     comment_ratio = round((comment_lines / total_lines) * 100, 1) if total_lines else 0
     blank_ratio = round((blank_lines / total_lines) * 100, 1) if total_lines else 0
@@ -704,8 +776,8 @@ def analyze_source(text: str, lang: str = "Other") -> dict:
         "comment_blocks": comment_blocks,
         "string_lines": string_lines,
         "characters": chars,
-        "unicode_characters": sum(1 for char in text if ord(char) > 127),
-        "words": len(re.findall(r"\b[\w']+\b", text, re.UNICODE)),
+        "unicode_characters": 0 if text.isascii() else len(text) - len(text.encode("ascii", "ignore")),
+        "words": len(_RE_WORDS.findall(text)),
         "tokens": halstead["halstead"]["length"],
         "operators": halstead["operators"],
         "operands": halstead["operands"],
@@ -720,7 +792,7 @@ def analyze_source(text: str, lang: str = "Other") -> dict:
         "max_line_length": max_line_length,
         "avg_line_length": avg_line_length,
         "trailing_whitespace_lines": sum(
-            1 for line in lines if _TRAILING_WS_RE.search(line)),
+            1 for line in lines if line.endswith((" ", "\t"))),
         "tab_indented_lines": tab_indented_lines,
         "space_indented_lines": space_indented_lines,
         "final_newline": text.endswith(("\n", "\r")),

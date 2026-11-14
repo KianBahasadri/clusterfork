@@ -1,5 +1,6 @@
 """Tests for codeview.scan: git history/files/deps scanners against a real
 throwaway repo, plus exclusion rules."""
+import json
 import os
 import subprocess
 import tempfile
@@ -204,6 +205,46 @@ class FilesScanTests(TempRepoTestCase):
         self.assertEqual(appy["lines"], 1)
         self.assertEqual(data["total_lines"], sum(
             f["lines"] for f in data["files"] if f["lines"] is not None))
+
+    def test_file_metrics_cache_reuses_invalidates_and_prunes(self):
+        self.commit({
+            "src/a.py": "def a():\n    return 1\n",
+            "src/b.py": "def b():\n    return 2\n",
+        }, "init")
+        self.assertFalse((self.repo / ".codeview").exists())
+        first = scan.scan_files(self.repo, scan.RepoShape())
+        # Plain repos without .codeview/ stay untouched.
+        self.assertFalse((self.repo / ".codeview").exists())
+
+        (self.repo / ".codeview").mkdir()
+        populated = scan.scan_files(self.repo, scan.RepoShape())
+        self.assertEqual(populated, first)
+        cache_file = self.repo / ".codeview" / "cache" / "file_metrics.json"
+        self.assertTrue(cache_file.is_file())
+
+        # Second scan hits cache without re-running analyze_source.
+        with mock.patch.object(metrics, "analyze_source", wraps=metrics.analyze_source) as spy:
+            cached = scan.scan_files(self.repo, scan.RepoShape())
+        self.assertEqual(spy.call_count, 0)
+        self.assertEqual(cached, first)
+
+        # Even a same-size edit with restored mtime invalidates via ctime_ns and re-analyzes only that file.
+        target = self.repo / "src" / "a.py"
+        old_st = target.stat()
+        target.write_text("def x():\n    return 9\n")
+        os.utime(target, ns=(old_st.st_atime_ns, old_st.st_mtime_ns))
+        with mock.patch.object(metrics, "analyze_source", wraps=metrics.analyze_source) as spy:
+            updated = scan.scan_files(self.repo, scan.RepoShape())
+        self.assertEqual(spy.call_count, 1)
+        a_entry = next(f for f in updated["files"] if f["path"] == "src/a.py")
+        self.assertEqual(a_entry["metrics"]["function_names"], ["x"])
+
+        # Deleted file is pruned from both scan result and cached entries.
+        (self.repo / "src" / "b.py").unlink()
+        pruned = scan.scan_files(self.repo, scan.RepoShape())
+        self.assertEqual([f["path"] for f in pruned["files"]], ["src/a.py"])
+        cached_payload = json.loads(cache_file.read_text())
+        self.assertEqual(list(cached_payload["entries"]), ["src/a.py"])
 
 
 class MetricsTests(unittest.TestCase):

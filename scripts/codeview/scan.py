@@ -7,14 +7,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
 import subprocess
+import threading
 from pathlib import Path
 
-from codeview import metrics
+from codeview import cachestore, metrics
 
 CODEVIEW_DIR_NAME = ".codeview"
 SCAN_SCHEMA_VERSION = 3
+_FILE_METRICS_CACHE_VERSION = f"{SCAN_SCHEMA_VERSION}.1"
 MAX_CHURN_FILES = 200
 
 # Excluded from the LOC snapshot by suffix or directory component.
@@ -244,12 +248,13 @@ def _count_lines(path: Path) -> tuple[int | None, bool]:
     return len(text.splitlines()), False
 
 
-def _read_source(path: Path) -> tuple[str | None, bool, int | None]:
+def _read_source(path: Path, size: int | None = None) -> tuple[str | None, bool, int | None]:
     """Read an analyzable UTF-8-ish file once, returning text/binary/bytes."""
-    try:
-        size = path.stat().st_size
-    except OSError:
-        return None, False, None
+    if size is None:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return None, False, None
     if size > MAX_LINE_COUNT_BYTES:
         return None, False, size
     try:
@@ -261,6 +266,43 @@ def _read_source(path: Path) -> tuple[str | None, bool, int | None]:
     return data.decode("utf-8", errors="replace"), False, size
 
 
+def _analyze_pending_file(task: tuple[Path, str, str, str, str, int]) -> dict:
+    abs_path, relpath, top, ext_name, lang, size = task
+    source, binary, actual_size = _read_source(abs_path, size=size)
+    if source is None:
+        lines = None
+        source_metrics = metrics.empty_metrics(
+            "binary" if binary else "too large or unreadable")
+    else:
+        source_metrics = metrics.analyze_source(source, lang)
+        lines = source_metrics["total_lines"]
+    return {
+        "path": relpath, "top": top, "ext": ext_name,
+        "lang": lang, "lines": lines, "bytes": actual_size,
+        "binary": binary, "metrics": source_metrics,
+    }
+
+
+def _run_pending_analyses(tasks: list[tuple[Path, str, str, str, str, int]]) -> list[dict]:
+    if os.name == "posix" and len(tasks) >= 32 and threading.active_count() == 1:
+        try:
+            import concurrent.futures
+            import multiprocessing
+
+            workers = min(8, os.cpu_count() or 4)
+            if workers > 1:
+                ctx = multiprocessing.get_context("fork")
+                chunk = max(1, len(tasks) // (workers * 2))
+                with concurrent.futures.ProcessPoolExecutor(
+                    max_workers=workers, mp_context=ctx,
+                ) as executor:
+                    return list(executor.map(_analyze_pending_file, tasks, chunksize=chunk))
+        except (OSError, PermissionError):
+            # Fall back to single-process analysis if fork/semaphores are blocked.
+            pass
+    return [_analyze_pending_file(task) for task in tasks]
+
+
 def scan_files(repo: Path, shape: RepoShape) -> dict:  # noqa: ARG001 (uniform signature)
     listing = try_git(["ls-files", "-z"], repo)
     files: list[dict] = []
@@ -268,34 +310,85 @@ def scan_files(repo: Path, shape: RepoShape) -> dict:  # noqa: ARG001 (uniform s
     tops: dict[str, dict] = {}
     analyzed_metrics: list[dict] = []
     if listing:
+        codeview_dir = repo / CODEVIEW_DIR_NAME
+        use_cache = codeview_dir.is_dir()
+        cache_path = codeview_dir / "cache" / "file_metrics.json"
+        cached_entries: dict = {}
+        if use_cache:
+            payload = cachestore.read_json(cache_path)
+            if (isinstance(payload, dict)
+                    and payload.get("schema_version") == _FILE_METRICS_CACHE_VERSION):
+                raw_entries = payload.get("entries")
+                if isinstance(raw_entries, dict):
+                    cached_entries = raw_entries
+
+        pending_indices: list[int] = []
+        pending_tasks: list[tuple[Path, str, str, str, str, int]] = []
+        pending_metas: list[tuple[str, int, int, int, int, str]] = []
+        new_cache_entries: dict[str, list] = {}
+        cache_dirty = False
+
         for relpath in listing.split("\0"):
             if not relpath or _excluded(relpath):
                 continue
             abs_path = repo / relpath
+            try:
+                st = abs_path.lstat()
+            except OSError:
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                continue
+
             ext = abs_path.suffix.lower()
             lang = LANG_BY_EXT.get(ext, "Other")
             top = relpath.split("/", 1)[0]
-            if not abs_path.is_file() or abs_path.is_symlink():
+            size = st.st_size
+
+            cached = cached_entries.get(relpath) if use_cache else None
+            if (
+                isinstance(cached, list)
+                and len(cached) == 6
+                and cached[0] == st.st_mtime_ns
+                and cached[1] == st.st_ctime_ns
+                and cached[2] == size
+                and cached[3] == st.st_ino
+                and cached[4] == lang
+                and isinstance(cached[5], dict)
+            ):
+                files.append(cached[5])
+                new_cache_entries[relpath] = cached
                 continue
-            source, binary, size = _read_source(abs_path)
-            if size is None:
-                continue
-            if source is None:
-                lines = None
-                source_metrics = metrics.empty_metrics(
-                    "binary" if binary else "too large or unreadable")
-            else:
-                source_metrics = metrics.analyze_source(source, lang)
-                lines = source_metrics["total_lines"]
-                analyzed_metrics.append(source_metrics)
-            entry = {
-                "path": relpath, "top": top, "ext": ext.lstrip("."),
-                "lang": lang, "lines": lines, "bytes": size,
-                "binary": binary, "metrics": source_metrics,
-            }
-            files.append(entry)
+
+            idx = len(files)
+            files.append({})
+            pending_indices.append(idx)
+            pending_tasks.append((abs_path, relpath, top, ext.lstrip("."), lang, size))
+            pending_metas.append((relpath, st.st_mtime_ns, st.st_ctime_ns, size, st.st_ino, lang))
+
+        if pending_tasks:
+            cache_dirty = True
+            computed = _run_pending_analyses(pending_tasks)
+            for idx, meta, entry in zip(pending_indices, pending_metas, computed):
+                files[idx] = entry
+                relpath, mtime_ns, ctime_ns, size, ino, lang = meta
+                if use_cache:
+                    new_cache_entries[relpath] = [mtime_ns, ctime_ns, size, ino, lang, entry]
+
+        if use_cache and (cache_dirty or len(new_cache_entries) != len(cached_entries)):
+            try:
+                cachestore.write_json_atomic(cache_path, {
+                    "schema_version": _FILE_METRICS_CACHE_VERSION,
+                    "entries": new_cache_entries,
+                })
+            except OSError:
+                pass
+
+        for entry in files:
+            lines = entry["lines"]
+            if entry["metrics"].get("analyzed"):
+                analyzed_metrics.append(entry["metrics"])
             if lines is not None:
-                for bucket_dict, bucket_key in ((langs, lang), (tops, top)):
+                for bucket_dict, bucket_key in ((langs, entry["lang"]), (tops, entry["top"])):
                     b = bucket_dict.setdefault(
                         bucket_key, {"files": 0, "lines": 0})
                     b["files"] += 1
