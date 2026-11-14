@@ -8,7 +8,7 @@
 | --- | --- |
 | `cl` | `claude --dangerously-skip-permissions --effort max`; adds `--continue` for no arguments or first positional argument |
 | `cmd` | Resolved binary with `--resume --yolo`; either caller `--yolo` or `--dangerously-skip-permissions` suppresses both defaults |
-| `cc` | Run `rotate-codex` first, then `codex resume --yolo` with shared statusline; rotation failure stops launch |
+| `cc` | Run `rotate-codex`, share saved local history, then `codex resume --yolo` with shared statusline; a failed preparation stops launch |
 | `ca` | `cursor-agent --yolo` |
 | `oc` | `opencode` without continue |
 | `occ` | Claude Code on [OpenCode Go](opencode-go.md) |
@@ -20,6 +20,21 @@ All use `_cf_tmux` and forward arguments. `cc --profile NAME` (also
 `rotate-codex NAME` and does not pass the flag to Codex. A missing or repeated
 name fails before launch. Arguments after `--` stay with Codex, including a
 literal `--profile`. Without a profile flag, `cc` still selects automatically.
+
+Before opening the picker, `cc` removes the `account_scoped` marker from existing
+JSONL session headers in `sessions/` and `archived_sessions/` under `CODEX_HOME`
+(default `~/.codex`). Creator IDs stay recorded, while the stock CLI can discover
+the same local history across account switches. The helper updates marker bytes
+in place with whitespace, preserving message bytes, file offsets and open append
+handles. Removed markers and their offsets are saved privately in
+`clusterfork-history-scopes.jsonl` under that same Codex home. Idle files retain
+their modification timestamps. Repeated launches
+leave already-shared files alone; newly created scoped sessions are shared on the
+next `cc` launch. This is a local workaround verified against Codex 0.169.0; see
+the [investigation and abandoned custom build](archive/codex-account-scoped-history.md).
+Existing shells load the updated function with
+`source ~/.config/clusterfork/shell/codex.sh`; new shells load it normally.
+
 The `codex` command applies [statusline](statusline.md#codex)
 overrides but runs directly; `command codex` bypasses it. `cl` adds Opus 4.8 via
 launch-scoped `ANTHROPIC_CUSTOM_MODEL_OPTION*`; sourcing `shell/claude.sh` exports

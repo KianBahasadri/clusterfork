@@ -51,6 +51,7 @@ Dated records establish neither current health nor compatibility; recheck upstre
 - [MCP disable probes](archive/mcp-disable-probes.md) — version-scoped reasons for the shipped controls
 - [Codex rewind, 0.147.0](archive/codex-rewind-bug-0147.md) — upstream prompt-ID regression
 - [Codex context management, 0.153.x](archive/codex-context-management-0153.md) — deferred experiment and measurement criteria
+- [Codex account-scoped history, 0.169.0](archive/codex-account-scoped-history.md) — disappearing-session diagnosis, custom-build attempt and why it was abandoned
 - [Codex usage-limit bell](archive/codex-usage-limit-bell.md) — completion-hook gap and rejected watcher
 - [Command Code resume](archive/cmd-resume-bug.md) — empty-directory failure and reverted fallback
 - [Retired integrations](archive/retired-integrations.md) — removed Aerolink and Pioneer gateways

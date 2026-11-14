@@ -1,8 +1,66 @@
-"""Dependency-free provider identity and login-chain comparisons; never log tokens."""
+"""Provider identity, login comparisons and shared local Codex history."""
 
 import base64
+import fcntl
 import hashlib
 import json
+import os
+from pathlib import Path
+import re
+import sys
+
+
+def share_codex_history(home):
+    """Remove discovery scope in place, preserving creator IDs and byte offsets."""
+    changed = 0
+    for directory in (home / "sessions", home / "archived_sessions"):
+        for path in directory.rglob("*.jsonl"):
+            if path.is_symlink():
+                continue
+            try:
+                stream = path.open("r+b")
+            except FileNotFoundError:
+                continue
+            with stream:
+                fcntl.flock(stream, fcntl.LOCK_EX)
+                info = os.fstat(stream.fileno())
+                header = stream.readline()
+                if b'"account_scoped"' not in header:
+                    continue
+                try:
+                    data = json.loads(header)
+                except ValueError:
+                    continue
+                if not isinstance(data, dict) or data.get("type") != "session_meta":
+                    continue
+                payload = data.get("payload")
+                if not isinstance(payload, dict) or payload.get("account_scoped") is not True:
+                    continue
+                marker = re.search(
+                    rb'"account_scoped"\s*:\s*true\s*,|,\s*"account_scoped"\s*:\s*true', header)
+                if marker is None:
+                    raise ValueError(f"Unrecognized scoped session header: {path}")
+                padding = b" " * len(marker.group())
+                updated = header[:marker.start()] + padding + header[marker.end():]
+                del payload["account_scoped"]
+                if json.loads(updated) != data:
+                    raise ValueError(f"Cannot preserve session metadata: {path}")
+                record = {"path": str(path.relative_to(home)), "offset": marker.start(),
+                          "original": marker.group().decode("utf-8"),
+                          "atime_ns": info.st_atime_ns, "mtime_ns": info.st_mtime_ns}
+                backup_path = home / "clusterfork-history-scopes.jsonl"
+                descriptor = os.open(backup_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(descriptor, "ab") as backup:
+                    backup.write((json.dumps(record) + "\n").encode())
+                    backup.flush()
+                    os.fsync(backup.fileno())
+                if os.pwrite(stream.fileno(), padding, marker.start()) != len(padding):
+                    raise OSError(f"Incomplete session metadata update: {path}")
+                if os.fstat(stream.fileno()).st_size == info.st_size:
+                    os.utime(stream.fileno(), ns=(info.st_atime_ns, info.st_mtime_ns))
+                os.fsync(stream.fileno())
+                changed += 1
+    return changed
 
 
 def jwt_payload(token):
@@ -64,3 +122,13 @@ def login_id(auth, provider):
     tokens = auth if provider == "cursor" else auth["tokens"]
     refresh = tokens["refreshToken" if provider == "cursor" else "refresh_token"]
     return hashlib.sha256(("login:" + refresh).encode()).hexdigest()
+
+
+if __name__ == "__main__":
+    try:
+        count = share_codex_history(Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex"))
+    except (OSError, ValueError) as error:
+        print(f"cc: cannot share local Codex history: {error}", file=sys.stderr)
+        sys.exit(1)
+    if count:
+        print(f"cc: shared {count} saved Codex sessions across accounts", file=sys.stderr)

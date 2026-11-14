@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -101,6 +102,44 @@ class SourcingTests(unittest.TestCase):
 
 
 class CcRotationTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.codex_home = Path(temporary.name)
+        environment = patch.dict(os.environ, {"CODEX_HOME": str(self.codex_home)})
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def test_history_is_shared_after_rotation_before_opening_the_picker(self):
+        proc = run_bash('''
+source shell/codex.sh
+rotate-codex() {
+  python3 - <<'PY'
+import json, os
+from pathlib import Path
+path = Path(os.environ["CODEX_HOME"]) / "sessions" / "rollout.jsonl"
+path.parent.mkdir()
+path.write_text(json.dumps({"type": "session_meta", "payload": {
+    "account_scoped": True, "id": "thread-id", "creator_account_id": "old-account"}}) + "\\n")
+PY
+}
+_cf_launch_codex() {
+  python3 - <<'PY'
+import json, os
+from pathlib import Path
+path = Path(os.environ["CODEX_HOME"]) / "sessions" / "rollout.jsonl"
+payload = json.loads(path.read_text())["payload"]
+assert "account_scoped" not in payload
+assert payload["creator_account_id"] == "old-account"
+print("picker opened with shared history")
+PY
+}
+cc --last
+''')
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "picker opened with shared history")
+        self.assertIn("shared 1 saved Codex sessions", proc.stderr)
+
     def test_rotation_runs_first_without_receiving_codex_arguments(self):
         proc = run_bash('''
 source shell/codex.sh

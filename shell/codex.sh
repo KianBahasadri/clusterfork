@@ -97,6 +97,7 @@ cc() {
     # shellcheck disable=SC2119
     rotate-codex || return "$?"
   fi
+  python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/account_sessions.py" || return "$?"
   _cf_launch_codex tmux resume --yolo "${launch_args[@]}"
 }
 
