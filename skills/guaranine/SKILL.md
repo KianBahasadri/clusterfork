@@ -1,6 +1,6 @@
 ---
 name: guaranine
-description: Reference context for Kian's Guaranine K3s cluster (Kairos nodes over Tailscale, kubeconfig location, PodSecurity restricted rules, disabled components, and networking constraints). Use when deploying workloads, configuring services, debugging cluster issues, or answering questions about the Guaranine cluster, or when invoked with /guaranine.
+description: Reference context for Kian's Guaranine K3s cluster (Kairos nodes over Tailscale, default ~/.kube/config access, PodSecurity restricted rules, disabled components, and networking constraints). Use when deploying workloads, configuring services, debugging cluster issues, or answering questions about the Guaranine cluster, or when invoked with /guaranine.
 ---
 
 # Guaranine Cluster Reference
@@ -16,8 +16,8 @@ Guaranine is Kian's personal K3s cluster: a single cloud control-plane VM plus L
 
 ## Operator Access & Secrets Boundary
 
-- **Operator directory:** `${GUARANINE_OPERATOR_DIR:-$HOME/.local/state/guaranine-kairos}`
-- **Kubeconfig:** `$GUARANINE_OPERATOR_DIR/kubeconfig` (default `~/.local/state/guaranine-kairos/kubeconfig`)
+- **Default `kubectl` / `helm` access:** `~/.kube/config` is already symlinked to the active cluster kubeconfig. Run plain `kubectl` / `helm` directly—do **not** pass `--kubeconfig` or set `KUBECONFIG` unless `GUARANINE_OPERATOR_DIR` is explicitly overridden to a different directory.
+- **Operator directory:** `${GUARANINE_OPERATOR_DIR:-$HOME/.local/state/guaranine-kairos}` holds the authoritative `kubeconfig` and private cluster state.
 - **Connectivity:** The operator machine must be connected to Tailscale (`100.64.0.0/10` routes preserved). The K3s API is only reachable over Tailscale (TCP `6443`).
 - **Privacy rule:** Never copy `kubeconfig`, SSH keys, Tailscale/K3s tokens, `operator.yaml`, `.tfvars`, or `.tfstate` into any git repository or public output. Never commit app secrets (API keys, bot tokens) to Git; load them from Kubernetes `Secret` resources (K3s has `secrets-encryption: true` enabled).
 
