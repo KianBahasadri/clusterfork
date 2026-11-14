@@ -85,6 +85,7 @@ The links below open the complete rules, including any approval requirements.
 | [ask-cursor](../skills/ask-cursor/SKILL.md) | Gets headless help from Cursor Agent on difficult work; `/ask-cursor` |
 | [ask-antigravity](../skills/ask-antigravity/SKILL.md) | Gets headless help from Antigravity, including image work; `/ask-antigravity` |
 | [decide](../skills/decide/SKILL.md) | Forms and explains an independent recommendation when asked to decide |
+| [guaranine](../skills/guaranine/SKILL.md) | Reference context for the Guaranine K3s cluster (kubeconfig, PodSecurity, disabled components, and networking); `/guaranine` |
 | [code-simplifier](../skills/code-simplifier/SKILL.md) | Anthropic's upstream prompt for refining recently changed code while preserving behavior; `/code-simplifier` |
 | [deslop](../skills/deslop/SKILL.md) | Cursor's upstream skill for removing generated code clutter from the branch diff; `/deslop` |
 
