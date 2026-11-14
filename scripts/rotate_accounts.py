@@ -265,6 +265,10 @@ class ScopedAccounts:
                 transfer = profiles
             if transfer:
                 planned.append((identity, transfer))
+        # Moving one alias transfers its login, including any selected copy under
+        # an unchecked alias. Leave unchecked files alone, but detach their links.
+        login_paths = {identity: {path.resolve() for _, path, _, _ in transfer}
+                       for identity, transfer in planned}
         if choose:
             options = sorted({name for _, transfer in planned for name, *_ in transfer})
             if not options:
@@ -277,12 +281,16 @@ class ScopedAccounts:
                 for identity, transfer in planned
             ]
             planned = [(identity, transfer) for identity, transfer in planned if transfer]
+        if planned and self.backend.auth.is_file() and not self.backend.auth.is_symlink():
+            active_identity = account_identity(self.read_auth(self.backend.auth), self.provider)
+            if any(identity == active_identity for identity, _ in planned):
+                raise WorkerError("Unsaved login belongs to a transferred account; save the current credentials before migrating")
         moved = 0
         for identity, transfer in planned:
             names = [name for name, _, _, _ in transfer]
             if any(manifest.get(remote_profile_key(name), {}).get("account_id", identity) != identity for name in names):
                 raise WorkerError("Local and remote names identify different accounts; choose another remote name")
-            paths = {path.resolve() for _, path, _, _ in transfer}
+            paths = login_paths[identity]
             if self.backend.auth.is_symlink() and self.backend.auth.resolve() in paths:
                 self.backend.auth.unlink()
             if self.backend.current.is_symlink() and self.backend.current.resolve() in paths:

@@ -917,19 +917,29 @@ class ClaudeBackend:
         active_bytes: bytes | None = None
         if self.active.is_file():
             active_bytes = self.active.read_bytes()
+        original_name = self.current_suffix()
 
         print(f"{self.command}: kickoff — pinging each saved profile with {KICKOFF_MESSAGE!r}")
         failures = 0
-        for name in names:
-            atomic_copy(self.claude_dir / f"{CLAUDE_PREFIX}{name}", self.active)
-            ok, detail = ping_agent(self.command)
-            mark = "ok" if ok else "FAIL"
-            print(f"  {name}: {mark}" + (f" ({detail})" if not ok else ""))
-            if not ok:
-                failures += 1
-
-        if active_bytes is not None:
-            atomic_write_bytes(self.active, active_bytes)
+        try:
+            for name in names:
+                profile = self.claude_dir / f"{CLAUDE_PREFIX}{name}"
+                atomic_copy(profile, self.active)
+                try:
+                    ok, detail = ping_agent(self.command)
+                finally:
+                    # Refresh may succeed before a failed/interrupted model request.
+                    if self._read_token(self.active):
+                        atomic_copy(self.active, profile)
+                mark = "ok" if ok else "FAIL"
+                print(f"  {name}: {mark}" + (f" ({detail})" if not ok else ""))
+                if not ok:
+                    failures += 1
+        finally:
+            if original_name is not None:
+                atomic_copy(self.claude_dir / f"{CLAUDE_PREFIX}{original_name}", self.active)
+            elif active_bytes is not None:
+                atomic_write_bytes(self.active, active_bytes)
         return 1 if failures else 0
 
     def _choose(self, names: list[str], requested: str | None) -> str:
@@ -1165,26 +1175,43 @@ class SharedStoreBackend:
 
         print(f"{self.command}: kickoff — pinging each saved profile with {KICKOFF_MESSAGE!r}")
         failures = 0
-        for name in names:
-            atomic_symlink(f"{PROFILE_PREFIX}{name}", self.current)
-            if not self._auth_links_to_current():
-                self._restore_auth_link()
-            ok, detail = ping_agent(self.command)
-            mark = "ok" if ok else "FAIL"
-            print(f"  {name}: {mark}" + (f" ({detail})" if not ok else ""))
-            if not ok:
-                failures += 1
-
-        if orig_current is not None:
-            atomic_symlink(orig_current, self.current)
-        else:
-            print(
-                f"{self.command}: warning: store had no previous current link; "
-                f"left it at {readlink_text(self.current)}",
-                file=sys.stderr,
-            )
-        if not orig_auth_hooked and self.auth.is_symlink():
-            self.auth.unlink()
+        try:
+            for name in names:
+                atomic_symlink(f"{PROFILE_PREFIX}{name}", self.current)
+                if not self._auth_links_to_current():
+                    self._restore_auth_link()
+                try:
+                    ok, detail = ping_agent(self.command)
+                finally:
+                    # Some clients replace auth.json instead of following its link.
+                    # Save the refresh before reconnecting or selecting another login.
+                    if self.auth.is_file() and not self.auth.is_symlink():
+                        profile = self.store_dir / f"{PROFILE_PREFIX}{name}"
+                        if self.command in {"rotate-codex", "rotate-cursor-cli"}:
+                            provider = "cursor" if self.command == "rotate-cursor-cli" else "codex"
+                            try:
+                                identity = account_identity(json.loads(self.auth.read_text()), provider)
+                                if identity != account_identity(json.loads(profile.read_text()), provider):
+                                    raise ValueError("Account changed during kickoff")
+                            except (OSError, ValueError, TypeError):
+                                fail(f"{self.command}: kickoff login changed; active credentials were kept")
+                        atomic_copy(self.auth, profile)
+                        self._restore_auth_link()
+                mark = "ok" if ok else "FAIL"
+                print(f"  {name}: {mark}" + (f" ({detail})" if not ok else ""))
+                if not ok:
+                    failures += 1
+        finally:
+            if orig_current is not None:
+                atomic_symlink(orig_current, self.current)
+            else:
+                print(
+                    f"{self.command}: warning: store had no previous current link; "
+                    f"left it at {readlink_text(self.current)}",
+                    file=sys.stderr,
+                )
+            if not orig_auth_hooked and self.auth.is_symlink():
+                self.auth.unlink()
         return 1 if failures else 0
 
     def unhook(self) -> int:

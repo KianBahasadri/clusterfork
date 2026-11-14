@@ -120,13 +120,20 @@ names and dashed arguments fail before pings. Ping failures do not stop the swee
 but make its final exit code 1. Shared stores refuse regular `auth.json` files;
 Antigravity refuses an active item without a recoverable current profile.
 
-Normal completion restores Claude's previous file bytes, shared stores' previous
-`current` link (removing a temporary agent link if initially unhooked), and
-Antigravity's current saved profile or fully unhooked state. Limits: Claude with
+Each ping preserves refreshed credentials even when the model request fails.
+Claude copies them back to the saved profile; shared stores capture regular-file
+auth replacements before rebuilding their links. Codex/Cursor reject a replacement
+belonging to another account and preserve that active file.
+
+Completion restores Claude's previous saved login with its updated credentials
+(or the original bytes for an unsaved login), shared stores' previous `current`
+link (removing a temporary agent link if initially unhooked), and Antigravity's
+current saved profile or fully unhooked state. Limits: Claude with
 no previous file and shared stores without `current` remain on the last profile
 (the latter warns). Antigravity cannot restore a current profile omitted from an
-explicit subset; use a full sweep when restoration matters. Interrupted sweeps
-have no general cleanup guarantee.
+explicit subset; use a full sweep when restoration matters. Claude and shared
+stores also run their preservation/restoration steps on interruption. Antigravity
+has no general interrupted-sweep cleanup guarantee.
 
 ## Implementation and directory overrides
 

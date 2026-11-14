@@ -62,7 +62,10 @@ sign-in is required.
 
 The interactive menu moves only the checked profiles. Aliases of one remote
 account are one choice and move together. The explicit direction flags move
-every eligible profile.
+every eligible profile. Moving a local alias also detaches selection links to
+unchecked copies of the same login, preventing further local refreshes of the
+transferred session. An unsaved regular active login of a transferred account
+must be saved before migration; its credentials are never discarded.
 
 Pending remote transfers live under the private sibling directory
 `.<store-directory-name>-logins/{local,remote}/NAME/`, outside profile enumeration.
@@ -297,6 +300,10 @@ Private SQLite `accounts` rows hold auth caches. Each account has one 120-second
 lease with random fence; SQL atomically checks owner/fence/expiry. Jobs renew every
 20 seconds and save refreshes during execution/exit. Lease loss stops the agent;
 a crash before persisting a refreshed token can require login again.
+Live quota-probe leases are exclusive too: workers, reclaim and deletion refuse
+them until the probe saves its refreshed credentials and releases the lease.
+Taking over a probe could otherwise transfer stale tokens and discard their
+replacement. Retrying a transfer after a busy response reads the latest login.
 
 Codex retains its `codex` identities. Cursor uses provider `cursor`, login format
 `cursor-cli-auth-v1` (`accessToken`, `refreshToken`), and SHA-256 of access JWT `sub`
@@ -310,9 +317,9 @@ renewal path; expired/revoked logins fail without invented endpoints or local fa
 The App private key stays in Azure. [Signed job roles](remote-development-controller.md#controller-owned-execution)
 authorize each phase. Review/coding select independently before target checkout.
 Private probe homes are saved/released; atomic assignment reserves the chosen
-lease and closes pool access. Execution worker leases preempt background usage-collector
-(`quota:*`) probes, while background collection pauses while tasks are active.
-Heartbeats preserve the lease through checkout; execution
+lease and closes pool access. Background collection pauses while tasks are active;
+workers respect any probe already holding an account lease. Heartbeats preserve
+the lease through checkout; execution
 claims that same fence. Selection cannot execute target code, validate or publish.
 
 Quota inspection is a snapshot, not a reservation. If another worker wins the
