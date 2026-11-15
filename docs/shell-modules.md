@@ -60,6 +60,11 @@ include `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `OCC_OPENCODE_AUTH_FILE` and rotation
 directories. Labels are launch snapshots; rotation does not rename windows.
 Automatic/terminal renaming is disabled; direct launches have no label.
 
+`tmux.conf` uses the terminal's default background and foreground for the status
+bar, with cyan active-window and active-pane-border accents from its palette.
+These colors follow the terminal's light or dark theme without a separate tmux
+theme switch.
+
 ## Grok confirmation
 
 Interactive `grok` asks `did you mean to launch grok? y/n`; only `y` proceeds.

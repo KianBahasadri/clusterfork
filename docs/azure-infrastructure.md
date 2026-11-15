@@ -1,5 +1,26 @@
 # Azure infrastructure
 
+## Deployment status: decommissioned November 14, 2026
+
+The Azure deployment was torn down at the owner's request. Both
+`rg-clusterfork-automation` and `rg-clusterfork-tfstate` were deleted, including
+the controller VM, disks, public IP, recovery snapshots, monitoring, deployment
+identity, Key Vault and remote Terraform storage. The controller had no active
+tasks when it was stopped. GitHub workflows `deploy-azure.yml` and
+`clusterfork-task.yml` are disabled.
+
+Private state backups, destroy plans and verification receipts are saved under
+`~/.local/state/clusterfork/teardown/20261114T222428Z/`. Deletion protection was
+relaxed only in private teardown copies; the checked-in Terraform configuration
+retains its protections. The bootstrap teardown used local state so it could
+delete its own former backend.
+
+Azure retains the deleted vault `cfsecrets7604cac329` under purge protection
+until December 14, 2026, and the deleted Log Analytics workspace under its
+[workspace recovery policy](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/delete-workspace).
+The sections below describe the former deployment and its configuration;
+rebuilding requires restoring the backend and deliberately enabling deployment.
+
 Terraform owns Azure resources/configuration; deployment installs versioned source.
 Task state, auth caches, instructions and leases are private SQLite runtime data
 on the Terraform-managed disk.
