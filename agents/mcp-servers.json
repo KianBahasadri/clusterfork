@@ -1,0 +1,48 @@
+{
+  "servers": [
+    {
+      "name": "context7",
+      "enabled": true,
+      "url": "https://mcp.context7.com/mcp",
+      "headers": [
+        {"name": "CONTEXT7_API_KEY", "env": "CONTEXT7_API_KEY"},
+        {
+          "name": "Accept",
+          "value": "application/json, text/event-stream",
+          "agents": ["grok", "qwen"]
+        }
+      ],
+      "claudeMarketplace": "context7@claude-plugins-official"
+    },
+    {
+      "name": "ElevenLabs",
+      "enabled": true,
+      "command": "bash",
+      "args": ["-c", "exec \"$HOME/.config/clusterfork/bin/elevenlabs-mcp\""]
+    },
+    {
+      "name": "linear",
+      "enabled": false,
+      "url": "https://mcp.linear.app/mcp",
+      "bearer": {"env": "LINEAR_API_KEY", "optional": true}
+    },
+    {
+      "name": "chrome-devtools",
+      "enabled": false,
+      "command": "pnpm",
+      "args": [
+        "dlx",
+        "chrome-devtools-mcp@latest",
+        "--no-usage-statistics",
+        "--browserUrl",
+        "http://127.0.0.1:9222"
+      ]
+    },
+    {
+      "name": "pixellab",
+      "enabled": false,
+      "url": "https://api.pixellab.ai/mcp",
+      "bearer": {"env": "PIXELLAB_API_KEY"}
+    }
+  ]
+}

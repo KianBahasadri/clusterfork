@@ -14,52 +14,5 @@
         "edit": "deny"
       }
     }
-  },
-  "mcp": {
-    "context7": {
-      "type": "remote",
-      "url": "https://mcp.context7.com/mcp",
-      "headers": {
-        "CONTEXT7_API_KEY": "{env:CONTEXT7_API_KEY}"
-      },
-      "enabled": true
-    },
-    "linear": {
-      "type": "remote",
-      "url": "https://mcp.linear.app/mcp",
-      "headers": {
-        "Authorization": "Bearer {env:LINEAR_API_KEY}"
-      },
-      "enabled": false
-    },
-    "chrome-devtools": {
-      "type": "local",
-      "command": [
-        "pnpm",
-        "dlx",
-        "chrome-devtools-mcp@latest",
-        "--no-usage-statistics",
-        "--browserUrl",
-        "http://127.0.0.1:9222"
-      ],
-      "enabled": false
-    },
-    "pixellab": {
-      "type": "remote",
-      "url": "https://api.pixellab.ai/mcp",
-      "headers": {
-        "Authorization": "Bearer {env:PIXELLAB_API_KEY}"
-      },
-      "enabled": false
-    },
-    "ElevenLabs": {
-      "type": "local",
-      "command": [
-        "bash",
-        "-c",
-        "exec \"$HOME/.config/clusterfork/bin/elevenlabs-mcp\""
-      ],
-      "enabled": false
-    }
   }
 }

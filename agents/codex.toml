@@ -1,46 +1,14 @@
-# Codex settings and MCP servers.
+# Codex settings.
 #
-# Top-level settings defined here, [mcp_servers] tables, and [hooks] tables
-# are installed/overwritten into ~/.codex/config.toml. Other settings (model,
-# approvals, per-project trust levels written by Codex) are preserved.
-# The installer also strips retired clusterfork keys (notify).
+# Top-level settings defined here and [hooks] tables are installed into
+# ~/.codex/config.toml. The installer adds [mcp_servers] from
+# agents/mcp-servers.json before that merge. Other settings (model, approvals,
+# per-project trust levels written by Codex) are preserved. The installer also
+# strips retired clusterfork keys (notify).
 #
 # Secrets stay in .env: Codex resolves env_http_headers and bearer_token_env_var
 # from the environment at launch, and bash_profile.sh exports .env into every
 # shell, so no API key is written into config.toml.
-
-[mcp_servers.context7]
-url = "https://mcp.context7.com/mcp"
-enabled = true
-
-[mcp_servers.context7.env_http_headers]
-CONTEXT7_API_KEY = "CONTEXT7_API_KEY"
-
-[mcp_servers.ElevenLabs]
-command = "bash"
-args = ["-c", "exec \"$HOME/.config/clusterfork/bin/elevenlabs-mcp\""]
-enabled = true
-
-[mcp_servers.linear]
-url = "https://mcp.linear.app/mcp"
-bearer_token_env_var = "LINEAR_API_KEY"
-enabled = true
-
-[mcp_servers.chrome-devtools]
-command = "pnpm"
-args = [
-    "dlx",
-    "chrome-devtools-mcp@latest",
-    "--no-usage-statistics",
-    "--browserUrl",
-    "http://127.0.0.1:9222",
-]
-enabled = false
-
-[mcp_servers.pixellab]
-url = "https://api.pixellab.ai/mcp"
-bearer_token_env_var = "PIXELLAB_API_KEY"
-enabled = false
 
 # Stop is root-turn only. Thread-spawned subagents fire SubagentStop instead,
 # so they do not notify. async: don't hold the turn open for the notifier.

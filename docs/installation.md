@@ -39,13 +39,10 @@ Paths below are relative to the repository unless prefixed with `~`.
 | `agents/qwen.json` | `~/.qwen/settings.json` |
 | `agents/grok.toml` | `~/.grok/config.toml` |
 | `agents/claude.json` | `~/.claude/settings.json` |
-| `agents/claude-plugins/<name>/` | `~/.claude/skills/<name>/` (after the shared skills copy) |
+| `agents/mcp-servers.json` | `~/.cursor/mcp.json`, `~/.commandcode/mcp.json`, `~/.gemini/config/mcp_config.json`, the MCP sections of OpenCode, Qwen, Grok, and Codex settings, Claude `enabledPlugins`, disabled Claude skills-dir plugins, and enabled user servers in `~/.claude.json` |
 | `agents/antigravity.json` | `~/.gemini/antigravity-cli/settings.json` |
 | `agents/antigravity-hooks.json` | `~/.gemini/config/hooks.json` |
-| `agents/antigravity-mcp.json` | `~/.gemini/config/mcp_config.json` |
 | `agents/cursor-hooks.json` | `~/.cursor/hooks.json` |
-| `agents/cursor-mcp.json` | `~/.cursor/mcp.json` |
-| `agents/command-code-mcp.json` | `~/.commandcode/mcp.json` |
 | `agents/command-code.json` | `~/.commandcode/config.json` |
 | `agents/command-code-settings.json` | `~/.commandcode/settings.json` |
 | `agents/codex.toml` | `~/.codex/config.toml` |
@@ -71,7 +68,7 @@ exceptions:
 | `~/.gemini/antigravity-cli/settings.json` | Overlays repo keys and unions `trustedWorkspaces`; retains unrelated runtime keys |
 | `~/.commandcode/config.json` | Overlays repo keys, currently `telemetry`; retains other settings |
 | `~/.commandcode/settings.json` | Ensures the repo's Stop hook and removes the exact legacy clusterfork bell; retains other hooks and settings |
-| `~/.claude.json` | Upserts only `mcpServers.ElevenLabs` |
+| `~/.claude.json` | Upserts enabled non-marketplace roster servers and removes other roster servers |
 | `~/.cursor/hooks.json` | Ensures the repo's stop hook; creates a minimal file when absent and preserves other hooks |
 | `~/.cursor/cli-config.json` | Upserts `statusLine`; creates a minimal file when absent |
 | `~/.codex/config.toml` | Overlays repo top-level keys and tables, removes retired `notify`, and restores existing `hooks.state` with the notifier's `trusted_hash` updated; retains unrelated settings and project trust |

@@ -26,9 +26,9 @@ Work on this repository's `skills/`, then reinstall to distribute edits.
 Disabled definitions are kept in `disabled-skills/`, outside the installer's
 source tree and the dashboard's active inventory. Move a definition's directory
 back into `skills/` and reinstall to enable it again.
-`agents/claude-plugins/` also installs directories into Claude's skills tree;
-those are [MCP plugins](agent-configs.md#skills-directory-mcp-plugins), not
-shared `SKILL.md` skills.
+Disabled MCP servers from the [roster](agent-configs.md#skills-directory-mcp-plugins)
+are also written into Claude's skills tree. Those are MCP plugins, not shared
+`SKILL.md` skills.
 
 ## Upstream skills
 

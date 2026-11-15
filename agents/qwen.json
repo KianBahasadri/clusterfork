@@ -12,43 +12,5 @@
     "accessibility": {
       "enableLoadingPhrases": false
     }
-  },
-  "mcp": {
-    "excluded": ["linear", "chrome-devtools", "pixellab"]
-  },
-  "mcpServers": {
-    "context7": {
-      "httpUrl": "https://mcp.context7.com/mcp",
-      "headers": {
-        "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}",
-        "Accept": "application/json, text/event-stream"
-      }
-    },
-    "ElevenLabs": {
-      "command": "bash",
-      "args": ["-c", "exec \"$HOME/.config/clusterfork/bin/elevenlabs-mcp\""]
-    },
-    "linear": {
-      "httpUrl": "https://mcp.linear.app/mcp",
-      "headers": {
-        "Authorization": "Bearer ${LINEAR_API_KEY}"
-      }
-    },
-    "chrome-devtools": {
-      "command": "pnpm",
-      "args": [
-        "dlx",
-        "chrome-devtools-mcp@latest",
-        "--no-usage-statistics",
-        "--browserUrl",
-        "http://127.0.0.1:9222"
-      ]
-    },
-    "pixellab": {
-      "httpUrl": "https://api.pixellab.ai/mcp",
-      "headers": {
-        "Authorization": "Bearer ${PIXELLAB_API_KEY}"
-      }
-    }
   }
 }

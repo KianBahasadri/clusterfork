@@ -15,14 +15,14 @@
 #      Code and Antigravity, plus OpenCode compatibility aliases.
 #   6. Overwrites Claude/Cursor statusline scripts + usage fetchers from
 #      repo-local statusline/ and links shared Codex statusline settings
-#   7. Overwrites ~/.cursor/mcp.json from agents/cursor-mcp.json (expands
-#      ${ENV} placeholders from the clusterfork .env)
+#   7. Renders ~/.cursor/mcp.json from agents/mcp-servers.json (expands
+#      ${ENV} placeholders from the clusterfork .env; disabled servers omitted)
 #   8. Ensures the stop turn-notification hook in ~/.cursor/hooks.json from
 #      agents/cursor-hooks.json (appends the hook if missing; preserves the
 #      rest of the file)
-#   9. Overwrites ~/.commandcode/mcp.json from agents/command-code-mcp.json
+#   9. Renders ~/.commandcode/mcp.json from agents/mcp-servers.json
 #      (expands ${ENV} placeholders from the clusterfork .env)
-#  10. Overwrites ~/.gemini/config/mcp_config.json from agents/antigravity-mcp.json
+#  10. Renders ~/.gemini/config/mcp_config.json from agents/mcp-servers.json
 #      (expands ${ENV} placeholders from the clusterfork .env)
 #  11. Ensures telemetry is disabled in ~/.commandcode/config.json from
 #      agents/command-code.json (key only; does not replace the whole file)
@@ -30,13 +30,13 @@
 #      agents/command-code-settings.json (appends the hook if missing; preserves
 #      the rest of the file)
 #  13. Updates ~/.codex/config.toml from agents/codex.toml (merges top-level
-#      settings, replaces mcp_servers and hook event tables, strips retired
-#      keys like notify, stamps trusted_hash for the notification hooks; Codex owns
-#      the rest of that file)
-#  14. Installs agents/claude-plugins/* into ~/.claude/skills/ as skills-dir
-#      plugins; agents/claude.json ships each one disabled
-#  15. Ensures ElevenLabs in ~/.claude.json mcpServers (key only; does not
-#      replace the whole file)
+#      settings, replaces mcp_servers from agents/mcp-servers.json and hook
+#      event tables, strips retired keys like notify, stamps trusted_hash for
+#      the notification hooks; Codex owns the rest of that file)
+#  14. Renders disabled MCP servers from agents/mcp-servers.json into
+#      ~/.claude/skills/ as skills-dir plugins; claude settings records them off
+#  15. Ensures enabled non-marketplace MCP servers in ~/.claude.json (those
+#      keys only; does not replace the whole file)
 #  16. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
 #      replace the whole file)
 #  17. Appends a source line to ~/.bashrc if it is not already present
@@ -69,6 +69,7 @@ ROTATE_AUTH_DEST="$CLUSTERFORK_CONFIG_DIR/scripts/rotate_auth.py"
 CODEVIEW_SRC_DIR="$REPO_DIR/scripts/codeview"
 CODEVIEW_DEST_DIR="$CLUSTERFORK_CONFIG_DIR/scripts/codeview"
 AGENTS_SRC_DIR="$REPO_DIR/agents"
+MCP_ROSTER="$AGENTS_SRC_DIR/mcp-servers.json"
 MCP_CONFIG_RENDERER="$REPO_DIR/scripts/mcp_config.py"
 OPENCODE_CONFIG_SRC="$AGENTS_SRC_DIR/opencode.json"
 OPENCODE_CONFIG_DEST="$HOME/.config/opencode/opencode.json"
@@ -78,13 +79,11 @@ ANTIGRAVITY_CONFIG_SRC="$AGENTS_SRC_DIR/antigravity.json"
 ANTIGRAVITY_CONFIG_DEST="$HOME/.gemini/antigravity-cli/settings.json"
 ANTIGRAVITY_HOOKS_SRC="$AGENTS_SRC_DIR/antigravity-hooks.json"
 ANTIGRAVITY_HOOKS_DEST="$HOME/.gemini/config/hooks.json"
-ANTIGRAVITY_MCP_SRC="$AGENTS_SRC_DIR/antigravity-mcp.json"
 ANTIGRAVITY_MCP_DEST="$HOME/.gemini/config/mcp_config.json"
 SKILLS_SRC_DIR="$REPO_DIR/skills"
 QWEN_SKILLS_DEST_DIR="$HOME/.qwen/skills"
 GROK_SKILLS_DEST_DIR="$HOME/.grok/skills"
 CLAUDE_SKILLS_DEST_DIR="$HOME/.claude/skills"
-CLAUDE_PLUGINS_SRC_DIR="$AGENTS_SRC_DIR/claude-plugins"
 CODEX_SKILLS_DEST_DIR="$HOME/.codex/skills"
 COMMAND_CODE_SKILLS_DEST_DIR="$HOME/.commandcode/skills"
 OPENCODE_SKILLS_DEST_DIR="$HOME/.config/opencode/skills"
@@ -103,12 +102,10 @@ CURSOR_STATUSLINE_SRC="$STATUSLINE_SRC_DIR/cursor/statusline.sh"
 CURSOR_STATUSLINE_DEST="$HOME/.cursor/statusline.sh"
 CURSOR_USAGE_FETCH_SRC="$STATUSLINE_SRC_DIR/cursor/usage-fetch.py"
 CURSOR_USAGE_FETCH_DEST="$HOME/.cursor/cursor-usage-fetch.py"
-CURSOR_MCP_SRC="$AGENTS_SRC_DIR/cursor-mcp.json"
 CURSOR_MCP_DEST="$HOME/.cursor/mcp.json"
 CURSOR_HOOKS_SRC="$AGENTS_SRC_DIR/cursor-hooks.json"
 CURSOR_HOOKS_DEST="$HOME/.cursor/hooks.json"
 CURSOR_CLI_CONFIG="$HOME/.cursor/cli-config.json"
-COMMAND_CODE_MCP_SRC="$AGENTS_SRC_DIR/command-code-mcp.json"
 COMMAND_CODE_MCP_DEST="$HOME/.commandcode/mcp.json"
 COMMAND_CODE_CONFIG_SRC="$AGENTS_SRC_DIR/command-code.json"
 COMMAND_CODE_CONFIG_DEST="$HOME/.commandcode/config.json"
@@ -153,9 +150,26 @@ step() {
 # An extra destination installed by the previous step, aligned under it.
 substep() { printf '%-29s+  %s\n' '' "$(tildify "$1")"; }
 
-# Comma-joined MCP server names from a repo MCP JSON file.
+# Comma-joined MCP server names the roster installs for one agent.
 mcp_server_names() {
-  python3 -c 'import json, sys; print(", ".join(json.load(open(sys.argv[1], encoding="utf-8"))["mcpServers"]))' "$1"
+  python3 "$MCP_CONFIG_RENDERER" names --roster "$MCP_ROSTER" --agent "$1"
+}
+
+# Write one agent's MCP config from agents/mcp-servers.json.
+render_mcp() {
+  local agent="$1" dest="$2" template="${3:-}"
+  [[ -f "$MCP_ROSTER" ]] || fail "missing $(tildify "$MCP_ROSTER")"
+  local args=(
+    "$MCP_CONFIG_RENDERER" apply
+    --roster "$MCP_ROSTER"
+    --dotenv "$DOTENV_DEST"
+    --agent "$agent"
+    --dest "$dest"
+  )
+  if [[ -n "$template" ]]; then
+    args+=(--template "$template")
+  fi
+  python3 "${args[@]}"
 }
 
 # A fatal error with an optional hint line, then exit.
@@ -488,12 +502,12 @@ step "codeview server" "$CODEVIEW_DEST_DIR"
 
 [[ -f "$OPENCODE_CONFIG_SRC" ]] || fail "missing $(tildify "$OPENCODE_CONFIG_SRC")"
 mkdir -p "$(dirname "$OPENCODE_CONFIG_DEST")"
-python3 "$MCP_CONFIG_RENDERER" "$OPENCODE_CONFIG_SRC" "$OPENCODE_CONFIG_DEST" "$DOTENV_DEST"
+render_mcp opencode "$OPENCODE_CONFIG_DEST" "$OPENCODE_CONFIG_SRC"
 step "opencode" "$OPENCODE_CONFIG_DEST"
 
 [[ -f "$QWEN_CONFIG_SRC" ]] || fail "missing $(tildify "$QWEN_CONFIG_SRC")"
 mkdir -p "$(dirname "$QWEN_CONFIG_DEST")"
-python3 "$MCP_CONFIG_RENDERER" "$QWEN_CONFIG_SRC" "$QWEN_CONFIG_DEST" "$DOTENV_DEST"
+render_mcp qwen "$QWEN_CONFIG_DEST" "$QWEN_CONFIG_SRC"
 step "qwen code" "$QWEN_CONFIG_DEST"
 
 [[ -f "$ANTIGRAVITY_CONFIG_SRC" ]] || fail "missing $(tildify "$ANTIGRAVITY_CONFIG_SRC")"
@@ -581,45 +595,18 @@ if [[ -d "$SKILLS_SRC_DIR" ]]; then
 fi
 
 # Claude Code has no global off switch for ~/.claude.json mcpServers entries —
-# /mcp's toggle only writes a per-project opt-out — so servers that must default
-# to off ship as plugins instead. A directory under ~/.claude/skills/ holding
-# .claude-plugin/plugin.json auto-loads as the plugin <name>@skills-dir, and
-# agents/claude.json turns each one off in enabledPlugins. This runs after the
-# skills copy above, which wipes that directory.
-if [[ -d "$CLAUDE_PLUGINS_SRC_DIR" ]]; then
-  python3 - "$CLAUDE_CONFIG_SRC" "$CLAUDE_PLUGINS_SRC_DIR" <<'CLAUDE_PLUGINS_PY'
-import json, pathlib, sys
-
-settings_path, plugins_dir = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
-enabled = json.loads(settings_path.read_text()).get("enabledPlugins", {})
-
-for plugin in sorted(p for p in plugins_dir.iterdir() if p.is_dir()):
-    for required in (".claude-plugin/plugin.json", ".mcp.json"):
-        if not (plugin / required).is_file():
-            sys.exit(f"claude mcp plugins: {plugin.name} is missing {required}")
-    key = f"{plugin.name}@skills-dir"
-    if enabled.get(key) is not False:
-        sys.exit(f"claude mcp plugins: {settings_path.name} must set "
-                 f'"{key}": false — plugins are on unless told otherwise')
-CLAUDE_PLUGINS_PY
-
-  mkdir -p "$CLAUDE_SKILLS_DEST_DIR"
-  plugin_names=""
-  for d in "$CLAUDE_PLUGINS_SRC_DIR"/*/; do
-    [[ -d "$d" ]] || continue
-    plugin_name="$(basename "$d")"
-    rm -rf -- "${CLAUDE_SKILLS_DEST_DIR:?}/$plugin_name"
-    cp -r "$d" "$CLAUDE_SKILLS_DEST_DIR/$plugin_name"
-    python3 "$MCP_CONFIG_RENDERER" "$d/.mcp.json" \
-      "$CLAUDE_SKILLS_DEST_DIR/$plugin_name/.mcp.json" "$DOTENV_DEST"
-    plugin_names+=", $plugin_name"
-  done
-  plugin_detail="${plugin_names#, }"
-  if [[ -n "$plugin_detail" ]]; then
-    plugin_detail="disabled: $plugin_detail"
-  fi
-  step "claude mcp plugins" "$CLAUDE_SKILLS_DEST_DIR" "$plugin_detail"
+# /mcp's toggle only writes a per-project opt-out — so a disabled roster server
+# is installed as a plugin. A directory under ~/.claude/skills/ holding
+# .claude-plugin/plugin.json auto-loads as <name>@skills-dir, and the rendered
+# settings set that plugin false. This runs after the skills copy above, which
+# wipes that directory.
+mkdir -p "$CLAUDE_SKILLS_DEST_DIR"
+render_mcp claude-plugins "$CLAUDE_SKILLS_DEST_DIR"
+plugin_detail="$(mcp_server_names claude-plugins)"
+if [[ -n "$plugin_detail" ]]; then
+  plugin_detail="disabled: $plugin_detail"
 fi
+step "claude mcp plugins" "$CLAUDE_SKILLS_DEST_DIR" "$plugin_detail"
 
 [[ -f "$GROK_CONFIG_SRC" ]] || fail "missing $(tildify "$GROK_CONFIG_SRC")"
 mkdir -p "$(dirname "$GROK_CONFIG_DEST")"
@@ -628,7 +615,7 @@ grok_theme=""
 if [[ -f "$GROK_CONFIG_DEST" ]]; then
   grok_theme="$(sed -n 's/^theme = "\(.*\)"/\1/p' "$GROK_CONFIG_DEST" | head -n1)"
 fi
-python3 "$MCP_CONFIG_RENDERER" "$GROK_CONFIG_SRC" "$GROK_CONFIG_DEST" "$DOTENV_DEST"
+render_mcp grok "$GROK_CONFIG_DEST" "$GROK_CONFIG_SRC"
 if [[ -n "$grok_theme" ]]; then
   sed -i "s/^theme = \".*\"/theme = \"$grok_theme\"/" "$GROK_CONFIG_DEST"
 fi
@@ -640,7 +627,7 @@ step "grok config" "$GROK_CONFIG_DEST" "$grok_detail"
 
 [[ -f "$CLAUDE_CONFIG_SRC" ]] || fail "missing $(tildify "$CLAUDE_CONFIG_SRC")"
 mkdir -p "$(dirname "$CLAUDE_CONFIG_DEST")"
-cp "$CLAUDE_CONFIG_SRC" "$CLAUDE_CONFIG_DEST"
+render_mcp claude-settings "$CLAUDE_CONFIG_DEST" "$CLAUDE_CONFIG_SRC"
 step "claude" "$CLAUDE_CONFIG_DEST" "Stop → clusterfork-notify"
 
 [[ -f "$CLAUDE_STATUSLINE_SRC" ]] || fail "missing $(tildify "$CLAUDE_STATUSLINE_SRC")"
@@ -664,10 +651,10 @@ step "cursor status" "$CURSOR_STATUSLINE_DEST"
 substep "$CURSOR_USAGE_FETCH_DEST"
 
 # Cursor MCP: expand ${VAR} from clusterfork .env so secrets stay out of the repo.
-[[ -f "$CURSOR_MCP_SRC" ]] || fail "missing $(tildify "$CURSOR_MCP_SRC")"
+# Disabled servers are omitted; Cursor has no config-file off switch.
 mkdir -p "$(dirname "$CURSOR_MCP_DEST")"
-python3 "$MCP_CONFIG_RENDERER" "$CURSOR_MCP_SRC" "$CURSOR_MCP_DEST" "$DOTENV_DEST" --expand
-step "cursor mcp" "$CURSOR_MCP_DEST" "$(mcp_server_names "$CURSOR_MCP_SRC")"
+render_mcp cursor "$CURSOR_MCP_DEST"
+step "cursor mcp" "$CURSOR_MCP_DEST" "$(mcp_server_names cursor)"
 
 # Cursor hooks: ensure the stop turn-notification hook in ~/.cursor/hooks.json
 [[ -f "$CURSOR_HOOKS_SRC" ]] || fail "missing $(tildify "$CURSOR_HOOKS_SRC")"
@@ -709,16 +696,14 @@ PY
 step "cursor hooks" "$CURSOR_HOOKS_DEST" "stop → clusterfork-notify"
 
 # Command Code MCP: same ${VAR} expansion as Cursor so secrets stay out of the repo.
-[[ -f "$COMMAND_CODE_MCP_SRC" ]] || fail "missing $(tildify "$COMMAND_CODE_MCP_SRC")"
 mkdir -p "$(dirname "$COMMAND_CODE_MCP_DEST")"
-python3 "$MCP_CONFIG_RENDERER" "$COMMAND_CODE_MCP_SRC" "$COMMAND_CODE_MCP_DEST" "$DOTENV_DEST" --expand
-step "command code mcp" "$COMMAND_CODE_MCP_DEST" "$(mcp_server_names "$COMMAND_CODE_MCP_SRC")"
+render_mcp command-code "$COMMAND_CODE_MCP_DEST"
+step "command code mcp" "$COMMAND_CODE_MCP_DEST" "$(mcp_server_names command-code)"
 
 # Antigravity MCP: same ${VAR} expansion as Cursor/Command Code so secrets stay out of the repo.
-[[ -f "$ANTIGRAVITY_MCP_SRC" ]] || fail "missing $(tildify "$ANTIGRAVITY_MCP_SRC")"
 mkdir -p "$(dirname "$ANTIGRAVITY_MCP_DEST")"
-python3 "$MCP_CONFIG_RENDERER" "$ANTIGRAVITY_MCP_SRC" "$ANTIGRAVITY_MCP_DEST" "$DOTENV_DEST" --expand
-step "antigravity mcp" "$ANTIGRAVITY_MCP_DEST" "$(mcp_server_names "$ANTIGRAVITY_MCP_SRC")"
+render_mcp antigravity "$ANTIGRAVITY_MCP_DEST"
+step "antigravity mcp" "$ANTIGRAVITY_MCP_DEST" "$(mcp_server_names antigravity)"
 
 # Command Code config: ensure telemetry is disabled. Merge keys from the repo
 # template into ~/.commandcode/config.json so existing user settings (provider,
@@ -809,21 +794,21 @@ if changed or not dest.is_file():
 PY
 step "command code hooks" "$COMMAND_CODE_SETTINGS_DEST" "Stop → clusterfork-notify"
 
-# Codex config: update top-level settings, replace mcp_servers and hook event
-# tables from agents/codex.toml, strip retired clusterfork keys (notify), and
+# Codex config: update top-level settings, replace mcp_servers from the roster
+# and hook event tables from agents/codex.toml, strip retired keys (notify), and
 # stamp trusted_hash for the notification hooks (other hooks.state entries kept).
 # Other settings (model, approvals, per-project trust levels written by Codex)
 # are preserved.
 [[ -f "$CODEX_CONFIG_SRC" ]] || fail "missing $(tildify "$CODEX_CONFIG_SRC")"
 mkdir -p "$(dirname "$CODEX_CONFIG_DEST")"
-python3 - "$CODEX_CONFIG_SRC" "$CODEX_CONFIG_DEST" "$DOTENV_DEST" "$REPO_DIR/scripts" <<'PY'
+python3 - "$CODEX_CONFIG_SRC" "$CODEX_CONFIG_DEST" "$DOTENV_DEST" "$REPO_DIR/scripts" "$MCP_ROSTER" <<'PY'
 import os, re, sys, tomllib
 from pathlib import Path
 
-src_path, dest_path, dotenv_path, scripts_dir = map(Path, sys.argv[1:])
+src_path, dest_path, dotenv_path, scripts_dir, roster_path = map(Path, sys.argv[1:])
 sys.path.insert(0, str(scripts_dir))
 import codex_hook_trust
-from mcp_config import load_dotenv, toml_template
+from mcp_config import load_dotenv, load_roster, render_codex_source
 
 env = dict(os.environ)
 installed_env = load_dotenv(dotenv_path)
@@ -831,7 +816,7 @@ env.update(installed_env)
 
 # Only the installed .env selects shared-key auth; ambient controller secrets
 # must not opt an interactive client into a different authentication mode.
-src_raw = toml_template(src_path, installed_env)
+src_raw = render_codex_source(src_path.read_text(encoding="utf-8"), load_roster(roster_path), installed_env)
 
 def expand_match(m: re.Match[str]) -> str:
     var = m.group(1)
@@ -1050,7 +1035,7 @@ for k, v in before.items():
 if result != current:
     dest_path.write_text(result, encoding="utf-8")
 PY
-step "codex config" "$CODEX_CONFIG_DEST" "Stop / needs attention → clusterfork-notify; mcp_servers: $(python3 -c 'import sys, tomllib; print(", ".join(tomllib.load(open(sys.argv[1], "rb")).get("mcp_servers", {})))' "$CODEX_CONFIG_SRC")"
+step "codex config" "$CODEX_CONFIG_DEST" "Stop / needs attention → clusterfork-notify; mcp_servers: $(mcp_server_names codex)"
 
 # The dev box mounts the auth store read-only. Install the shared status-line
 # settings on its writable host; each environment only needs a relative link.
@@ -1066,27 +1051,10 @@ fi
 ln -sfnT "$(realpath -ms --relative-to="$HOME/.codex" "$CODEX_STATUSLINE_SHARED")" "$CODEX_STATUSLINE_LINK"
 step "codex statusline" "$CODEX_STATUSLINE_LINK" "shared settings for codex and cc"
 
-# Ensure Claude Code user-scope MCP includes ElevenLabs. ~/.claude.json holds a lot
-# of unrelated state, so only upsert this one server entry.
-python3 - "$CLAUDE_USER_JSON" <<'PY'
-import json, sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-server = {
-    "command": "bash",
-    "args": ["-c", 'exec "$HOME/.config/clusterfork/bin/elevenlabs-mcp"'],
-}
-if path.is_file():
-    data = json.loads(path.read_text(encoding="utf-8"))
-else:
-    data = {}
-servers = data.setdefault("mcpServers", {})
-if servers.get("ElevenLabs") != server:
-    servers["ElevenLabs"] = server
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-PY
-step "claude mcp" "$CLAUDE_USER_JSON" "merge: mcpServers.ElevenLabs"
+# Ensure Claude Code user-scope MCP includes enabled non-marketplace servers.
+# ~/.claude.json holds a lot of unrelated state, so only those roster entries move.
+render_mcp claude-user "$CLAUDE_USER_JSON"
+step "claude mcp" "$CLAUDE_USER_JSON" "merge: $(mcp_server_names claude-user)"
 
 # Ensure Cursor CLI statusLine points at the installed script. Unlike other
 # agent configs, cli-config.json holds session/auth caches we must not replace.

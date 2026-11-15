@@ -88,7 +88,6 @@ class InstallerLinearMCPTests(unittest.TestCase):
                 url_field = {"antigravity": "serverUrl", "qwen": "httpUrl"}.get(name, "url")
                 self.assertEqual(server[url_field], LINEAR_URL)
                 if name == "codex":
-                    self.assertTrue(server["enabled"])
                     self.assertEqual(server.get("bearer_token_env_var"), "LINEAR_API_KEY" if key else None)
                     self.assertFalse(server.get("http_headers"))
                 else:
@@ -97,17 +96,24 @@ class InstallerLinearMCPTests(unittest.TestCase):
                         reference = "{env:LINEAR_API_KEY}" if name == "opencode" else "${LINEAR_API_KEY}"
                         expected = "Bearer " + (key if name in ("antigravity", "command-code") else reference)
                     self.assertEqual(server.get("headers", {}).get("Authorization"), expected)
-                if name in ("opencode", "command-code", "grok"):
+                if name in ("opencode", "command-code", "grok", "codex"):
                     self.assertFalse(server["enabled"])
                 elif name == "antigravity":
                     self.assertTrue(server["disabled"])
                 elif name == "qwen":
                     self.assertIn("linear", config["mcp"]["excluded"])
+                if name == "opencode":
+                    self.assertTrue(config["mcp"]["ElevenLabs"]["enabled"])
         settings = json.loads((self.home / ".claude/settings.json").read_text())
         self.assertFalse(settings["enabledPlugins"]["linear@skills-dir"])
-        # Linear remains absent in Cursor, which has no shipped Linear entry.
+        self.assertTrue(settings["enabledPlugins"]["context7@claude-plugins-official"])
         cursor = json.loads((self.home / ".cursor/mcp.json").read_text())
         self.assertNotIn("linear", cursor["mcpServers"])
+        self.assertNotIn("chrome-devtools", cursor["mcpServers"])
+        self.assertNotIn("pixellab", cursor["mcpServers"])
+        self.assertEqual(cursor["mcpServers"]["context7"]["url"], "https://mcp.context7.com/mcp")
+        self.assertEqual(cursor["mcpServers"]["context7"]["headers"]["CONTEXT7_API_KEY"], "fixture-context7")
+        self.assertIn("ElevenLabs", cursor["mcpServers"])
         return data
 
     def exported_key(self):

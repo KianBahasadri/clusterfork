@@ -5,12 +5,6 @@
     "command": "bash ~/.claude/statusline-command.sh",
     "refreshInterval": 60
   },
-  "enabledPlugins": {
-    "context7@claude-plugins-official": true,
-    "linear@skills-dir": false,
-    "chrome-devtools@skills-dir": false,
-    "pixellab@skills-dir": false
-  },
   "hooks": {
     "Stop": [
       {
