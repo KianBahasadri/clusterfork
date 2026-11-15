@@ -88,6 +88,7 @@ The links below open the complete rules, including any approval requirements.
 | [guaranine](../skills/guaranine/SKILL.md) | Reference context for the Guaranine K3s cluster (kubeconfig, PodSecurity, disabled components, and networking); `/guaranine` |
 | [code-simplifier](../skills/code-simplifier/SKILL.md) | Anthropic's upstream prompt for refining recently changed code while preserving behavior; `/code-simplifier` |
 | [deslop](../skills/deslop/SKILL.md) | Cursor's upstream skill for removing generated code clutter from the branch diff; `/deslop` |
+| [reuse-before-build](../skills/reuse-before-build/SKILL.md) | Finds custom code already covered by the standard library, framework, or project dependencies and replaces it when editing is requested; `/reuse-before-build` |
 
 Disabled skills:
 
