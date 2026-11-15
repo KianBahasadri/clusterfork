@@ -22,7 +22,7 @@
     },
     {
       "name": "linear",
-      "enabled": false,
+      "enabled": true,
       "url": "https://mcp.linear.app/mcp",
       "bearer": {"env": "LINEAR_API_KEY", "optional": true}
     },

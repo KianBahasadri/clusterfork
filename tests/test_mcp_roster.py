@@ -33,7 +33,7 @@ class MCPRosterTests(unittest.TestCase):
     def test_one_flag_reaches_every_agent(self):
         self.assertTrue(self.enabled("context7"))
         self.assertTrue(self.enabled("ElevenLabs"))
-        self.assertFalse(self.enabled("linear"))
+        self.assertTrue(self.enabled("linear"))
         self.assertFalse(self.enabled("chrome-devtools"))
         self.assertFalse(self.enabled("pixellab"))
         for agent in ("command-code", "opencode", "grok", "codex"):
@@ -53,13 +53,13 @@ class MCPRosterTests(unittest.TestCase):
             else:
                 self.assertTrue(antigravity[server["name"]]["disabled"])
         cursor = self.render("cursor")["mcpServers"]
-        self.assertEqual(set(cursor), {"context7", "ElevenLabs"})
+        self.assertEqual(set(cursor), {"context7", "ElevenLabs", "linear"})
         self.assertEqual(cursor["context7"]["url"], CONTEXT7_URL)
         self.assertEqual(cursor["context7"]["headers"]["CONTEXT7_API_KEY"], "fixture-context7")
 
-    def test_codex_linear_stays_off_and_omits_a_missing_bearer(self):
+    def test_codex_linear_omits_a_missing_bearer(self):
         codex = self.server("codex", self.render("codex"), "linear")
-        self.assertFalse(codex["enabled"])
+        self.assertTrue(codex["enabled"])
         self.assertNotIn("bearer_token_env_var", codex)
         with_key = dict(self.values, LINEAR_API_KEY="fixture-linear")
         codex = self.server("codex", self.render("codex", with_key), "linear")
@@ -70,18 +70,18 @@ class MCPRosterTests(unittest.TestCase):
         settings = self.render("claude-settings")
         plugins = settings["enabledPlugins"]
         self.assertTrue(plugins["context7@claude-plugins-official"])
-        self.assertFalse(plugins["linear@skills-dir"])
+        self.assertNotIn("linear@skills-dir", plugins)
         self.assertNotIn("ElevenLabs@skills-dir", plugins)
         user = json.loads(mcp_config.render_claude_user(None, self.roster, self.values))
-        self.assertEqual(set(user["mcpServers"]), {"ElevenLabs"})
+        self.assertEqual(set(user["mcpServers"]), {"ElevenLabs", "linear"})
+        linear = user["mcpServers"]["linear"]
+        self.assertEqual(linear["url"], "https://mcp.linear.app/mcp")
+        self.assertNotIn("headers", linear)
         files = mcp_config.claude_plugin_files(self.roster, self.values)
         self.assertEqual(
             {path.split("/")[0] for path in files},
-            {"linear", "chrome-devtools", "pixellab"},
+            {"chrome-devtools", "pixellab"},
         )
-        linear = json.loads(files["linear/.mcp.json"])["mcpServers"]["linear"]
-        self.assertEqual(linear["url"], "https://mcp.linear.app/mcp")
-        self.assertNotIn("headers", linear)
 
     def test_agent_templates_do_not_repeat_the_roster(self):
         for path in (REPO_ROOT / "agents").rglob("*"):

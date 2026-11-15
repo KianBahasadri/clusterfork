@@ -39,7 +39,7 @@ class InstallerLinearMCPTests(unittest.TestCase):
             "opencode": ".config/opencode/opencode.json",
             "qwen": ".qwen/settings.json",
             "grok": ".grok/config.toml",
-            "claude": ".claude/skills/linear/.mcp.json",
+            "claude": ".claude.json",
         }
         self.known_secrets = ["fixture-context7", "fixture-pixellab"]
 
@@ -97,18 +97,20 @@ class InstallerLinearMCPTests(unittest.TestCase):
                         expected = "Bearer " + (key if name in ("antigravity", "command-code") else reference)
                     self.assertEqual(server.get("headers", {}).get("Authorization"), expected)
                 if name in ("opencode", "command-code", "grok", "codex"):
-                    self.assertFalse(server["enabled"])
+                    self.assertTrue(server["enabled"])
                 elif name == "antigravity":
-                    self.assertTrue(server["disabled"])
+                    self.assertNotIn("disabled", server)
                 elif name == "qwen":
-                    self.assertIn("linear", config["mcp"]["excluded"])
+                    self.assertNotIn("linear", config["mcp"]["excluded"])
                 if name == "opencode":
                     self.assertTrue(config["mcp"]["ElevenLabs"]["enabled"])
         settings = json.loads((self.home / ".claude/settings.json").read_text())
-        self.assertFalse(settings["enabledPlugins"]["linear@skills-dir"])
+        self.assertNotIn("linear@skills-dir", settings["enabledPlugins"])
         self.assertTrue(settings["enabledPlugins"]["context7@claude-plugins-official"])
         cursor = json.loads((self.home / ".cursor/mcp.json").read_text())
-        self.assertNotIn("linear", cursor["mcpServers"])
+        linear = cursor["mcpServers"]["linear"]
+        self.assertEqual(linear["url"], LINEAR_URL)
+        self.assertEqual(linear.get("headers", {}).get("Authorization"), "Bearer " + key if key else None)
         self.assertNotIn("chrome-devtools", cursor["mcpServers"])
         self.assertNotIn("pixellab", cursor["mcpServers"])
         self.assertEqual(cursor["mcpServers"]["context7"]["url"], "https://mcp.context7.com/mcp")

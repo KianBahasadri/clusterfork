@@ -75,7 +75,7 @@ every agent. Add a server there and reinstall.
 | --- | --- | --- |
 | context7 | on | `https://mcp.context7.com/mcp` |
 | ElevenLabs | on | `bin/elevenlabs-mcp` |
-| Linear | off | `https://mcp.linear.app/mcp` |
+| Linear | on | `https://mcp.linear.app/mcp` |
 | Chrome DevTools | off | `pnpm dlx chrome-devtools-mcp@latest` on port 9222 |
 | PixelLab | off | `https://api.pixellab.ai/mcp` |
 
