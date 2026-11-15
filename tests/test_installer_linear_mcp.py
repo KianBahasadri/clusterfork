@@ -263,6 +263,24 @@ class InstallerLinearMCPTests(unittest.TestCase):
                     for relative in self.paths.values():
                         self.assertNotIn("fixture-linear-rotated", (self.home / relative).read_text())
 
+    def test_completion_summary_lists_mcp_servers_like_skills(self):
+        self.write_dotenv()
+        output = self.install().stdout
+        self.assertEqual(len(output.split("\n  Skills\n", 1)), 2)
+        body = output.split("\n  MCP\n", 1)
+        self.assertEqual(len(body), 2)
+        enabled, _, disabled = body[1].split("\n  ✓", 1)[0].partition("\n\n")
+        self.assertIn("[enabled]", enabled)
+        self.assertNotIn("[disabled]", enabled)
+        self.assertIn("linear", enabled)
+        self.assertIn(LINEAR_URL, enabled)
+        self.assertIn("bin/elevenlabs-mcp", enabled)
+        self.assertIn("[disabled]", disabled)
+        self.assertNotIn("[enabled]", disabled)
+        self.assertIn("chrome-devtools", disabled)
+        self.assertIn("pixellab", disabled)
+        self.assertIn("https://api.pixellab.ai/mcp", disabled)
+
     def test_other_required_placeholders_still_fail_without_printing_secrets(self):
         self.write_dotenv("fixture-linear-do-not-log", include_context7=False)
         proc = self.install(success=False)

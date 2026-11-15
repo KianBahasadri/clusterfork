@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
+import textwrap
 from pathlib import Path
 
 
@@ -453,6 +455,48 @@ def claude_plugin_files(roster: list[dict], values: dict[str, str]) -> dict[str,
     return files
 
 
+_BIN_LAUNCHER = re.compile(r"bin/[\w.-]+")
+
+
+def server_reach(server: dict) -> str:
+    """Return the URL or command shown for a server in the install summary."""
+    if server["url"]:
+        return server["url"]
+    command = server["command"]
+    args = server["args"]
+    if command == "bash" and len(args) >= 2 and args[0] == "-c":
+        match = _BIN_LAUNCHER.search(args[1])
+        if match:
+            return match.group(0)
+    return " ".join([command, *args])
+
+
+def format_summary(roster: list[dict], *, columns: int) -> str:
+    """Return the installer's MCP section, aligned like its skills section."""
+    ordered = [server for server in roster if server["enabled"]]
+    ordered += [server for server in roster if not server["enabled"]]
+    if not ordered:
+        return ""
+    name_width = min(32, max(len(server["name"]) for server in ordered))
+    tag_width = len("[disabled]")
+    description_width = max(24, columns - name_width - tag_width - 7)
+    lines = ["", "  MCP"]
+    previous = None
+    for server in ordered:
+        status = "enabled" if server["enabled"] else "disabled"
+        if previous is not None and status != previous:
+            lines.append("")
+        previous = status
+        summary = textwrap.shorten(server_reach(server), width=description_width, placeholder="…")
+        name = server["name"]
+        tag = f"[{status}]"
+        if len(name) > name_width:
+            lines.append(f"    {tag:<{tag_width}} {name}")
+            tag, name = "", ""
+        lines.append(f"    {tag:<{tag_width}} {name:<{name_width}}  {summary}")
+    return "\n".join(lines)
+
+
 def selected_names(agent: str, roster: list[dict]) -> list[str]:
     if agent == "cursor":
         return [server["name"] for server in roster if server["enabled"]]
@@ -526,10 +570,17 @@ def main(argv: list[str] | None = None) -> None:
     names_parser = commands.add_parser("names", help="list servers installed for one agent")
     names_parser.add_argument("--roster", type=Path, required=True)
     names_parser.add_argument("--agent", choices=AGENTS, required=True)
+    summary_parser = commands.add_parser("summary", help="print the installer's MCP section")
+    summary_parser.add_argument("--roster", type=Path, required=True)
     args = parser.parse_args(argv)
     roster = load_roster(args.roster)
     if args.command == "names":
         print(", ".join(selected_names(args.agent, roster)))
+        return
+    if args.command == "summary":
+        text = format_summary(roster, columns=shutil.get_terminal_size(fallback=(120, 24)).columns)
+        if text:
+            print(text)
         return
     apply(args.agent, roster, load_dotenv(args.dotenv), args.dest, args.template)
 

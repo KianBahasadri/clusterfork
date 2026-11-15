@@ -129,6 +129,58 @@ class MCPRosterTests(unittest.TestCase):
             return rendered["mcp_servers"][name]
         return rendered["mcpServers"][name]
 
+    def test_summary_lists_enabled_servers_before_disabled(self):
+        text = mcp_config.format_summary(self.roster, columns=200)
+        self.assertTrue(text.startswith("\n  MCP\n"))
+        rows = [line for line in text.splitlines() if line.startswith("    [")]
+        self.assertEqual(
+            [line.split()[0] for line in rows],
+            ["[enabled]", "[enabled]", "[enabled]", "[disabled]", "[disabled]"],
+        )
+        enabled, _, disabled = text.split("\n  MCP\n", 1)[1].partition("\n\n")
+        self.assertIn("context7", enabled)
+        self.assertIn(CONTEXT7_URL, enabled)
+        self.assertIn("bin/elevenlabs-mcp", enabled)
+        self.assertIn("https://mcp.linear.app/mcp", enabled)
+        self.assertNotIn("[disabled]", enabled)
+        self.assertIn("chrome-devtools", disabled)
+        self.assertIn("pnpm dlx chrome-devtools-mcp@latest", disabled)
+        self.assertIn("pixellab", disabled)
+        self.assertIn("https://api.pixellab.ai/mcp", disabled)
+        self.assertNotIn("[enabled]", disabled)
+        self.assertNotIn("CONTEXT7_API_KEY", text)
+        self.assertNotIn("PIXELLAB_API_KEY", text)
+
+    def test_summary_aligns_like_the_skill_list(self):
+        roster = [
+            {
+                "name": "short",
+                "enabled": True,
+                "url": "https://example.test/mcp",
+                "command": None,
+                "args": [],
+            },
+            {
+                "name": "a" * 33,
+                "enabled": False,
+                "url": None,
+                "command": "tool",
+                "args": ["word"] * 30,
+            },
+        ]
+        lines = mcp_config.format_summary(roster, columns=80).splitlines()
+        self.assertEqual(lines[0], "")
+        self.assertEqual(lines[1], "  MCP")
+        self.assertIn("[enabled]", lines[2])
+        self.assertIn("short", lines[2])
+        self.assertIn("https://example.test/mcp", lines[2])
+        self.assertEqual(lines[3], "")
+        self.assertEqual(lines[4], f"    {'[disabled]':<10} {'a' * 33}")
+        self.assertTrue(lines[5].startswith("    "))
+        self.assertIn("tool", lines[5])
+        self.assertIn("…", lines[5])
+        self.assertLessEqual(len(lines[5]), 80)
+
     def test_apply_writes_private_expanded_files(self):
         with tempfile.TemporaryDirectory() as temporary:
             dest = Path(temporary) / "mcp.json"

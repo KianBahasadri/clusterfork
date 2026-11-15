@@ -1210,6 +1210,9 @@ if skills:
         print(f"    {tag:<{tag_width}} {name:<{name_width}}  {summary}")
 PY
 
+# MCP: enabled and disabled groups, with each server's URL or command.
+python3 "$MCP_CONFIG_RENDERER" summary --roster "$MCP_ROSTER"
+
 printf '\n  ✓  done\n\n'
 printf '  Restart your shell or run:\n'
 printf '    source ~/.bashrc\n'
