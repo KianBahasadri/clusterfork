@@ -35,7 +35,8 @@ _cf_tmux() (
   [[ -z "$name" ]] && name="default"
   orig="$name"
   i=1
-  while tmux has-session -t "$name" 2>/dev/null; do
+  # Treat names literally, including ~ (tmux's marked-pane target).
+  while tmux has-session -t "=$name" 2>/dev/null; do
     name="${orig}-${i}"
     ((i++))
   done

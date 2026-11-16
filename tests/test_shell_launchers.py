@@ -233,6 +233,12 @@ class MockTmuxTests(unittest.TestCase):
             '  for i in "${!args[@]}"; do\n'
             '    if [[ "${args[i]}" == "-t" ]]; then target="${args[i+1]:-}"; break; fi\n'
             '  done\n'
+            '  if [[ "$target" == =* ]]; then\n'
+            '    target="${target#=}"\n'
+            '  elif [[ "$target" == "~" ]]; then\n'
+            '    # An unescaped tilde selects the marked pane, not a session name.\n'
+            '    exit 1\n'
+            '  fi\n'
             '  if [[ -n "${MOCK_TMUX_EXISTING_SESSIONS:-}" ]]; then\n'
             '    if [[ "${MOCK_TMUX_EXISTING_SESSIONS}" == *\\|* ]]; then\n'
             '      IFS="|" read -ra _mock_sess <<< "$MOCK_TMUX_EXISTING_SESSIONS"\n'
@@ -759,6 +765,17 @@ class MockTmuxTests(unittest.TestCase):
         log = self._log()
         self.assertIn("-s my-project-2", log)
         self.assertNotIn("-A", log)
+
+    def test_cc_home_session_collisions_increment_suffix(self):
+        for existing, want in (("other", "~"), ("~", "~-1"), ("~|~-1", "~-2")):
+            with self.subTest(existing=existing):
+                self.log.unlink(missing_ok=True)
+                env = {**self.base_env, "MOCK_TMUX_EXISTING_SESSIONS": existing}
+                proc = self._script_run(
+                    '\'source bash_profile.sh; PWD="$HOME" cc --help\'', env=env,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                self.assertIn(f"new-session -s {want} -n codex - unknown", self._log())
 
     def test_cl_second_launch_suffixed(self):
         self.log.unlink(missing_ok=True)

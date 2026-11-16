@@ -49,6 +49,8 @@ Each launch creates a session in `$PWD`, named from its basename (with ` - [bran
 appended if inside a git repository with an active branch); `$HOME` uses `~`
 instead of its basename. Dots/colons become `-`, leading `-` is guarded, `/`
 becomes `root`, collisions add `-1`, `-2`, etc.
+Collision checks match exact names, so `~` is treated literally rather than as
+tmux's marked-pane target.
 It never attaches another agent to an existing session. Nonempty `CF_NO_TMUX`,
 existing `$TMUX`, non-TTY stdin or missing tmux runs directly; internal
 `-e NAME=value` variables reach either path.
