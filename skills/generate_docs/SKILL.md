@@ -38,17 +38,22 @@ accurate to the implementation.
    credentials), and no credential or token value may ever appear in the
    docs.
 
-3. **Generate AGENTS.md.** Write a slim AGENTS.md: minimal **domain** content,
-   but explicit **process** instructions for using docs. Do not paste topic
-   detail from `docs/` into AGENTS.md.
+3. **Generate AGENTS.md.** Write a slim AGENTS.md with a `## Rules` section
+   for repository-specific working policies and explicit **process**
+   instructions for using docs. Keep **domain** content minimal; do not paste
+   topic detail from `docs/` into AGENTS.md.
 
-   Use this structure (adapt only the project one-liner; keep the Documentation
-   section wording stable so regenerations stay consistent):
+   Use this structure (adapt the project one-liner and Rules section; keep the
+   Documentation section wording stable so regenerations stay consistent):
 
    ```markdown
    # AGENTS.md
 
    <one sentence: what this project is>
+
+   ## Rules
+
+   - <repository-specific working policy>
 
    ## Documentation (read/write)
 
@@ -71,7 +76,12 @@ accurate to the implementation.
    ```
 
    Replace `<one sentence: what this project is>` with a single accurate
-   sentence from what you read. Nothing else from the docs belongs here.
+   sentence from what you read. Populate `## Rules` with concise policies
+   from existing repository instructions or explicit user requirements, such
+   as branch/commit conventions, architecture constraints, and required tools.
+   Preserve existing rules when regenerating. Do not invent policies to fill
+   the section or copy another project's rules. Keep implementation details
+   under `docs/`.
 
 4. **Create CLAUDE.md symlink.** Create a symlink `CLAUDE.md → AGENTS.md` in
    the repo root so Claude Code picks up the same instructions. If CLAUDE.md
@@ -122,5 +132,6 @@ accurate to the implementation.
 
 - Re-running this skill is a regeneration, not an append — the same repo
   state should produce equivalent output.
-- AGENTS.md holds process rules for reading/writing docs; topic facts live
-  only under `docs/`. Do not grow AGENTS.md into a second docs tree.
+- AGENTS.md holds repository-specific working rules and process rules for
+  reading/writing docs; topic facts live only under `docs/`. Do not grow
+  AGENTS.md into a second docs tree.
