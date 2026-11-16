@@ -42,6 +42,8 @@
 #  17. Appends a source line to ~/.bashrc if it is not already present
 #  18. Best-effort: ensures Codex/Cursor/Grok/OpenCode auth.json links through
 #      ~/.local/share/clusterfork-auth/<agent>/current when profiles exist
+#  19. Installs the Codex kickoff timer and enables it when this home's systemd
+#      user manager is available
 #
 # Usage:
 #   ./install-clusterfork.sh
@@ -62,6 +64,8 @@ BIN_SRC_DIR="$REPO_DIR/bin"
 BIN_DEST_DIR="$CLUSTERFORK_CONFIG_DIR/bin"
 NOTIFY_SRC_DIR="$REPO_DIR/notify"
 NOTIFY_DEST_DIR="$CLUSTERFORK_CONFIG_DIR/notify"
+SYSTEMD_SRC_DIR="$REPO_DIR/systemd"
+SYSTEMD_DEST_DIR="$CLUSTERFORK_CONFIG_DIR/systemd"
 TMUX_CONFIG_SRC="$REPO_DIR/tmux.conf"
 TMUX_CONFIG_DEST="$HOME/.tmux.conf"
 ROTATE_AUTH_SRC="$REPO_DIR/scripts/rotate_auth.py"
@@ -479,6 +483,10 @@ rm -rf -- "$NOTIFY_DEST_DIR"
 mkdir -p "$NOTIFY_DEST_DIR"
 cp -r "$NOTIFY_SRC_DIR"/. "$NOTIFY_DEST_DIR"/
 step "notify service" "$NOTIFY_DEST_DIR" "ntfy compose"
+
+mkdir -p "$SYSTEMD_DEST_DIR"
+cp "$SYSTEMD_SRC_DIR"/clusterfork-codex-kickoff.{service,timer} "$SYSTEMD_DEST_DIR/"
+step "codex kickoff timer" "$SYSTEMD_DEST_DIR" "units; enable with systemctl --user"
 
 [[ -f "$ROTATE_AUTH_SRC" ]] || fail "missing $(tildify "$ROTATE_AUTH_SRC")"
 mkdir -p "$(dirname "$ROTATE_AUTH_DEST")"
@@ -1148,6 +1156,24 @@ else
     "OpenCode shared auth was not configured; the rest of the install is complete." \
     "Fix the reported auth state, then re-run the installer."
 fi
+
+# Activate only after the helper, dependencies and auth links are installed.
+# A disposable HOME must never change the real user's systemd configuration.
+kickoff_manager_env=""
+if command -v systemctl >/dev/null 2>&1; then
+  kickoff_manager_env="$(systemctl --user show-environment 2>/dev/null)" || kickoff_manager_env=""
+fi
+if [[ $'\n'"$kickoff_manager_env"$'\n' == *$'\n'"HOME=$HOME"$'\n'* ]]; then
+  if systemctl --user link "$SYSTEMD_DEST_DIR"/clusterfork-codex-kickoff.{service,timer} \
+      && systemctl --user daemon-reload \
+      && systemctl --user enable --now clusterfork-codex-kickoff.timer; then
+    step "codex kickoff" "clusterfork-codex-kickoff.timer" "enabled; every 30 minutes"
+  else
+    warn "Codex kickoff units installed, but the timer could not be enabled." \
+      "Run: systemctl --user enable --now clusterfork-codex-kickoff.timer"
+  fi
+fi
+unset kickoff_manager_env
 
 # Shell commands: one line per launcher, its target, and fixed flags.
 printf '\n  Shell commands\n'

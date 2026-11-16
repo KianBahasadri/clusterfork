@@ -1,0 +1,12 @@
+[Unit]
+Description=Start unused Codex five-hour usage windows
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h
+EnvironmentFile=-%h/.config/clusterfork/.env
+ExecStart=/usr/bin/python3 -u -S %h/.config/clusterfork/bin/clusterfork-codex-kickoff
+StandardInput=null
+UMask=0077
+KillSignal=SIGINT
+TimeoutStopSec=150

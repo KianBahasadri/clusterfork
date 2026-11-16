@@ -101,7 +101,8 @@ def measure_logins(provider, logins, account_id, model):
     return None, error, None
 
 
-def read_cached_snapshots(provider, logins, model, max_age_seconds=300):
+def read_usage_cache(provider):
+    """Read the shared Conky account rows without probing providers."""
     filename = CACHE_FILENAMES.get(provider)
     if not filename:
         return None
@@ -126,8 +127,18 @@ def read_cached_snapshots(provider, logins, model, max_age_seconds=300):
         data = json.loads(cache_path.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or not isinstance(data.get("accounts"), list):
             return None
+        return data["accounts"]
+    except (OSError, ValueError, UnicodeError):
+        return None
+
+
+def read_cached_snapshots(provider, logins, model, max_age_seconds=300):
+    accounts = read_usage_cache(provider)
+    if accounts is None:
+        return None
+    try:
         cache_by_id = {}
-        for row in data["accounts"]:
+        for row in accounts:
             if isinstance(row, dict) and row.get("ok") and not row.get("staleCache"):
                 aid = str(row.get("accountId") or "")
                 if aid:

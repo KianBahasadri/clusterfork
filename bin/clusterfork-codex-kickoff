@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""Start unused Codex five-hour windows using only the shared Conky usage cache."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+import sys
+import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import rotate_auth
+from rotate_usage import (
+    UsageError, finite_number, identity, read_credentials, read_usage_cache, selection_config, timestamp,
+)
+
+
+def skip_reason(row, *, now, max_age_seconds):
+    if not isinstance(row, dict) or row.get("ok") is not True or row.get("staleCache"):
+        return "no fresh usage cache"
+    observed = row.get("observedAt")
+    if not finite_number(observed) or not 0 <= now - observed <= max_age_seconds:
+        return "stale or invalid usage cache"
+    windows = row.get("windows")
+    if not isinstance(windows, list) or not windows:
+        return "incomplete usage windows"
+    short = []
+    for window in windows:
+        if not isinstance(window, dict):
+            return "incomplete usage windows"
+        used = window.get("usedPercent")
+        duration = window.get("windowSeconds")
+        if (not finite_number(used) or not 0 <= used <= 100
+                or not finite_number(duration) or duration <= 0):
+            return "incomplete usage windows"
+        try:
+            if "resetAtEpoch" in window:
+                reset = timestamp(window["resetAtEpoch"])
+            elif "resetsAt" in window:
+                reset = timestamp(window["resetsAt"])
+            else:
+                return "missing reset metadata"
+        except (UsageError, ValueError, TypeError, OverflowError):
+            return "invalid reset metadata"
+        if reset is not None and (not finite_number(reset) or reset < 0):
+            return "invalid reset metadata"
+        if used >= 100:
+            return "account quota is exhausted"
+        if duration == 18000:
+            short.append((used, reset))
+        elif used > 0 and (reset is None or reset <= now):
+            return "stale or incomplete usage windows"
+    if len(short) != 1:
+        return "missing or ambiguous five-hour window"
+    used, reset = short[0]
+    # A tiny request can round down to 0% while its window is already running.
+    if used > 0 or reset is not None and reset > now:
+        return "five-hour window already started"
+    return None
+
+
+def run(*, dry_run=False):
+    backend = rotate_auth.make_backend("codex")
+    names = backend.local_profiles()
+    if not names:
+        print("codex kickoff: no saved local profiles")
+        return 0
+    rows = read_usage_cache("codex")
+    if rows is None:
+        print("codex kickoff: no readable usage cache; skipping")
+        return 0
+    cached = {row.get("accountId"): row for row in rows
+              if isinstance(row, dict) and isinstance(row.get("accountId"), str)}
+    _, policy = selection_config("codex")
+    seen, selected = set(), []
+    current = backend.current_suffix()
+    # Prefer the current login when several saved names share an account.
+    for name in sorted(names, key=lambda name: name != current):
+        try:
+            account_id = identity("codex", read_credentials(backend, name, "codex"))
+        except (OSError, ValueError, KeyError, TypeError):
+            print(f"  {name}: skipping unreadable saved login")
+            continue
+        if account_id in seen:
+            continue
+        seen.add(account_id)
+        reason = skip_reason(cached.get(account_id), now=time.time(),
+                             max_age_seconds=min(300, policy.max_snapshot_age_seconds))
+        if reason:
+            print(f"  {name}: skipping ({reason})")
+            continue
+        print(f"  {name}: {'would start' if dry_run else 'starting'} five-hour window")
+        selected.append(name)
+    if dry_run or not selected:
+        return 0
+    # Reuse rotate-codex --local --kickoff's sequential pings, refresh handling
+    # and restoration of the previous account, including failed requests.
+    return backend.kickoff(selected)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dry-run", action="store_true", help="show decisions without sending prompts")
+    args = parser.parse_args()
+    try:
+        return run(dry_run=args.dry_run)
+    except rotate_auth.RotateError as error:
+        print("\n".join(error.lines), file=sys.stderr)
+        return 1
+    except (UsageError, OSError, ValueError, UnicodeError):
+        print("codex kickoff: cannot read local account state", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -59,6 +59,19 @@ class InstallerSharedAuthTests(unittest.TestCase):
 
             env = {key: value for key, value in os.environ.items() if not key.startswith("ROTATE_")}
             env["HOME"] = str(home)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            systemctl_log = root / "systemctl.log"
+            systemctl = fake_bin / "systemctl"
+            systemctl.write_text('''#!/bin/sh
+case "$*" in
+  '--user show-environment') printf 'HOME=%s\\n' "$HOME" ;;
+  *) printf '%s\\n' "$*" >> "$CLUSTERFORK_TEST_SYSTEMCTL_LOG" ;;
+esac
+''')
+            systemctl.chmod(0o755)
+            env.update(PATH=str(fake_bin) + os.pathsep + os.environ["PATH"],
+                       CLUSTERFORK_TEST_SYSTEMCTL_LOG=str(systemctl_log))
             for _ in range(2):
                 proc = subprocess.run([str(repo / "install-clusterfork.sh")], cwd=repo,
                                       capture_output=True, text=True, env=env, timeout=20)
@@ -74,6 +87,27 @@ class InstallerSharedAuthTests(unittest.TestCase):
                                      manifests[provider]["remote:21kb60"]["source_sha256"])
                     agent_dir = home / (".codex" if provider == "codex" else ".config/cursor")
                     self.assertEqual((agent_dir / "auth.json").readlink(), links[provider])
+
+            installed_root = home / ".config/clusterfork"
+            for filename in ("bin/clusterfork-codex-kickoff",
+                             "systemd/clusterfork-codex-kickoff.service",
+                             "systemd/clusterfork-codex-kickoff.timer"):
+                self.assertEqual((installed_root / filename).read_bytes(), (repo / filename).read_bytes())
+            self.assertTrue(os.access(installed_root / "bin/clusterfork-codex-kickoff", os.X_OK))
+            service_calls = systemctl_log.read_text().splitlines()
+            self.assertEqual(service_calls, [
+                f"--user link {installed_root}/systemd/clusterfork-codex-kickoff.service "
+                f"{installed_root}/systemd/clusterfork-codex-kickoff.timer",
+                "--user daemon-reload", "--user enable --now clusterfork-codex-kickoff.timer",
+            ] * 2)
+            # The installed command imports its helpers without this checkout,
+            # additional dependencies or a provider request when no cache exists.
+            scheduled = subprocess.run([sys.executable, "-I", "-S",
+                str(installed_root / "bin/clusterfork-codex-kickoff"), "--dry-run"],
+                cwd=root, env={**env, "CONKY_CACHE_DIR": "", "CLUSTERFORK_USAGE_CACHE_DIR": ""},
+                capture_output=True, text=True, timeout=10)
+            self.assertEqual(scheduled.returncode, 0, scheduled.stderr)
+            self.assertIn("no readable usage cache", scheduled.stdout)
 
             for provider, command in (("codex", "rotate-codex"), ("cursor", "rotate-cursor-cli")):
                 def run_wrapper(*args):

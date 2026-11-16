@@ -1,0 +1,9 @@
+[Unit]
+Description=Check Codex five-hour usage windows every 30 minutes
+
+[Timer]
+OnCalendar=*-*-* *:00,30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

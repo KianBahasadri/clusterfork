@@ -135,6 +135,48 @@ explicit subset; use a full sweep when restoration matters. Claude and shared
 stores also run their preservation/restoration steps on interruption. Antigravity
 has no general interrupted-sweep cleanup guarantee.
 
+## Scheduled Codex kickoff
+
+`clusterfork-codex-kickoff` checks saved local Codex accounts against the same
+`codex-usage.json` cache and directory overrides as automatic rotation. It sends
+the existing `rotate-codex --local --kickoff` ping only when the five-hour window
+has exactly 0% used and no future reset. A running window rounded to 0% is left
+alone. Each account is pinged once even when several profile names share it;
+all local profiles participate, including `kian`. Cloud-only accounts are excluded.
+
+Readings must meet Codex rotation's freshness limit (currently 60 seconds, capped
+at 300). Missing, stale, failed, incomplete or exhausted readings are skipped;
+there is no live quota request or credential refresh just to check eligibility.
+Kickoff preserves refreshed credentials and restores the previous selection as
+described above. Failed pings continue through the selected accounts and make
+the service fail for visibility in the journal.
+
+The installer copies the helper and `systemd/clusterfork-codex-kickoff` service
+and timer into `~/.config/clusterfork/`. When the current user's systemd manager
+is available for that home, it also links the units and enables the timer.
+Other environments receive the files without activating a service. Reinstalling
+updates the units and reloads the available user manager.
+
+The timer runs at :00 and :30, catches up once after downtime and never overlaps
+an already-running invocation. The service reads the installed `.env` for the
+same cache/auth overrides used by the shell commands. To inspect or manage it:
+
+```bash
+~/.config/clusterfork/bin/clusterfork-codex-kickoff --dry-run
+systemctl --user status clusterfork-codex-kickoff.timer
+journalctl --user -u clusterfork-codex-kickoff.service -n 30
+systemctl --user start clusterfork-codex-kickoff.service
+systemctl --user disable --now clusterfork-codex-kickoff.timer
+```
+
+For manual activation after installing without an available user manager:
+
+```bash
+systemctl --user link ~/.config/clusterfork/systemd/clusterfork-codex-kickoff.{service,timer}
+systemctl --user daemon-reload
+systemctl --user enable --now clusterfork-codex-kickoff.timer
+```
+
 ## Implementation and directory overrides
 
 Shell modules resolve the shared implementation from `BASH_SOURCE`; installation

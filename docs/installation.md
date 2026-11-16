@@ -32,6 +32,7 @@ Paths below are relative to the repository unless prefixed with `~`.
 | --- | --- |
 | `.env`, `bell.mp3`, `bash_profile.sh` | Matching files in `~/.config/clusterfork/` |
 | `shell/`, `bin/`, `notify/` | Matching trees in `~/.config/clusterfork/` |
+| `systemd/clusterfork-codex-kickoff.{service,timer}` | `~/.config/clusterfork/systemd/`; activation is covered in [Auth Rotation](auth-rotation.md#scheduled-codex-kickoff) |
 | `scripts/{rotate_auth,rotate_accounts,rotate_usage,account_sessions,account_usage}.py`, `scripts/codeview/` | Matching paths in `~/.config/clusterfork/scripts/` |
 | `automation/{accounts,account_client}.py`, `automation/common/{accounts,selection,__init__}.py`, `automation/controller/projects.json` | Matching paths in `~/.config/clusterfork/automation/`; preserves an existing `venv/` |
 | `tmux.conf` | `~/.tmux.conf` |
