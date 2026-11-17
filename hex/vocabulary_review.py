@@ -86,7 +86,10 @@ def review_entry(entry, entries):
     if not evidence:
         return 0
     settings = json.loads(rewrite.SETTINGS_PATH.read_text())
-    profile = settings["dictation_processing"]["default_mode"]["post_processing"]
+    profile = {
+        **settings["dictation_processing"]["default_mode"]["post_processing"],
+        "variant": "low",
+    }
     budget = max(1, min(profile.get("deadline_seconds", 30), 30))
     started = time.monotonic()
     deadline = started + budget

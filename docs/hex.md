@@ -102,8 +102,8 @@ Names belong in vocabulary. Fixed substitutions and deletions belong in
 replacements; this integration does not add any.
 
 The separate vocabulary worker polls saved History once per second, after Hex
-has delivered the text. It uses the selected rewrite model independently of
-the paste process. A new name must appear in both the current original and
+has delivered the text. It requests `low` reasoning from the selected rewrite
+model. A new name must appear in both the current original and
 rewritten text and in an earlier, separate original dictation. Repeating a
 word within one message does not qualify. Only high-confidence names or
 technical terms qualify; at most three are added, without phonetic aliases.

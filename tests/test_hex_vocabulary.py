@@ -101,6 +101,7 @@ class BackgroundVocabularyTests(unittest.TestCase):
             self.assertEqual(reference["pasted_text"], "Restart Syncthing.")
             self.assertEqual(reference["vocabulary"], ["Kobo"])
             self.assertEqual(profile["model"], "opencode-go/claude-haiku-5-5")
+            self.assertEqual(profile["variant"], "low")
             settings = json.loads(self.settings.read_text())
             settings["vocabulary"].append("Syncthing")
             self.settings.write_text(json.dumps(settings))
