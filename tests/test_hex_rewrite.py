@@ -142,6 +142,64 @@ class RecentDictationTests(unittest.TestCase):
             self.assertEqual(payload["model"], {"providerID": "opencode-go", "id": "claude-haiku-5-5", "variant": "none"})
 
 
+class AdaptiveReasoningTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        isolated_settings(self, directory.name)
+
+    def test_word_threshold_switches_only_the_current_request(self):
+        saved = rewrite.SETTINGS_PATH.read_bytes()
+        for word_count, expected in ((99, "none"), (100, "medium"), (350, "medium")):
+            with self.subTest(words=word_count):
+                text = "\n\t".join(["word"] * word_count)
+                with patch.object(rewrite, "read_history", return_value=[]), patch.object(rewrite, "generate", return_value="Edited.") as generate:
+                    self.assertEqual(rewrite.rewrite(text, {}), "Edited.")
+                self.assertEqual(generate.call_args.args[1]["variant"], expected)
+                self.assertEqual(rewrite.SETTINGS_PATH.read_bytes(), saved)
+
+    def test_large_history_and_vocabulary_do_not_enable_reasoning_for_short_text(self):
+        settings = json.loads(rewrite.SETTINGS_PATH.read_text())
+        settings["vocabulary"] = [f"Product{index}" for index in range(200)]
+        rewrite.SETTINGS_PATH.write_text(json.dumps(settings))
+        history = [{"text": "older " * 2000}]
+        with patch.object(rewrite, "read_history", return_value=history), patch.object(rewrite, "generate", return_value="Check the logs.") as generate:
+            self.assertEqual(rewrite.rewrite("um check the logs", {}), "Check the logs.")
+        self.assertEqual(generate.call_args.args[1]["variant"], "none")
+        self.assertGreater(len(generate.call_args.args[0].split()), 2000)
+
+    def test_explicit_effort_and_other_models_are_preserved(self):
+        cases = [
+            ("opencode-go/claude-haiku-5-5", "low"),
+            ("opencode-go/claude-haiku-5-5", "high"),
+            ("opencode-go/claude-haiku-5-5", None),
+            ("opencode-go/gpt-6-luna", "none"),
+        ]
+        for model, variant in cases:
+            with self.subTest(model=model, variant=variant):
+                settings = json.loads(rewrite.SETTINGS_PATH.read_text())
+                settings["dictation_processing"]["default_mode"]["post_processing"].update(model=model, variant=variant)
+                rewrite.SETTINGS_PATH.write_text(json.dumps(settings))
+                with patch.object(rewrite, "read_history", return_value=[]), patch.object(rewrite, "generate", return_value="Edited.") as generate:
+                    self.assertEqual(rewrite.rewrite("word " * 200, {}), "Edited.")
+                self.assertEqual(generate.call_args.args[1]["model"], model)
+                self.assertEqual(generate.call_args.args[1]["variant"], variant)
+
+    def test_reasoning_timeout_preserves_exact_long_input(self):
+        text = "um " * 150 + "keep the original\n"
+        with patch.object(rewrite, "read_history", return_value=[]), patch.object(rewrite, "generate", side_effect=TimeoutError()) as generate:
+            self.assertEqual(rewrite.rewrite(text, {}), text)
+        self.assertEqual(generate.call_args.args[1]["variant"], "medium")
+
+    def test_long_generation_sends_medium_in_the_model_payload(self):
+        responses = [(200, b'{}'), (200, b'{"data":{"text":"Only the edited message."}}')]
+        with patch.object(rewrite, "read_history", return_value=[]), patch.object(rewrite, "service_registration", return_value=("127.0.0.1", 1, None)), patch.object(rewrite, "request", side_effect=responses) as request:
+            self.assertEqual(rewrite.rewrite("word " * 100, {}), "Only the edited message.")
+        self.assertEqual(request.call_args_list[1].args[5]["model"], {
+            "providerID": "opencode-go", "id": "claude-haiku-5-5", "variant": "medium",
+        })
+
+
 class VocabularyLearningTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()

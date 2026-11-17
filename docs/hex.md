@@ -60,10 +60,18 @@ uncertainty, quotations, identifiers, and intended numbers. Preserve unresolved
 contradictions instead of guessing. `@HOME@` is expanded during installation
 in the personal Guaranine repository reference.
 
-`hex/rewrite.json` selects Claude Haiku 5.5 on OpenCode Go, variant `none`, with
-a 30-second deadline. The helper reads these values from the saved Global
-profile for each dictation. Built-in post-processing stays disabled because
-the `conversation-context` transformation performs the rewrite once.
+`hex/rewrite.json` selects Claude Haiku 5.5 on OpenCode Go, base variant `none`,
+with a 30-second deadline. The helper reads these values from the saved Global
+profile for each dictation. With that model and base variant, a current
+dictation of **100 words or more** requests `medium` reasoning for that rewrite;
+shorter dictations keep `none`. Only the current text counts toward the
+threshold, not history, vocabulary, or instructions. `LONG_DICTATION_WORDS` in
+the helper owns the threshold. The selection is per request: it does not write
+settings or change the background vocabulary worker's effort. Other models and
+explicit reasoning variants are preserved. The helper logs the current word
+count and selected variant. Reasoning shares the existing deadline and failure
+fallback. Built-in post-processing stays disabled because the
+`conversation-context` transformation performs the rewrite once.
 
 The helper includes up to 2000 whitespace-separated words from earlier
 nonempty dictations retained in Hex History. There is no age or message-count
