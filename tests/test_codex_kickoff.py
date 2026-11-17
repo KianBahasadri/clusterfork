@@ -35,7 +35,7 @@ def row():
 
 class KickoffDecisionTests(unittest.TestCase):
     def reason(self, value):
-        return kickoff.skip_reason(value, now=NOW, max_age_seconds=60)
+        return kickoff.skip_reason(value, now=NOW, max_age_seconds=300)
 
     def test_unused_window_without_pending_reset_is_eligible(self):
         for reset in (0, None, NOW - 1, NOW):
@@ -51,6 +51,38 @@ class KickoffDecisionTests(unittest.TestCase):
             with self.subTest(used=used):
                 self.assertEqual(self.reason(value), "five-hour window already started")
 
+    def test_moving_full_span_reset_is_unused_even_when_cache_is_minutes_old(self):
+        for age in (0, 61, 120, 300):
+            for offset in (-1, 0, 1):
+                value = row()
+                value["observedAt"] = NOW - age
+                value["windows"][0] = window(0, NOW - age + 18000 + offset)
+                with self.subTest(age=age, offset=offset):
+                    self.assertIsNone(self.reason(value))
+
+    def test_provider_full_countdown_handles_observation_before_http_completion(self):
+        value = row()
+        value["windows"][0] = {**window(0, NOW + 18003), "resetAfterSeconds": 18000}
+        self.assertIsNone(self.reason(value))
+        # A just-started request can still round down to zero; its countdown
+        # takes precedence over the approximate reset minus observation time.
+        value["windows"][0].update(resetAtEpoch=NOW + 18000, resetAfterSeconds=17999)
+        self.assertEqual(self.reason(value), "five-hour window already started")
+        for invalid in (-1, 18001, True, "18000", float("nan")):
+            value["windows"][0]["resetAfterSeconds"] = invalid
+            with self.subTest(invalid=invalid):
+                self.assertIsNotNone(self.reason(value))
+        value["windows"][0].update(usedPercent=1, resetAfterSeconds=18000)
+        self.assertEqual(self.reason(value), "five-hour window already started")
+
+    def test_shorter_source_freshness_limit_is_honored(self):
+        value = {**row(), "observedAt": NOW - 61, "maxAgeSeconds": 60}
+        self.assertEqual(self.reason(value), "stale or invalid usage cache")
+        for age in (None, 0, -1, True, "300", float("inf")):
+            value["maxAgeSeconds"] = age
+            with self.subTest(age=age):
+                self.assertIsNotNone(self.reason(value))
+
     def test_iso_reset_is_honored(self):
         value = row()
         value["windows"][0] = {"usedPercent": 0, "windowSeconds": 18000,
@@ -61,7 +93,7 @@ class KickoffDecisionTests(unittest.TestCase):
 
     def test_invalid_stale_failed_exhausted_and_incomplete_rows_are_skipped(self):
         cases = [None, {}, {**row(), "ok": False}, {**row(), "staleCache": True},
-                 {**row(), "observedAt": NOW - 61}, {**row(), "observedAt": NOW + 1},
+                 {**row(), "observedAt": NOW - 301}, {**row(), "observedAt": NOW + 1},
                  {**row(), "observedAt": float("nan")}, {**row(), "windows": []},
                  {**row(), "windows": [None]},
                  {**row(), "windows": [window(0, 0, 604800)]},
@@ -130,8 +162,11 @@ class KickoffRunTests(unittest.TestCase):
         used, rounded = row(), row()
         used["windows"][0] = window(10, NOW + 100)
         rounded["windows"][0] = window(0, NOW + 100)
+        unused_kian = row()
+        unused_kian["observedAt"] = NOW - 120
+        unused_kian["windows"][0] = {**window(0, NOW - 120 + 18002), "resetAfterSeconds": 18000}
         self.write_cache({"active": row(), "used": used, "rounded": rounded,
-                          "kian": row(), "cloud": row()})
+                          "kian": unused_kian, "cloud": row()})
         pinged = []
 
         def ping(command):
@@ -172,7 +207,7 @@ class KickoffRunTests(unittest.TestCase):
             self.assertEqual(kickoff.run(), 0)
             self.write_cache({"active": row()})
             self.assertEqual(kickoff.run(dry_run=True), 0)
-            stale = {**row(), "observedAt": NOW - 61}
+            stale = {**row(), "observedAt": NOW - 301}
             self.write_cache({"active": stale})
             self.assertEqual(kickoff.run(), 0)
             (self.cache / "codex-usage.json").write_text("bad JSON")

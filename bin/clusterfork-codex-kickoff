@@ -11,14 +11,20 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import rotate_auth
 from rotate_usage import (
-    UsageError, finite_number, identity, read_credentials, read_usage_cache, selection_config, timestamp,
+    UsageError, finite_number, identity, read_credentials, read_usage_cache, timestamp,
 )
+
+MAX_CACHE_AGE_SECONDS = 300
 
 
 def skip_reason(row, *, now, max_age_seconds):
     if not isinstance(row, dict) or row.get("ok") is not True or row.get("staleCache"):
         return "no fresh usage cache"
     observed = row.get("observedAt")
+    source_max_age = row.get("maxAgeSeconds", max_age_seconds)
+    if not finite_number(source_max_age) or source_max_age <= 0:
+        return "invalid cache age limit"
+    max_age_seconds = min(max_age_seconds, source_max_age)
     if not finite_number(observed) or not 0 <= now - observed <= max_age_seconds:
         return "stale or invalid usage cache"
     windows = row.get("windows")
@@ -47,15 +53,26 @@ def skip_reason(row, *, now, max_age_seconds):
         if used >= 100:
             return "account quota is exhausted"
         if duration == 18000:
-            short.append((used, reset))
+            short.append((window, reset))
         elif used > 0 and (reset is None or reset <= now):
             return "stale or incomplete usage windows"
     if len(short) != 1:
         return "missing or ambiguous five-hour window"
-    used, reset = short[0]
-    # A tiny request can round down to 0% while its window is already running.
-    if used > 0 or reset is not None and reset > now:
+    window, reset = short[0]
+    if window["usedPercent"] > 0:
         return "five-hour window already started"
+    if reset is not None and reset > now:
+        remaining = window.get("resetAfterSeconds")
+        # Unused Codex accounts report a moving reset five hours from each
+        # observation. An active window, even at rounded 0%, counts down.
+        if remaining is not None:
+            if not finite_number(remaining) or not 0 <= remaining <= 18000:
+                return "invalid reset countdown"
+            untouched = remaining == 18000
+        else:
+            untouched = abs(reset - observed - 18000) <= 1
+        if not untouched:
+            return "five-hour window already started"
     return None
 
 
@@ -71,7 +88,6 @@ def run(*, dry_run=False):
         return 0
     cached = {row.get("accountId"): row for row in rows
               if isinstance(row, dict) and isinstance(row.get("accountId"), str)}
-    _, policy = selection_config("codex")
     seen, selected = set(), []
     current = backend.current_suffix()
     # Prefer the current login when several saved names share an account.
@@ -85,7 +101,7 @@ def run(*, dry_run=False):
             continue
         seen.add(account_id)
         reason = skip_reason(cached.get(account_id), now=time.time(),
-                             max_age_seconds=min(300, policy.max_snapshot_age_seconds))
+                             max_age_seconds=MAX_CACHE_AGE_SECONDS)
         if reason:
             print(f"  {name}: skipping ({reason})")
             continue

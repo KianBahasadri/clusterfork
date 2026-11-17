@@ -140,12 +140,17 @@ has no general interrupted-sweep cleanup guarantee.
 `clusterfork-codex-kickoff` checks saved local Codex accounts against the same
 `codex-usage.json` cache and directory overrides as automatic rotation. It sends
 the existing `rotate-codex --local --kickoff` ping only when the five-hour window
-has exactly 0% used and no future reset. A running window rounded to 0% is left
-alone. Each account is pinged once even when several profile names share it;
-all local profiles participate, including `kian`. Cloud-only accounts are excluded.
+has exactly 0% used and either no pending reset or the provider's full five-hour
+countdown. Unused accounts report a moving reset five hours from each reading;
+that placeholder is eligible. A running window rounded to 0% with a shorter
+countdown is left alone. Each account gets one ping even when several profile
+names share it. All local profiles participate, including `kian`; cloud-only
+accounts are excluded.
 
-Readings must meet Codex rotation's freshness limit (currently 60 seconds, capped
-at 300). Missing, stale, failed, incomplete or exhausted readings are skipped;
+Readings must be at most 300 seconds old, matching Conky's local cache validity,
+and respect any shorter age limit advertised by the source.
+This scheduled check does not use rotation's stricter live-selection age limit.
+Missing, stale, failed, incomplete or exhausted readings are skipped;
 there is no live quota request or credential refresh just to check eligibility.
 Kickoff preserves refreshed credentials and restores the previous selection as
 described above. Failed pings continue through the selected accounts and make
