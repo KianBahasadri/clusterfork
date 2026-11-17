@@ -44,9 +44,11 @@
 #      ~/.local/share/clusterfork-auth/<agent>/current when profiles exist
 #  19. Installs the Codex kickoff timer and enables it when this home's systemd
 #      user manager is available
+#  20. Installs the optional Hex workspace and merges its live rewrite settings
+#      and seed vocabulary when Hex is installed and running
 #
 # Usage:
-#   ./install-clusterfork.sh
+#   ./install-clusterfork.sh [--skip-hex] [--hex-microphone pcm2902]
 
 set -euo pipefail
 
@@ -411,21 +413,34 @@ usage() {
 Install clusterfork config.
 
 Usage:
-  ./install-clusterfork.sh
+  ./install-clusterfork.sh [--skip-hex] [--hex-microphone pcm2902]
 
 Options:
   -h, --help              Show this help message
+  --skip-hex              Leave the optional Hex integration untouched
+  --hex-microphone NAME    Also install the pcm2902 microphone profile
 
 Examples:
   ./install-clusterfork.sh
 EOF
 }
 
+install_hex=true
+hex_options=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help)
       usage
       exit 0
+      ;;
+    --skip-hex)
+      install_hex=false
+      shift
+      ;;
+    --hex-microphone)
+      [[ "${2:-}" == pcm2902 ]] || fail "--hex-microphone requires pcm2902"
+      hex_options=(--microphone "$2")
+      shift 2
       ;;
     *)
       echo "ERROR: unknown option: $1"
@@ -1174,6 +1189,10 @@ if [[ $'\n'"$kickoff_manager_env"$'\n' == *$'\n'"HOME=$HOME"$'\n'* ]]; then
   fi
 fi
 unset kickoff_manager_env
+
+if "$install_hex"; then
+  python3 "$REPO_DIR/hex/install.py" "${hex_options[@]}"
+fi
 
 # Shell commands: one line per launcher, its target, and fixed flags.
 printf '\n  Shell commands\n'

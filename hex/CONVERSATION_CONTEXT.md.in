@@ -1,0 +1,9 @@
+# Hex dictation configuration
+
+This workspace is installed from Clusterfork. Edit the sources in
+`@CLUSTERFORK@/hex/`, then run `uv run --no-project python hex/install.py`
+from that repository to apply changes.
+
+The canonical setup, rewrite policy, vocabulary rules, microphone profile,
+and troubleshooting documentation is `@CLUSTERFORK@/docs/hex.md`.
+Hex owns `AGENTS.md` and its generated editor typings in this workspace.

@@ -50,6 +50,10 @@ Paths below are relative to the repository unless prefixed with `~`.
 | `statusline/claude/statusline.sh`, `statusline/claude/usage-fetch.py` | `~/.claude/statusline-command.sh`, `~/.claude/claude-usage-fetch.py` |
 | `statusline/cursor/statusline.sh`, `statusline/cursor/usage-fetch.py` | `~/.cursor/statusline.sh`, `~/.cursor/cursor-usage-fetch.py` |
 | `statusline/codex/statusline.config.toml` | `~/.local/share/clusterfork-auth/codex/statusline.config.toml`, linked from `~/.codex/clusterfork-statusline.toml` |
+| `hex/{contextual_rewrite,vocabulary_review}.py`, rendered `hex/{hex.config.ts,CONVERSATION_CONTEXT.md}.in` | `~/.config/hex/`; optional when Hex is installed, see [Hex dictation](hex.md) |
+| `hex/hex-vocabulary-review.service` | `~/.config/systemd/user/hex-vocabulary-review.service` |
+| `hex/rewrite.json`, `hex/prompt.md`, `hex/vocabulary.json` | Global rewrite fields and merged vocabulary, applied through the running Hex CLI |
+| `hex/microphones/pcm2902/` (opt-in) | WirePlumber fragment, user service drop-in, and `~/.local/bin/disable-laptop-capture.py`; [profile usage](hex.md#optional-pcm2902-microphone-profile) |
 
 The installer also installs the shared skills and compatibility aliases;
 [Skills](skills.md#installation-and-discovery) owns their destinations and names.

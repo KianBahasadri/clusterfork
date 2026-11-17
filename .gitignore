@@ -16,3 +16,12 @@ crash.log
 !.codeview/modules/**
 .codeview/modules/**/__pycache__/
 .codeview/modules/**/*.py[cod]
+# Hex runtime data is local, including when copied into the integration tree.
+hex/**/settings.json
+hex/**/history.json
+hex/**/history-audio/
+hex/**/models/
+hex/**/local-api.json
+hex/**/transform-trust.json
+hex/**/vocabulary-review-state.json
+hex/**/vocabulary-auto-added.jsonl

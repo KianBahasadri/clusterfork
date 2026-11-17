@@ -1,0 +1,28 @@
+import { defineHexConfig } from "@hex/commands"
+import { execFile } from "node:child_process"
+
+export default defineHexConfig({
+  transformations: {
+    "conversation-context": {
+      name: "Rewrite with recent dictations",
+      description: "Use recent dictations as background for Luna, within a total word limit.",
+      timeout: 30000,
+      transform: (text, context) => new Promise<string>((resolve, reject) => {
+        execFile("/usr/bin/python3", [@REWRITE_HELPER@], {
+          input: JSON.stringify({ text, context }),
+          timeout: 28000,
+          maxBuffer: 262144,
+        }, (error, stdout, stderr) => {
+          if (stderr.trim()) console.log(stderr.trim())
+          if (error) reject(error)
+          else resolve(stdout || text)
+        })
+      }),
+    },
+    "trim-whitespace": {
+      name: "Trim whitespace",
+      description: "Remove leading and trailing whitespace",
+      transform: (text) => text.trim(),
+    },
+  },
+})

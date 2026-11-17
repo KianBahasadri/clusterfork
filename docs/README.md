@@ -16,6 +16,7 @@ Complete documentation before this prune: parent commit [`f5642f9103c77727752316
 - [Notification relay](notifications-relay.md) — devbox-to-host socket and user service
 - [Private ntfy](notifications-ntfy.md) — Tailnet phone service setup and troubleshooting
 - [OpenCode Go](opencode-go.md) — shipped `occ` profile, overrides, and model discovery
+- [Hex dictation](hex.md) — concise rewriting, conversation context, vocabulary, and optional microphone profile
 
 ## Development
 

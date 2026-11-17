@@ -1,0 +1,15 @@
+[Unit]
+Description=Review Hex vocabulary after dictations are pasted
+PartOf=graphical-session.target
+After=graphical-session.target hex.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -u "%h/.config/hex/vocabulary_review.py"
+Environment=PYTHONDONTWRITEBYTECODE=1
+Restart=on-failure
+RestartSec=3
+UMask=0077
+
+[Install]
+WantedBy=graphical-session.target
