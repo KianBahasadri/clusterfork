@@ -1,11 +1,14 @@
 """Check the Hex Linear workflow at its read/write and recording boundaries."""
 
+from contextlib import redirect_stderr
 from dataclasses import replace
+from io import StringIO
 import json
 from pathlib import Path
 from queue import SimpleQueue
 from subprocess import CompletedProcess, TimeoutExpired
 import sys
+from tempfile import TemporaryDirectory
 from threading import Event
 import unittest
 from unittest.mock import Mock, patch
@@ -50,6 +53,37 @@ def update_fixture(changes):
 
 
 class LinearDictationTests(unittest.TestCase):
+    def test_archived_session_log_points_to_private_instructions_snapshot(self):
+        assistant_reply = {"clarification": "Which Linear issue should I update?"}
+        events = [
+            {"type": "step_start", "sessionID": "ses_fixture123"},
+            {"type": "text", "part": {"messageID": "final", "text": json.dumps(assistant_reply)}},
+            {"type": "step_finish", "part": {"messageID": "final", "reason": "stop"}},
+        ]
+        stdout = "\n".join(map(json.dumps, events))
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "hex" / "linear"
+            agent = workspace / ".opencode" / "agents" / "linear-issue.md"
+            agent.parent.mkdir(parents=True)
+            agent.write_text("Complete agent instructions\n")
+            (workspace.parent / "AGENTS.md").write_text("Shared Hex instructions\n")
+            logs = StringIO()
+            with (patch.object(issue, "WORKSPACE", workspace),
+                  patch.dict(issue.os.environ, {"XDG_STATE_HOME": str(root / "state")}),
+                  patch.object(issue.subprocess, "run", return_value=CompletedProcess([], 0, stdout=stdout)) as run,
+                  redirect_stderr(logs)):
+                self.assertEqual(issue.opencode_draft(DICTATION, ({}, {}, {})), assistant_reply)
+                snapshot = issue.snapshot_instructions()
+            self.assertIn("--archived", run.call_args.args[0])
+            self.assertIn(DICTATION.transcript, run.call_args.kwargs["input"])
+            self.assertIn(f"{NEW} archived OpenCode session ses_fixture123 instructions={snapshot}", logs.getvalue())
+            self.assertNotIn(DICTATION.transcript, logs.getvalue())
+            self.assertEqual(list(snapshot.parent.iterdir()), [snapshot])
+            self.assertEqual(snapshot.stat().st_mode & 0o777, 0o600)
+            self.assertIn(agent.read_text(), snapshot.read_text())
+            self.assertIn("Shared Hex instructions\n", snapshot.read_text())
+
     def test_uses_the_final_assistant_reply_after_tool_calls(self):
         records = [
             {"type": "text", "part": {"messageID": "early", "text": "Looking up the issue."}},

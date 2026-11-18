@@ -4,6 +4,7 @@ import argparse
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date
+from hashlib import sha256
 from http.client import HTTPSConnection, HTTPException
 import json
 import os
@@ -12,7 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
-from tempfile import TemporaryDirectory
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 import time
 from typing import Literal
 from urllib.parse import urlsplit
@@ -174,6 +175,42 @@ def focused_project(title, projects):
     return None
 
 
+def snapshot_instructions():
+    agent = WORKSPACE / ".opencode" / "agents" / f"{AGENT}.md"
+    content = f"# {agent.name}\n\n".encode() + agent.read_bytes()
+    parent = WORKSPACE.parent / "AGENTS.md"
+    if parent.is_file():
+        content += b"\n\n# Hex workspace AGENTS.md\n\n" + parent.read_bytes()
+    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
+    directory = state / "hex" / "linear" / "prompts"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    snapshot = directory / f"{sha256(content).hexdigest()}.md"
+    if not snapshot.exists():
+        with NamedTemporaryFile(dir=directory) as temporary:
+            temporary.write(content)
+            temporary.flush()
+            try:
+                os.link(temporary.name, snapshot)
+            except FileExistsError:
+                pass  # Another run already saved these exact instructions.
+    return snapshot
+
+
+def log_opencode_session(output, dictation_id, snapshot):
+    for line in (output or "").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        session = event.get("sessionID") if isinstance(event, dict) else None
+        if isinstance(session, str) and re.fullmatch(r"ses_[A-Za-z0-9]+", session):
+            print(f"Hex Linear dictation {dictation_id} archived OpenCode session {session} "
+                  f"instructions={snapshot or 'unavailable'}", file=sys.stderr)
+            return
+    print(f"Hex Linear dictation {dictation_id} has no OpenCode session ID "
+          f"instructions={snapshot or 'unavailable'}", file=sys.stderr)
+
+
 def opencode_draft(dictation, catalog):
     projects, teams, labels = catalog
     context = {"transcript": dictation.transcript, "focused_project_id": focused_project(dictation.title, projects),
@@ -184,6 +221,12 @@ def opencode_draft(dictation, catalog):
     binary = shutil.which("opencode") or Path.home() / ".opencode/bin/opencode"
     command = [str(binary), "run", "--agent", AGENT, "--model", MODEL, "--format", "json",
                "--title", "Hex Linear dictation", "--archived"]
+    try:
+        snapshot = snapshot_instructions()
+    except OSError as error:
+        print(f"Hex Linear dictation {dictation.issue_id} could not save instructions ({type(error).__name__}).",
+              file=sys.stderr)
+        snapshot = None
     with TemporaryDirectory(prefix="hex-linear-") if dictation.image else nullcontext() as directory:
         if dictation.image:
             mime, image = dictation.image
@@ -191,8 +234,13 @@ def opencode_draft(dictation, catalog):
             path.write_bytes(image)
             command.extend(["--file", str(path)])
         # The CLI uses PWD to locate project-level agents. Pass the transcript on stdin.
-        result = subprocess.run(command, input=prompt, cwd=WORKSPACE, env={**os.environ, "PWD": str(WORKSPACE)},
-                                text=True, capture_output=True, timeout=300)
+        try:
+            result = subprocess.run(command, input=prompt, cwd=WORKSPACE, env={**os.environ, "PWD": str(WORKSPACE)},
+                                    text=True, capture_output=True, timeout=300)
+        except subprocess.TimeoutExpired as error:
+            log_opencode_session(error.stdout, dictation.issue_id, snapshot)
+            raise
+    log_opencode_session(result.stdout, dictation.issue_id, snapshot)
     if result.returncode:
         raise FilingError("OpenCode failed to draft the issue. See the Hex Linear service journal.")
     return parse_draft(result.stdout)
@@ -476,6 +524,7 @@ def file_dictation(dictation, *, dry_run=False):
         raise ReplyNeeded(IMAGE_QUESTION, copy_image=True)
     linear = configured_client()
     catalog = read_catalog(linear)
+    print(f"Hex Linear dictation {dictation.issue_id} loaded the Linear catalog.", file=sys.stderr)
     reply = opencode_draft(dictation, catalog)
     if dictation.image:
         if not isinstance(reply, dict) or reply.get("image_relevant") is not True:
@@ -508,6 +557,7 @@ def file_dictation(dictation, *, dry_run=False):
 
     ids = list(dict.fromkeys(ref for draft in drafts for ref in draft.blocked_by + draft.blocks))
     refs = read_dependencies(linear, ids)
+    print(f"Hex Linear dictation {dictation.issue_id} validated {len(drafts)} issue drafts.", file=sys.stderr)
     asset = upload_image(linear, dictation.image) if attaching and not dry_run else None
     issues, unconfirmed = [], []
     for draft in drafts:

@@ -105,8 +105,24 @@ client. New issues are filed in Backlog. Updates pass only the requested field
 changes and check the current issue revision before writing. Each creation reuses
 its ID on retry. If an issue or dependency link cannot be confirmed, the
 notification identifies it. Other issues in the batch proceed independently.
-The service journal records workflow stages and issue IDs.
-The archived **Hex Linear dictation** OpenCode prompt contains the transcript.
+
+The service journal records the same dictation ID from recording through the
+Linear save, alongside the OpenCode session ID and any created or updated
+issue IDs. A reply keeps the dictation ID and gets its own OpenCode session.
+The service saves a private snapshot of the agent file and Hex workspace
+instructions at the path logged as `instructions=`. It reuses the same
+snapshot when those instructions are identical.
+
+Search the journal for the Linear issue ID. Use the associated dictation ID
+to find the OpenCode session and instructions snapshot. The archived session
+messages contain the exact prompt sent on stdin, including the transcript and
+catalog, any images, each Linear lookup and its reply, and the final draft.
+
+```bash
+journalctl --user -u hex-linear-issue.service --grep 'KIAN-123'
+journalctl --user -u hex-linear-issue.service --grep '<dictation-id>'
+opencode api GET '/api/session/<session-id>/message'
+```
 
 To check the workflow with text, the dry run reads Linear and runs OpenCode Go,
 then prints the drafts and resolved dependencies before the write step:
