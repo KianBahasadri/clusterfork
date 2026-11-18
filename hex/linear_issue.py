@@ -2,10 +2,9 @@
 
 import argparse
 from collections import Counter
-from contextlib import nullcontext
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import date
-from hashlib import sha256
 from http.client import HTTPSConnection, HTTPException
 from itertools import count
 import json
@@ -15,7 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
-from tempfile import NamedTemporaryFile, TemporaryDirectory
+from tempfile import TemporaryDirectory, mkdtemp
 import time
 from typing import Literal
 from urllib.parse import urlsplit
@@ -235,28 +234,27 @@ def prompt_for(dictation, catalog):
     return "\n".join(lines)
 
 
-def snapshot_instructions():
-    agent = WORKSPACE / ".opencode" / "agents" / f"{AGENT}.md"
-    content = f"# {agent.name}\n\n".encode() + agent.read_bytes()
-    parent = WORKSPACE.parent / "AGENTS.md"
-    if parent.is_file():
-        content += b"\n\n# Hex workspace AGENTS.md\n\n" + parent.read_bytes()
+def private_file(path):
+    return os.fdopen(os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600), "w+b")
+
+
+def start_attempt_log(dictation):
     state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
-    directory = state / "hex" / "linear" / "prompts"
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    snapshot = directory / f"{sha256(content).hexdigest()}.md"
-    if not snapshot.exists():
-        with NamedTemporaryFile(dir=directory) as temporary:
-            temporary.write(content)
-            temporary.flush()
-            try:
-                os.link(temporary.name, snapshot)
-            except FileExistsError:
-                pass  # Another run already saved these exact instructions.
-    return snapshot
+    directory = state / "hex" / "linear" / "runs"
+    try:
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        attempt = Path(mkdtemp(prefix=f"{dictation.issue_id}-", dir=directory))
+        with private_file(attempt / "transcript.txt") as transcript:
+            transcript.write(dictation.transcript.encode("utf-8"))
+    except OSError as error:
+        print(f"Hex Linear dictation {dictation.issue_id} could not start an attempt log ({type(error).__name__}).",
+              file=sys.stderr)
+        return None
+    print(f"Hex Linear dictation {dictation.issue_id} attempt={attempt}", file=sys.stderr, flush=True)
+    return attempt
 
 
-def log_opencode_session(output, dictation_id, snapshot):
+def log_opencode_session(output, dictation_id):
     for line in (output or "").splitlines():
         try:
             event = json.loads(line)
@@ -264,41 +262,54 @@ def log_opencode_session(output, dictation_id, snapshot):
             continue
         session = event.get("sessionID") if isinstance(event, dict) else None
         if isinstance(session, str) and re.fullmatch(r"ses_[A-Za-z0-9]+", session):
-            print(f"Hex Linear dictation {dictation_id} archived OpenCode session {session} "
-                  f"instructions={snapshot or 'unavailable'}", file=sys.stderr)
+            print(f"Hex Linear dictation {dictation_id} archived OpenCode session {session}", file=sys.stderr)
             return
-    print(f"Hex Linear dictation {dictation_id} has no OpenCode session ID "
-          f"instructions={snapshot or 'unavailable'}", file=sys.stderr)
+    print(f"Hex Linear dictation {dictation_id} has no OpenCode session ID.", file=sys.stderr)
 
 
-def opencode_draft(dictation, catalog):
-    prompt = prompt_for(dictation, catalog)
+def opencode_draft(dictation, catalog, attempt):
+    prompt = prompt_for(dictation, catalog).encode("utf-8")
     binary = shutil.which("opencode") or Path.home() / ".opencode/bin/opencode"
     command = [str(binary), "run", "--agent", AGENT, "--model", MODEL, "--format", "json",
                "--title", "Hex Linear dictation", "--archived"]
-    try:
-        snapshot = snapshot_instructions()
-    except OSError as error:
-        print(f"Hex Linear dictation {dictation.issue_id} could not save instructions ({type(error).__name__}).",
-              file=sys.stderr)
-        snapshot = None
-    with TemporaryDirectory(prefix="hex-linear-") if dictation.image else nullcontext() as directory:
+    with ExitStack() as files:
+        stdout = stderr = None
+        if attempt is not None:
+            try:
+                with private_file(attempt / "prompt.txt") as saved_prompt:
+                    saved_prompt.write(prompt)
+                response = files.enter_context(private_file(attempt / "stdout.jsonl"))
+                errors = files.enter_context(private_file(attempt / "stderr.txt"))
+            except OSError as error:
+                print(f"Hex Linear dictation {dictation.issue_id} could not save the OpenCode trace ({type(error).__name__}).",
+                      file=sys.stderr)
+            else:
+                stdout, stderr = response, errors
         if dictation.image:
             mime, image = dictation.image
+            directory = files.enter_context(TemporaryDirectory(prefix="hex-linear-"))
             path = Path(directory) / f"clipboard.{EXTENSIONS[mime]}"
             path.write_bytes(image)
             command.extend(["--file", str(path)])
         # The CLI uses PWD to locate project-level agents. Pass the transcript on stdin.
+        output = None
         try:
             result = subprocess.run(command, input=prompt, cwd=WORKSPACE, env={**os.environ, "PWD": str(WORKSPACE)},
-                                    text=True, capture_output=True, timeout=300)
+                                    stdout=stdout or subprocess.PIPE, stderr=stderr or subprocess.PIPE, timeout=300)
+            output = result.stdout
         except subprocess.TimeoutExpired as error:
-            log_opencode_session(error.stdout, dictation.issue_id, snapshot)
+            output = error.stdout
             raise
-    log_opencode_session(result.stdout, dictation.issue_id, snapshot)
+        finally:
+            if stdout is not None:
+                stdout.seek(0)
+                output = stdout.read()
+            log_opencode_session(output, dictation.issue_id)
     if result.returncode:
+        print(f"Hex Linear dictation {dictation.issue_id} OpenCode exited with status {result.returncode}.",
+              file=sys.stderr)
         raise FilingError("OpenCode failed to draft the issue. See the Hex Linear service journal.")
-    return parse_draft(result.stdout)
+    return parse_draft(output)
 
 
 def parse_draft(output):
@@ -600,12 +611,13 @@ def upload_image(linear, image):
 
 
 def file_dictation(dictation, *, dry_run=False):
+    attempt = start_attempt_log(dictation)
     if dictation.image_use and not dictation.image:
         raise ReplyNeeded(IMAGE_QUESTION, copy_image=True)
     linear = configured_client()
     catalog = read_catalog(linear)
     print(f"Hex Linear dictation {dictation.issue_id} loaded the Linear catalog.", file=sys.stderr)
-    reply = opencode_draft(dictation, catalog)
+    reply = opencode_draft(dictation, catalog, attempt)
     if dictation.image:
         if not isinstance(reply, dict) or reply.get("image_relevant") is not True:
             raise ReplyNeeded("The clipboard image did not clearly match the request. " + IMAGE_QUESTION, copy_image=True)
@@ -686,8 +698,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", required=True, help="Print validated drafts from stdin")
     args = parser.parse_args()
-    transcript = sys.stdin.read().strip()
-    if not transcript:
+    transcript = sys.stdin.read()
+    if not transcript.strip():
         parser.error("Pass a dictation transcript on stdin")
     try:
         print(json.dumps(file_dictation(Dictation(transcript, None, str(uuid4())), dry_run=args.dry_run), indent=2))

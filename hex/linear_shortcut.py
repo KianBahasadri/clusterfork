@@ -207,13 +207,13 @@ def capture(released, stopping, jobs):
                     hex_request(registration, path + "/cancel", owner=owner)
                 except (OSError, ValueError, HTTPException):
                     pass  # Hex also cancels the capture when its lease expires.
-        transcript = result["transcript"].strip()
-        if transcript:
+        transcript = result["transcript"]
+        if transcript.strip():
             image_use = image = None
             if instruction := IMAGE_REQUEST.search(transcript):
                 image_use = "attach" if instruction["attach"] else "reference"
                 image = clipboard_image()
-            copy_transcript(transcript)
+            copy_transcript(transcript.strip())
             print(f"Hex Linear dictation {dictation_id} transcribed and queued.")
             jobs.put(Dictation(transcript, title, dictation_id, image_use=image_use, image=image))
         else:

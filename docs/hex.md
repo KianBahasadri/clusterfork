@@ -112,18 +112,23 @@ independently.
 
 The service journal records the same dictation ID from recording through the
 Linear save, alongside the OpenCode session ID and any created or updated
-issue IDs. A reply keeps the dictation ID and gets its own OpenCode session.
-The service saves a private snapshot of the agent file and Hex workspace
-instructions at the path logged as `instructions=`. It reuses the same
-snapshot when those instructions are identical.
+issue IDs. The `attempt=` entry points to a private directory under
+`~/.local/state/hex/linear/runs/`, or the equivalent under `XDG_STATE_HOME`.
+Each reply keeps the dictation ID and gets a new attempt directory.
 
-Search the journal for the Linear issue ID. Use the associated dictation ID
-to find the OpenCode session and instructions snapshot. The archived session
-messages contain the exact prompt sent on stdin, including the transcript and
-catalog, any images, each Linear lookup and the result shown to the model, and
-the final draft.
+`transcript.txt` holds the verbatim Hex transcript and is saved before the
+Linear catalog is loaded. `prompt.txt` holds the exact bytes supplied on
+OpenCode's stdin. `stdout.jsonl` records OpenCode's events, including Linear
+lookups, their results, and the final draft. `stderr.txt` records CLI errors.
+Both streams are written as OpenCode runs, preserving partial output on failure
+or timeout. When a session ID is available, its archive also contains tool
+results and any supplied clipboard image.
+
+For a saved issue, search the journal by issue ID, then by dictation ID. For a
+failed attempt, start with the recent journal entries and open its `attempt=` path.
 
 ```bash
+journalctl --user -u hex-linear-issue.service -n 50
 journalctl --user -u hex-linear-issue.service --grep 'KIAN-123'
 journalctl --user -u hex-linear-issue.service --grep '<dictation-id>'
 opencode api GET '/api/session/<session-id>/message'

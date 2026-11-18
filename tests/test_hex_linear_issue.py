@@ -60,44 +60,77 @@ def update_fixture(changes):
 
 
 class LinearDictationTests(unittest.TestCase):
-    def test_archived_session_log_points_to_private_instructions_snapshot(self):
+    def setUp(self):
+        state = self.enterContext(TemporaryDirectory())
+        self.enterContext(patch.dict(issue.os.environ, {"XDG_STATE_HOME": state}))
+        self.attempts = Path(state) / "hex/linear/runs"
+
+    def test_saves_verbatim_transcript_stdin_and_archived_response(self):
         assistant_reply = {"clarification": "Which Linear issue should I update?"}
         events = [
             {"type": "step_start", "sessionID": "ses_fixture123"},
+            {"type": "tool_use", "part": {"state": {"input": {"query": "Relay"},
+                                                    "content": [{"type": "text", "text": "KIAN-1\tRelay"}]}}},
             {"type": "text", "part": {"messageID": "final", "text": json.dumps(assistant_reply)}},
             {"type": "step_finish", "part": {"messageID": "final", "reason": "stop"}},
         ]
-        stdout = "\n".join(map(json.dumps, events))
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            workspace = root / "hex" / "linear"
-            agent = workspace / ".opencode" / "agents" / "linear-issue.md"
-            agent.parent.mkdir(parents=True)
-            agent.write_text("Complete agent instructions\n")
-            (workspace.parent / "AGENTS.md").write_text("Shared Hex instructions\n")
-            logs = StringIO()
-            with (patch.object(issue, "WORKSPACE", workspace),
-                  patch.dict(issue.os.environ, {"XDG_STATE_HOME": str(root / "state")}),
-                  patch.object(issue.subprocess, "run", return_value=CompletedProcess([], 0, stdout=stdout)) as run,
-                  redirect_stderr(logs)):
-                dictation = replace(DICTATION, title="Relay – Linear", answers=(("Which project?", "Relay"),))
-                self.assertEqual(issue.opencode_draft(dictation, fixture()[0]), assistant_reply)
-                snapshot = issue.snapshot_instructions()
-            self.assertIn("--archived", run.call_args.args[0])
-            prompt = run.call_args.kwargs["input"]
-            self.assertIn(f"Transcript\n{DICTATION.transcript}\n\nFollow-up question\nWhich project?\nFollow-up answer\nRelay", prompt)
-            self.assertIn("Focused project: Relay", prompt)
-            self.assertIn("Relay\tstarted\tKIAN\t-\tRelay service", prompt)
-            self.assertIn("Feature\tworkspace\tType\tA new feature", prompt)
-            self.assertIn("KIAN\tDone\tcompleted", prompt)
-            for internal_value in ("backlog-state", "old-label", "done-state", "relay-slug", BEFORE, AFTER):
-                self.assertNotIn(internal_value, prompt)
-            self.assertIn(f"{NEW} archived OpenCode session ses_fixture123 instructions={snapshot}", logs.getvalue())
-            self.assertNotIn(DICTATION.transcript, logs.getvalue())
-            self.assertEqual(list(snapshot.parent.iterdir()), [snapshot])
-            self.assertEqual(snapshot.stat().st_mode & 0o777, 0o600)
-            self.assertIn(agent.read_text(), snapshot.read_text())
-            self.assertIn("Shared Hex instructions\n", snapshot.read_text())
+        stdout_bytes = ("\n".join(map(json.dumps, events)) + "\n").encode()
+        stderr_bytes = b"Fixture diagnostic\r\n"
+        transcript = "  Réparer le relais.\r\nMore detail.\n "
+        dictation = replace(DICTATION, transcript=transcript, title="Relay – Linear", answers=(("Which project?", "Relay"),))
+
+        def complete(command, *, stdout, stderr, **kwargs):
+            self.assertEqual((attempt / "prompt.txt").read_bytes(), kwargs["input"])
+            stdout.write(stdout_bytes)
+            stderr.write(stderr_bytes)
+            return CompletedProcess(command, 0)
+
+        logs = StringIO()
+        with patch.object(issue.subprocess, "run", side_effect=complete) as run, redirect_stderr(logs):
+            attempt = issue.start_attempt_log(dictation)
+            self.assertEqual(issue.opencode_draft(dictation, fixture()[0], attempt), assistant_reply)
+        self.assertIn("--archived", run.call_args.args[0])
+        prompt = run.call_args.kwargs["input"].decode()
+        self.assertIn(f"Transcript\n{transcript}\n\nFollow-up question\nWhich project?\nFollow-up answer\nRelay", prompt)
+        self.assertIn("Focused project: Relay", prompt)
+        self.assertIn("Relay\tstarted\tKIAN\t-\tRelay service", prompt)
+        self.assertIn("Feature\tworkspace\tType\tA new feature", prompt)
+        self.assertIn("KIAN\tDone\tcompleted", prompt)
+        for internal_value in ("backlog-state", "old-label", "done-state", "relay-slug", BEFORE, AFTER):
+            self.assertNotIn(internal_value, prompt)
+        self.assertIn(f"{NEW} attempt={attempt}", logs.getvalue())
+        self.assertIn(f"{NEW} archived OpenCode session ses_fixture123", logs.getvalue())
+        self.assertNotIn(transcript, logs.getvalue())
+        self.assertEqual(attempt.stat().st_mode & 0o777, 0o700)
+        expected = {"transcript.txt": transcript.encode(), "prompt.txt": run.call_args.kwargs["input"],
+                    "stdout.jsonl": stdout_bytes, "stderr.txt": stderr_bytes}
+        self.assertEqual({path.name: path.read_bytes() for path in attempt.iterdir()}, expected)
+        self.assertTrue(all(path.stat().st_mode & 0o777 == 0o600 for path in attempt.iterdir()))
+
+    def test_preserves_partial_output_when_the_cli_times_out_or_exits(self):
+        partial = b'{"type":"step_start","sessionID":"ses_fixture123"}\n{"type":"text","part":"\xc3'
+        diagnostic = b"Connection lost\n"
+        attempts = set()
+        for failure in (TimeoutExpired, issue.FilingError):
+            with self.subTest(failure=failure):
+                def incomplete(command, *, stdout, stderr, **kwargs):
+                    stdout.write(partial)
+                    stderr.write(diagnostic)
+                    if failure is TimeoutExpired:
+                        raise TimeoutExpired(command, 300)
+                    return CompletedProcess(command, 1)
+
+                logs = StringIO()
+                with (patch.object(issue.subprocess, "run", side_effect=incomplete) as run, redirect_stderr(logs),
+                      self.assertRaises(failure)):
+                    attempt = issue.start_attempt_log(DICTATION)
+                    attempts.add(attempt)
+                    issue.opencode_draft(DICTATION, fixture()[0], attempt)
+                self.assertIn(f"{NEW} archived OpenCode session ses_fixture123", logs.getvalue())
+                self.assertEqual((attempt / "prompt.txt").read_bytes(), run.call_args.kwargs["input"])
+                self.assertEqual((attempt / "stdout.jsonl").read_bytes(), partial)
+                self.assertEqual((attempt / "stderr.txt").read_bytes(), diagnostic)
+        self.assertEqual(len(attempts), 2)
 
     def test_uses_the_final_assistant_reply_after_tool_calls(self):
         records = [
@@ -375,9 +408,9 @@ class LinearDictationTests(unittest.TestCase):
         self.assertEqual([call.args[1] for call in request.call_args_list],
                          ["/dictations", "/dictations/7/heartbeat", "/dictations/7/finish"])
         dictation = jobs.get_nowait()
-        self.assertEqual((dictation.transcript, dictation.title), ("File an issue", "Clusterfork"))
+        self.assertEqual((dictation.transcript, dictation.title), (" File an issue ", "Clusterfork"))
         self.assertEqual(UUID(dictation.issue_id).version, 4)
-        copy.assert_called_once_with(dictation.transcript)
+        copy.assert_called_once_with("File an issue")
         image.assert_not_called()
         self.assertTrue(jobs.empty())
 
@@ -465,6 +498,9 @@ class LinearDictationTests(unittest.TestCase):
             with self.assertRaises(issue.ReplyNeeded) as missing:
                 issue.file_dictation(dictation)
             client.assert_not_called()
+            before_drafting, = self.attempts.iterdir()
+            self.assertEqual({path.name: path.read_text() for path in before_drafting.iterdir()},
+                             {"transcript.txt": dictation.transcript})
             with self.assertRaises(issue.ReplyNeeded) as unrelated:
                 issue.file_dictation(replace(dictation, image=("image/png", b"wrong image")))
         self.assertTrue(missing.exception.copy_image and unrelated.exception.copy_image)
