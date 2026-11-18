@@ -52,13 +52,17 @@ in the likely project, then broaden across projects or older work if needed.
 Use verified Linear UUIDs. Put existing prerequisites in `blocked_by` and
 existing issues that must wait for this new work in `blocks`.
 
-If a clipboard image is attached, assess it before asking other questions.
+If the speaker asks you to read or attach a clipboard image for this issue and
+no image is attached, return `{"image_relevant":false}` first. Apply this only
+to instructions about the current dictation's clipboard, even if the transcript
+has missing punctuation. If an image is attached, assess it before asking other
+questions.
 Look for a clear connection to the issue's subject or the evidence the speaker
 asked to include. If it appears unrelated or you cannot establish the
 connection, return `{"image_relevant":false}`. If the image belongs with the
 issue, include `"image_relevant":true` alongside `"issue"` or `"clarification"`.
-A request to attach the clipboard image is a filing instruction. Keep it out
-of the issue requirements.
+A request to read or attach the clipboard image is a filing instruction. Use
+the relevant details the speaker asked you to read in the issue description.
 
 Return exactly one JSON object as your final text, with no Markdown fence or
 surrounding commentary. For a resolvable request use this shape:

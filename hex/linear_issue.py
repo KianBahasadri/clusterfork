@@ -13,6 +13,7 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import time
+from typing import Literal
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
@@ -56,7 +57,7 @@ class Dictation:
     title: str | None
     issue_id: str
     answers: tuple[tuple[str, str], ...] = ()
-    wants_image: bool = False
+    image_use: Literal["attach", "reference"] | None = None
     image: tuple[str, bytes] | None = None
 
 
@@ -325,7 +326,7 @@ def upload_image(linear, image):
 
 
 def file_dictation(dictation, *, dry_run=False):
-    if dictation.wants_image and not dictation.image:
+    if dictation.image_use and not dictation.image:
         raise ReplyNeeded(IMAGE_QUESTION, copy_image=True)
     linear = configured_client()
     catalog = read_catalog(linear)
@@ -334,6 +335,8 @@ def file_dictation(dictation, *, dry_run=False):
         if not isinstance(reply, dict) or reply.get("image_relevant") is not True:
             raise ReplyNeeded("The clipboard image did not clearly match the issue. " + IMAGE_QUESTION, copy_image=True)
         reply = {key: value for key, value in reply.items() if key != "image_relevant"}
+    elif isinstance(reply, dict) and reply.get("image_relevant") is False:
+        raise ReplyNeeded(IMAGE_QUESTION, copy_image=True)
     if isinstance(reply, dict) and set(reply) == {"clarification"} and isinstance(reply["clarification"], str):
         reason = reply["clarification"].strip()
         if reason:
@@ -345,7 +348,7 @@ def file_dictation(dictation, *, dry_run=False):
     if dry_run:
         return {"fields": fields, "clipboard_image": bool(dictation.image), **dependencies}
 
-    if dictation.image:
+    if dictation.image_use == "attach":
         url = upload_image(linear, dictation.image)
         fields["description"] += f"\n\n![Clipboard image](<{url}>)"
     issue = create_issue(linear, fields)

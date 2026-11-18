@@ -156,19 +156,24 @@ class LinearDictationTests(unittest.TestCase):
     def test_capture_snapshots_an_explicit_image_before_copying_the_transcript(self):
         released, stopping, jobs = Event(), Event(), SimpleQueue()
         released.set()
-        transcript = "File an issue and copy the image currently in my clipboard."
-        sequence = []
-        with (patch.object(shortcut, "HEX_REGISTRATION") as registration,
-              patch.object(shortcut, "hex_request", side_effect=[{"id": 7, "ownerToken": "fixture"}, {"transcript": transcript}]),
-              patch.object(shortcut, "clipboard_image", side_effect=lambda: sequence.append("image") or ("image/png", b"image")),
-              patch.object(shortcut, "copy_transcript", side_effect=lambda text: sequence.append(text))):
-            registration.read_text.return_value = '{"token":"fixture","port":1234}'
-            shortcut.capture(released, stopping, jobs)
-        self.assertEqual(sequence, ["image", transcript])
-        dictation = jobs.get_nowait()
-        self.assertTrue(dictation.wants_image)
-        self.assertEqual(dictation.image, ("image/png", b"image"))
+        for transcript, image_use in (
+            ("File an issue and copy the image currently in my clipboard.", "attach"),
+            ("File an issue. Check the image of my clipboard.", "reference"),
+        ):
+            with self.subTest(transcript=transcript):
+                sequence = []
+                with (patch.object(shortcut, "HEX_REGISTRATION") as registration,
+                      patch.object(shortcut, "hex_request", side_effect=[{"id": 7, "ownerToken": "fixture"}, {"transcript": transcript}]),
+                      patch.object(shortcut, "clipboard_image", side_effect=lambda: sequence.append("image") or ("image/png", b"image")),
+                      patch.object(shortcut, "copy_transcript", side_effect=lambda text: sequence.append(text))):
+                    registration.read_text.return_value = '{"token":"fixture","port":1234}'
+                    shortcut.capture(released, stopping, jobs)
+                self.assertEqual(sequence, ["image", transcript])
+                dictation = jobs.get_nowait()
+                self.assertEqual(dictation.image_use, image_use)
+                self.assertEqual(dictation.image, ("image/png", b"image"))
         self.assertIsNone(shortcut.IMAGE_REQUEST.search("Add a feature to copy the image in my clipboard."))
+        self.assertIsNone(shortcut.IMAGE_REQUEST.search("Add a feature to check the image of my clipboard."))
         self.assertIsNone(shortcut.IMAGE_REQUEST.search("Do not attach the image in my clipboard."))
 
     def test_clipboard_uses_utf8_input_and_treats_copy_failure_as_nonfatal(self):
@@ -182,7 +187,7 @@ class LinearDictationTests(unittest.TestCase):
 
     def test_reply_keeps_its_original_request_identity_and_image(self):
         jobs = SimpleQueue()
-        dictation = replace(DICTATION, wants_image=True, image=("image/png", b"original"))
+        dictation = replace(DICTATION, image_use="attach", image=("image/png", b"original"))
         question = issue.ReplyNeeded("Which project?")
         with patch.object(shortcut.subprocess, "run", side_effect=[
             CompletedProcess("notify-send", 0, stdout="default\n"),
@@ -195,17 +200,20 @@ class LinearDictationTests(unittest.TestCase):
 
     def test_image_reply_reads_the_new_clipboard_and_keeps_prior_answers(self):
         jobs = SimpleQueue()
-        dictation = replace(DICTATION, wants_image=True, answers=(("Which project?", "Clusterfork"),))
         image = ("image/jpeg", b"replacement")
-        with (patch.object(shortcut.subprocess, "run", return_value=CompletedProcess("notify-send", 0, stdout="reply\n")) as run,
-              patch.object(shortcut, "clipboard_image", return_value=image)):
-            shortcut.offer_reply(jobs, dictation, issue.ReplyNeeded("Copy a new image.", copy_image=True))
-        self.assertEqual(jobs.get_nowait(), replace(dictation, image=image))
-        run.assert_called_once()
+        for image_use, expected in (("attach", "attach"), (None, "reference")):
+            with self.subTest(image_use=image_use):
+                dictation = replace(DICTATION, image_use=image_use, answers=(("Which project?", "Clusterfork"),))
+                with (patch.object(shortcut.subprocess, "run", return_value=CompletedProcess("notify-send", 0, stdout="reply\n")) as run,
+                      patch.object(shortcut, "clipboard_image", return_value=image)):
+                    shortcut.offer_reply(jobs, dictation, issue.ReplyNeeded("Copy a new image.", copy_image=True))
+                self.assertEqual(jobs.get_nowait(), replace(dictation, image_use=expected, image=image))
+                self.assertIn("--action=default=Reply", run.call_args.args[0])
+                run.assert_called_once()
 
     def test_holds_for_missing_and_unrelated_images_before_upload_or_creation(self):
         catalog, _ = fixture()
-        dictation = replace(DICTATION, wants_image=True)
+        dictation = replace(DICTATION, image_use="attach")
         with (patch.object(issue, "configured_client") as client, patch.object(issue, "read_catalog", return_value=catalog),
               patch.object(issue, "opencode_draft", return_value={"image_relevant": False}),
               patch.object(issue, "upload_image") as upload, patch.object(issue, "create_issue") as create):
@@ -218,32 +226,50 @@ class LinearDictationTests(unittest.TestCase):
         upload.assert_not_called()
         create.assert_not_called()
 
+    def test_an_image_request_missed_during_capture_gets_an_actionable_reply(self):
+        catalog, _ = fixture()
+        dictation = replace(DICTATION, transcript="File a task for the meeting check the image of my clipboard")
+        response = {"clarification": "Could you attach the clipboard image?", "image_relevant": False}
+        with (patch.object(issue, "configured_client"), patch.object(issue, "read_catalog", return_value=catalog),
+              patch.object(issue, "opencode_draft", return_value=response), patch.object(issue, "create_issue") as create):
+            self.assertIsNone(shortcut.IMAGE_REQUEST.search(dictation.transcript))
+            with self.assertRaisesRegex(issue.ReplyNeeded, "Copy an image.*click Reply") as reply:
+                issue.file_dictation(dictation)
+        self.assertTrue(reply.exception.copy_image)
+        create.assert_not_called()
+
     def test_relevant_image_waits_with_the_draft_for_other_clarification(self):
         catalog, _ = fixture()
-        dictation = replace(DICTATION, wants_image=True, image=("image/png", b"matching image"))
+        dictation = replace(DICTATION, image_use="attach", image=("image/png", b"matching image"))
         with (patch.object(issue, "configured_client"), patch.object(issue, "read_catalog", return_value=catalog),
               patch.object(issue, "opencode_draft", return_value={"image_relevant": True, "clarification": "Which project?"})):
             with self.assertRaisesRegex(issue.ReplyNeeded, "Which project") as reply:
                 issue.file_dictation(dictation)
         self.assertFalse(reply.exception.copy_image)
 
-    def test_relevant_image_is_uploaded_and_embedded_in_the_created_issue(self):
+    def test_relevant_image_is_uploaded_only_for_an_attachment_request(self):
         catalog, draft = fixture()
         draft["image_relevant"] = True
-        dictation = replace(DICTATION, wants_image=True, image=("image/png", b"correct image"))
         asset = "https://uploads.linear.app/workspace/asset/clipboard.png"
-        with (patch.object(issue, "configured_client") as client, patch.object(issue, "read_catalog", return_value=catalog),
-              patch.object(issue, "opencode_draft", return_value=draft),
-              patch.object(issue, "read_dependencies", return_value={BEFORE: "KIAN-1", AFTER: "KIAN-2"}),
-              patch.object(issue, "upload_image", return_value=asset) as upload, patch.object(issue, "add_dependencies", return_value=[])):
-            client.return_value.create_issue.return_value = {"identifier": "KIAN-3", "url": "https://linear.app/workspace/issue/KIAN-3"}
-            self.assertTrue(issue.file_dictation(dictation, dry_run=True)["clipboard_image"])
-            upload.assert_not_called()
-            issue.file_dictation(dictation)
-        upload.assert_called_once_with(client.return_value, dictation.image)
-        fields = client.return_value.create_issue.call_args.args[0]
-        self.assertTrue(fields["description"].endswith(f"![Clipboard image](<{asset}>)"))
-        self.assertEqual(fields["id"], NEW)
+        for image_use in ("reference", "attach"):
+            with self.subTest(image_use=image_use):
+                dictation = replace(DICTATION, image_use=image_use, image=("image/png", b"correct image"))
+                with (patch.object(issue, "configured_client") as client, patch.object(issue, "read_catalog", return_value=catalog),
+                      patch.object(issue, "opencode_draft", return_value=draft),
+                      patch.object(issue, "read_dependencies", return_value={BEFORE: "KIAN-1", AFTER: "KIAN-2"}),
+                      patch.object(issue, "upload_image", return_value=asset) as upload, patch.object(issue, "add_dependencies", return_value=[])):
+                    client.return_value.create_issue.return_value = {"identifier": "KIAN-3", "url": "https://linear.app/workspace/issue/KIAN-3"}
+                    self.assertTrue(issue.file_dictation(dictation, dry_run=True)["clipboard_image"])
+                    upload.assert_not_called()
+                    issue.file_dictation(dictation)
+                fields = client.return_value.create_issue.call_args.args[0]
+                self.assertEqual(fields["id"], NEW)
+                if image_use == "attach":
+                    upload.assert_called_once_with(client.return_value, dictation.image)
+                    self.assertTrue(fields["description"].endswith(f"![Clipboard image](<{asset}>)"))
+                else:
+                    upload.assert_not_called()
+                    self.assertEqual(fields["description"], draft["issue"]["description"])
 
     def test_image_upload_uses_the_signed_put_headers_and_returns_the_linear_asset(self):
         asset = "https://uploads.linear.app/workspace/asset/clipboard.webp"

@@ -32,9 +32,10 @@ HEX_REGISTRATION = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local
 NOTIFY = ["notify-send", "--app-name", "Linear Dictation", "--icon", "accessories-text-editor"]
 IMAGE_REQUEST = re.compile(
     r"(?:^|[.!?,;]\s*|\band\s+)(?:(?:can|could|would) you\s+)?(?:please\s+)?"
-    r"(?:attach|include|copy|add|use|embed|paste)\s+(?:(?:the|my|this|an?)\s+)?"
+    r"(?:(?P<attach>attach|include|copy|add|use|embed|paste)|check|read|inspect|look\s+at)\s+"
+    r"(?:(?:the|my|this|an?)\s+)?"
     r"(?:clipboard\s+(?:image|screenshot|picture|photo)|(?:current\s+)?(?:image|screenshot|picture|photo)\s+"
-    r"(?:(?:that is|that’s|that's)\s+)?(?:currently\s+)?(?:in|on|from)\s+(?:(?:my|the)\s+)?clipboard)\b",
+    r"(?:(?:that is|that’s|that's)\s+)?(?:currently\s+)?(?:in|on|from|of)\s+(?:(?:my|the)\s+)?clipboard)\b",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -155,7 +156,7 @@ def offer_reply(jobs, dictation, error):
             token_file.seek(0)
             token = token_file.read(4096).decode().strip()
         if error.copy_image:
-            jobs.put(replace(dictation, image=clipboard_image()))
+            jobs.put(replace(dictation, image_use=dictation.image_use or "reference", image=clipboard_image()))
             return
         environment = {**os.environ, "XDG_ACTIVATION_TOKEN": token} if token else os.environ
         entry = subprocess.run(["zenity", "--entry", "--title=Reply to Linear dictation", "--width=440",
@@ -195,10 +196,12 @@ def capture(released, stopping, jobs):
                     pass  # Hex also cancels the capture when its lease expires.
         transcript = result["transcript"].strip()
         if transcript:
-            wants_image = bool(IMAGE_REQUEST.search(transcript))
-            image = clipboard_image() if wants_image else None
+            image_use = image = None
+            if instruction := IMAGE_REQUEST.search(transcript):
+                image_use = "attach" if instruction["attach"] else "reference"
+                image = clipboard_image()
             copy_transcript(transcript)
-            jobs.put(Dictation(transcript, title, str(uuid4()), wants_image=wants_image, image=image))
+            jobs.put(Dictation(transcript, title, str(uuid4()), image_use=image_use, image=image))
             print("Hex Linear dictation queued.")
         else:
             print("Hex Linear dictation was empty.")
@@ -218,7 +221,7 @@ def process_jobs(jobs, dry_run):
             print("Hex Linear draft needs a reply. See the desktop notification.")
             Thread(target=offer_reply, args=(jobs, dictation, error), daemon=True).start()
         except FilingError as error:
-            print("Hex Linear draft did not proceed. See the desktop notification.")
+            print(f"Hex Linear draft did not proceed. {error}")
             notify("Linear dictation", str(error))
         except (OSError, ValueError, KeyError, TypeError, RequestError, subprocess.SubprocessError) as error:
             print(f"Hex Linear issue could not be confirmed ({type(error).__name__}).")

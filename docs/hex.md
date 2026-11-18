@@ -65,12 +65,12 @@ the box, or type, then select **Send reply**. The answer goes to that specific
 request. A separate numpad `/` recording starts a fresh request. Pending replies
 are kept in memory while the service runs.
 
-Say **“Attach the image in my clipboard”** as part of the request to include a
-PNG, JPEG, or WebP image. The service takes a copy before placing the transcript
-on the clipboard and keeps those bytes with any clarification. Luna inspects
-the image for relevance to the issue. If the image is missing or does not
-clearly match, copy the intended image and click **Reply** on that question.
-An accepted image is uploaded to Linear and displayed in the issue description.
+Say **“Check the image in my clipboard”** to use a PNG, JPEG, or WebP image when
+drafting. Say **“Attach the image in my clipboard”** to also display it in
+Linear. When the service recognizes the instruction, it takes a copy before
+placing the transcript on the clipboard and keeps that image with the draft.
+Luna checks whether the image belongs with the issue. If the draft needs an
+image, copy the intended image and click **Reply** to resume the same request.
 
 The integration uses the Global Shortcuts portal and its host app registry. On
 GNOME, approve **Linear Dictation** and its numpad slash binding if the desktop
