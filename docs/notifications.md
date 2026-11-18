@@ -1,10 +1,16 @@
 # Agent notifications
 
 Claude, Grok, Command Code, Codex, Antigravity and Cursor Stop hooks call
-`~/.config/clusterfork/bin/clusterfork-notify <agent>`. Bell (`mpv`, then terminal
-fallback) and optional ntfy run concurrently; phone timeout is three seconds.
-Hook errors are silent, exit zero. Messages contain agent/project basename,
-never transcripts/payloads. See [ntfy](notifications-ntfy.md) and [relay](notifications-relay.md).
+`~/.config/clusterfork/bin/clusterfork-notify <agent>`. The `bell` channel uses
+eSpeak NG and `mpv` to say the Git checkout's name. If Git cannot find the
+checkout, it says the workspace directory name. With multiple open tmux
+sessions for that checkout or directory on the same server, it adds the
+session's position in creation order, starting at 1.
+
+Audio and optional ntfy delivery run concurrently. Phone delivery times out
+after three seconds. Hook errors are silent and exit zero. Phone messages
+contain the agent and project basename. See [ntfy](notifications-ntfy.md) and
+[relay](notifications-relay.md).
 
 ## Event gates
 
@@ -19,7 +25,8 @@ never transcripts/payloads. See [ntfy](notifications-ntfy.md) and [relay](notifi
   `request_user_input` and `request_user_input_async` for questions. Approvals
   and questions from subagents also need a person; their completions and request
   failures stay quiet. All use the same notifier and channel switches; Codex
-  phone alerts say "Codex needs attention" for both completions and waits. These
+  phone alerts say "Codex needs attention" for both completions and waits. The
+  audio for approvals, questions, and usage limits is a bell. These
   [supported hooks](https://learn.chatgpt.com/docs/hooks), verified with Codex
   0.167.0, do not expose a universal pause/terminal-error event. Other request
   failures and cancellations stay quiet, avoiding alerts on automatic retries.
@@ -41,15 +48,15 @@ notify bell             # toggle channel
 notify phone on         # set channel
 notify grok off         # agent's bell and phone
 notify test             # both channels
-notify test bell
+notify test bell         # preview the name for the current workspace
 notify test phone
 notify log              # newest 50
 notify log 100          # 1–200
 ```
 
 Agents: `claude`, `codex`, `command-code`, `grok`, `antigravity`, `cursor`. Tests bypass local
-switches without changing them; relay host switches still apply. Bell tests return
-on playback start; phone tests wait for server acceptance, exiting nonzero on
+switches without changing them; relay host switches still apply. Audio tests
+return on playback start. Phone tests wait for server acceptance, exiting nonzero on
 missing config/failure. Acceptance does not confirm phone receipt. Interactive
 color can be forced by `CLICOLOR_FORCE`/`FORCE_COLOR`; `NO_COLOR` wins, otherwise
 `CLICOLOR=0`, `TERM=dumb` or redirection disables automatic color.
@@ -61,4 +68,5 @@ keeps 200 dispatches with local date/time/zone, agent and requested channels,
 not receipts; disabled agents/rejected Stops add none. Logging fails silently;
 `flock` serializes when available. Helper loads installed `notify/settings.env`,
 `notify/relay-settings.sh`, then `.env` (override `CLUSTERFORK_ENV_FILE`), last wins.
-`CLUSTERFORK_NTFY_TOKEN` adds bearer auth; `CLUSTERFORK_NOTIFY_SOUND` overrides sound.
+`CLUSTERFORK_NTFY_TOKEN` adds bearer auth. `CLUSTERFORK_NOTIFY_SOUND` overrides the
+bell clip for Codex attention events.

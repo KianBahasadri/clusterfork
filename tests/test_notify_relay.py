@@ -24,18 +24,20 @@ loader.exec_module(relay)
 
 class ProtocolTests(unittest.TestCase):
     def test_only_notification_metadata_is_accepted(self):
-        valid = {"agent": "codex", "project": "my-project", "channels": "bell,phone"}
+        valid = {"agent": "codex", "project": "my-project", "channels": "bell,phone",
+                 "spoken_name": "my-project 2"}
         self.assertEqual(relay.parse_request(json.dumps(valid).encode()),
-                         ("codex", "my-project", "bell,phone"))
+                         ("codex", "my-project", "bell,phone", "my-project 2"))
         for change in (
             {"agent": "bash"}, {"agent": ["codex"]}, {"channels": "all"},
             {"project": "/tmp/file"}, {"project": "$(touch owned)"},
             {"project": "<b>markup</b>"}, {"project": "line\nline"},
             {"project": "x" * 81}, {"command": "id"}, {"url": "http://example.com"},
+            {"spoken_name": "/tmp/project"}, {"spoken_name": "line\nline"}, {"spoken_name": []},
         ):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 relay.parse_request(json.dumps({**valid, **change}).encode())
-        for payload in (b"[]", b"null", b"bad json", b" " * 513):
+        for payload in (b"[]", b"null", b"bad json", json.dumps(valid).encode().ljust(relay.MAX_REQUEST + 1)):
             with self.subTest(payload=payload[:20]), self.assertRaises(ValueError):
                 relay.parse_request(payload)
 
@@ -101,31 +103,31 @@ class ServerTests(unittest.TestCase):
     def test_invalid_requests_do_not_execute_and_valid_requests_are_rate_limited(self):
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.request(b'{"command":"touch owned"}'), b"invalid request\n")
-        self.assertEqual(self.request(b"x" * 513), b"invalid request\n")
+        self.assertEqual(self.request(b"x" * (relay.MAX_REQUEST + 1)), b"invalid request\n")
         self.assertFalse(self.log.exists())
-        payload = b'{"agent":"codex","project":"my-project","channels":"bell"}'
+        payload = b'{"agent":"codex","project":"my-project","channels":"bell","spoken_name":"my-project 2"}'
         self.assertEqual(self.request(payload), b"accepted\n")
         self.assertIn(b"rate limited", self.request(payload))
         deadline = time.monotonic() + 2
         while not self.log.exists() and time.monotonic() < deadline:
             time.sleep(0.01)
         self.assertEqual(self.log.read_text().splitlines(),
-                         [json.dumps(["--from-devbox", "codex", "my-project", "bell"])])
+                         [json.dumps(["--from-devbox", "codex", "my-project", "bell", "my-project 2"])])
 
     def test_stalled_client_does_not_block_later_alerts(self):
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stalled:
             stalled.connect(str(self.path))
             stalled.sendall(b"{")
             started = time.monotonic()
-            payload = b'{"agent":"claude","project":"project","channels":"bell"}'
+            payload = b'{"agent":"claude","project":"project","channels":"bell","spoken_name":"project"}'
             self.assertEqual(self.request(payload), b"accepted\n")
             self.assertLess(time.monotonic() - started, 1.5)
 
     def test_live_socket_cannot_be_replaced_by_second_server(self):
         with self.assertRaises(ValueError):
             relay.bind_socket(self.path)
-        self.assertEqual(self.request(b'{"agent":"codex","project":"project","channels":"bell"}'),
-                         b"accepted\n")
+        payload = b'{"agent":"codex","project":"project","channels":"bell","spoken_name":""}'
+        self.assertEqual(self.request(payload), b"accepted\n")
 
 
 class RelayHookTests(NotifyFixture):
@@ -140,13 +142,15 @@ class RelayHookTests(NotifyFixture):
 
     def test_stop_forwards_metadata_only_without_local_side_effects(self):
         self.env_file.write_text(f"CLUSTERFORK_NOTIFY_RELAY_SOCKET={self.socket}\n")
-        proc = subprocess.Popen([str(NOTIFIER), "codex"], cwd=ROOT,
+        nested = self.repo / "nested"
+        nested.mkdir()
+        proc = subprocess.Popen([str(NOTIFIER), "codex"], cwd=nested,
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, env=self.env(), text=True)
         try:
             with self.listener.accept()[0] as connection:
                 connection.settimeout(1)
-                request = json.loads(connection.recv(513))
+                request = json.loads(connection.recv(relay.MAX_REQUEST + 1))
                 connection.sendall(b"accepted\n")
             out, err = proc.communicate("private transcript", timeout=3)
         finally:
@@ -154,8 +158,10 @@ class RelayHookTests(NotifyFixture):
                 proc.kill()
                 proc.communicate()
         self.assertEqual((proc.returncode, out, err), (0, "", ""))
-        self.assertEqual(request, {"agent": "codex", "project": ROOT.name, "channels": "bell,phone"})
+        self.assertEqual(request, {"agent": "codex", "project": "nested",
+                                   "channels": "bell,phone", "spoken_name": "sample-repo"})
         self.assertFalse(self.mpv_log.exists())
+        self.assertFalse(self.speech_log.exists())
         self.assertFalse(self.curl_log.exists())
         self.assertIn("codex\tbell,phone", self.notify_history.read_text())
 
@@ -177,14 +183,15 @@ class RelayHookTests(NotifyFixture):
         self._write_mock("notify-send", f"printf '%s\\n' \"$@\" >'{desktop}'\n")
         self.env_file.write_text("CLUSTERFORK_NTFY_URL=http://127.0.0.1:2586/clusterfork\n")
         self.write_prefs("phone=0\nvolume=60\n")
-        result = subprocess.run([str(NOTIFIER), "--from-devbox", "antigravity", "demo", "bell,phone"],
+        result = subprocess.run([str(NOTIFIER), "--from-devbox", "antigravity", "demo", "bell,phone", "demo 2"],
                                 env=self.env(), capture_output=True, text=True, timeout=5)
         self.assertEqual(result.returncode, 0)
         self.assertIn("--volume=60", self.mpv_log.read_text())
+        self.assertEqual(self.speech_log.read_text(), "demo 2\n")
         self.assertFalse(desktop.exists())
         self.assertFalse(self.curl_log.exists())
         self.mpv_log.unlink()
-        result = subprocess.run([str(NOTIFIER), "--from-devbox", "codex", "demo", "phone"],
+        result = subprocess.run([str(NOTIFIER), "--from-devbox", "codex", "demo", "phone", ""],
                                 env=self.env(), capture_output=True, text=True, timeout=5)
         self.assertEqual(result.returncode, 0)
         self.assertFalse(self.mpv_log.exists())

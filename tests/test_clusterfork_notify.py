@@ -24,6 +24,10 @@ class NotifyFixture(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        self.repo = self.root / "sample-repo"
+        subprocess.run(
+            ["git", "init", "--quiet", "--template=", str(self.repo)], check=True
+        )
         self.cf_dir = self.root / "clusterfork"
         self.cf_dir.mkdir()
         (self.cf_dir / "bell.mp3").write_bytes(b"fake bell")
@@ -31,6 +35,7 @@ class NotifyFixture(unittest.TestCase):
         self.mock_bin = self.root / "bin"
         self.mock_bin.mkdir()
         self.mpv_log = self.root / "mpv.log"
+        self.speech_log = self.root / "speech"
         self.curl_log = self.root / "curl.log"
         self.curl_stdin = self.root / "curl.stdin"
         self.notify_history = self.cf_dir / "notify-history"
@@ -38,8 +43,12 @@ class NotifyFixture(unittest.TestCase):
         self._write_mock(
             "mpv",
             'printf "%s\\n" "$@" >"$FAKE_MPV_LOG"\n'
+            'if [[ "${!#}" == - ]]; then cat >/dev/null; fi\n'
             'printf "mpv noise\\n"\n'
             'exit "${FAKE_MPV_EXIT:-0}"\n',
+        )
+        self._write_mock(
+            "espeak-ng", 'cat >"$FAKE_SPEECH_LOG"\nprintf "fake audio"\n',
         )
         self._write_mock(
             "curl",
@@ -69,8 +78,10 @@ class NotifyFixture(unittest.TestCase):
             "CLUSTERFORK_DIR": str(self.cf_dir),
             "CLUSTERFORK_ENV_FILE": str(self.env_file),
             "FAKE_MPV_LOG": str(self.mpv_log),
+            "FAKE_SPEECH_LOG": str(self.speech_log),
             "FAKE_CURL_LOG": str(self.curl_log),
             "FAKE_CURL_STDIN": str(self.curl_stdin),
+            "TMUX_PANE": "",
             **(extra_env or {}),
         }
 
@@ -86,7 +97,7 @@ class NotifyFixture(unittest.TestCase):
         self.env_file.write_text(dotenv, encoding="utf-8")
         return subprocess.run(
             [str(NOTIFIER), source, *args],
-            cwd=cwd or REPO_ROOT,
+            cwd=cwd or self.repo,
             input=stdin,
             capture_output=True,
             text=True,
@@ -104,7 +115,7 @@ class NotifyFixture(unittest.TestCase):
         self.env_file.write_text(dotenv, encoding="utf-8")
         return subprocess.run(
             [str(NOTIFY_CMD), *args],
-            cwd=REPO_ROOT,
+            cwd=self.repo,
             capture_output=True,
             text=True,
             env=self.env(extra_env),
@@ -122,13 +133,50 @@ class NotifyFixture(unittest.TestCase):
 
 
 class NotifierTests(NotifyFixture):
-    def test_always_rings_and_skips_unconfigured_phone(self):
-        proc = self.run_notifier(stdin='{"last_assistant_message":"private"}')
+    def test_speaks_only_the_repository_name_and_skips_unconfigured_phone(self):
+        nested = self.repo / "nested"
+        nested.mkdir()
+        proc = self.run_notifier(
+            stdin='{"last_assistant_message":"private"}', cwd=nested,
+        )
         self.assertEqual(proc.returncode, 0)
         self.assertEqual((proc.stdout, proc.stderr), ("", ""))
-        self.assertIn(str(self.cf_dir / "bell.mp3"), self.mpv_log.read_text())
+        self.assertEqual(self.speech_log.read_text(), "sample-repo\n")
+        self.assertEqual(self.mpv_log.read_text().splitlines()[-1], "-")
         self.assertIn("--volume=100", self.mpv_log.read_text())
         self.assertFalse(self.curl_log.exists())
+
+    def test_numbers_open_sessions_in_the_same_checkout_or_directory(self):
+        nested = self.repo / "nested"
+        nested.mkdir()
+        separate = nested / "other-repo"
+        subprocess.run(["git", "init", "--quiet", "--template=", str(separate)], check=True)
+        unrelated = self.root / "unrelated" / self.repo.name
+        unrelated.mkdir(parents=True)
+        self._write_mock(
+            "tmux",
+            'case "$1" in\n'
+            '  display-message) [[ "$4" == %11 ]] && printf "%s\\n" "$SESSION_ID" ;;\n'
+            '  list-sessions) printf "%s\\n" "$SESSIONS" ;;\n'
+            'esac\n',
+        )
+
+        for workspace, matches in ((self.repo, nested), (unrelated, unrelated)):
+            other = unrelated if workspace == self.repo else self.repo
+            sessions = f"$12\t{matches}\n$5\t{separate}\n$6\t{other}\n$2\t{workspace}"
+            for session_id, cwd, number in (("$2", workspace, " 1"), ("$12", matches, " 2"),
+                                            ("$12", matches, "")):
+                with self.subTest(workspace=workspace, session_id=session_id, number=number):
+                    proc = self.run_notifier(
+                        cwd=cwd,
+                        extra_env={
+                            "TMUX_PANE": "%11",
+                            "SESSION_ID": session_id,
+                            "SESSIONS": sessions if number else sessions.rsplit("\n", 1)[0],
+                        },
+                    )
+                    self.assertEqual(proc.returncode, 0)
+                    self.assertEqual(self.speech_log.read_text(), f"{workspace.name}{number}\n")
 
     def test_posts_fixed_project_message_with_optional_token(self):
         project = self.root / "secret-project"
@@ -174,11 +222,11 @@ class NotifierTests(NotifyFixture):
         self.assertFalse(self.mpv_log.exists())
         self.assertTrue(self.curl_log.exists())
 
-    def test_phone_pref_off_skips_curl_but_still_rings(self):
+    def test_phone_pref_off_skips_curl_but_still_speaks(self):
         self.write_prefs("phone=0\n")
         proc = self.run_notifier(dotenv=f"CLUSTERFORK_NTFY_URL={PHONE_URL}\n")
         self.assertEqual(proc.returncode, 0)
-        self.assertIn(str(self.cf_dir / "bell.mp3"), self.mpv_log.read_text())
+        self.assertEqual(self.speech_log.read_text(), "sample-repo\n")
         self.assertFalse(self.curl_log.exists())
 
     def test_disabled_agent_is_silent_other_agents_still_notify(self):
@@ -239,6 +287,7 @@ class NotifierTests(NotifyFixture):
         self.assertIn("Turn complete in secret-project", args)
         self.assertNotIn("should not escape", args)
         self.assertNotIn("wrong-cwd", args)
+        self.assertEqual(self.speech_log.read_text(), "secret-project\n")
         self.assertEqual(self.curl_stdin.read_text(), "")
 
     def test_grok_notifies_only_on_end_turn(self):
@@ -274,7 +323,7 @@ class NotifierTests(NotifyFixture):
         self.assertEqual(self.curl_stdin.read_text(), "")
 
     def test_cursor_notifies_on_turn_completion_and_skips_aborted(self):
-        project = self.root / "secret-project"
+        project = self.repo / "secret-project"
         project.mkdir()
 
         # Aborted turn must be silent
@@ -305,6 +354,7 @@ class NotifierTests(NotifyFixture):
         self.assertIn("X-Title: Cursor finished", args)
         self.assertIn("Turn complete in secret-project", args)
         self.assertNotIn(".cursor", args)
+        self.assertEqual(self.speech_log.read_text(), "sample-repo\n")
         self.assertEqual(self.curl_stdin.read_text(), "")
 
     def test_gate_edge_cases_match_with_and_without_jq(self):
@@ -729,7 +779,8 @@ class NotifyCommandTests(NotifyFixture):
         self.assertEqual(proc.stdout, "  ✓  bell  playing\n")
         self.assertEqual(proc.stderr, "")
         log = self.wait_file(self.mpv_log)
-        self.assertIn(str(self.cf_dir / "bell.mp3"), log)
+        self.assertEqual(log.splitlines()[-1], "-")
+        self.assertEqual(self.wait_file(self.speech_log), "sample-repo\n")
         self.assertIn("--volume=40", log)
         self.assertFalse(self.curl_log.exists())
         self.assertIn("bell=0\n", (self.cf_dir / "notify-prefs").read_text())
@@ -758,7 +809,7 @@ class NotifyCommandTests(NotifyFixture):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout, "  ✓  bell  playing\n")
-        self.assertIn(str(self.cf_dir / "bell.mp3"), self.wait_file(self.mpv_log))
+        self.assertEqual(self.wait_file(self.mpv_log).splitlines()[-1], "-")
 
     def test_test_phone_posts_even_when_pref_is_off(self):
         self.write_prefs("bell=0\nphone=0\n")
@@ -794,7 +845,7 @@ class NotifyCommandTests(NotifyFixture):
             f"  ✓  phone  posted to {PHONE_URL}\n",
         )
         self.assertEqual(proc.stderr, "")
-        self.assertIn(str(self.cf_dir / "bell.mp3"), self.wait_file(self.mpv_log))
+        self.assertEqual(self.wait_file(self.mpv_log).splitlines()[-1], "-")
         args = self.curl_log.read_text()
         self.assertIn("X-Title: Clusterfork test", args)
         self.assertIn("Phone path works", args)

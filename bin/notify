@@ -352,13 +352,13 @@ Toggle turn-completion notifications.
 ${c_bold}Usage:${c_reset}
   notify                      show status
   notify all on|off           set every switch
-  notify volume <0-100>       set the local bell volume
-  notify bell [on|off]        toggle or set the local bell
+  notify volume <0-100>       set the local audio volume
+  notify bell [on|off]        toggle or set the local audio alert
   notify phone [on|off]       toggle or set phone push
   notify <agent> [on|off]     toggle or set one agent
                               claude, codex, command-code, grok,
                               antigravity, cursor
-  notify test [bell|phone]    play the bell and/or post a phone test
+  notify test [bell|phone]    preview the spoken name and/or post a phone test
   notify log [count]          show trigger history (default 50, max 200)
 
 ${c_bold}Prefs:${c_reset} ~/.config/clusterfork/notify-prefs (not overwritten by install)
@@ -372,6 +372,44 @@ notify_hint() {
   printf '            notify test [bell|phone]\n' >&2
   printf '            notify log [1-200]\n' >&2
 }
+
+notify_session_number() {
+  local directory="$1" root="$2" current session_id session_path
+  local count=0 number=0
+  [[ -n "${TMUX_PANE:-}" ]] || return 0
+  current="$(tmux display-message -p -t "$TMUX_PANE" '#{session_id}' 2>/dev/null)" || return 0
+  [[ -n "$current" ]] || return 0
+
+  while IFS=$'\t' read -r session_id session_path; do
+    if [[ "$session_id" != "$current" && "$session_path" != "${root:-$directory}" ]]; then
+      [[ -n "$root" && "$session_path" == "$root/"* ]] || continue
+      # A nested checkout or submodule is a different repository.
+      [[ "$(git -C "$session_path" rev-parse --show-toplevel 2>/dev/null)" == "$root" ]] || continue
+    fi
+    ((count += 1))
+    if [[ "$session_id" == "$current" ]]; then
+      number="$count"
+    fi
+  done < <(tmux list-sessions -F $'#{session_id}\t#{session_path}' 2>/dev/null | sort -k1.2n)
+
+  if (( count > 1 && number > 0 )); then
+    printf ' %s' "$number"
+  fi
+}
+
+notify_spoken_name() {
+  local directory="$1" root name
+  root="$(git -C "$directory" rev-parse --show-toplevel 2>/dev/null)" || root=""
+  name="$(basename -- "${root:-$directory}")"
+  [[ "$name" != / ]] || name=root
+  printf '%s%s\n' "$name" "$(notify_session_number "$directory" "$root")"
+}
+
+notify_speak() (
+  set -o pipefail
+  printf '%s\n' "$1" | espeak-ng --stdin --stdout |
+    mpv --no-video --no-terminal --volume="${NOTIFY_VOLUME:-100}" -
+) >/dev/null 2>&1
 
 notify_play_bell() {
   local dir="$1"
@@ -391,7 +429,7 @@ notify_play_bell() {
 notify_relay() {
   local helper
   helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/clusterfork-notify-relay"
-  python3 -I "$helper" send "$CLUSTERFORK_NOTIFY_RELAY_SOCKET" "$1" "$2" "$3" </dev/null
+  python3 -I "$helper" send -- "$CLUSTERFORK_NOTIFY_RELAY_SOCKET" "$@" </dev/null
 }
 
 notify_post_ntfy() {
@@ -420,23 +458,14 @@ notify_post_ntfy() {
   return 0
 }
 
-notify_bell_ready() {
-  local dir="$1"
-  local sound="${CLUSTERFORK_NOTIFY_SOUND:-$dir/bell.mp3}"
-  if command -v mpv >/dev/null 2>&1 && [[ -f "$sound" ]]; then
-    return 0
-  fi
-  [[ -w /dev/tty ]]
-}
-
 notify_test_bell() {
-  if ! notify_bell_ready "$1"; then
-    notify_err "bell  play failed"
+  if ! command -v espeak-ng >/dev/null 2>&1 || ! command -v mpv >/dev/null 2>&1; then
+    notify_err "bell  espeak-ng and mpv required"
     return 1
   fi
   # Detach so the clip can finish after this command returns. The job
   # must not inherit stdout or a caller capturing output will wait for it.
-  notify_play_bell "$1" </dev/null >/dev/null 2>&1 &
+  notify_speak "$1" </dev/null >/dev/null 2>&1 &
   disown "$!" 2>/dev/null || true
   notify_ok "bell" "playing"
 }
@@ -460,15 +489,18 @@ notify_test_phone() {
 
 notify_run_test() {
   local dir="$1" channel="${2:-}"
-  local failed=0 timestamp notifications=""
+  local failed=0 timestamp notifications="" spoken_name=""
   timestamp="$(notify_history_timestamp 2>/dev/null || true)"
+  if [[ -z "$channel" || "$channel" == bell ]]; then
+    spoken_name="$(notify_spoken_name "$PWD")"
+  fi
   if [[ -n "${CLUSTERFORK_NOTIFY_RELAY_SOCKET:-}" ]]; then
     case "$channel" in
       "") notifications="bell,phone" ;;
       bell|phone) notifications="$channel" ;;
       *) notify_err "notify test expects bell or phone, not $channel"; return 1 ;;
     esac
-    if notify_relay test node-dev "$notifications"; then
+    if notify_relay test node-dev "$notifications" "$spoken_name"; then
       notify_ok "host relay" "accepted $notifications (host switches apply)"
       notify_record_trigger "$dir" test "$notifications" "$timestamp"
       return 0
@@ -478,7 +510,7 @@ notify_run_test() {
   fi
   case "$channel" in
     "")
-      if notify_test_bell "$dir"; then
+      if notify_test_bell "$spoken_name"; then
         notifications="bell"
       else
         failed=1
@@ -490,7 +522,7 @@ notify_run_test() {
       fi
       ;;
     bell)
-      if notify_test_bell "$dir"; then
+      if notify_test_bell "$spoken_name"; then
         notifications="bell"
       else
         failed=1

@@ -17,7 +17,7 @@ import time
 
 AGENTS = frozenset({"claude", "codex", "command-code", "grok", "antigravity", "cursor", "agent", "test"})
 CHANNELS = frozenset({"bell", "phone", "bell,phone"})
-MAX_REQUEST = 512
+MAX_REQUEST = 1024
 MIN_INTERVAL = 10.0
 
 
@@ -26,25 +26,34 @@ def project_name(value: str) -> str:
     return "".join(c for c in value if c.isalnum() or c in " ._-")[:80].strip() or "workspace"
 
 
-def parse_request(data: bytes) -> tuple[str, str, str]:
+def speech_label(value: str) -> str:
+    return "".join(c if c.isprintable() and c != "/" else " " for c in value)
+
+
+def parse_request(data: bytes) -> tuple[str, str, str, str]:
     if len(data) > MAX_REQUEST:
         raise ValueError("request too large")
     request = json.loads(data)
-    if not isinstance(request, dict) or set(request) != {"agent", "project", "channels"}:
+    if not isinstance(request, dict) or set(request) != {"agent", "project", "channels", "spoken_name"}:
         raise ValueError("invalid fields")
     agent, project, channels = (request[key] for key in ("agent", "project", "channels"))
-    if not all(isinstance(value, str) for value in (agent, project, channels)):
+    spoken_name = request["spoken_name"]
+    if not all(isinstance(value, str) for value in (agent, project, channels, spoken_name)):
         raise ValueError("invalid types")
     if agent not in AGENTS or channels not in CHANNELS:
         raise ValueError("invalid action")
     if project != project_name(project):
         raise ValueError("invalid project")
-    return agent, project, channels
+    if spoken_name != speech_label(spoken_name):
+        raise ValueError("invalid spoken name")
+    return agent, project, channels, spoken_name
 
 
-def send(path: str, agent: str, project: str, channels: str) -> None:
-    request = json.dumps({"agent": agent, "project": project_name(project), "channels": channels},
-                         ensure_ascii=False).encode()
+def send(path: str, agent: str, project: str, channels: str, spoken_name: str) -> None:
+    request = json.dumps(
+        {"agent": agent, "project": project_name(project), "channels": channels,
+         "spoken_name": speech_label(spoken_name)}, ensure_ascii=False,
+    ).encode()
     parse_request(request)
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(1)
@@ -124,13 +133,13 @@ def serve(path: Path) -> None:
                             if not part:
                                 break
                             data.extend(part)
-                        agent, project, channels = parse_request(bytes(data))
+                        agent, project, channels, spoken_name = parse_request(bytes(data))
                         now = time.monotonic()
                         if now < next_allowed or (child is not None and child.poll() is None):
                             connection.sendall(b"rate limited; wait 10 seconds\n")
                             continue
                         child = subprocess.Popen(
-                            [str(helper), "--from-devbox", agent, project, channels],
+                            [str(helper), "--from-devbox", agent, project, channels, spoken_name],
                             cwd=Path.home(), stdin=subprocess.DEVNULL,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             env={**os.environ, "CLUSTERFORK_DIR": str(helper.parent.parent)},
@@ -169,12 +178,13 @@ def main() -> int:
     client.add_argument("agent", choices=sorted(AGENTS))
     client.add_argument("project")
     client.add_argument("channels", choices=sorted(CHANNELS))
+    client.add_argument("spoken_name")
     args = parser.parse_args()
     try:
         if args.command == "serve":
             serve(args.socket)
         else:
-            send(args.socket, args.agent, args.project, args.channels)
+            send(args.socket, args.agent, args.project, args.channels, args.spoken_name)
     except (OSError, ValueError) as error:
         print(f"notification relay: {error}", file=sys.stderr)
         return 1

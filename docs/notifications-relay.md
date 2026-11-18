@@ -10,7 +10,8 @@ socket timeout is one second; hook failures remain silent.
 
 ## Host setup
 
-Install on both sides, then on the host:
+Install on the host first and restart the relay before installing in the devbox.
+On the host, enable the service at login.
 
 ```bash
 systemctl --user enable --now \
@@ -34,9 +35,11 @@ service health is independent of bell playback.
 
 ## Receiver contract
 
-`bin/clusterfork-notify-relay` uses mode `0600`, at most 512 bytes and a 250 ms
-request deadline. It accepts known agent/channels and sanitized project labels
-up to 80 characters, invoking one fixed notifier without shell evaluation.
+`bin/clusterfork-notify-relay` uses mode `0600`, at most 1,024 bytes and a 250 ms
+request deadline. The guest resolves the spoken name before sending the request.
+The receiver accepts known agents and channels, sanitized project labels up to
+80 characters, and spoken names as printable text. It invokes one fixed notifier
+without shell evaluation.
 Socket access permits alerts/labels, not authenticated task-completion proof.
 Global rate limit is one per ten seconds; a running notifier blocks the next.
 Systemd also limits memory/processes/CPU.
