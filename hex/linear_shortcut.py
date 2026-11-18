@@ -139,6 +139,20 @@ def clipboard_image():
         return None
 
 
+def reply_image(environment):
+    image = clipboard_image()
+    while image is None:
+        dialog = subprocess.run(["zenity", "--question", "--title=Add a clipboard image", "--width=440",
+                                 "--ok-label=Use Clipboard Image", "--text",
+                                 "No image could be read from the clipboard. Copy the screenshot, "
+                                 "then select Use Clipboard Image."], env=environment, capture_output=True)
+        if dialog.returncode == 1:
+            return None
+        dialog.check_returncode()
+        image = clipboard_image()
+    return image
+
+
 def offer_reply(jobs, dictation, error):
     question = str(error)
     excerpt = " ".join(dictation.transcript.split())
@@ -155,10 +169,12 @@ def offer_reply(jobs, dictation, error):
                 return
             token_file.seek(0)
             token = token_file.read(4096).decode().strip()
-        if error.copy_image:
-            jobs.put(replace(dictation, image_use=dictation.image_use or "reference", image=clipboard_image()))
-            return
         environment = {**os.environ, "XDG_ACTIVATION_TOKEN": token} if token else os.environ
+        if error.copy_image:
+            image = reply_image(environment)
+            if image is not None:
+                jobs.put(replace(dictation, image_use=dictation.image_use or "reference", image=image))
+            return
         entry = subprocess.run(["zenity", "--entry", "--title=Reply to Linear dictation", "--width=440",
                                 "--ok-label=Send reply", "--text",
                                 escape(f"{question}\n\nDictate with your regular Hex shortcut or type your answer.")],

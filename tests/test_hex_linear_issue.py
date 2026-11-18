@@ -211,6 +211,21 @@ class LinearDictationTests(unittest.TestCase):
                 self.assertIn("--action=default=Reply", run.call_args.args[0])
                 run.assert_called_once()
 
+    def test_image_reply_opens_a_dialog_until_an_image_can_be_read(self):
+        jobs = SimpleQueue()
+        image = ("image/png", b"copied while the dialog was open")
+        with (patch.object(shortcut.subprocess, "run", side_effect=[
+            CompletedProcess("notify-send", 0, stdout="reply\n"),
+            CompletedProcess("zenity", 0),
+            CompletedProcess("zenity", 0),
+        ]) as run, patch.object(shortcut, "clipboard_image", side_effect=[None, None, image])):
+            shortcut.offer_reply(jobs, DICTATION, issue.ReplyNeeded(issue.IMAGE_QUESTION, copy_image=True))
+        for call in run.call_args_list[1:]:
+            self.assertEqual(call.args[0][0], "zenity")
+            self.assertIn("--ok-label=Use Clipboard Image", call.args[0])
+        self.assertEqual(jobs.get_nowait(), replace(DICTATION, image_use="reference", image=image))
+        self.assertTrue(jobs.empty())
+
     def test_holds_for_missing_and_unrelated_images_before_upload_or_creation(self):
         catalog, _ = fixture()
         dictation = replace(DICTATION, image_use="attach")

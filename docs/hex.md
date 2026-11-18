@@ -71,6 +71,8 @@ Linear. When the service recognizes the instruction, it takes a copy before
 placing the transcript on the clipboard and keeps that image with the draft.
 Luna checks whether the image belongs with the issue. If the draft needs an
 image, copy the intended image and click **Reply** to resume the same request.
+If the clipboard has no usable image, **Reply** opens a dialog. Copy the image,
+then select **Use Clipboard Image** in that dialog.
 
 The integration uses the Global Shortcuts portal and its host app registry. On
 GNOME, approve **Linear Dictation** and its numpad slash binding if the desktop
