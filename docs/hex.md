@@ -52,13 +52,19 @@ Hex-owned `AGENTS.md`, `hex.d.ts`, and `tsconfig.json` are left alone. Run
 
 ## Dictating Linear issues
 
-Hold **numpad `/`**, say what to file, and release. For example, say “Make a
-Clusterfork issue to add a relay health check, blocked by KIAN-123.” Ask for
-separate issues when one recording contains several independent items. The
-service copies the transcript to the clipboard as soon as Hex transcribes it,
-then files the issues in the background. Paste the transcript wherever you
+Hold **numpad `/`**, say what to create or update, and release. Say “Make a
+Clusterfork issue to add a relay health check, blocked by KIAN-123” or “Set
+KIAN-123 to High priority and add that it needs to cover timeouts.” One
+recording can contain several independent issue requests. The service copies
+the transcript to the clipboard as soon as Hex transcribes it, then saves
+the issues in the background. Paste the transcript wherever you
 meant to send it if you pressed the slash shortcut by accident. Each completion
 notification shows the issue link and any confirmed dependency links.
+
+Identify the issue by ID or by a clear name or description. You can edit its
+title, description, project, status, priority, estimate, due date, and labels,
+or add a blocker or clipboard image. Adding context appends to the description.
+The service asks for a reply when it cannot identify the issue confidently.
 
 If you get a clarification question, click that notification or its **Reply**
 button to open the multiline answer box. Use your regular Hex shortcut to
@@ -85,7 +91,7 @@ registration uses the same running Hex and the selected transcription model.
 Hex applies its Skip Long Pauses setting to the captured audio. The issue
 transcript goes to OpenCode and the clipboard as raw text.
 
-The helper fetches the project, team, label, estimate, and Backlog catalog in
+The helper fetches the project, team, label, estimate, and workflow state catalog in
 one paged GraphQL read. If the accessible foreground window clearly names a
 project, only the matching project ID is sent as a hint. OpenCode Go runs
 `gpt-6-luna#max` in an archived session. The agent can search and read issues
@@ -95,10 +101,11 @@ catalog to write the issue with the spoken rationale, behavior, and constraints.
 
 Clusterfork validates the selected project, team, labels, priority, estimate
 and dependency IDs for the entire batch before saving through its shared Linear
-client. New issues are filed in Backlog and can link to existing issues. Each
-creation reuses its ID on retry. If an issue or dependency link cannot be
-confirmed, the notification identifies it. Other issues in the batch continue
-filing independently. The service journal records workflow stages and issue IDs.
+client. New issues are filed in Backlog. Updates pass only the requested field
+changes and check the current issue revision before writing. Each creation reuses
+its ID on retry. If an issue or dependency link cannot be confirmed, the
+notification identifies it. Other issues in the batch proceed independently.
+The service journal records workflow stages and issue IDs.
 The archived **Hex Linear dictation** OpenCode prompt contains the transcript.
 
 To check the workflow with text, the dry run reads Linear and runs OpenCode Go,
@@ -146,7 +153,8 @@ is refused or the service registration is missing, the helper starts OpenCode
 and retries once with the same model and reasoning variant within the original
 deadline. The provider receives the current dictation, selected history
 excerpt, shared vocabulary, prompt, and available foreground context. If the
-rewrite still fails or reaches its deadline, Hex preserves the original input.
+rewrite still fails or reaches its deadline, Hex keeps the original transcript
+and shows a desktop notification.
 The template uses an argument array and stdin for dictated text, with no shell
 interpolation.
 

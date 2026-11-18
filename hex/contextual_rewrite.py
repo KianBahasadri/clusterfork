@@ -345,9 +345,17 @@ def rewrite(text, context):
         return output
     except Exception as error:
         print(f"contextual-rewrite: {type(error).__name__}; preserving input", file=sys.stderr)
-        return text
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
+    try:
+        subprocess.Popen(
+            ["notify-send", "--app-name", "Hex", "--icon", "dialog-warning", "Hex rewrite failed",
+             "OpenCode could not rewrite this dictation. Hex used the original transcript."],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+    except OSError as error:
+        print(f"contextual-rewrite: could not show failure notification ({type(error).__name__})", file=sys.stderr)
+    return text
 
 
 if __name__ == "__main__":

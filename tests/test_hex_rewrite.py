@@ -130,7 +130,21 @@ class RecentDictationTests(unittest.TestCase):
 
     def test_network_failure_returns_exact_input(self):
         text = "um preserve this 30-second request\n"
-        with patch.object(rewrite, "read_history", return_value=[]), patch.object(rewrite, "generate", side_effect=TimeoutError()):
+        with (patch.object(rewrite, "read_history", return_value=[]),
+              patch.object(rewrite, "generate", side_effect=TimeoutError()),
+              patch.object(rewrite.subprocess, "Popen") as notify):
+            self.assertEqual(rewrite.rewrite(text, {}), text)
+        notify.assert_called_once()
+        arguments = notify.call_args.args[0]
+        self.assertEqual(arguments[0], "notify-send")
+        self.assertIn("original transcript", arguments[-1])
+        self.assertNotIn(text, arguments)
+
+    def test_notification_failure_still_returns_exact_input(self):
+        text = "um keep my text\n"
+        with (patch.object(rewrite, "read_history", return_value=[]),
+              patch.object(rewrite, "generate", side_effect=TimeoutError()),
+              patch.object(rewrite.subprocess, "Popen", side_effect=FileNotFoundError)):
             self.assertEqual(rewrite.rewrite(text, {}), text)
 
     def test_generation_uses_selected_haiku_model_and_only_returns_generated_text(self):
@@ -187,8 +201,11 @@ class AdaptiveReasoningTests(unittest.TestCase):
 
     def test_reasoning_timeout_preserves_exact_long_input(self):
         text = "um " * 150 + "keep the original\n"
-        with patch.object(rewrite, "read_history", return_value=[]), patch.object(rewrite, "generate", side_effect=TimeoutError()) as generate:
+        with (patch.object(rewrite, "read_history", return_value=[]),
+              patch.object(rewrite, "generate", side_effect=TimeoutError()) as generate,
+              patch.object(rewrite.subprocess, "Popen") as notify):
             self.assertEqual(rewrite.rewrite(text, {}), text)
+        notify.assert_called_once()
         self.assertEqual(generate.call_args.args[1]["variant"], "medium")
 
     def test_long_generation_sends_medium_in_the_model_payload(self):
@@ -207,8 +224,10 @@ class AdaptiveReasoningTests(unittest.TestCase):
             patch.object(rewrite, "service_registration", side_effect=registrations),
             patch.object(rewrite, "request", side_effect=responses) as request,
             patch.object(rewrite.subprocess, "run") as start,
+            patch.object(rewrite.subprocess, "Popen") as notify,
         ):
             self.assertEqual(rewrite.rewrite("word " * 100, {}), "Edited.")
+        notify.assert_not_called()
         start.assert_called_once()
         self.assertEqual(start.call_args.args[0], [str(rewrite.OPENCODE_PATH), "service", "start"])
         self.assertGreater(start.call_args.kwargs["timeout"], 0)
@@ -241,10 +260,12 @@ class AdaptiveReasoningTests(unittest.TestCase):
                 patch.object(rewrite, "service_registration", return_value=("127.0.0.1", 1, None)),
                 patch.object(rewrite, "request", side_effect=error) as request,
                 patch.object(rewrite.subprocess, "run") as start,
+                patch.object(rewrite.subprocess, "Popen") as notify,
             ):
                 self.assertEqual(rewrite.rewrite(text, {}), text)
                 self.assertEqual(request.call_count, attempts)
                 self.assertEqual(start.call_count, attempts - 1)
+                notify.assert_called_once()
 
 
 class VocabularyLearningTests(unittest.TestCase):

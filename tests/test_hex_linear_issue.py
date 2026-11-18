@@ -26,14 +26,27 @@ DICTATION = issue.Dictation("Please file this", None, NEW)
 def fixture():
     catalog = (
         {"project": {"team_ids": ["team"]}},
-        {"team": {"backlog": "backlog-state", "estimates": [1, 2, 3]}},
-        {"label": {"team_id": None}},
+        {"team": {"backlog": "backlog-state", "estimates": [1, 2, 3], "states": [{"id": "done-state"}]}},
+        {"label": {"team_id": None}, "old-label": {"team_id": "team"}},
     )
     return catalog, {"issues": [{
         "title": "Check the relay", "description": "Cover the reported failure.",
         "project_id": "project", "team_id": "team", "priority": 2, "estimate": 3,
         "label_ids": ["label"], "blocked_by": [BEFORE], "blocks": [AFTER], "attach_image": False,
     }]}
+
+
+def update_fixture(changes):
+    current = {
+        "id": BEFORE, "identifier": "KIAN-1", "url": "https://linear.app/workspace/issue/KIAN-1",
+        "updatedAt": "2026-01-01T12:00:00.000Z", "trashed": False, "title": "Keep this title",
+        "description": "Original scope.\n\n[Original reference](https://example.com)",
+        "priority": 3, "estimate": 1, "dueDate": None, "labelIds": ["old-label", "keep-label"],
+        "team": {"id": "team"}, "state": {"id": "backlog-state"}, "project": {"id": "project"},
+    }
+    draft = {"issue_id": "KIAN-1", "updated_at": current["updatedAt"], "changes": changes,
+             "blocked_by": [], "blocks": [], "attach_image": False}
+    return current, draft
 
 
 class LinearDictationTests(unittest.TestCase):
@@ -116,7 +129,8 @@ class LinearDictationTests(unittest.TestCase):
 
     def test_retries_same_issue_id_and_reconciles_a_lost_relation_response(self):
         catalog, draft = fixture()
-        fields, blocked_by, blocks, _ = issue.validate_issue(draft["issues"][0], catalog, NEW)
+        validated = issue.validate_issue(draft["issues"][0], catalog, NEW)
+        fields, blocked_by, blocks = validated.fields, validated.blocked_by, validated.blocks
         with patch.object(issue, "time") as clock, patch.object(issue, "configured_client") as configured:
             client = configured.return_value
             client.create_issue.side_effect = [RequestError(503), {"id": NEW}]
@@ -155,10 +169,116 @@ class LinearDictationTests(unittest.TestCase):
               patch.object(issue, "add_dependencies", return_value=["KIAN-2"])):
             client.return_value.create_issue.return_value = {"identifier": "KIAN-3", "url": url}
             self.assertEqual(issue.file_dictation(DICTATION)["issues"][0], {
-                "identifier": "KIAN-3", "url": url, "unverified": ["KIAN-2"],
+                "action": "Created", "identifier": "KIAN-3", "url": url, "unverified": ["KIAN-2"],
                 "blocked_by": ["KIAN-1"], "blocks": ["KIAN-2"],
             })
             client.return_value.create_issue.assert_called_once()
+
+    def test_mixed_dictation_patches_only_requested_fields_on_the_existing_issue(self):
+        catalog, reply = fixture()
+        reply["issues"][0].update(blocked_by=[], blocks=[])
+        current, draft = update_fixture({"priority": 2, "stateId": "done-state", "dueDate": "2026-11-24",
+                                         "append_description": "Include timeouts.",
+                                         "addedLabelIds": ["label"], "removedLabelIds": ["old-label"]})
+        reply["issues"].append(draft)
+        expected = {**draft["changes"], "description": current["description"] + "\n\nInclude timeouts."}
+        del expected["append_description"]
+        updated = {**current, "priority": 2, "state": {"id": "done-state"}, "dueDate": "2026-11-24",
+                   "description": expected["description"], "labelIds": ["keep-label", "label"]}
+        with (patch.object(issue, "configured_client") as configured,
+              patch.object(issue, "read_catalog", return_value=catalog),
+              patch.object(issue, "opencode_draft", return_value=reply)):
+            linear = configured.return_value
+            linear.query.return_value = {"issue": current}
+            preview = issue.file_dictation(DICTATION, dry_run=True)["issues"][1]
+            self.assertEqual(preview["fields"], {"id": BEFORE, **expected})
+            self.assertEqual((preview["action"], preview["identifier"]), ("Updated", "KIAN-1"))
+            linear.create_issue.assert_not_called()
+            linear.query.assert_called_once()
+            linear.query.reset_mock()
+            linear.create_issue.return_value = {"identifier": "KIAN-3", "url": None}
+            linear.query.side_effect = [{"issue": current}, {"issue": current}, {"issueUpdate": {"issue": updated}}]
+            saved = issue.file_dictation(DICTATION)
+        self.assertEqual([(item["action"], item["identifier"]) for item in saved["issues"]],
+                         [("Created", "KIAN-3"), ("Updated", "KIAN-1")])
+        self.assertEqual(saved["issues"][1]["url"], current["url"])
+        self.assertEqual(saved["unconfirmed"], [])
+        linear.create_issue.assert_called_once()
+        self.assertIn("issueUpdate", linear.query.call_args.args[0])
+        self.assertEqual(linear.query.call_args.args[1], {"id": BEFORE, "input": expected})
+
+    def test_unverified_update_target_stops_the_batch_before_writes(self):
+        catalog, reply = fixture()
+        current, draft = update_fixture({"priority": 2})
+        reply["issues"].append(draft)
+        for snapshot, question in ((None, "Which Linear issue"),
+                                   ({**current, "updatedAt": "2026-01-02T12:00:00.000Z"}, "changed while I was drafting")):
+            with (self.subTest(snapshot=snapshot), patch.object(issue, "configured_client") as configured,
+                  patch.object(issue, "read_catalog", return_value=catalog),
+                  patch.object(issue, "opencode_draft", return_value=reply)):
+                linear = configured.return_value
+                linear.query.return_value = {"issue": snapshot}
+                with self.assertRaisesRegex(issue.ReplyNeeded, question):
+                    issue.file_dictation(DICTATION)
+                linear.create_issue.assert_not_called()
+                linear.query.assert_called_once()
+                self.assertTrue(linear.query.call_args.args[0].startswith("query"))
+
+    def test_update_rejects_invalid_and_unsupported_changes(self):
+        catalog, _ = fixture()
+        invalid = ({"teamId": "other"}, {"priority": 0}, {"estimate": 5}, {"stateId": "other-state"},
+                   {"projectId": "other"}, {"addedLabelIds": ["unknown"]}, {"dueDate": "2026-02-30"},
+                   {"description": "Replacement", "append_description": "New details"})
+        linear = Mock()
+        for changes in invalid:
+            with self.subTest(changes=changes), self.assertRaises(issue.FilingError):
+                current, draft = update_fixture(changes)
+                linear.query.return_value = {"issue": current}
+                issue.validate_update(linear, draft, catalog)
+
+    def test_lost_update_response_confirms_the_append_once(self):
+        current, _ = update_fixture({})
+        fields = {"id": BEFORE, "description": current["description"] + "\n\nMore details."}
+        saved = {**current, "description": fields["description"], "updatedAt": "2026-01-01T12:01:00.000Z"}
+        linear = Mock()
+        linear.query.side_effect = [{"issue": current}, RequestError(503), {"issue": saved}]
+        with patch.object(issue.time, "sleep"):
+            self.assertEqual(issue.update_issue(linear, current, fields), saved)
+        writes = [call for call in linear.query.call_args_list if call.args[0].startswith("mutation")]
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(writes[0].args[1], {"id": BEFORE, "input": {"description": fields["description"]}})
+
+    def test_concurrent_edit_is_preserved_before_saving_an_append(self):
+        current, _ = update_fixture({})
+        linear = Mock()
+        linear.query.return_value = {"issue": {**current, "description": "Another writer added details.",
+                                               "updatedAt": "2026-01-01T12:01:00.000Z"}}
+        with self.assertRaisesRegex(issue.FilingError, "changed before the update could be saved"):
+            issue.update_issue(linear, current, {"id": BEFORE, "description": current["description"] + "\n\nMy details."})
+        linear.query.assert_called_once()
+
+    def test_update_can_attach_an_image_without_recreating_an_existing_dependency(self):
+        catalog, _ = fixture()
+        current, draft = update_fixture({})
+        draft.update(attach_image=True, blocked_by=[AFTER])
+        dictation = replace(DICTATION, image_use="attach", image=("image/png", b"fixture"))
+        asset = "https://uploads.linear.app/workspace/asset/clipboard.png"
+        with (patch.object(issue, "configured_client") as configured,
+              patch.object(issue, "read_catalog", return_value=catalog),
+              patch.object(issue, "opencode_draft", return_value={"issues": [draft], "image_relevant": True}),
+              patch.object(issue, "read_dependencies", return_value={AFTER: "KIAN-2"}),
+              patch.object(issue, "upload_image", return_value=asset),
+              patch.object(issue, "update_issue", return_value=current) as update):
+            linear = configured.return_value
+            linear.issue_dependencies.return_value = [{"type": "blocks", "issue": {"id": AFTER}}]
+            linear.query.return_value = {"issue": current}
+            saved = issue.file_dictation(dictation)["issues"][0]
+        self.assertEqual((saved["blocked_by"], saved["unverified"]), (["KIAN-2"], []))
+        update.assert_called_once_with(linear, current, {"id": BEFORE,
+                                       "description": current["description"] + f"\n\n![Clipboard image](<{asset}>)"})
+        linear.issue_dependencies.assert_called_once_with(BEFORE)
+        linear.query.assert_called_once()
+        linear.create_issue.assert_not_called()
 
     def test_capture_renews_lease_copies_on_release_and_queues_one_transcript(self):
         released, stopping, jobs = Event(), Event(), SimpleQueue()

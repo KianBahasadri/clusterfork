@@ -223,8 +223,9 @@ def capture(released, stopping, jobs):
         notify("Linear dictation", "Could not capture or transcribe audio. Check that Hex is running.")
 
 
-def notify_created_issue(saved):
+def notify_saved_issue(saved):
     identifier, url = saved["identifier"], saved["url"]
+    title = f"{saved['action']} {identifier}"
     pending = saved["unverified"]
     lines = []
     for key, label in (("blocked_by", "Blocked by"), ("blocks", "Blocks")):
@@ -234,8 +235,8 @@ def notify_created_issue(saved):
     if pending:
         lines.append(f"Could not confirm links to {', '.join(pending)}. Check the issue in Linear.")
     lines.append(url or "Find the issue by its identifier in Linear.")
-    print(f"Filed Linear issue {identifier}." + (" Some dependency links are unverified." if pending else ""))
-    Thread(target=notify, args=(f"Created {identifier}", "\n".join(lines), url), daemon=True).start()
+    print(f"{title}." + (" Some dependency links are unverified." if pending else ""))
+    Thread(target=notify, args=(title, "\n".join(lines), url), daemon=True).start()
 
 
 def process_jobs(jobs, dry_run):
@@ -251,7 +252,7 @@ def process_jobs(jobs, dry_run):
             notify("Linear dictation", str(error))
         except (OSError, ValueError, KeyError, TypeError, RequestError, subprocess.SubprocessError) as error:
             print(f"Hex Linear issue could not be confirmed ({type(error).__name__}).")
-            notify("Linear dictation", "Could not confirm issue filing. Check Linear and the service journal.")
+            notify("Linear dictation", "Could not confirm the requested issue changes. Check Linear and the service journal.")
         else:
             if dry_run:
                 count = len(saved["issues"])
@@ -259,9 +260,9 @@ def process_jobs(jobs, dry_run):
                 notify("Linear dictation dry run", f"Validated {count} drafts and their dependencies.")
                 continue
             for item in saved["issues"]:
-                notify_created_issue(item)
+                notify_saved_issue(item)
             if saved["unconfirmed"]:
-                notify("Linear filing could not be confirmed", "\n".join(saved["unconfirmed"]))
+                notify("Linear issue changes could not be confirmed", "\n".join(saved["unconfirmed"]))
 
 
 def listen(dry_run):
