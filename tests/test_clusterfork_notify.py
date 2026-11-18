@@ -42,13 +42,17 @@ class NotifyFixture(unittest.TestCase):
 
         self._write_mock(
             "mpv",
-            'printf "%s\\n" "$@" >"$FAKE_MPV_LOG"\n'
+            'printf "%s\\n" "$@" >"$FAKE_MPV_LOG.tmp"\n'
+            'mv -- "$FAKE_MPV_LOG.tmp" "$FAKE_MPV_LOG"\n'
             'if [[ "${!#}" == - ]]; then cat >/dev/null; fi\n'
             'printf "mpv noise\\n"\n'
             'exit "${FAKE_MPV_EXIT:-0}"\n',
         )
         self._write_mock(
-            "espeak-ng", 'cat >"$FAKE_SPEECH_LOG"\nprintf "fake audio"\n',
+            "espeak-ng",
+            'cat >"$FAKE_SPEECH_LOG.tmp"\n'
+            'mv -- "$FAKE_SPEECH_LOG.tmp" "$FAKE_SPEECH_LOG"\n'
+            'printf "fake audio"\n',
         )
         self._write_mock(
             "curl",
@@ -797,8 +801,9 @@ class NotifyCommandTests(NotifyFixture):
         self.addCleanup(_kill_mpv)
         self._write_mock(
             "mpv",
-            'printf "%s\\n" "$@" >"$FAKE_MPV_LOG"\n'
             'echo $$ >"$FAKE_MPV_PID"\n'
+            'printf "%s\\n" "$@" >"$FAKE_MPV_LOG.tmp"\n'
+            'mv -- "$FAKE_MPV_LOG.tmp" "$FAKE_MPV_LOG"\n'
             "sleep 8\n",
         )
         proc = self.run_cli(
