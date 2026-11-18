@@ -49,8 +49,9 @@ class NotifyFixture(unittest.TestCase):
             'exit "${FAKE_MPV_EXIT:-0}"\n',
         )
         self._write_mock(
-            "espeak-ng",
-            'cat >"$FAKE_SPEECH_LOG.tmp"\n'
+            "uv",
+            '[[ "$1" == run && "$2" == --script && "$3" == */clusterfork-notify-speech ]] || exit 2\n'
+            'printf "%s\\n" "$4" >"$FAKE_SPEECH_LOG.tmp"\n'
             'mv -- "$FAKE_SPEECH_LOG.tmp" "$FAKE_SPEECH_LOG"\n'
             'printf "fake audio"\n',
         )

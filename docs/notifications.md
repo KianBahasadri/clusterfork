@@ -2,7 +2,7 @@
 
 Claude, Grok, Command Code, Codex, Antigravity and Cursor Stop hooks call
 `~/.config/clusterfork/bin/clusterfork-notify <agent>`. The `bell` channel uses
-eSpeak NG and `mpv` to say the Git checkout's name. If Git cannot find the
+Piper's Lessac voice and `mpv` to say the Git checkout's name. If Git cannot find the
 checkout, it says the workspace directory name. With multiple open tmux
 sessions for that checkout or directory on the same server, it adds the
 session's position in creation order, starting at 1.
@@ -11,6 +11,16 @@ Audio and optional ntfy delivery run concurrently. Phone delivery times out
 after three seconds. Hook errors are silent and exit zero. Phone messages
 contain the agent and project basename. See [ntfy](notifications-ntfy.md) and
 [relay](notifications-relay.md).
+
+## Speech cache
+
+The playback host uses `uv` to run Piper on the CPU. On its first use, Piper
+downloads the voice model and config into
+`${XDG_DATA_HOME:-~/.local/share}/clusterfork/notifications/`. The same directory
+holds `speech.sqlite3`, with one WAV and its generation settings for each
+exact spoken string. When the engine version, voice model, or generation
+settings change, the next request for that string generates a new WAV and
+replaces its entry.
 
 ## Event gates
 

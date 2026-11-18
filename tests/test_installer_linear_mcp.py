@@ -150,19 +150,31 @@ class InstallerLinearMCPTests(unittest.TestCase):
 
         mock_bin = self.root / "bin"
         mock_bin.mkdir()
-        bell_log = self.root / "bell.log"
+        audio_log = self.root / "audio.log"
         mpv = mock_bin / "mpv"
-        mpv.write_text('#!/bin/sh\nprintf "bell\\n" >> "$FIXTURE_BELL_LOG"\n')
+        mpv.write_text(
+            '#!/usr/bin/env bash\n'
+            'if [[ "${!#}" == - ]]; then cat; else printf "bell\\n"; fi >> "$FIXTURE_AUDIO_LOG"\n'
+        )
         mpv.chmod(0o755)
+        uv = mock_bin / "uv"
+        uv.write_text(
+            '#!/usr/bin/env bash\n'
+            '[[ "$1" == run && "$2" == --script && "$3" == "$CLUSTERFORK_DIR/bin/clusterfork-notify-speech"'
+            ' && -x "$3" ]] || exit 2\n'
+            'printf "speech %s\\n" "$4"\n'
+        )
+        uv.chmod(0o755)
         cf_dir = self.home / ".config/clusterfork"
         (cf_dir / "notify-prefs").write_text("phone=0\n")
         hook_env = {
             **self.env,
             "PATH": f"{mock_bin}:{self.env['PATH']}",
-            "FIXTURE_BELL_LOG": str(bell_log),
+            "FIXTURE_AUDIO_LOG": str(audio_log),
             "CLUSTERFORK_DIR": str(cf_dir),
             "CLUSTERFORK_ENV_FILE": str(cf_dir / ".env"),
             "CLUSTERFORK_NOTIFY_RELAY_SOCKET": "",
+            "TMUX_PANE": "",
         }
         cases = (
             ("Stop", "stop", {}),
@@ -186,8 +198,9 @@ class InstallerLinearMCPTests(unittest.TestCase):
                 )
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 self.assertEqual((proc.stdout, proc.stderr), ("", ""))
-                self.assertEqual(bell_log.read_text(), "bell\n")
-                bell_log.unlink()
+                expected_audio = f"speech {self.root.name}\n" if event == "Stop" else "bell\n"
+                self.assertEqual(audio_log.read_text(), expected_audio)
+                audio_log.unlink()
 
     def test_shared_key_uses_client_secret_resolution_without_shell_or_recursive_expansion(self):
         key = 'fixture-linear-$(touch EXECUTED)-`touch EXECUTED`-${MISSING}-"quoted"-\\slash'

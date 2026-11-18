@@ -1,0 +1,104 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = "==3.12.*"
+# dependencies = ["piper-tts==1.8.0"]
+# ///
+"""Write a cached Piper recording of the notification text to stdout."""
+
+from contextlib import closing
+from hashlib import file_digest
+from importlib.metadata import version
+from io import BytesIO
+import json
+import os
+from pathlib import Path
+import sqlite3
+import sys
+from tempfile import TemporaryDirectory
+import wave
+
+
+VOICE = "en_US-lessac-medium"
+PROVIDER = "CPUExecutionProvider"
+INFERENCE_THREADS = 1
+SYNTHESIS_OPTIONS = {"normalize_audio": True, "volume": 1.0}
+
+
+def voice_files(directory: Path) -> tuple[Path, Path]:
+    model = directory / f"{VOICE}.onnx"
+    config = directory / f"{VOICE}.onnx.json"
+    if not (model.is_file() and config.is_file()):
+        from piper.download_voices import download_voice
+
+        with TemporaryDirectory(dir=directory) as staging:
+            staging_directory = Path(staging)
+            download_voice(VOICE, staging_directory)
+            config.unlink(missing_ok=True)
+            (staging_directory / model.name).replace(model)
+            (staging_directory / config.name).replace(config)
+    return model, config
+
+
+def synthesize(text: str, model: Path, voice_config: dict) -> bytes:
+    from onnxruntime import InferenceSession, SessionOptions
+    from piper import PiperVoice, SynthesisConfig
+    from piper.config import PiperConfig
+
+    options = SessionOptions()
+    options.intra_op_num_threads = INFERENCE_THREADS
+    voice = PiperVoice(
+        session=InferenceSession(str(model), sess_options=options, providers=[PROVIDER]),
+        config=PiperConfig.from_dict(voice_config),
+    )
+    with BytesIO() as audio:
+        with wave.open(audio, "wb") as wav:
+            voice.synthesize_wav(text, wav, SynthesisConfig(**SYNTHESIS_OPTIONS))
+        return audio.getvalue()
+
+
+def cached_audio(directory: Path, text: str) -> bytes:
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with closing(sqlite3.connect(directory / "speech.sqlite3", timeout=20)) as cache, cache:
+        cache.execute(
+            "CREATE TABLE IF NOT EXISTS clips "
+            "(text TEXT PRIMARY KEY, settings TEXT NOT NULL, wav BLOB NOT NULL)"
+        )
+        # A second hook for the same text can reuse the first hook's recording.
+        cache.execute("BEGIN IMMEDIATE")
+        model, config = voice_files(directory)
+        with model.open("rb") as model_file:
+            model_digest = file_digest(model_file, "sha256").hexdigest()
+        voice_config = json.loads(config.read_text(encoding="utf-8"))
+        settings = json.dumps(
+            {
+                "piper_version": version("piper-tts"),
+                "onnxruntime_version": version("onnxruntime"),
+                "voice": VOICE,
+                "model_sha256": model_digest,
+                "voice_config": voice_config,
+                "provider": PROVIDER,
+                "inference_threads": INFERENCE_THREADS,
+                "synthesis": SYNTHESIS_OPTIONS,
+            },
+            sort_keys=True,
+        )
+        match = cache.execute(
+            "SELECT wav FROM clips WHERE text = ? AND settings = ?", (text, settings)
+        ).fetchone()
+        if match is not None:
+            return match[0]
+
+        audio = synthesize(text, model, voice_config)
+        cache.execute(
+            "INSERT INTO clips (text, settings, wav) VALUES (?, ?, ?) "
+            "ON CONFLICT(text) DO UPDATE SET settings = excluded.settings, wav = excluded.wav",
+            (text, settings, audio),
+        )
+        return audio
+
+
+if __name__ == "__main__":
+    os.umask(0o077)
+    os.environ["OPENBLAS_NUM_THREADS"] = str(INFERENCE_THREADS)
+    data_home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
+    sys.stdout.buffer.write(cached_audio(data_home / "clusterfork" / "notifications", sys.argv[1]))

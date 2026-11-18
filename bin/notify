@@ -407,7 +407,7 @@ notify_spoken_name() {
 
 notify_speak() (
   set -o pipefail
-  printf '%s\n' "$1" | espeak-ng --stdin --stdout |
+  uv run --script "$(dirname -- "${BASH_SOURCE[0]}")/clusterfork-notify-speech" "$1" |
     mpv --no-video --no-terminal --volume="${NOTIFY_VOLUME:-100}" -
 ) >/dev/null 2>&1
 
@@ -459,8 +459,8 @@ notify_post_ntfy() {
 }
 
 notify_test_bell() {
-  if ! command -v espeak-ng >/dev/null 2>&1 || ! command -v mpv >/dev/null 2>&1; then
-    notify_err "bell  espeak-ng and mpv required"
+  if ! command -v uv >/dev/null 2>&1 || ! command -v mpv >/dev/null 2>&1; then
+    notify_err "bell  uv and mpv required"
     return 1
   fi
   # Detach so the clip can finish after this command returns. The job
