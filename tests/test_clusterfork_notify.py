@@ -42,9 +42,9 @@ class NotifyFixture(unittest.TestCase):
 
         self._write_mock(
             "mpv",
+            'if [[ "${!#}" == - ]]; then cat >/dev/null; fi\n'
             'printf "%s\\n" "$@" >"$FAKE_MPV_LOG.tmp"\n'
             'mv -- "$FAKE_MPV_LOG.tmp" "$FAKE_MPV_LOG"\n'
-            'if [[ "${!#}" == - ]]; then cat >/dev/null; fi\n'
             'printf "mpv noise\\n"\n'
             'exit "${FAKE_MPV_EXIT:-0}"\n',
         )
@@ -802,6 +802,7 @@ class NotifyCommandTests(NotifyFixture):
         self.addCleanup(_kill_mpv)
         self._write_mock(
             "mpv",
+            'cat >/dev/null\n'
             'echo $$ >"$FAKE_MPV_PID"\n'
             'printf "%s\\n" "$@" >"$FAKE_MPV_LOG.tmp"\n'
             'mv -- "$FAKE_MPV_LOG.tmp" "$FAKE_MPV_LOG"\n'
