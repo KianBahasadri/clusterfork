@@ -1,0 +1,16 @@
+[Unit]
+Description=Dictate a Linear issue with keypad slash
+PartOf=graphical-session.target
+After=hex.service xdg-desktop-portal.service
+
+[Service]
+Type=simple
+ExecCondition=/usr/bin/python3 -c 'from gi.repository import Gio'
+ExecStart=/usr/bin/python3 -u "%h/.config/hex/linear/linear_shortcut.py"
+Environment=PYTHONDONTWRITEBYTECODE=1
+Restart=on-failure
+RestartSec=10
+UMask=0077
+
+[Install]
+WantedBy=graphical-session.target

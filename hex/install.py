@@ -12,6 +12,8 @@ import tempfile
 
 
 SOURCE = Path(__file__).resolve().parent
+LINEAR_DESKTOP = "io.github.KianBahasadri.Clusterfork.LinearDictation.desktop"
+LINEAR_UNIT = "hex-linear-issue.service"
 
 
 def write_changed(destination, content):
@@ -71,7 +73,26 @@ def apply_settings(binary, home, microphone):
             hex_command(binary, "settings", "set", "microphone", "PipeWire Sound Server")
 
 
-def activate_worker(home, changed):
+def install_linear_shortcut(home):
+    workspace = home / ".config/hex/linear"
+    files = [
+        (SOURCE / name, workspace / name) for name in ("linear_issue.py", "linear_shortcut.py")
+    ] + [
+        (SOURCE / "linear-agent.md", workspace / ".opencode/agents/linear-issue.md"),
+        (SOURCE / LINEAR_DESKTOP, home / ".local/share/applications" / LINEAR_DESKTOP),
+        (SOURCE / LINEAR_UNIT, home / ".config/systemd/user" / LINEAR_UNIT),
+    ]
+    common = SOURCE.parent / "automation/common"
+    for name in ("__init__", "clients", "configuration", "context", "diagnostics", "images",
+                 "issue_metadata", "policy", "reporting", "routing", "selection", "timing"):
+        files.append((common / f"{name}.py", workspace / "common" / f"{name}.py"))
+    changed = False
+    for source, destination in files:
+        changed = write_changed(destination, source.read_bytes()) or changed
+    return changed
+
+
+def activate_workers(home, changes):
     binary = shutil.which("systemctl")
     if not binary:
         return
@@ -82,19 +103,22 @@ def activate_worker(home, changed):
         # A test HOME or container must never alter the host user's services.
         if manager.returncode or f"HOME={home}" not in manager.stdout.splitlines():
             return
-        active = subprocess.run(
-            [binary, "--user", "is-active", "--quiet", "hex-vocabulary-review.service"],
-            capture_output=True, timeout=5,
-        ).returncode == 0
-        for arguments in (["daemon-reload"], ["enable", "--now", "hex-vocabulary-review.service"]):
-            subprocess.run([binary, "--user", *arguments], check=True, capture_output=True, timeout=10)
-        if active and changed:
+        subprocess.run([binary, "--user", "daemon-reload"], check=True, capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        print("Hex: use systemctl --user daemon-reload to load the installed workers.", file=sys.stderr)
+        return
+    for unit, changed in changes.items():
+        try:
+            active = subprocess.run([binary, "--user", "is-active", "--quiet", unit],
+                                    capture_output=True, timeout=5).returncode == 0
             subprocess.run(
-                [binary, "--user", "restart", "hex-vocabulary-review.service"],
+                [binary, "--user", "enable", "--now", unit],
                 check=True, capture_output=True, timeout=10,
             )
-    except (OSError, subprocess.SubprocessError):
-        print("Hex: worker installed; enable it with systemctl --user enable --now hex-vocabulary-review.service", file=sys.stderr)
+            if active and changed:
+                subprocess.run([binary, "--user", "restart", unit], check=True, capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            print(f"Hex: enable {unit} with systemctl --user enable --now {unit}", file=sys.stderr)
 
 
 def install(home, microphone=None):
@@ -116,6 +140,7 @@ def install(home, microphone=None):
         home / ".config/systemd/user/hex-vocabulary-review.service",
         (SOURCE / "hex-vocabulary-review.service").read_bytes(),
     ) or changed
+    linear_changed = install_linear_shortcut(home)
     if microphone:
         source = SOURCE / "microphones" / microphone
         for name, destination in (
@@ -137,7 +162,7 @@ def install(home, microphone=None):
         print("Hex: workspace installed. Start Hex and rerun the installer to apply rewriting and vocabulary.")
         return
     apply_settings(binary, home, microphone)
-    activate_worker(home, changed)
+    activate_workers(home, {"hex-vocabulary-review.service": changed, LINEAR_UNIT: linear_changed})
     print("Hex: workspace installed; rewrite settings and seed vocabulary merged.")
     if config_changed:
         print("Hex: transformation configuration changed; click Allow in Hex's Output pane to enable its Python helper.")

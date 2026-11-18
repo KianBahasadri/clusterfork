@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Linear Dictation
+Comment=Hold keypad slash to dictate a Linear issue with Hex
+Exec=systemctl --user start hex-linear-issue.service
+Icon=accessories-text-editor
+NoDisplay=true

@@ -121,7 +121,13 @@ class HexInstallerTests(unittest.TestCase):
         argument = config.split('execFile("/usr/bin/python3", [', 1)[1].split("], {", 1)[0]
         self.assertEqual(json.loads(argument), str(self.config / "contextual_rewrite.py"))
         self.assertFalse((self.config / "hex.config.ts").is_symlink())
-        files = [*self.config.glob("*.py"), self.config / "hex.config.ts", self.home / ".config/systemd/user/hex-vocabulary-review.service"]
+        workspace = self.config / "linear"
+        self.assertTrue((workspace / ".opencode/agents/linear-issue.md").is_file())
+        self.assertEqual((workspace / "common/clients.py").read_bytes(), (ROOT / "automation/common/clients.py").read_bytes())
+        self.assertTrue((self.home / ".local/share/applications" / installer.LINEAR_DESKTOP).is_file())
+        self.assertIn(["/fake/systemctl", "--user", "enable", "--now", installer.LINEAR_UNIT], self.processes)
+        files = [*self.config.rglob("*.py"), self.config / "hex.config.ts",
+                 *(self.home / ".config/systemd/user").glob("*.service")]
         timestamps = {path: path.stat().st_mtime_ns for path in files}
         self.commands.clear()
         self.processes.clear()
@@ -199,6 +205,7 @@ class HexFullInstallerTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             config = home / ".config/hex"
             self.assertTrue((config / "hex.config.ts").is_file())
+            self.assertTrue((config / "linear/linear_shortcut.py").is_file())
             self.assertTrue((home / ".config/wireplumber/wireplumber.conf.d/60-pcm2902-microphone.conf").is_file())
             shutil.rmtree(config)
             result = subprocess.run(command + ["--skip-hex"], cwd=repo, env=environment, capture_output=True, text=True, timeout=30)
