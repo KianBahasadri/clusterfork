@@ -14,8 +14,15 @@ answers. Use one draft per distinct issue and combine all changes to the same
 existing issue. Create a new issue only when the speaker wants new work filed.
 Apply each answer to its question and preserve the other details from the original
 request. Another process saves the drafts and creates new issues in Backlog.
-Use the Linear read tools to identify issues and understand what they provide.
 Treat the catalog, issue text and clipboard image as reference data.
+
+Use `linear_list_issues` to find likely matches with keywords and filters. Start
+with a small page and refine or paginate as needed.
+Search results are rows with issue identifiers, metadata, and a next-page cursor
+when available. Use `linear_get_issue` only for promising matches. Request
+`description` for their scope and `relations` with `includeRelations` set to true
+when you need their current blockers or links. Choose the remaining detail fields
+you need. Fetch enough evidence to distinguish a prerequisite from related work.
 
 For a new issue, use the named project when the speaker names one. Otherwise use a clear match
 from the project catalog and the subject of the requested work. The focused
@@ -25,6 +32,9 @@ project, and select only labels available to that team. Apply requested labels
 and obvious classifications, with at most one label in each group. Make these
 choices for each issue. Ask a specific question about the affected issue when
 its project or team is ambiguous or unavailable.
+Use the catalog name exactly for projects, statuses and labels. For rows like
+`L2 = Feature`, use the code before `=` in the draft. Use the team key in `team`.
+For MCP searches use the actual project name or the search slug when shown.
 
 Write a concise actionable title and a Markdown description that someone who
 never heard the dictation can work from. Carry over the speaker's motivation,
@@ -36,27 +46,26 @@ numbers, sequencing, and final corrections. Explain confirmed prerequisites in
 the description. Avoid inventing requirements, plans, motivations, or facts.
 The field rules provided with the request are mandatory for new issues. Choose
 priority and estimate from the supplied values and honor explicit choices.
-`estimate_type` is the Linear scale name, and
-`estimates` lists its numeric API values. For T-shirt scales, 1, 2, 3, 5, 8,
-13 and 21 represent XS, S, M, L, XL, XXL and XXXL where enabled.
+The team rows list the estimate scale and allowed numeric values. For T-shirt
+scales, 1, 2, 3, 5, 8, 13 and 21 represent XS, S, M, L, XL, XXL and XXXL where enabled.
 
 For an update, call `linear_get_issue` on the intended issue. Request `updatedAt`,
-`teamId` and the current fields you need. Use the returned issue identifier
+`team` and the current fields you need. Use the returned issue identifier
 (such as KIAN-123) and copy `updatedAt` exactly. If the speaker only names or
 describes the issue, search for it and then read it. Ask which issue to update
 if the match is ambiguous or unavailable. Keep an update request tied to an
 existing issue even when its identifier needs clarification.
 
 Include just the requested changes in `changes`. The allowed keys are `title`,
-`description`, `append_description`, `priority`, `estimate`, `stateId`, `projectId`,
-`dueDate`, `addedLabelIds`, and `removedLabelIds`. For added context use
+`description`, `append_description`, `priority`, `estimate`, `status`, `project`,
+`dueDate`, `addedLabels`, and `removedLabels`. For added context use
 `append_description` with just the new Markdown. To edit existing description
 text use `description` with the complete resulting description, retaining all
 unaffected text, links and images. Use one of these description keys per update.
 Use the issue's team to resolve workflow states, estimates, projects and labels
-from the catalog. For labels specify only the IDs being added or removed.
-Set `dueDate` to YYYY-MM-DD using `local_date` for relative dates, or to null to
-clear it when requested. Use null for `projectId` when asked to remove the project.
+from the catalog. For labels specify only the names or catalog codes being added
+or removed. Set `dueDate` to YYYY-MM-DD using the local date for relative dates,
+or to null to clear it when requested. Use null for `project` when asked to remove it.
 
 Resolve both explicit and implied prerequisites. If the speaker puts this work
 in or on top of a named system that is still being built, look up the issue
@@ -75,9 +84,9 @@ A shared topic or an older, completed issue with a different deliverable is
 insufficient to infer a blocker. Ask a specific question if you cannot find
 the issue that delivers a stated prerequisite. Do not substitute related work.
 
-Look up explicit identifiers directly. Otherwise start with a small search
-in the likely project, then broaden across projects or older work if needed.
-Use verified UUIDs of existing Linear issues in `blocked_by` and `blocks`.
+Look up explicit identifiers directly. Search the likely project first, then
+broaden across projects or older work if needed.
+Use verified identifiers such as `KIAN-123` in `blocked_by` and `blocks`.
 Before returning a draft, verify that any issue described as a prerequisite
 in its description is also included in `blocked_by`.
 Keep issues created together independent of one another. Ask which work to
@@ -94,7 +103,7 @@ asked to include. If it appears unrelated or you cannot establish the
 connection, return `{"image_relevant":false}`. If it belongs with any requested
 issue, include `"image_relevant":true` alongside `"issues"` or `"clarification"`.
 Use the relevant details from the image in each affected description. Set
-`attach_image` to true for an issue when `clipboard_image_use` is `attach` and
+`attach_image` to true for an issue when clipboard image use is `attach` and
 the speaker wants that issue to display the image. Ask which issues should
 display it if the intended attachments are ambiguous. Set the field to false
 for image references and for issues without attachments.
@@ -103,7 +112,7 @@ Return exactly one JSON object as your final text, with no Markdown fence or
 surrounding commentary. Use this item shape to create an issue:
 
 ```json
-{"issues":[{"title":"...","description":"...","project_id":"UUID","team_id":"UUID","priority":3,"estimate":2,"label_ids":[],"blocked_by":[],"blocks":[],"attach_image":false}]}
+{"issues":[{"title":"...","description":"...","project":"Project name","team":"KIAN","priority":3,"estimate":2,"labels":["Feature"],"blocked_by":["KIAN-123"],"blocks":[],"attach_image":false}]}
 ```
 
 Use this item shape to update an issue:

@@ -1,11 +1,13 @@
 """Draft Linear issues with OpenCode and save them through Clusterfork's client."""
 
 import argparse
+from collections import Counter
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date
 from hashlib import sha256
 from http.client import HTTPSConnection, HTTPException
+from itertools import count
 import json
 import os
 from pathlib import Path
@@ -30,11 +32,12 @@ DOTENV = Path.home() / ".config/clusterfork/.env"
 MODEL = "opencode-go/gpt-6-luna#max"
 AGENT = "linear-issue"
 IMAGE_QUESTION = "Copy an image for this request, then click Reply."
-ISSUE_KEYS = {"title", "description", "project_id", "team_id", "priority", "estimate",
-              "label_ids", "blocked_by", "blocks", "attach_image"}
+ISSUE_IDENTIFIER = re.compile(r"[A-Z0-9_-]+-[0-9]+")
+ISSUE_KEYS = {"title", "description", "project", "team", "priority", "estimate",
+              "labels", "blocked_by", "blocks", "attach_image"}
 UPDATE_KEYS = {"issue_id", "updated_at", "changes", "blocked_by", "blocks", "attach_image"}
-UPDATE_FIELDS = {"title", "description", "append_description", "priority", "estimate", "stateId",
-                 "projectId", "dueDate", "addedLabelIds", "removedLabelIds"}
+UPDATE_FIELDS = {"title", "description", "append_description", "priority", "estimate", "status",
+                 "project", "dueDate", "addedLabels", "removedLabels"}
 UPDATE_SELECTION = ("id identifier url updatedAt trashed title description priority estimate dueDate labelIds "
                     "state { id } project { id } team { id }")
 
@@ -96,6 +99,21 @@ def next_cursor(connection, previous):
     return cursor
 
 
+def single_line(value):
+    return " ".join(str(value).split()) if value is not None else ""
+
+
+def set_catalog_refs(rows, prefix):
+    names = Counter(single_line(row["name"]).casefold() for row in rows)
+    codes = (f"{prefix}{number}" for number in count(1))
+    for row in rows:
+        name = single_line(row["name"])
+        ref = name
+        if names[name.casefold()] > 1:
+            ref = next(code for code in codes if code.casefold() not in names)
+        row["ref"] = ref
+
+
 def read_catalog(linear):
     rows = {key: [] for key in CATALOG_FIELDS}
     cursors = dict.fromkeys(rows)
@@ -133,7 +151,8 @@ def read_catalog(linear):
             estimates = estimate_values(scale) if scale else linear.team_estimates(team_id)
         except ValueError:
             estimates = []
-        teams[team_id] = {"id": team_id, "name": team["name"], "key": team["key"],
+        set_catalog_refs(team_states, "S")
+        teams[team_id] = {"id": team_id, "name": team["name"], "ref": team["key"],
                           "estimate_type": scale["issueEstimationType"] if scale else None,
                           "estimates": estimates, "backlog": backlog["id"] if backlog else None,
                           "states": team_states}
@@ -162,6 +181,8 @@ def read_catalog(linear):
                       "team_id": (label["team"] or {}).get("id"), "group": (label["parent"] or {}).get("name")}
         for label in rows["issueLabels"] if not label["isGroup"]
     }
+    set_catalog_refs(projects.values(), "P")
+    set_catalog_refs(labels.values(), "L")
     return projects, teams, labels
 
 
@@ -173,6 +194,45 @@ def focused_project(title, projects):
         if len(hits) == 1:
             return hits[0]
     return None
+
+
+def named_entry(entry):
+    name = single_line(entry["name"])
+    return name if entry["ref"] == name else f"{entry['ref']} = {name}"
+
+
+def table_row(*values):
+    return "\t".join(single_line(value) or "-" for value in values)
+
+
+def prompt_for(dictation, catalog):
+    projects, teams, labels = catalog
+    focused = projects.get(focused_project(dictation.title, projects))
+    lines = [ISSUE_METADATA_POLICY, f"Local date: {date.today().isoformat()}",
+             f"Clipboard image use: {dictation.image_use or 'none'}",
+             f"Focused project: {focused['ref'] if focused else 'none'}",
+             "\nProjects", "Name\tStatus\tTeam keys\tSearch slug for duplicate names\tSummary"]
+    for project in projects.values():
+        lines.append(table_row(named_entry(project), project["status"],
+                               ", ".join(teams[key]["ref"] for key in project["team_ids"]),
+                               project["slug"] if project["ref"] != single_line(project["name"]) else None,
+                               project["description"]))
+    lines += ["\nTeams", "Key\tName\tEstimate scale\tAllowed estimates"]
+    for team in teams.values():
+        lines.append(table_row(team["ref"], team["name"], team["estimate_type"], ", ".join(map(str, team["estimates"]))))
+    lines += ["\nWorkflow statuses", "Team key\tName\tType"]
+    for team in teams.values():
+        lines.extend(table_row(team["ref"], named_entry(state), state["type"]) for state in team["states"])
+    lines += ["\nLabels", "Name\tScope\tGroup\tDescription"]
+    for label in labels.values():
+        team = teams.get(label["team_id"])
+        if team or label["team_id"] is None:
+            lines.append(table_row(named_entry(label), team["ref"] if team else "workspace",
+                                   label["group"], label["description"]))
+    lines.extend(["\nTranscript", dictation.transcript])
+    for question, answer in dictation.answers:
+        lines.extend(["\nFollow-up question", question, "Follow-up answer", answer])
+    return "\n".join(lines)
 
 
 def snapshot_instructions():
@@ -212,12 +272,7 @@ def log_opencode_session(output, dictation_id, snapshot):
 
 
 def opencode_draft(dictation, catalog):
-    projects, teams, labels = catalog
-    context = {"transcript": dictation.transcript, "focused_project_id": focused_project(dictation.title, projects),
-               "clipboard_image_use": dictation.image_use, "local_date": date.today().isoformat(),
-               "clarifications": [{"question": question, "answer": answer} for question, answer in dictation.answers],
-               "projects": list(projects.values()), "teams": list(teams.values()), "labels": list(labels.values())}
-    prompt = ISSUE_METADATA_POLICY + "\nCurrent request and Linear reference data:\n" + json.dumps(context, ensure_ascii=False)
+    prompt = prompt_for(dictation, catalog)
     binary = shutil.which("opencode") or Path.home() / ".opencode/bin/opencode"
     command = [str(binary), "run", "--agent", AGENT, "--model", MODEL, "--format", "json",
                "--title", "Hex Linear dictation", "--archived"]
@@ -266,49 +321,63 @@ def parse_draft(output):
         raise FilingError("OpenCode did not return a valid issue draft.") from error
 
 
-def valid_ids(values):
+def unique_strings(values):
     return (isinstance(values, list) and all(isinstance(value, str) for value in values)
             and len(set(values)) == len(values))
 
 
-def validate_links(draft, issue_id):
+def is_issue_identifier(value):
+    if not ISSUE_IDENTIFIER.fullmatch(value):
+        return False
+    try:
+        UUID(value)
+    except ValueError:
+        return True
+    return False
+
+
+def validate_links(draft, identifier=None):
     if (type(draft["attach_image"]) is not bool
-            or not all(valid_ids(draft[key]) for key in ("blocked_by", "blocks"))):
+            or not all(unique_strings(draft[key]) for key in ("blocked_by", "blocks"))):
         raise FilingError("OpenCode returned invalid dependency or attachment fields.")
     refs = draft["blocked_by"] + draft["blocks"]
-    try:
-        if len(set(refs)) != len(refs) or any(str(UUID(ref)) != ref or ref == issue_id for ref in refs):
-            raise ValueError("Invalid dependency IDs")
-    except ValueError as error:
-        raise FilingError("OpenCode returned an invalid dependency.") from error
+    if len(set(refs)) != len(refs) or identifier in refs or not all(is_issue_identifier(ref) for ref in refs):
+        raise FilingError("OpenCode returned an invalid dependency.")
+
+
+def catalog_id(entries, reference):
+    return next((entry["id"] for entry in entries if entry["ref"] == reference), None)
+
+
+def resolve_labels(references, labels, team_id):
+    available = {label["ref"]: key for key, label in labels.items() if label["team_id"] in (None, team_id)}
+    if not unique_strings(references) or not available.keys() >= set(references):
+        raise FilingError("OpenCode selected a label unavailable to that team.")
+    return [available[ref] for ref in references]
 
 
 def validate_issue(issue, catalog, issue_id):
     if (not isinstance(issue, dict) or set(issue) != ISSUE_KEYS
             or not isinstance(issue["title"], str) or not issue["title"].strip()
-            or not isinstance(issue["description"], str) or not issue["description"].strip()
-            or not valid_ids(issue["label_ids"])):
+            or not isinstance(issue["description"], str) or not issue["description"].strip()):
         raise FilingError("OpenCode returned incomplete issue fields.")
-    validate_links(issue, issue_id)
+    validate_links(issue)
     projects, teams, labels = catalog
-    team_id, project_id = issue["team_id"], issue["project_id"]
-    if (not isinstance(team_id, str) or not isinstance(project_id, str)
-            or team_id not in teams or project_id not in projects
-            or team_id not in projects[project_id]["team_ids"]):
+    team_id = catalog_id(teams.values(), issue["team"])
+    project_id = catalog_id(projects.values(), issue["project"])
+    if team_id is None or project_id is None or team_id not in projects[project_id]["team_ids"]:
         raise FilingError("OpenCode selected an unavailable project or team.")
     team = teams[team_id]
     if not team["backlog"]:
         raise FilingError("The selected team has no unambiguous Backlog state.")
-    for label_id in issue["label_ids"]:
-        if label_id not in labels or labels[label_id]["team_id"] not in (None, team_id):
-            raise FilingError("OpenCode selected a label unavailable to that team.")
+    label_ids = resolve_labels(issue["labels"], labels, team_id)
     try:
         validate_metadata(issue, estimates=team["estimates"])
     except (ValueError, OverflowError) as error:
         raise FilingError("OpenCode returned an invalid priority or estimate.") from error
     fields = {"id": issue_id, "title": issue["title"].strip(), "description": issue["description"].strip(),
               "projectId": project_id, "teamId": team_id, "stateId": team["backlog"],
-              "labelIds": issue["label_ids"], "priority": issue["priority"], "estimate": int(issue["estimate"])}
+              "labelIds": label_ids, "priority": issue["priority"], "estimate": int(issue["estimate"])}
     return IssueDraft(fields, issue["blocked_by"], issue["blocks"], issue["attach_image"])
 
 
@@ -318,7 +387,7 @@ def read_update_issue(linear, issue_id):
 
 def validate_update(linear, draft, catalog):
     if (set(draft) != UPDATE_KEYS or not isinstance(draft["issue_id"], str)
-            or not re.fullmatch(r"[A-Za-z0-9_-]+-[0-9]+", draft["issue_id"])
+            or not is_issue_identifier(draft["issue_id"].upper())
             or not isinstance(draft["updated_at"], str) or not draft["updated_at"]
             or not isinstance(draft["changes"], dict) or not draft["changes"].keys() <= UPDATE_FIELDS):
         raise FilingError("OpenCode returned an invalid issue update.")
@@ -333,7 +402,7 @@ def validate_update(linear, draft, catalog):
         raise ReplyNeeded(f"I could not verify {identifier}. Which Linear issue should I update?")
     if current["updatedAt"] != draft["updated_at"]:
         raise ReplyNeeded(f"{identifier} changed while I was drafting. Should I apply your update to its current version?")
-    validate_links(draft, current["id"])
+    validate_links(draft, identifier)
     changes = draft["changes"].copy()
     if not (changes or draft["blocked_by"] or draft["blocks"] or draft["attach_image"]):
         raise ReplyNeeded(f"What would you like to change on {identifier}?")
@@ -351,17 +420,22 @@ def validate_update(linear, draft, catalog):
         existing = current["description"] or ""
         addition = changes.pop("append_description")
         changes["description"] = f"{existing}\n\n{addition}" if existing else addition
-    project_id = changes.get("projectId")
-    if project_id is not None and (not isinstance(project_id, str) or project_id not in projects
-                                   or team_id not in projects[project_id]["team_ids"]):
-        raise FilingError("OpenCode selected a project unavailable to that team.")
-    if "stateId" in changes and changes["stateId"] not in [state["id"] for state in team.get("states", [])]:
-        raise FilingError("OpenCode selected a status unavailable to that team.")
-    add, remove = changes.get("addedLabelIds", []), changes.get("removedLabelIds", [])
-    if (not valid_ids(add) or not valid_ids(remove) or set(add) & set(remove)
-            or any(label_id not in labels or labels[label_id]["team_id"] not in (None, team_id)
-                   for label_id in add + remove)):
-        raise FilingError("OpenCode selected invalid labels for the issue's team.")
+    if "project" in changes:
+        reference = changes.pop("project")
+        project_id = catalog_id(projects.values(), reference)
+        if reference is not None and (project_id is None or team_id not in projects[project_id]["team_ids"]):
+            raise FilingError("OpenCode selected a project unavailable to that team.")
+        changes["projectId"] = project_id
+    if "status" in changes:
+        state_id = catalog_id(team.get("states", []), changes.pop("status"))
+        if state_id is None:
+            raise FilingError("OpenCode selected a status unavailable to that team.")
+        changes["stateId"] = state_id
+    for field, api_field in (("addedLabels", "addedLabelIds"), ("removedLabels", "removedLabelIds")):
+        if field in changes:
+            changes[api_field] = resolve_labels(changes.pop(field), labels, team_id)
+    if set(changes.get("addedLabelIds", [])) & set(changes.get("removedLabelIds", [])):
+        raise FilingError("OpenCode requested adding and removing the same label.")
     try:
         validate_metadata(changes, estimates=team.get("estimates", []))
         if changes.get("dueDate") is not None and date.fromisoformat(changes["dueDate"]).isoformat() != changes["dueDate"]:
@@ -373,13 +447,19 @@ def validate_update(linear, draft, catalog):
     return IssueDraft({"id": current["id"], **changes}, draft["blocked_by"], draft["blocks"], draft["attach_image"], current)
 
 
-def read_dependencies(linear, ids):
+def read_dependencies(linear, identifiers):
     refs = {}
-    for start in range(0, len(ids), 100):
-        data = linear.query("query($ids: [ID!]!) { issues(first: 100, includeArchived: true, filter: {id: {in: $ids}}) { "
-                            "nodes { id identifier trashed } } }", {"ids": ids[start:start + 100]})["issues"]
-        refs.update((item["id"], item["identifier"]) for item in data["nodes"] if not item["trashed"])
-    if set(refs) != set(ids):
+    for start in range(0, len(identifiers), 100):
+        try:
+            data = linear.query("""query($ids: [ID!]!) {
+              issues(first: 100, includeArchived: true, filter: {id: {in: $ids}}) { nodes { id identifier trashed } }
+            }""", {"ids": identifiers[start:start + 100]})["issues"]
+        except RequestError as error:
+            if getattr(error, "clusterfork_failure", {}).get("graphql_type") != "invalid input":
+                raise
+            raise ReplyNeeded("A referenced dependency is unavailable. What is its Linear issue identifier?") from error
+        refs.update((item["identifier"], item["id"]) for item in data["nodes"] if not item["trashed"])
+    if set(refs) != set(identifiers):
         raise ReplyNeeded("A referenced dependency is unavailable. What is its Linear issue identifier?")
     return refs
 
@@ -555,16 +635,20 @@ def file_dictation(dictation, *, dry_run=False):
     if dictation.image_use == "attach" and not attaching:
         raise ReplyNeeded("Which issue should include the clipboard image?")
 
-    ids = list(dict.fromkeys(ref for draft in drafts for ref in draft.blocked_by + draft.blocks))
-    refs = read_dependencies(linear, ids)
+    identifiers = list(dict.fromkeys(ref for draft in drafts for ref in draft.blocked_by + draft.blocks))
+    refs = read_dependencies(linear, identifiers)
+    if any(draft.fields["id"] == refs[ref] for draft in drafts for ref in draft.blocked_by + draft.blocks):
+        raise FilingError("An issue cannot depend on itself.")
+    identifiers_by_id = {value: key for key, value in refs.items()}
     print(f"Hex Linear dictation {dictation.issue_id} validated {len(drafts)} issue drafts.", file=sys.stderr)
     asset = upload_image(linear, dictation.image) if attaching and not dry_run else None
     issues, unconfirmed = [], []
     for draft in drafts:
         fields, current = draft.fields.copy(), draft.existing
-        blocked_by, blocks = draft.blocked_by, draft.blocks
+        blocked_by = [refs[ref] for ref in draft.blocked_by]
+        blocks = [refs[ref] for ref in draft.blocks]
         action = "Updated" if current else "Created"
-        dependencies = {"blocked_by": [refs[value] for value in blocked_by], "blocks": [refs[value] for value in blocks]}
+        dependencies = {"blocked_by": draft.blocked_by, "blocks": draft.blocks}
         if dry_run:
             target = {"identifier": current["identifier"]} if current else {}
             issues.append({"action": action, "fields": fields, "attach_image": draft.attach_image, **target, **dependencies})
@@ -587,7 +671,7 @@ def file_dictation(dictation, *, dry_run=False):
             if current:
                 blocked_by = unlinked_dependencies(linear, fields["id"], blocked_by, incoming=True)
                 blocks = unlinked_dependencies(linear, fields["id"], blocks, incoming=False)
-            missing = add_dependencies(linear, fields["id"], blocked_by, blocks, refs)
+            missing = add_dependencies(linear, fields["id"], blocked_by, blocks, identifiers_by_id)
         except (RequestError, ValueError, KeyError, TypeError):
             missing = dependencies["blocked_by"] + dependencies["blocks"]
         if not isinstance(url, str) or not url.startswith("https://linear.app/"):

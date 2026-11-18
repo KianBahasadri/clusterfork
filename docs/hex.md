@@ -91,22 +91,24 @@ registration uses the same running Hex and the selected transcription model.
 Hex applies its Skip Long Pauses setting to the captured audio. The issue
 transcript goes to OpenCode and the clipboard as raw text.
 
-The helper fetches the project, team, label, estimate, and workflow state catalog in
-one paged GraphQL read. If the accessible foreground window clearly names a
-project, only the matching project ID is sent as a hint. OpenCode Go runs
-`gpt-6-luna#max` in an archived session. The agent can search and read issues
-through the existing Linear MCP for explicit and implied prerequisites,
-including older and cross-project issues. An open analysis or plan is a
-blocker when the new work depends on its outcome. The agent uses the transcript
-and scoped catalog to write the issue with the spoken rationale, behavior,
-and constraints.
+The helper sends the transcript and compact, tab-separated rows for projects,
+teams, labels, estimate scales, and workflow states. An unambiguous foreground
+project is a hint. OpenCode Go runs `gpt-6-luna#max` in an archived session and
+searches for issues on demand through Linear's MCP. A Hex workspace plugin limits
+search results to rows with the issue identifier, title, project, status, labels,
+priority, estimate, and dates. OpenCode reads descriptions and relations only
+for issues it needs to inspect, including older and cross-project prerequisites.
+An open analysis or plan is a blocker when the new work depends on its outcome.
+The draft carries the spoken rationale, behavior, and constraints.
 
-Clusterfork validates the selected project, team, labels, priority, estimate
-and dependency IDs for the entire batch before saving through its shared Linear
-client. New issues are filed in Backlog. Updates pass only the requested field
-changes and check the current issue revision before writing. Each creation reuses
-its ID on retry. If an issue or dependency link cannot be confirmed, the
-notification identifies it. Other issues in the batch proceed independently.
+The agent returns a JSON draft with catalog names, short codes for duplicate
+names, team keys, and issue identifiers like `KIAN-123`. Clusterfork resolves
+these to Linear UUIDs and validates the entire batch before saving through its
+shared Linear client. New issues are filed in Backlog. Updates pass only the
+requested field changes and check the current issue revision before writing.
+Each creation reuses its ID on retry. If an issue or dependency link cannot be
+confirmed, the notification identifies it. Other issues in the batch proceed
+independently.
 
 The service journal records the same dictation ID from recording through the
 Linear save, alongside the OpenCode session ID and any created or updated
@@ -118,7 +120,8 @@ snapshot when those instructions are identical.
 Search the journal for the Linear issue ID. Use the associated dictation ID
 to find the OpenCode session and instructions snapshot. The archived session
 messages contain the exact prompt sent on stdin, including the transcript and
-catalog, any images, each Linear lookup and its reply, and the final draft.
+catalog, any images, each Linear lookup and the result shown to the model, and
+the final draft.
 
 ```bash
 journalctl --user -u hex-linear-issue.service --grep 'KIAN-123'

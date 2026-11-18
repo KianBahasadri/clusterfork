@@ -23,19 +23,26 @@ from common.clients import RequestError
 
 
 NEW, BEFORE, AFTER = (str(UUID(int=i)) for i in range(1, 4))
+DEPENDENCIES = {"KIAN-1": BEFORE, "KIAN-2": AFTER}
 DICTATION = issue.Dictation("Please file this", None, NEW)
 
 
 def fixture():
     catalog = (
-        {"project": {"team_ids": ["team"]}},
-        {"team": {"backlog": "backlog-state", "estimates": [1, 2, 3], "states": [{"id": "done-state"}]}},
-        {"label": {"team_id": None}, "old-label": {"team_id": "team"}},
+        {"project": {"id": "project", "name": "Relay", "ref": "Relay", "slug": "relay-slug",
+                     "status": "started", "team_ids": ["team"], "description": "Relay\nservice"}},
+        {"team": {"id": "team", "name": "Kian", "ref": "KIAN", "backlog": "backlog-state",
+                  "estimate_type": "fibonacci", "estimates": [1, 2, 3],
+                  "states": [{"id": "done-state", "name": "Done", "ref": "Done", "type": "completed"}]}},
+        {"label": {"id": "label", "name": "Feature", "ref": "Feature", "team_id": None,
+                   "group": "Type", "description": "A new feature"},
+         "old-label": {"id": "old-label", "name": "Bug", "ref": "Bug", "team_id": "team",
+                       "group": "Type", "description": None}},
     )
     return catalog, {"issues": [{
         "title": "Check the relay", "description": "Cover the reported failure.",
-        "project_id": "project", "team_id": "team", "priority": 2, "estimate": 3,
-        "label_ids": ["label"], "blocked_by": [BEFORE], "blocks": [AFTER], "attach_image": False,
+        "project": "Relay", "team": "KIAN", "priority": 2, "estimate": 3,
+        "labels": ["Feature"], "blocked_by": ["KIAN-1"], "blocks": ["KIAN-2"], "attach_image": False,
     }]}
 
 
@@ -73,10 +80,18 @@ class LinearDictationTests(unittest.TestCase):
                   patch.dict(issue.os.environ, {"XDG_STATE_HOME": str(root / "state")}),
                   patch.object(issue.subprocess, "run", return_value=CompletedProcess([], 0, stdout=stdout)) as run,
                   redirect_stderr(logs)):
-                self.assertEqual(issue.opencode_draft(DICTATION, ({}, {}, {})), assistant_reply)
+                dictation = replace(DICTATION, title="Relay – Linear", answers=(("Which project?", "Relay"),))
+                self.assertEqual(issue.opencode_draft(dictation, fixture()[0]), assistant_reply)
                 snapshot = issue.snapshot_instructions()
             self.assertIn("--archived", run.call_args.args[0])
-            self.assertIn(DICTATION.transcript, run.call_args.kwargs["input"])
+            prompt = run.call_args.kwargs["input"]
+            self.assertIn(f"Transcript\n{DICTATION.transcript}\n\nFollow-up question\nWhich project?\nFollow-up answer\nRelay", prompt)
+            self.assertIn("Focused project: Relay", prompt)
+            self.assertIn("Relay\tstarted\tKIAN\t-\tRelay service", prompt)
+            self.assertIn("Feature\tworkspace\tType\tA new feature", prompt)
+            self.assertIn("KIAN\tDone\tcompleted", prompt)
+            for internal_value in ("backlog-state", "old-label", "done-state", "relay-slug", BEFORE, AFTER):
+                self.assertNotIn(internal_value, prompt)
             self.assertIn(f"{NEW} archived OpenCode session ses_fixture123 instructions={snapshot}", logs.getvalue())
             self.assertNotIn(DICTATION.transcript, logs.getvalue())
             self.assertEqual(list(snapshot.parent.iterdir()), [snapshot])
@@ -98,13 +113,33 @@ class LinearDictationTests(unittest.TestCase):
             issue.parse_draft("\n".join(map(json.dumps, records[:-1])))
 
     def test_invalid_metadata_destination_labels_or_dependencies_stop_before_creation(self):
-        for change in ({"priority": 0}, {"estimate": 5}, {"team_id": "other"}, {"label_ids": ["unavailable"]},
-                       {"blocks": [BEFORE]}, {"blocks": [NEW]}):
+        for change in ({"priority": 0}, {"estimate": 5}, {"team": "OTHER"}, {"labels": ["unavailable"]},
+                       {"blocks": ["KIAN-1"]}, {"blocks": [NEW]}):
             with self.subTest(change=change):
                 catalog, draft = fixture()
                 draft["issues"][0].update(change)
                 with self.assertRaises(issue.FilingError):
                     issue.validate_issue(draft["issues"][0], catalog, NEW)
+
+    def test_duplicate_names_use_distinct_references_with_team_scope(self):
+        catalog, draft = fixture()
+        projects, _, labels = catalog
+        projects["other-project"] = {**projects["project"], "id": "other-project", "slug": "other-relay-slug"}
+        labels["other-label"] = {**labels["label"], "id": "other-label", "team_id": "other-team"}
+        labels["literal-l1"] = {**labels["label"], "id": "literal-l1", "name": "L1"}
+        issue.set_catalog_refs(projects.values(), "P")
+        issue.set_catalog_refs(labels.values(), "L")
+        self.assertEqual([row["ref"] for row in labels.values()], ["L2", "Bug", "L3", "L1"])
+        new = draft["issues"][0]
+        new.update(project="P2", labels=["L2", "L1"])
+        saved = issue.validate_issue(new, catalog, NEW)
+        self.assertEqual((saved.fields["projectId"], saved.fields["labelIds"]), ("other-project", ["label", "literal-l1"]))
+        prompt = issue.prompt_for(DICTATION, catalog)
+        self.assertIn("P2 = Relay\tstarted\tKIAN\tother-relay-slug", prompt)
+        self.assertIn("L2 = Feature\tworkspace\tType", prompt)
+        for unavailable in ("Feature", "L3"):
+            with self.subTest(unavailable=unavailable), self.assertRaises(issue.FilingError):
+                issue.validate_issue({**new, "labels": [unavailable]}, catalog, NEW)
 
     def test_checks_dependency_availability_before_writing_and_dry_run_stays_read_only(self):
         catalog, draft = fixture()
@@ -121,6 +156,7 @@ class LinearDictationTests(unittest.TestCase):
             saved = issue.file_dictation(DICTATION, dry_run=True)["issues"][0]
             self.assertEqual((saved["blocked_by"], saved["blocks"]), (["KIAN-1"], ["KIAN-2"]))
             self.assertEqual(saved["fields"]["stateId"], "backlog-state")
+            self.assertEqual(client.return_value.query.call_args.args[1], {"ids": ["KIAN-1", "KIAN-2"]})
             create.assert_not_called()
             dependencies.assert_not_called()
 
@@ -141,10 +177,9 @@ class LinearDictationTests(unittest.TestCase):
             {**draft["issues"][0], "title": "Unconfirmed issue", "blocked_by": [], "blocks": []},
             {**draft["issues"][0], "title": "Another issue", "priority": 4, "estimate": 1, "blocks": []},
         ]
-        refs = {BEFORE: "KIAN-1", AFTER: "KIAN-2"}
         with (patch.object(issue, "configured_client") as client, patch.object(issue, "read_catalog", return_value=catalog),
               patch.object(issue, "opencode_draft", return_value=draft),
-              patch.object(issue, "read_dependencies", return_value=refs) as read,
+              patch.object(issue, "read_dependencies", return_value=DEPENDENCIES) as read,
               patch.object(issue, "add_dependencies", return_value=[]) as link):
             client.return_value.create_issue.side_effect = [
                 {"identifier": "KIAN-3", "url": "https://linear.app/workspace/issue/KIAN-3"},
@@ -157,14 +192,14 @@ class LinearDictationTests(unittest.TestCase):
         first, failed, last = (call.args[0] for call in client.return_value.create_issue.call_args_list)
         self.assertEqual(len({first["id"], failed["id"], last["id"]}), 3)
         self.assertEqual((last["priority"], last["estimate"]), (4, 1))
-        read.assert_called_once_with(client.return_value, [BEFORE, AFTER])
+        read.assert_called_once_with(client.return_value, ["KIAN-1", "KIAN-2"])
         self.assertEqual([call.args[1:4] for call in link.call_args_list],
                          [(first["id"], [BEFORE], [AFTER]), (last["id"], [BEFORE], [])])
 
     def test_retries_same_issue_id_and_reconciles_a_lost_relation_response(self):
         catalog, draft = fixture()
         validated = issue.validate_issue(draft["issues"][0], catalog, NEW)
-        fields, blocked_by, blocks = validated.fields, validated.blocked_by, validated.blocks
+        fields = validated.fields
         with patch.object(issue, "time") as clock, patch.object(issue, "configured_client") as configured:
             client = configured.return_value
             client.create_issue.side_effect = [RequestError(503), {"id": NEW}]
@@ -186,7 +221,7 @@ class LinearDictationTests(unittest.TestCase):
                 return {"issueRelation": known.get(variables["id"])}
 
             client.query.side_effect = query
-            missing = issue.add_dependencies(client, NEW, blocked_by, blocks, {BEFORE: "KIAN-1", AFTER: "KIAN-2"})
+            missing = issue.add_dependencies(client, NEW, [BEFORE], [AFTER], {BEFORE: "KIAN-1", AFTER: "KIAN-2"})
             inbound, outbound = writes[0]["r0"], writes[0]["r1"]
             self.assertEqual((UUID(inbound["id"]).version, UUID(outbound["id"]).version), (4, 4))
             self.assertEqual((inbound["issueId"], inbound["relatedIssueId"]), (BEFORE, NEW))
@@ -199,7 +234,7 @@ class LinearDictationTests(unittest.TestCase):
         url = "https://linear.app/workspace/issue/KIAN-3/check-the-relay"
         with (patch.object(issue, "configured_client") as client, patch.object(issue, "read_catalog", return_value=catalog),
               patch.object(issue, "opencode_draft", return_value=draft),
-              patch.object(issue, "read_dependencies", return_value={BEFORE: "KIAN-1", AFTER: "KIAN-2"}),
+              patch.object(issue, "read_dependencies", return_value=DEPENDENCIES),
               patch.object(issue, "add_dependencies", return_value=["KIAN-2"])):
             client.return_value.create_issue.return_value = {"identifier": "KIAN-3", "url": url}
             self.assertEqual(issue.file_dictation(DICTATION)["issues"][0], {
@@ -211,14 +246,15 @@ class LinearDictationTests(unittest.TestCase):
     def test_mixed_dictation_patches_only_requested_fields_on_the_existing_issue(self):
         catalog, reply = fixture()
         reply["issues"][0].update(blocked_by=[], blocks=[])
-        current, draft = update_fixture({"priority": 2, "stateId": "done-state", "dueDate": "2026-11-24",
-                                         "append_description": "Include timeouts.",
-                                         "addedLabelIds": ["label"], "removedLabelIds": ["old-label"]})
+        current, draft = update_fixture({"priority": 2, "status": "Done", "dueDate": "2026-11-24",
+                                         "append_description": "Include timeouts.", "project": None,
+                                         "addedLabels": ["Feature"], "removedLabels": ["Bug"]})
         reply["issues"].append(draft)
-        expected = {**draft["changes"], "description": current["description"] + "\n\nInclude timeouts."}
-        del expected["append_description"]
+        expected = {"priority": 2, "stateId": "done-state", "dueDate": "2026-11-24", "projectId": None,
+                    "addedLabelIds": ["label"], "removedLabelIds": ["old-label"],
+                    "description": current["description"] + "\n\nInclude timeouts."}
         updated = {**current, "priority": 2, "state": {"id": "done-state"}, "dueDate": "2026-11-24",
-                   "description": expected["description"], "labelIds": ["keep-label", "label"]}
+                   "project": None, "description": expected["description"], "labelIds": ["keep-label", "label"]}
         with (patch.object(issue, "configured_client") as configured,
               patch.object(issue, "read_catalog", return_value=catalog),
               patch.object(issue, "opencode_draft", return_value=reply)):
@@ -260,8 +296,9 @@ class LinearDictationTests(unittest.TestCase):
 
     def test_update_rejects_invalid_and_unsupported_changes(self):
         catalog, _ = fixture()
-        invalid = ({"teamId": "other"}, {"priority": 0}, {"estimate": 5}, {"stateId": "other-state"},
-                   {"projectId": "other"}, {"addedLabelIds": ["unknown"]}, {"dueDate": "2026-02-30"},
+        invalid = ({"teamId": "other"}, {"priority": 0}, {"estimate": 5}, {"status": "Other state"},
+                   {"project": "Other project"}, {"addedLabels": ["unknown"]}, {"dueDate": "2026-02-30"},
+                   {"addedLabels": ["Bug"], "removedLabels": ["Bug"]},
                    {"description": "Replacement", "append_description": "New details"})
         linear = Mock()
         for changes in invalid:
@@ -294,13 +331,13 @@ class LinearDictationTests(unittest.TestCase):
     def test_update_can_attach_an_image_without_recreating_an_existing_dependency(self):
         catalog, _ = fixture()
         current, draft = update_fixture({})
-        draft.update(attach_image=True, blocked_by=[AFTER])
+        draft.update(attach_image=True, blocked_by=["KIAN-2"])
         dictation = replace(DICTATION, image_use="attach", image=("image/png", b"fixture"))
         asset = "https://uploads.linear.app/workspace/asset/clipboard.png"
         with (patch.object(issue, "configured_client") as configured,
               patch.object(issue, "read_catalog", return_value=catalog),
               patch.object(issue, "opencode_draft", return_value={"issues": [draft], "image_relevant": True}),
-              patch.object(issue, "read_dependencies", return_value={AFTER: "KIAN-2"}),
+              patch.object(issue, "read_dependencies", return_value={"KIAN-2": AFTER}),
               patch.object(issue, "upload_image", return_value=asset),
               patch.object(issue, "update_issue", return_value=current) as update):
             linear = configured.return_value
@@ -466,7 +503,7 @@ class LinearDictationTests(unittest.TestCase):
                 dictation = replace(DICTATION, image_use=image_use, image=("image/png", b"correct image"))
                 with (patch.object(issue, "configured_client") as client, patch.object(issue, "read_catalog", return_value=catalog),
                       patch.object(issue, "opencode_draft", return_value=draft),
-                      patch.object(issue, "read_dependencies", return_value={BEFORE: "KIAN-1", AFTER: "KIAN-2"}),
+                      patch.object(issue, "read_dependencies", return_value=DEPENDENCIES),
                       patch.object(issue, "upload_image", return_value=asset) as upload, patch.object(issue, "add_dependencies", return_value=[])):
                     client.return_value.create_issue.return_value = {"identifier": "KIAN-3", "url": "https://linear.app/workspace/issue/KIAN-3"}
                     self.assertTrue(issue.file_dictation(dictation, dry_run=True)["clipboard_image"])

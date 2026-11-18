@@ -123,10 +123,12 @@ class HexInstallerTests(unittest.TestCase):
         self.assertFalse((self.config / "hex.config.ts").is_symlink())
         workspace = self.config / "linear"
         self.assertTrue((workspace / ".opencode/agents/linear-issue.md").is_file())
+        plugin = workspace / ".opencode/plugins/linear-search.js"
+        self.assertEqual(plugin.read_bytes(), (ROOT / "hex/linear-search.js").read_bytes())
         self.assertEqual((workspace / "common/clients.py").read_bytes(), (ROOT / "automation/common/clients.py").read_bytes())
         self.assertTrue((self.home / ".local/share/applications" / installer.LINEAR_DESKTOP).is_file())
         self.assertIn(["/fake/systemctl", "--user", "enable", "--now", installer.LINEAR_UNIT], self.processes)
-        files = [*self.config.rglob("*.py"), self.config / "hex.config.ts",
+        files = [*self.config.rglob("*.py"), self.config / "hex.config.ts", plugin,
                  *(self.home / ".config/systemd/user").glob("*.service")]
         timestamps = {path: path.stat().st_mtime_ns for path in files}
         self.commands.clear()
