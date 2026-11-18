@@ -1,6 +1,9 @@
 """Draft one Linear issue with OpenCode and save it through Clusterfork's client."""
 
 import argparse
+from contextlib import nullcontext
+from dataclasses import dataclass
+from http.client import HTTPSConnection, HTTPException
 import json
 import os
 from pathlib import Path
@@ -8,12 +11,14 @@ import re
 import shutil
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import time
 from urllib.parse import urlsplit
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid4
 
 from common.clients import Linear, RequestError
 from common.configuration import settings
+from common.images import EXTENSIONS
 from common.issue_metadata import ISSUE_METADATA_POLICY, estimate_values, validate_metadata
 
 
@@ -21,6 +26,7 @@ WORKSPACE = Path(__file__).resolve().parent
 DOTENV = Path.home() / ".config/clusterfork/.env"
 MODEL = "opencode-go/gpt-6-luna#max"
 AGENT = "linear-issue"
+IMAGE_QUESTION = "Copy an image that belongs with this issue, then click Reply."
 ISSUE_KEYS = {"title", "description", "project_id", "team_id", "priority", "estimate",
               "label_ids", "blocked_by", "blocks"}
 
@@ -36,6 +42,22 @@ CATALOG_FIELDS = {
 
 class FilingError(ValueError):
     """An error message safe to show in a local notification."""
+
+
+class ReplyNeeded(FilingError):
+    def __init__(self, question, *, copy_image=False):
+        super().__init__(question)
+        self.copy_image = copy_image
+
+
+@dataclass(frozen=True)
+class Dictation:
+    transcript: str
+    title: str | None
+    issue_id: str
+    answers: tuple[tuple[str, str], ...] = ()
+    wants_image: bool = False
+    image: tuple[str, bytes] | None = None
 
 
 def configured_client():
@@ -133,17 +155,24 @@ def focused_project(title, projects):
     return None
 
 
-def opencode_draft(transcript, title, catalog):
+def opencode_draft(dictation, catalog):
     projects, teams, labels = catalog
-    context = {"transcript": transcript, "focused_project_id": focused_project(title, projects),
+    context = {"transcript": dictation.transcript, "focused_project_id": focused_project(dictation.title, projects),
+               "clarifications": [{"question": question, "answer": answer} for question, answer in dictation.answers],
                "projects": list(projects.values()), "teams": list(teams.values()), "labels": list(labels.values())}
     prompt = ISSUE_METADATA_POLICY + "\nCurrent request and Linear reference data:\n" + json.dumps(context, ensure_ascii=False)
     binary = shutil.which("opencode") or Path.home() / ".opencode/bin/opencode"
     command = [str(binary), "run", "--agent", AGENT, "--model", MODEL, "--format", "json",
                "--title", "Hex Linear dictation", "--archived"]
-    # The CLI uses PWD to locate project-level agents. Pass the transcript on stdin.
-    result = subprocess.run(command, input=prompt, cwd=WORKSPACE, env={**os.environ, "PWD": str(WORKSPACE)},
-                            text=True, capture_output=True, timeout=300)
+    with TemporaryDirectory(prefix="hex-linear-") if dictation.image else nullcontext() as directory:
+        if dictation.image:
+            mime, image = dictation.image
+            path = Path(directory) / f"clipboard.{EXTENSIONS[mime]}"
+            path.write_bytes(image)
+            command.extend(["--file", str(path)])
+        # The CLI uses PWD to locate project-level agents. Pass the transcript on stdin.
+        result = subprocess.run(command, input=prompt, cwd=WORKSPACE, env={**os.environ, "PWD": str(WORKSPACE)},
+                                text=True, capture_output=True, timeout=300)
     if result.returncode:
         raise FilingError("OpenCode failed to draft the issue. See the Hex Linear service journal.")
     return parse_draft(result.stdout)
@@ -214,7 +243,7 @@ def read_dependencies(linear, ids):
                         "nodes { id identifier trashed } pageInfo { hasNextPage } } }", {"ids": ids})["issues"]
     refs = {item["id"]: item["identifier"] for item in data["nodes"] if not item["trashed"]}
     if data["pageInfo"]["hasNextPage"] or set(refs) != set(ids):
-        raise FilingError("A referenced dependency is unavailable. Specify the Linear issue identifier.")
+        raise ReplyNeeded("A referenced dependency is unavailable. What is its Linear issue identifier?")
     return refs
 
 
@@ -232,7 +261,7 @@ def add_dependencies(linear, issue_id, blocked_by, blocks, refs):
     edges = [(ref, issue_id) for ref in blocked_by] + [(issue_id, ref) for ref in blocks]
     if not edges:
         return []
-    variables = {f"r{index}": {"id": str(uuid5(UUID(issue_id), f"{source}:{target}")), "type": "blocks",
+    variables = {f"r{index}": {"id": str(uuid4()), "type": "blocks",
                                 "issueId": source, "relatedIssueId": target}
                  for index, (source, target) in enumerate(edges)}
     verified = set()
@@ -264,20 +293,61 @@ def add_dependencies(linear, issue_id, blocked_by, blocks, refs):
             for index, (source, target) in enumerate(edges) if f"r{index}" not in verified]
 
 
-def file_dictation(transcript, title, issue_id, *, dry_run=False):
+def upload_image(linear, image):
+    mime, data = image
+    try:
+        upload = linear.query("""mutation($type: String!, $name: String!, $size: Int!) {
+          fileUpload(contentType: $type, filename: $name, size: $size, makePublic: false) {
+            success uploadFile { uploadUrl assetUrl headers { key value } }
+          }
+        }""", {"type": mime, "name": f"clipboard.{EXTENSIONS[mime]}", "size": len(data)})["fileUpload"]["uploadFile"]
+        destination = urlsplit(upload["uploadUrl"])
+        asset = urlsplit(upload["assetUrl"])
+        if (destination.scheme != "https" or not destination.hostname or destination.port not in (None, 443)
+                or destination.username is not None or destination.password is not None
+                or asset.scheme != "https" or asset.netloc != "uploads.linear.app" or not asset.path.startswith("/")):
+            raise ValueError("Unexpected Linear upload URL")
+        headers = {"Content-Type": mime, "Cache-Control": "public, max-age=31536000"}
+        headers.update({header["key"]: header["value"] for header in upload["headers"]})
+        path = destination.path or "/"
+        if destination.query:
+            path += "?" + destination.query
+        connection = HTTPSConnection(destination.hostname, timeout=20)
+        try:
+            connection.request("PUT", path, body=data, headers=headers)
+            if not 200 <= connection.getresponse().status < 300:
+                raise RequestError()
+        finally:
+            connection.close()
+        return upload["assetUrl"]
+    except (OSError, ValueError, RequestError, HTTPException, TypeError, KeyError) as error:
+        raise FilingError("Linear could not upload the clipboard image.") from error
+
+
+def file_dictation(dictation, *, dry_run=False):
+    if dictation.wants_image and not dictation.image:
+        raise ReplyNeeded(IMAGE_QUESTION, copy_image=True)
     linear = configured_client()
     catalog = read_catalog(linear)
-    reply = opencode_draft(transcript, title, catalog)
+    reply = opencode_draft(dictation, catalog)
+    if dictation.image:
+        if not isinstance(reply, dict) or reply.get("image_relevant") is not True:
+            raise ReplyNeeded("The clipboard image did not clearly match the issue. " + IMAGE_QUESTION, copy_image=True)
+        reply = {key: value for key, value in reply.items() if key != "image_relevant"}
     if isinstance(reply, dict) and set(reply) == {"clarification"} and isinstance(reply["clarification"], str):
         reason = reply["clarification"].strip()
         if reason:
-            raise FilingError(reason[:350])
+            raise ReplyNeeded(reason[:350])
+    issue_id = dictation.issue_id
     fields, blocked_by, blocks = validate_draft(reply, catalog, issue_id)
     refs = read_dependencies(linear, blocked_by + blocks)
     dependencies = {"blocked_by": [refs[value] for value in blocked_by], "blocks": [refs[value] for value in blocks]}
     if dry_run:
-        return {"fields": fields, **dependencies}
+        return {"fields": fields, "clipboard_image": bool(dictation.image), **dependencies}
 
+    if dictation.image:
+        url = upload_image(linear, dictation.image)
+        fields["description"] += f"\n\n![Clipboard image](<{url}>)"
     issue = create_issue(linear, fields)
     missing = add_dependencies(linear, issue_id, blocked_by, blocks, refs)
     url = urlsplit(issue["url"])
@@ -294,7 +364,7 @@ def main():
     if not transcript:
         parser.error("Pass a dictation transcript on stdin")
     try:
-        print(json.dumps(file_dictation(transcript, None, str(uuid4()), dry_run=args.dry_run), indent=2))
+        print(json.dumps(file_dictation(Dictation(transcript, None, str(uuid4())), dry_run=args.dry_run), indent=2))
     except FilingError as error:
         print(error, file=sys.stderr)
         return 1

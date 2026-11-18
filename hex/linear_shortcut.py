@@ -1,22 +1,26 @@
 """Hold keypad slash to record a Hex dictation for Linear."""
 
 import argparse
+from dataclasses import replace
 from html import escape
 from http.client import HTTPConnection, HTTPException
 import json
 import os
 from pathlib import Path
 from queue import SimpleQueue
+import re
 import signal
 import subprocess
 import sys
+from tempfile import TemporaryFile
 from threading import Event, Thread
 import time
 from uuid import uuid4
 
 from common.clients import RequestError
+from common.images import EXTENSIONS, MAX_IMAGE_BYTES, ImageContextError, validate_image
 
-from linear_issue import FilingError, file_dictation
+from linear_issue import Dictation, FilingError, ReplyNeeded, file_dictation
 
 
 APP = "io.github.KianBahasadri.Clusterfork.LinearDictation"
@@ -25,6 +29,14 @@ PORTAL = "org.freedesktop.portal.Desktop"
 DESKTOP = "/org/freedesktop/portal/desktop"
 SHORTCUTS = "org.freedesktop.portal.GlobalShortcuts"
 HEX_REGISTRATION = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "hex/local-api.json"
+NOTIFY = ["notify-send", "--app-name", "Linear Dictation", "--icon", "accessories-text-editor"]
+IMAGE_REQUEST = re.compile(
+    r"(?:^|[.!?,;]\s*|\band\s+)(?:(?:can|could|would) you\s+)?(?:please\s+)?"
+    r"(?:attach|include|copy|add|use|embed|paste)\s+(?:(?:the|my|this|an?)\s+)?"
+    r"(?:clipboard\s+(?:image|screenshot|picture|photo)|(?:current\s+)?(?:image|screenshot|picture|photo)\s+"
+    r"(?:(?:that is|that’s|that's)\s+)?(?:currently\s+)?(?:in|on|from)\s+(?:(?:my|the)\s+)?clipboard)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def hex_request(registration, path, *, owner=None, data=None, timeout=4):
@@ -86,11 +98,9 @@ def focused_title():
 
 
 def notify(title, message, url=None):
-    command = ["notify-send", "--app-name", "Linear Dictation", "--icon", "accessories-text-editor"]
-    if url:
-        command += ["--action=open=Open in Linear"]
+    actions = ["--action=open=Open in Linear"] if url else []
     try:
-        result = subprocess.run([*command, "--", title, escape(message)], text=True, capture_output=True,
+        result = subprocess.run([*NOTIFY, *actions, "--", title, escape(message)], text=True, capture_output=True,
                                 timeout=120 if url else 5, check=True)
         if url and result.stdout.strip() == "open":
             subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -98,6 +108,68 @@ def notify(title, message, url=None):
         pass
     except (OSError, subprocess.SubprocessError) as error:
         print(f"Could not show Linear notification ({type(error).__name__}).")
+
+
+def copy_transcript(transcript):
+    try:
+        subprocess.run(["wl-copy", "--type", "text/plain;charset=utf-8"], input=transcript.encode("utf-8"),
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=5)
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f"Hex Linear clipboard copy failed ({type(error).__name__}).")
+        notify("Linear dictation", "Could not copy the transcript to the clipboard.")
+
+
+def clipboard_image():
+    try:
+        types = subprocess.run(["wl-paste", "--list-types"], capture_output=True, text=True,
+                               check=True, timeout=3).stdout.splitlines()
+        mime = next((value for value in EXTENSIONS if value in types), None)
+        if mime is None:
+            return None
+        with TemporaryFile() as file:
+            subprocess.run(["wl-paste", "--no-newline", "--type", mime], stdout=file, stderr=subprocess.DEVNULL,
+                           check=True, timeout=5)
+            file.seek(0)
+            data = file.read(MAX_IMAGE_BYTES + 1)
+        validate_image(data, mime)
+        return mime, data
+    except (ImportError, OSError, subprocess.SubprocessError, ImageContextError) as error:
+        print(f"Could not read a supported clipboard image ({type(error).__name__}).")
+        return None
+
+
+def offer_reply(jobs, dictation, error):
+    question = str(error)
+    excerpt = " ".join(dictation.transcript.split())
+    if len(excerpt) > 140:
+        excerpt = excerpt[:137] + "..."
+    try:
+        with TemporaryFile() as token_file:
+            token_fd = token_file.fileno()
+            click = subprocess.run([*NOTIFY, "--expire-time=0", "--action=default=Reply", "--action=reply=Reply",
+                                    f"--activation-token-fd={token_fd}", "--", "Linear dictation needs a reply",
+                                    escape(f"{question}\n\n{excerpt}")], capture_output=True, text=True,
+                                   pass_fds=(token_fd,), check=True)
+            if click.stdout.strip() not in {"default", "reply"}:
+                return
+            token_file.seek(0)
+            token = token_file.read(4096).decode().strip()
+        if error.copy_image:
+            jobs.put(replace(dictation, image=clipboard_image()))
+            return
+        environment = {**os.environ, "XDG_ACTIVATION_TOKEN": token} if token else os.environ
+        entry = subprocess.run(["zenity", "--entry", "--title=Reply to Linear dictation", "--width=440",
+                                "--ok-label=Send reply", "--text",
+                                escape(f"{question}\n\nDictate with your regular Hex shortcut or type your answer.")],
+                               env=environment, capture_output=True, text=True)
+        if entry.returncode != 1:
+            entry.check_returncode()
+            answer = entry.stdout.strip()
+            if answer:
+                jobs.put(replace(dictation, answers=(*dictation.answers, (question, answer))))
+    except (OSError, subprocess.SubprocessError) as failure:
+        print(f"Could not open a Linear dictation reply ({type(failure).__name__}).")
+        notify("Linear dictation", "Could not open the reply. Check that notify-send and Zenity are installed.")
 
 
 def capture(released, stopping, jobs):
@@ -123,7 +195,10 @@ def capture(released, stopping, jobs):
                     pass  # Hex also cancels the capture when its lease expires.
         transcript = result["transcript"].strip()
         if transcript:
-            jobs.put((transcript, title, str(uuid4())))
+            wants_image = bool(IMAGE_REQUEST.search(transcript))
+            image = clipboard_image() if wants_image else None
+            copy_transcript(transcript)
+            jobs.put(Dictation(transcript, title, str(uuid4()), wants_image=wants_image, image=image))
             print("Hex Linear dictation queued.")
         else:
             print("Hex Linear dictation was empty.")
@@ -136,9 +211,12 @@ def capture(released, stopping, jobs):
 
 def process_jobs(jobs, dry_run):
     while True:
-        transcript, title, issue_id = jobs.get()
+        dictation = jobs.get()
         try:
-            saved = file_dictation(transcript, title, issue_id, dry_run=dry_run)
+            saved = file_dictation(dictation, dry_run=dry_run)
+        except ReplyNeeded as error:
+            print("Hex Linear draft needs a reply. See the desktop notification.")
+            Thread(target=offer_reply, args=(jobs, dictation, error), daemon=True).start()
         except FilingError as error:
             print("Hex Linear draft did not proceed. See the desktop notification.")
             notify("Linear dictation", str(error))

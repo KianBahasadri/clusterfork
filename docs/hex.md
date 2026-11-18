@@ -53,33 +53,50 @@ Hex-owned `AGENTS.md`, `hex.d.ts`, and `tsconfig.json` are left alone. Run
 ## Dictating Linear issues
 
 Hold **numpad `/`**, say what to file, and release. For example, say “Make a
-Clusterfork issue to add a relay health check, blocked by KIAN-123.” Hex
-transcribes the recording and the desktop service files it in the background.
-The completion notification shows the issue link and any confirmed dependency
-links. If the destination or a spoken dependency is ambiguous, the notification
-asks for the missing detail so you can dictate the request again.
+Clusterfork issue to add a relay health check, blocked by KIAN-123.” The service
+copies the transcript to the clipboard as soon as Hex transcribes it, then
+files the issue in the background. Paste the transcript wherever you meant to
+send it if you pressed the slash shortcut by accident. The completion
+notification shows the issue link and any confirmed dependency links.
+
+If you get a clarification question, click that notification or its **Reply**
+button to open the answer box. Use your regular Hex shortcut to dictate into
+the box, or type, then select **Send reply**. The answer goes to that specific
+request. A separate numpad `/` recording starts a fresh request. Pending replies
+are kept in memory while the service runs.
+
+Say **“Attach the image in my clipboard”** as part of the request to include a
+PNG, JPEG, or WebP image. The service takes a copy before placing the transcript
+on the clipboard and keeps those bytes with any clarification. Luna inspects
+the image for relevance to the issue. If the image is missing or does not
+clearly match, copy the intended image and click **Reply** on that question.
+An accepted image is uploaded to Linear and displayed in the issue description.
 
 The integration uses the Global Shortcuts portal and its host app registry. On
 GNOME, approve **Linear Dictation** and its numpad slash binding if the desktop
 prompts. The installed `hex-linear-issue.service` runs in the graphical user
-session and needs system Python with Gio, `notify-send`, OpenCode Go credentials,
-and Clusterfork's shared Linear credential. Its separate portal registration
+session and uses system Python with Gio, `notify-send`, `wl-clipboard`, and
+OpenCode Go and Linear credentials. Replies use Zenity, and image validation
+uses Pillow. Its separate portal registration
 uses the same running Hex and the selected transcription model. Hex applies
-its Skip Long Pauses setting to the captured audio. The transcript goes straight
-to the issue agent, bypassing the normal paste workflow and rewrite history.
+its Skip Long Pauses setting to the captured audio. The issue transcript goes to
+OpenCode and the clipboard as raw text.
 
 The helper fetches the project, team, label, estimate, and Backlog catalog in
 one paged GraphQL read. If the accessible foreground window clearly names a
 project, only the matching project ID is sent as a hint. OpenCode Go runs
 `gpt-6-luna#max` in an archived session. The agent can search and read issues
-through the existing Linear MCP for spoken dependencies, including older and
-cross-project issues. It gets the current transcript and the scoped catalog.
+through the existing Linear MCP for explicit and implied prerequisites,
+including older and cross-project issues. It uses the transcript and scoped
+catalog to write the issue with the spoken rationale, behavior, and constraints.
 
 Clusterfork validates the selected project, team, labels, priority, estimate
 and dependency IDs before saving through its shared Linear client. New issues
 are filed in Backlog. The same creation ID is reused if a request needs a
 retry. If the issue exists but a dependency link cannot be verified, the
-notification gives the issue link and identifies the relation to check.
+notification gives the issue link and identifies the relation to check. The
+service journal records workflow stages and issue IDs. The prompt in the
+archived **Hex Linear dictation** OpenCode session contains the transcript.
 
 To check the workflow with text, the dry run reads Linear and runs OpenCode Go,
 then prints the draft and resolved dependencies before the write step:
