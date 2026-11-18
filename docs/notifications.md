@@ -5,7 +5,8 @@ Claude, Grok, Command Code, Codex, Antigravity and Cursor Stop hooks call
 Piper's Lessac voice and `mpv` to say the Git checkout's name. If Git cannot find the
 checkout, it says the workspace directory name. With multiple open tmux
 sessions for that checkout or directory on the same server, it adds the
-session's position in creation order, starting at 1.
+session's position in creation order, starting at 1. The home directory
+always announces "home".
 
 Audio and optional ntfy delivery run concurrently. Phone delivery times out
 after three seconds. Hook errors are silent and exit zero. Phone messages

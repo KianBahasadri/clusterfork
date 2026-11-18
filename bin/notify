@@ -399,6 +399,10 @@ notify_session_number() {
 
 notify_spoken_name() {
   local directory="$1" root name
+  if [[ "$directory" -ef "${HOME:-}" ]]; then
+    printf '%s\n' home
+    return
+  fi
   root="$(git -C "$directory" rev-parse --show-toplevel 2>/dev/null)" || root=""
   name="$(basename -- "${root:-$directory}")"
   [[ "$name" != / ]] || name=root

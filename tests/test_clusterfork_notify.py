@@ -151,6 +151,11 @@ class NotifierTests(NotifyFixture):
         self.assertIn("--volume=100", self.mpv_log.read_text())
         self.assertFalse(self.curl_log.exists())
 
+    def test_home_announces_home(self):
+        proc = self.run_notifier(extra_env={"HOME": str(self.repo)})
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(self.speech_log.read_text(), "home\n")
+
     def test_numbers_open_sessions_in_the_same_checkout_or_directory(self):
         nested = self.repo / "nested"
         nested.mkdir()
