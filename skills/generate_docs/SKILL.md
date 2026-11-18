@@ -43,8 +43,10 @@ accurate to the implementation.
    instructions for using docs. Keep **domain** content minimal; do not paste
    topic detail from `docs/` into AGENTS.md.
 
-   Use this structure (adapt the project one-liner and Rules section; keep the
-   Documentation section wording stable so regenerations stay consistent):
+   Use the structure below. Always put the KISS rule and all its subrules
+   verbatim first under `## Rules` and give them priority over the other repo
+   rules. Adapt the project one-liner and the remaining rules. Keep the
+   Documentation section wording stable across regenerations.
 
    ```markdown
    # AGENTS.md
@@ -53,6 +55,12 @@ accurate to the implementation.
 
    ## Rules
 
+   - **Keep this repo KISS as fuck: stupid easy to use and boring to maintain. Complexity alone is enough to veto an idea.**
+     - **Push back before coding:** If a requested feature introduces disproportionate architectural complexity or state, flag it and propose the simplest viable alternative before writing code.
+     - **No legacy support:** Replace old behavior cleanly—never keep fallback paths, shims, or backwards-compatibility layers. If compatibility is actually needed, ask me first.
+     - **Prefer stdlib and existing dependencies:** Do not introduce a new package for something solvable in under 50 lines of straightforward code.
+     - **Flat and explicit over clever:** Use plain functions, direct control flow, and concrete types. Do not create wrappers, factories, or interfaces that only have one implementation.
+     - **No speculative extensibility:** Do not add config flags, plugin hooks, or abstraction layers for hypothetical future use cases.
    - <repository-specific working policy>
 
    ## Documentation (read/write)
