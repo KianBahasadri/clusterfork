@@ -1,4 +1,4 @@
-"""Draft one Linear issue with OpenCode and save it through Clusterfork's client."""
+"""Draft Linear issues with OpenCode and save them through Clusterfork's client."""
 
 import argparse
 from contextlib import nullcontext
@@ -27,9 +27,9 @@ WORKSPACE = Path(__file__).resolve().parent
 DOTENV = Path.home() / ".config/clusterfork/.env"
 MODEL = "opencode-go/gpt-6-luna#max"
 AGENT = "linear-issue"
-IMAGE_QUESTION = "Copy an image that belongs with this issue, then click Reply."
+IMAGE_QUESTION = "Copy an image for this request, then click Reply."
 ISSUE_KEYS = {"title", "description", "project_id", "team_id", "priority", "estimate",
-              "label_ids", "blocked_by", "blocks"}
+              "label_ids", "blocked_by", "blocks", "attach_image"}
 
 CATALOG_FIELDS = {
     "projects": ("first: 50", "id name slugId description status { type } "
@@ -159,6 +159,7 @@ def focused_project(title, projects):
 def opencode_draft(dictation, catalog):
     projects, teams, labels = catalog
     context = {"transcript": dictation.transcript, "focused_project_id": focused_project(dictation.title, projects),
+               "clipboard_image_use": dictation.image_use,
                "clarifications": [{"question": question, "answer": answer} for question, answer in dictation.answers],
                "projects": list(projects.values()), "teams": list(teams.values()), "labels": list(labels.values())}
     prompt = ISSUE_METADATA_POLICY + "\nCurrent request and Linear reference data:\n" + json.dumps(context, ensure_ascii=False)
@@ -204,12 +205,11 @@ def valid_ids(values):
             and len(set(values)) == len(values))
 
 
-def validate_draft(draft, catalog, issue_id):
-    if not isinstance(draft, dict) or set(draft) != {"issue"} or not isinstance(draft["issue"], dict):
-        raise FilingError("OpenCode did not return an issue draft.")
-    issue = draft["issue"]
-    if (set(issue) != ISSUE_KEYS or not isinstance(issue["title"], str) or not issue["title"].strip()
+def validate_issue(issue, catalog, issue_id):
+    if (not isinstance(issue, dict) or set(issue) != ISSUE_KEYS
+            or not isinstance(issue["title"], str) or not issue["title"].strip()
             or not isinstance(issue["description"], str) or not issue["description"].strip()
+            or type(issue["attach_image"]) is not bool
             or not all(valid_ids(issue[key]) for key in ("label_ids", "blocked_by", "blocks"))):
         raise FilingError("OpenCode returned incomplete issue fields.")
     projects, teams, labels = catalog
@@ -234,16 +234,16 @@ def validate_draft(draft, catalog, issue_id):
     fields = {"id": issue_id, "title": issue["title"].strip(), "description": issue["description"].strip(),
               "projectId": project_id, "teamId": team_id, "stateId": team["backlog"],
               "labelIds": issue["label_ids"], "priority": issue["priority"], "estimate": int(issue["estimate"])}
-    return fields, issue["blocked_by"], issue["blocks"]
+    return fields, issue["blocked_by"], issue["blocks"], issue["attach_image"]
 
 
 def read_dependencies(linear, ids):
-    if not ids:
-        return {}
-    data = linear.query("query($ids: [ID!]!) { issues(first: 100, includeArchived: true, filter: {id: {in: $ids}}) { "
-                        "nodes { id identifier trashed } pageInfo { hasNextPage } } }", {"ids": ids})["issues"]
-    refs = {item["id"]: item["identifier"] for item in data["nodes"] if not item["trashed"]}
-    if data["pageInfo"]["hasNextPage"] or set(refs) != set(ids):
+    refs = {}
+    for start in range(0, len(ids), 100):
+        data = linear.query("query($ids: [ID!]!) { issues(first: 100, includeArchived: true, filter: {id: {in: $ids}}) { "
+                            "nodes { id identifier trashed } } }", {"ids": ids[start:start + 100]})["issues"]
+        refs.update((item["id"], item["identifier"]) for item in data["nodes"] if not item["trashed"])
+    if set(refs) != set(ids):
         raise ReplyNeeded("A referenced dependency is unavailable. What is its Linear issue identifier?")
     return refs
 
@@ -284,7 +284,7 @@ def add_dependencies(linear, issue_id, blocked_by, blocks, refs):
                 try:
                     relation = linear.query("""query($id: String!) { issueRelation(id: $id) {
                       type issue { id } relatedIssue { id }
-                    } }""", {"id": value["id"]})["issueRelation"]
+                    } }""", {"id": value["id"]}).get("issueRelation")
                 except RequestError:
                     continue
             if (relation and relation.get("type") == "blocks" and (relation.get("issue") or {}).get("id") == value["issueId"]
@@ -333,7 +333,7 @@ def file_dictation(dictation, *, dry_run=False):
     reply = opencode_draft(dictation, catalog)
     if dictation.image:
         if not isinstance(reply, dict) or reply.get("image_relevant") is not True:
-            raise ReplyNeeded("The clipboard image did not clearly match the issue. " + IMAGE_QUESTION, copy_image=True)
+            raise ReplyNeeded("The clipboard image did not clearly match the request. " + IMAGE_QUESTION, copy_image=True)
         reply = {key: value for key, value in reply.items() if key != "image_relevant"}
     elif isinstance(reply, dict) and reply.get("image_relevant") is False:
         raise ReplyNeeded(IMAGE_QUESTION, copy_image=True)
@@ -341,27 +341,47 @@ def file_dictation(dictation, *, dry_run=False):
         reason = reply["clarification"].strip()
         if reason:
             raise ReplyNeeded(reason[:350])
-    issue_id = dictation.issue_id
-    fields, blocked_by, blocks = validate_draft(reply, catalog, issue_id)
-    refs = read_dependencies(linear, blocked_by + blocks)
-    dependencies = {"blocked_by": [refs[value] for value in blocked_by], "blocks": [refs[value] for value in blocks]}
-    if dry_run:
-        return {"fields": fields, "clipboard_image": bool(dictation.image), **dependencies}
+    if (not isinstance(reply, dict) or set(reply) != {"issues"}
+            or not isinstance(reply["issues"], list) or not reply["issues"]):
+        raise FilingError("OpenCode did not return any issue drafts.")
+    drafts = [validate_issue(item, catalog, str(uuid4()) if index else dictation.issue_id)
+              for index, item in enumerate(reply["issues"])]
+    attaching = any(attach_image for _, _, _, attach_image in drafts)
+    if attaching and dictation.image_use != "attach":
+        raise FilingError("OpenCode requested an attachment without an instruction to attach an image.")
+    if dictation.image_use == "attach" and not attaching:
+        raise ReplyNeeded("Which issue should include the clipboard image?")
 
-    if dictation.image_use == "attach":
-        url = upload_image(linear, dictation.image)
-        fields["description"] += f"\n\n![Clipboard image](<{url}>)"
-    issue = create_issue(linear, fields)
-    missing = add_dependencies(linear, issue_id, blocked_by, blocks, refs)
-    url = urlsplit(issue["url"])
-    if url.scheme != "https" or url.netloc != "linear.app" or not url.path.startswith("/"):
-        raise FilingError("The issue was filed, but Linear returned an unexpected link.")
-    return {"identifier": issue["identifier"], "url": issue["url"], "unverified": missing, **dependencies}
+    ids = list(dict.fromkeys(ref for _, blocked_by, blocks, _ in drafts for ref in blocked_by + blocks))
+    refs = read_dependencies(linear, ids)
+    asset = upload_image(linear, dictation.image) if attaching and not dry_run else None
+    issues, unconfirmed = [], []
+    for fields, blocked_by, blocks, attach_image in drafts:
+        dependencies = {"blocked_by": [refs[value] for value in blocked_by], "blocks": [refs[value] for value in blocks]}
+        if dry_run:
+            issues.append({"fields": fields, "attach_image": attach_image, **dependencies})
+            continue
+        if attach_image:
+            fields["description"] += f"\n\n![Clipboard image](<{asset}>)"
+        try:
+            saved = create_issue(linear, fields)
+            identifier, url = saved["identifier"], saved.get("url")
+        except (RequestError, ValueError, KeyError, TypeError) as error:
+            print(f"Hex Linear could not confirm one issue ({type(error).__name__}).")
+            unconfirmed.append(fields["title"])
+            continue
+        missing = add_dependencies(linear, fields["id"], blocked_by, blocks, refs)
+        if not isinstance(url, str) or not url.startswith("https://linear.app/"):
+            url = None
+        issues.append({"identifier": identifier, "url": url, "unverified": missing, **dependencies})
+    if dry_run:
+        return {"issues": issues, "clipboard_image": bool(dictation.image)}
+    return {"issues": issues, "unconfirmed": unconfirmed}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dry-run", action="store_true", required=True, help="Print a validated draft from stdin")
+    parser.add_argument("--dry-run", action="store_true", required=True, help="Print validated drafts from stdin")
     args = parser.parse_args()
     transcript = sys.stdin.read().strip()
     if not transcript:

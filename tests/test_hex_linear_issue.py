@@ -29,11 +29,11 @@ def fixture():
         {"team": {"backlog": "backlog-state", "estimates": [1, 2, 3]}},
         {"label": {"team_id": None}},
     )
-    return catalog, {"issue": {
+    return catalog, {"issues": [{
         "title": "Check the relay", "description": "Cover the reported failure.",
         "project_id": "project", "team_id": "team", "priority": 2, "estimate": 3,
-        "label_ids": ["label"], "blocked_by": [BEFORE], "blocks": [AFTER],
-    }}
+        "label_ids": ["label"], "blocked_by": [BEFORE], "blocks": [AFTER], "attach_image": False,
+    }]}
 
 
 class LinearDictationTests(unittest.TestCase):
@@ -55,9 +55,9 @@ class LinearDictationTests(unittest.TestCase):
                        {"blocks": [BEFORE]}, {"blocks": [NEW]}):
             with self.subTest(change=change):
                 catalog, draft = fixture()
-                draft["issue"].update(change)
+                draft["issues"][0].update(change)
                 with self.assertRaises(issue.FilingError):
-                    issue.validate_draft(draft, catalog, NEW)
+                    issue.validate_issue(draft["issues"][0], catalog, NEW)
 
     def test_checks_dependency_availability_before_writing_and_dry_run_stays_read_only(self):
         catalog, draft = fixture()
@@ -71,15 +71,52 @@ class LinearDictationTests(unittest.TestCase):
                 {"id": BEFORE, "identifier": "KIAN-1", "trashed": False},
                 {"id": AFTER, "identifier": "KIAN-2", "trashed": False},
             ]
-            saved = issue.file_dictation(DICTATION, dry_run=True)
+            saved = issue.file_dictation(DICTATION, dry_run=True)["issues"][0]
             self.assertEqual((saved["blocked_by"], saved["blocks"]), (["KIAN-1"], ["KIAN-2"]))
             self.assertEqual(saved["fields"]["stateId"], "backlog-state")
             create.assert_not_called()
             dependencies.assert_not_called()
 
+    def test_validates_all_drafts_before_writing_any_issue(self):
+        catalog, draft = fixture()
+        draft["issues"].append({**draft["issues"][0], "title": "Another issue", "estimate": 5})
+        with (patch.object(issue, "configured_client"), patch.object(issue, "read_catalog", return_value=catalog),
+              patch.object(issue, "opencode_draft", return_value=draft), patch.object(issue, "create_issue") as create,
+              patch.object(issue, "add_dependencies") as dependencies):
+            with self.assertRaises(issue.FilingError):
+                issue.file_dictation(DICTATION)
+        create.assert_not_called()
+        dependencies.assert_not_called()
+
+    def test_files_independent_issues_after_a_failed_create(self):
+        catalog, draft = fixture()
+        draft["issues"] += [
+            {**draft["issues"][0], "title": "Unconfirmed issue", "blocked_by": [], "blocks": []},
+            {**draft["issues"][0], "title": "Another issue", "priority": 4, "estimate": 1, "blocks": []},
+        ]
+        refs = {BEFORE: "KIAN-1", AFTER: "KIAN-2"}
+        with (patch.object(issue, "configured_client") as client, patch.object(issue, "read_catalog", return_value=catalog),
+              patch.object(issue, "opencode_draft", return_value=draft),
+              patch.object(issue, "read_dependencies", return_value=refs) as read,
+              patch.object(issue, "add_dependencies", return_value=[]) as link):
+            client.return_value.create_issue.side_effect = [
+                {"identifier": "KIAN-3", "url": "https://linear.app/workspace/issue/KIAN-3"},
+                RequestError(400),
+                {"identifier": "KIAN-4", "url": "https://linear.app/workspace/issue/KIAN-4"},
+            ]
+            saved = issue.file_dictation(DICTATION)
+        self.assertEqual([item["identifier"] for item in saved["issues"]], ["KIAN-3", "KIAN-4"])
+        self.assertEqual(saved["unconfirmed"], ["Unconfirmed issue"])
+        first, failed, last = (call.args[0] for call in client.return_value.create_issue.call_args_list)
+        self.assertEqual(len({first["id"], failed["id"], last["id"]}), 3)
+        self.assertEqual((last["priority"], last["estimate"]), (4, 1))
+        read.assert_called_once_with(client.return_value, [BEFORE, AFTER])
+        self.assertEqual([call.args[1:4] for call in link.call_args_list],
+                         [(first["id"], [BEFORE], [AFTER]), (last["id"], [BEFORE], [])])
+
     def test_retries_same_issue_id_and_reconciles_a_lost_relation_response(self):
         catalog, draft = fixture()
-        fields, blocked_by, blocks = issue.validate_draft(draft, catalog, NEW)
+        fields, blocked_by, blocks, _ = issue.validate_issue(draft["issues"][0], catalog, NEW)
         with patch.object(issue, "time") as clock, patch.object(issue, "configured_client") as configured:
             client = configured.return_value
             client.create_issue.side_effect = [RequestError(503), {"id": NEW}]
@@ -117,7 +154,7 @@ class LinearDictationTests(unittest.TestCase):
               patch.object(issue, "read_dependencies", return_value={BEFORE: "KIAN-1", AFTER: "KIAN-2"}),
               patch.object(issue, "add_dependencies", return_value=["KIAN-2"])):
             client.return_value.create_issue.return_value = {"identifier": "KIAN-3", "url": url}
-            self.assertEqual(issue.file_dictation(DICTATION), {
+            self.assertEqual(issue.file_dictation(DICTATION)["issues"][0], {
                 "identifier": "KIAN-3", "url": url, "unverified": ["KIAN-2"],
                 "blocked_by": ["KIAN-1"], "blocks": ["KIAN-2"],
             })
@@ -189,14 +226,16 @@ class LinearDictationTests(unittest.TestCase):
         jobs = SimpleQueue()
         dictation = replace(DICTATION, image_use="attach", image=("image/png", b"original"))
         question = issue.ReplyNeeded("Which project?")
+        answer = "Clusterfork\nUse the relay description."
         with patch.object(shortcut.subprocess, "run", side_effect=[
             CompletedProcess("notify-send", 0, stdout="default\n"),
-            CompletedProcess("zenity", 0, stdout="Clusterfork\n"),
+            CompletedProcess("linear_reply.py", 0, stdout=answer + "\n"),
         ]) as run:
             shortcut.offer_reply(jobs, dictation, question)
         self.assertIn("--action=default=Reply", run.call_args_list[0].args[0])
-        self.assertEqual(run.call_args_list[1].args[0][0], "zenity")
-        self.assertEqual(jobs.get_nowait(), replace(dictation, answers=(("Which project?", "Clusterfork"),)))
+        self.assertEqual(Path(run.call_args_list[1].args[0][1]).name, "linear_reply.py")
+        self.assertEqual(run.call_args_list[1].kwargs["input"], "Which project?")
+        self.assertEqual(jobs.get_nowait(), replace(dictation, answers=(("Which project?", answer),)))
 
     def test_image_reply_reads_the_new_clipboard_and_keeps_prior_answers(self):
         jobs = SimpleQueue()
@@ -265,9 +304,11 @@ class LinearDictationTests(unittest.TestCase):
     def test_relevant_image_is_uploaded_only_for_an_attachment_request(self):
         catalog, draft = fixture()
         draft["image_relevant"] = True
+        draft["issues"].append({**draft["issues"][0], "title": "Another issue"})
         asset = "https://uploads.linear.app/workspace/asset/clipboard.png"
         for image_use in ("reference", "attach"):
             with self.subTest(image_use=image_use):
+                draft["issues"][0]["attach_image"] = image_use == "attach"
                 dictation = replace(DICTATION, image_use=image_use, image=("image/png", b"correct image"))
                 with (patch.object(issue, "configured_client") as client, patch.object(issue, "read_catalog", return_value=catalog),
                       patch.object(issue, "opencode_draft", return_value=draft),
@@ -277,14 +318,15 @@ class LinearDictationTests(unittest.TestCase):
                     self.assertTrue(issue.file_dictation(dictation, dry_run=True)["clipboard_image"])
                     upload.assert_not_called()
                     issue.file_dictation(dictation)
-                fields = client.return_value.create_issue.call_args.args[0]
+                fields, other = [call.args[0] for call in client.return_value.create_issue.call_args_list]
                 self.assertEqual(fields["id"], NEW)
+                self.assertEqual(other["description"], draft["issues"][1]["description"])
                 if image_use == "attach":
                     upload.assert_called_once_with(client.return_value, dictation.image)
                     self.assertTrue(fields["description"].endswith(f"![Clipboard image](<{asset}>)"))
                 else:
                     upload.assert_not_called()
-                    self.assertEqual(fields["description"], draft["issue"]["description"])
+                    self.assertEqual(fields["description"], draft["issues"][0]["description"])
 
     def test_image_upload_uses_the_signed_put_headers_and_returns_the_linear_asset(self):
         asset = "https://uploads.linear.app/workspace/asset/clipboard.webp"

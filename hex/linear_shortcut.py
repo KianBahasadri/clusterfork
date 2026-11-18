@@ -1,4 +1,4 @@
-"""Hold keypad slash to record a Hex dictation for Linear."""
+"""Hold keypad slash to record a Hex dictation for Linear issues."""
 
 import argparse
 from dataclasses import replace
@@ -175,18 +175,13 @@ def offer_reply(jobs, dictation, error):
             if image is not None:
                 jobs.put(replace(dictation, image_use=dictation.image_use or "reference", image=image))
             return
-        entry = subprocess.run(["zenity", "--entry", "--title=Reply to Linear dictation", "--width=440",
-                                "--ok-label=Send reply", "--text",
-                                escape(f"{question}\n\nDictate with your regular Hex shortcut or type your answer.")],
-                               env=environment, capture_output=True, text=True)
-        if entry.returncode != 1:
-            entry.check_returncode()
-            answer = entry.stdout.strip()
-            if answer:
-                jobs.put(replace(dictation, answers=(*dictation.answers, (question, answer))))
+        entry = subprocess.run([sys.executable, str(Path(__file__).with_name("linear_reply.py"))],
+                               input=question, env=environment, capture_output=True, text=True, check=True)
+        if answer := entry.stdout.strip():
+            jobs.put(replace(dictation, answers=(*dictation.answers, (question, answer))))
     except (OSError, subprocess.SubprocessError) as failure:
         print(f"Could not open a Linear dictation reply ({type(failure).__name__}).")
-        notify("Linear dictation", "Could not open the reply. Check that notify-send and Zenity are installed.")
+        notify("Linear dictation", "Could not open the reply. Check that notify-send, GTK 4 and Zenity are installed.")
 
 
 def capture(released, stopping, jobs):
@@ -228,6 +223,21 @@ def capture(released, stopping, jobs):
         notify("Linear dictation", "Could not capture or transcribe audio. Check that Hex is running.")
 
 
+def notify_created_issue(saved):
+    identifier, url = saved["identifier"], saved["url"]
+    pending = saved["unverified"]
+    lines = []
+    for key, label in (("blocked_by", "Blocked by"), ("blocks", "Blocks")):
+        verified = [ref for ref in saved[key] if ref not in pending]
+        if verified:
+            lines.append(f"{label} {', '.join(verified)}")
+    if pending:
+        lines.append(f"Could not confirm links to {', '.join(pending)}. Check the issue in Linear.")
+    lines.append(url or "Find the issue by its identifier in Linear.")
+    print(f"Filed Linear issue {identifier}." + (" Some dependency links are unverified." if pending else ""))
+    Thread(target=notify, args=(f"Created {identifier}", "\n".join(lines), url), daemon=True).start()
+
+
 def process_jobs(jobs, dry_run):
     while True:
         dictation = jobs.get()
@@ -244,21 +254,14 @@ def process_jobs(jobs, dry_run):
             notify("Linear dictation", "Could not confirm issue filing. Check Linear and the service journal.")
         else:
             if dry_run:
-                print("Hex Linear dry run validated the issue and dependencies.")
-                notify("Linear dictation dry run", "Draft and dependencies validated.")
+                count = len(saved["issues"])
+                print(f"Hex Linear dry run validated {count} drafts and their dependencies.")
+                notify("Linear dictation dry run", f"Validated {count} drafts and their dependencies.")
                 continue
-            identifier, url = saved["identifier"], saved["url"]
-            pending = saved["unverified"]
-            lines = []
-            for key, label in (("blocked_by", "Blocked by"), ("blocks", "Blocks")):
-                verified = [ref for ref in saved[key] if ref not in pending]
-                if verified:
-                    lines.append(f"{label} {', '.join(verified)}")
-            if pending:
-                lines.append(f"Could not confirm links to {', '.join(pending)}. Open the issue to check them.")
-            lines.append(url)
-            print(f"Filed Linear issue {identifier}." + (" Some dependency links are unverified." if pending else ""))
-            Thread(target=notify, args=(f"Created {identifier}", "\n".join(lines), url), daemon=True).start()
+            for item in saved["issues"]:
+                notify_created_issue(item)
+            if saved["unconfirmed"]:
+                notify("Linear filing could not be confirmed", "\n".join(saved["unconfirmed"]))
 
 
 def listen(dry_run):

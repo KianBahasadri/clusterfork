@@ -76,7 +76,7 @@ def apply_settings(binary, home, microphone):
 def install_linear_shortcut(home):
     workspace = home / ".config/hex/linear"
     files = [
-        (SOURCE / name, workspace / name) for name in ("linear_issue.py", "linear_shortcut.py")
+        (SOURCE / name, workspace / name) for name in ("linear_issue.py", "linear_reply.py", "linear_shortcut.py")
     ] + [
         (SOURCE / "linear-agent.md", workspace / ".opencode/agents/linear-issue.md"),
         (SOURCE / LINEAR_DESKTOP, home / ".local/share/applications" / LINEAR_DESKTOP),

@@ -53,17 +53,18 @@ Hex-owned `AGENTS.md`, `hex.d.ts`, and `tsconfig.json` are left alone. Run
 ## Dictating Linear issues
 
 Hold **numpad `/`**, say what to file, and release. For example, say “Make a
-Clusterfork issue to add a relay health check, blocked by KIAN-123.” The service
-copies the transcript to the clipboard as soon as Hex transcribes it, then
-files the issue in the background. Paste the transcript wherever you meant to
-send it if you pressed the slash shortcut by accident. The completion
+Clusterfork issue to add a relay health check, blocked by KIAN-123.” Ask for
+separate issues when one recording contains several independent items. The
+service copies the transcript to the clipboard as soon as Hex transcribes it,
+then files the issues in the background. Paste the transcript wherever you
+meant to send it if you pressed the slash shortcut by accident. Each completion
 notification shows the issue link and any confirmed dependency links.
 
 If you get a clarification question, click that notification or its **Reply**
-button to open the answer box. Use your regular Hex shortcut to dictate into
-the box, or type, then select **Send reply**. The answer goes to that specific
-request. A separate numpad `/` recording starts a fresh request. Pending replies
-are kept in memory while the service runs.
+button to open the multiline answer box. Use your regular Hex shortcut to
+dictate into the box, or type, then select **Send reply**. The answer goes to
+that specific request. A separate numpad `/` recording starts a fresh request.
+Pending replies are kept in memory while the service runs.
 
 Say **“Check the image in my clipboard”** to use a PNG, JPEG, or WebP image when
 drafting. Say **“Attach the image in my clipboard”** to also display it in
@@ -78,11 +79,11 @@ The integration uses the Global Shortcuts portal and its host app registry. On
 GNOME, approve **Linear Dictation** and its numpad slash binding if the desktop
 prompts. The installed `hex-linear-issue.service` runs in the graphical user
 session and uses system Python with Gio, `notify-send`, `wl-clipboard`, and
-OpenCode Go and Linear credentials. Replies use Zenity, and image validation
-uses Pillow. Its separate portal registration
-uses the same running Hex and the selected transcription model. Hex applies
-its Skip Long Pauses setting to the captured audio. The issue transcript goes to
-OpenCode and the clipboard as raw text.
+OpenCode Go and Linear credentials. Text replies use GTK 4, clipboard image
+replies use Zenity, and image validation uses Pillow. The separate portal
+registration uses the same running Hex and the selected transcription model.
+Hex applies its Skip Long Pauses setting to the captured audio. The issue
+transcript goes to OpenCode and the clipboard as raw text.
 
 The helper fetches the project, team, label, estimate, and Backlog catalog in
 one paged GraphQL read. If the accessible foreground window clearly names a
@@ -93,15 +94,15 @@ including older and cross-project issues. It uses the transcript and scoped
 catalog to write the issue with the spoken rationale, behavior, and constraints.
 
 Clusterfork validates the selected project, team, labels, priority, estimate
-and dependency IDs before saving through its shared Linear client. New issues
-are filed in Backlog. The same creation ID is reused if a request needs a
-retry. If the issue exists but a dependency link cannot be verified, the
-notification gives the issue link and identifies the relation to check. The
-service journal records workflow stages and issue IDs. The prompt in the
-archived **Hex Linear dictation** OpenCode session contains the transcript.
+and dependency IDs for the entire batch before saving through its shared Linear
+client. New issues are filed in Backlog and can link to existing issues. Each
+creation reuses its ID on retry. If an issue or dependency link cannot be
+confirmed, the notification identifies it. Other issues in the batch continue
+filing independently. The service journal records workflow stages and issue IDs.
+The archived **Hex Linear dictation** OpenCode prompt contains the transcript.
 
 To check the workflow with text, the dry run reads Linear and runs OpenCode Go,
-then prints the draft and resolved dependencies before the write step:
+then prints the drafts and resolved dependencies before the write step:
 
 ```bash
 printf '%s\n' 'Make a Clusterfork issue to add a relay health check' |
