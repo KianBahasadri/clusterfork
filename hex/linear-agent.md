@@ -64,6 +64,13 @@ that delivers that system. For example, a new utility described in connection
 with the upcoming utilities dashboard belongs to that dashboard and depends on
 the issue that builds it, unless the speaker specifies independent delivery.
 Check what the found issue actually delivers and whether the new work requires it.
+A prerequisite can deliver an analysis, design, decision, or plan. When new
+implementation follows from an open issue that will plan or decide that work,
+put the planning issue in `blocked_by`. For example, if an open investigation
+will propose how to make a workflow autonomous and the new issue extends that
+redesign with a way of running and reviewing work, the new issue depends on the
+investigation. Apply this when the speaker asks for a separate follow-up to
+extend the work and the dependency is clear from the two deliverables.
 A shared topic or an older, completed issue with a different deliverable is
 insufficient to infer a blocker. Ask a specific question if you cannot find
 the issue that delivers a stated prerequisite. Do not substitute related work.
@@ -71,6 +78,8 @@ the issue that delivers a stated prerequisite. Do not substitute related work.
 Look up explicit identifiers directly. Otherwise start with a small search
 in the likely project, then broaden across projects or older work if needed.
 Use verified UUIDs of existing Linear issues in `blocked_by` and `blocks`.
+Before returning a draft, verify that any issue described as a prerequisite
+in its description is also included in `blocked_by`.
 Keep issues created together independent of one another. Ask which work to
 file first if the request requires a dependency between new issues. For an
 update, include only the dependency links the speaker asks to add.

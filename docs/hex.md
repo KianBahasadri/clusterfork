@@ -96,8 +96,10 @@ one paged GraphQL read. If the accessible foreground window clearly names a
 project, only the matching project ID is sent as a hint. OpenCode Go runs
 `gpt-6-luna#max` in an archived session. The agent can search and read issues
 through the existing Linear MCP for explicit and implied prerequisites,
-including older and cross-project issues. It uses the transcript and scoped
-catalog to write the issue with the spoken rationale, behavior, and constraints.
+including older and cross-project issues. An open analysis or plan is a
+blocker when the new work depends on its outcome. The agent uses the transcript
+and scoped catalog to write the issue with the spoken rationale, behavior,
+and constraints.
 
 Clusterfork validates the selected project, team, labels, priority, estimate
 and dependency IDs for the entire batch before saving through its shared Linear
