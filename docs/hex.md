@@ -81,11 +81,14 @@ entries oldest first as untrusted spelling/reference context. A known
 foreground app restricts history to that app; an unknown app permits context
 from multiple apps. Only the current dictation is rewritten.
 
-Requests go through the already running OpenCode service on loopback. The
-provider receives the current dictation, selected history excerpt, shared
-vocabulary, prompt, and available foreground context. A rewrite error or
-deadline preserves the original input. The template uses an argument array
-and stdin for dictated text, with no shell interpolation.
+Requests go through the local OpenCode service on loopback. If the connection
+is refused or the service registration is missing, the helper starts OpenCode
+and retries once with the same model and reasoning variant within the original
+deadline. The provider receives the current dictation, selected history
+excerpt, shared vocabulary, prompt, and available foreground context. If the
+rewrite still fails or reaches its deadline, Hex preserves the original input.
+The template uses an argument array and stdin for dictated text, with no shell
+interpolation.
 
 ## Vocabulary
 

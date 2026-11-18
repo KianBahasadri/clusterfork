@@ -2,6 +2,7 @@
 
 import base64
 from datetime import datetime, timezone
+import fcntl
 import http.client
 import ipaddress
 import json
@@ -19,6 +20,7 @@ from urllib.parse import urlsplit
 SETTINGS_PATH = Path.home() / ".local/share/hex/settings.json"
 HISTORY_PATH = SETTINGS_PATH.with_name("history.json")
 HEX_PATH = shutil.which("hex") or Path.home() / ".local/bin/hex"
+OPENCODE_PATH = shutil.which("opencode") or Path.home() / ".opencode/bin/opencode"
 VOCABULARY_LOG = SETTINGS_PATH.with_name("vocabulary-auto-added.jsonl")
 HISTORY_WORD_LIMIT = 2000
 LONG_DICTATION_WORDS = 100
@@ -262,7 +264,7 @@ def request(host, port, password, method, path, payload, deadline):
         connection.close()
 
 
-def generate(prompt, profile, deadline):
+def generate_from_service(prompt, profile, deadline):
     host, port, password = service_registration()
     status, _ = request(host, port, password, "GET", "/api/info", None, deadline)
     if status != 200:
@@ -283,6 +285,25 @@ def generate(prompt, profile, deadline):
     if not text:
         raise ValueError("OpenCode returned empty text")
     return text
+
+
+def generate(prompt, profile, deadline):
+    try:
+        return generate_from_service(prompt, profile, deadline)
+    except (ConnectionRefusedError, FileNotFoundError) as error:
+        # The foreground rewrite and vocabulary worker share one service.
+        with SETTINGS_PATH.with_name("opencode-start.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Rewrite deadline reached") from error
+            print(f"opencode: {type(error).__name__}; starting the service and retrying", file=sys.stderr)
+            subprocess.run(
+                [str(OPENCODE_PATH), "service", "start"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=remaining, check=True,
+            )
+        return generate_from_service(prompt, profile, deadline)
 
 
 def deadline_expired(_signum, _frame):

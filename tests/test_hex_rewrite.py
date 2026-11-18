@@ -199,6 +199,53 @@ class AdaptiveReasoningTests(unittest.TestCase):
             "providerID": "opencode-go", "id": "claude-haiku-5-5", "variant": "medium",
         })
 
+    def test_refused_connection_retries_with_new_registration_and_same_effort(self):
+        registrations = [("127.0.0.1", 1, None), ("127.0.0.1", 2, None)]
+        responses = [ConnectionRefusedError(), (200, b'{}'), (200, b'{"data":{"text":"Edited."}}')]
+        with (
+            patch.object(rewrite, "read_history", return_value=[]),
+            patch.object(rewrite, "service_registration", side_effect=registrations),
+            patch.object(rewrite, "request", side_effect=responses) as request,
+            patch.object(rewrite.subprocess, "run") as start,
+        ):
+            self.assertEqual(rewrite.rewrite("word " * 100, {}), "Edited.")
+        start.assert_called_once()
+        self.assertEqual(start.call_args.args[0], [str(rewrite.OPENCODE_PATH), "service", "start"])
+        self.assertGreater(start.call_args.kwargs["timeout"], 0)
+        self.assertLessEqual(start.call_args.kwargs["timeout"], 27)
+        first, second, generation = [call.args for call in request.call_args_list]
+        self.assertEqual([first[1], second[1], generation[1]], [1, 2, 2])
+        self.assertEqual(first[-1], generation[-1])
+        self.assertEqual(generation[5]["model"], {
+            "providerID": "opencode-go", "id": "claude-haiku-5-5", "variant": "medium",
+        })
+
+    def test_missing_service_registration_starts_service(self):
+        registrations = [FileNotFoundError(), ("127.0.0.1", 2, None)]
+        responses = [(200, b'{}'), (200, b'{"data":{"text":"Edited."}}')]
+        with (
+            patch.object(rewrite, "read_history", return_value=[]),
+            patch.object(rewrite, "service_registration", side_effect=registrations),
+            patch.object(rewrite, "request", side_effect=responses),
+            patch.object(rewrite.subprocess, "run") as start,
+        ):
+            self.assertEqual(rewrite.rewrite("Original.", {}), "Edited.")
+        start.assert_called_once()
+
+    def test_refused_retry_and_request_timeout_preserve_exact_input(self):
+        text = "um keep the original\n"
+        for error, attempts in ((ConnectionRefusedError, 2), (TimeoutError, 1)):
+            with (
+                self.subTest(error=error),
+                patch.object(rewrite, "read_history", return_value=[]),
+                patch.object(rewrite, "service_registration", return_value=("127.0.0.1", 1, None)),
+                patch.object(rewrite, "request", side_effect=error) as request,
+                patch.object(rewrite.subprocess, "run") as start,
+            ):
+                self.assertEqual(rewrite.rewrite(text, {}), text)
+                self.assertEqual(request.call_count, attempts)
+                self.assertEqual(start.call_count, attempts - 1)
+
 
 class VocabularyLearningTests(unittest.TestCase):
     def setUp(self):
