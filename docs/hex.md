@@ -60,6 +60,8 @@ the transcript to the clipboard as soon as Hex transcribes it, then saves
 the issues in the background. Paste the transcript wherever you
 meant to send it if you pressed the slash shortcut by accident. Each completion
 notification shows the issue link and any confirmed dependency links.
+If you request an issue under a new project, Luna can create the project first
+when its name, team and purpose are clear.
 
 Identify the issue by ID or by a clear name or description. You can edit its
 title, description, project, status, priority, estimate, due date, and labels,
@@ -70,7 +72,8 @@ If you get a clarification question, click that notification or its **Reply**
 button to open the multiline answer box. Use your regular Hex shortcut to
 dictate into the box, or type, then select **Send reply**. The answer goes to
 that specific request. A separate numpad `/` recording starts a fresh request.
-Pending replies are kept in memory while the service runs.
+Pending replies are kept in memory while the service runs. A reply resumes
+the same OpenCode session, preserving lookups and any completed changes.
 
 Say **“Check the image in my clipboard”** to use a PNG, JPEG, or WebP image when
 drafting. Say **“Attach the image in my clipboard”** to also display it in
@@ -91,24 +94,35 @@ registration uses the same running Hex and the selected transcription model.
 Hex applies its Skip Long Pauses setting to the captured audio. The issue
 transcript goes to OpenCode and the clipboard as raw text.
 
-The helper sends the transcript and compact, tab-separated rows for projects,
-teams, labels, estimate scales, and workflow states. An unambiguous foreground
-project is a hint. OpenCode Go runs `gpt-6-luna#max` in an archived session and
-searches for issues on demand through Linear's MCP. A Hex workspace plugin limits
-search results to rows with the issue identifier, title, project, status, labels,
-priority, estimate, and dates. OpenCode reads descriptions and relations only
-for issues it needs to inspect, including older and cross-project prerequisites.
-An open analysis or plan is a blocker when the new work depends on its outcome.
-The draft carries the spoken rationale, behavior, and constraints.
+The helper sends the verbatim transcript, foreground-window hint, local date,
+clipboard metadata and follow-up answers. OpenCode Go runs `gpt-6-luna#max`
+in an archived session with `hex/linear-agent.md` as its instructions. Luna
+loads the current projects, summaries and descriptions through Linear MCP
+before choosing a project. A workspace plugin presents project rows with their
+names, statuses, teams, summaries, descriptions and URLs. Longer descriptions
+can be read through `linear_get_project`. Luna queries issues, labels, workflow
+states and other details as needed. Issue search results contain identifiers,
+titles, projects, statuses, labels, priorities, estimates and dates. Luna reads
+descriptions and relations for relevant issues, including older and cross-project
+prerequisites. An open analysis or plan is a blocker when the new work depends
+on its outcome.
 
-The agent returns a JSON draft with catalog names, short codes for duplicate
-names, team keys, and issue identifiers like `KIAN-123`. Clusterfork resolves
-these to Linear UUIDs and validates the entire batch before saving through its
-shared Linear client. New issues are filed in Backlog. Updates pass only the
-requested field changes and check the current issue revision before writing.
-Each creation reuses its ID on retry. If an issue or dependency link cannot be
-confirmed, the notification identifies it. Other issues in the batch proceed
-independently.
+Luna performs project and issue creation, edits, assignments and dependency
+changes directly through MCP. Its instructions require preserving the dictated
+context, supplying priority and estimate, using Backlog for new issues unless
+requested otherwise, checking duplicates, verifying saved changes and correcting
+recoverable errors. After an uncertain save, it checks the result before retrying.
+These checks run in the agent. The Python helper runs the CLI and handles the
+desktop interaction. Each run has a twenty-minute limit, after which the helper
+requests interruption of its OpenCode session.
+
+Luna calls `hex_notify` with a verified issue or project URL to queue a GNOME
+notification. The Python service displays it with **Open in Linear** when the
+run finishes, including any completed results from an interrupted run. Luna uses
+`hex_reply` to request missing details or a replacement image. The final response
+is plain text. For image attachments, MCP prepares the signed upload request,
+`hex_upload_clipboard` sends the captured bytes with those headers, and MCP
+saves the image link in the description.
 
 The service journal records the same dictation ID from recording through the
 Linear save, alongside the OpenCode session ID and any created or updated
@@ -119,7 +133,8 @@ Each reply keeps the dictation ID and gets a new attempt directory.
 `transcript.txt` holds the verbatim Hex transcript and is saved before the
 Linear catalog is loaded. `prompt.txt` holds the exact bytes supplied on
 OpenCode's stdin. `stdout.jsonl` records OpenCode's events, including Linear
-lookups, their results, and the final draft. `stderr.txt` records CLI errors.
+lookups, project descriptions, write arguments and results, notification/reply
+requests, and the final response. `stderr.txt` records CLI errors.
 Both streams are written as OpenCode runs, preserving partial output on failure
 or timeout. When a session ID is available, its archive also contains tool
 results and any supplied clipboard image.
@@ -134,8 +149,9 @@ journalctl --user -u hex-linear-issue.service --grep '<dictation-id>'
 opencode api GET '/api/session/<session-id>/message'
 ```
 
-To check the workflow with text, the dry run reads Linear and runs OpenCode Go,
-then prints the drafts and resolved dependencies before the write step:
+To check the workflow with text, the dry run uses a separate OpenCode agent
+whose permissions allow Linear reads and clarification requests. It prints
+the proposed actions:
 
 ```bash
 printf '%s\n' 'Make a Clusterfork issue to add a relay health check' |

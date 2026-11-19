@@ -17,7 +17,6 @@ from threading import Event, Thread
 import time
 from uuid import uuid4
 
-from common.clients import RequestError
 from common.images import EXTENSIONS, MAX_IMAGE_BYTES, ImageContextError, validate_image
 
 from linear_issue import Dictation, FilingError, ReplyNeeded, file_dictation
@@ -227,21 +226,9 @@ def capture(released, stopping, jobs):
 
 
 def notify_saved_issue(saved, dictation_id):
-    identifier, url = saved["identifier"], saved["url"]
-    action = saved["action"]
-    title = f"{action} {identifier}"
-    pending = saved["unverified"]
-    lines = []
-    for key, label in (("blocked_by", "Blocked by"), ("blocks", "Blocks")):
-        verified = [ref for ref in saved[key] if ref not in pending]
-        if verified:
-            lines.append(f"{label} {', '.join(verified)}")
-    if pending:
-        lines.append(f"Could not confirm links to {', '.join(pending)}. Check the issue in Linear.")
-    lines.append(url or "Find the issue by its identifier in Linear.")
-    print(f"Hex Linear dictation {dictation_id} {action.lower()} {identifier}."
-          + (" Some dependency links are unverified." if pending else ""))
-    Thread(target=notify, args=(title, "\n".join(lines), url), daemon=True).start()
+    title, message, url = saved["title"], saved["message"], saved["url"]
+    print(f"Hex Linear dictation {dictation_id} {title}. {url}")
+    Thread(target=notify, args=(title, f"{message}\n{url}", url), daemon=True).start()
 
 
 def process_jobs(jobs, dry_run):
@@ -255,20 +242,23 @@ def process_jobs(jobs, dry_run):
         except FilingError as error:
             print(f"Hex Linear dictation {dictation.issue_id} did not proceed. {error}")
             notify("Linear dictation", str(error))
-        except (OSError, ValueError, KeyError, TypeError, RequestError, subprocess.SubprocessError) as error:
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
             print(f"Hex Linear dictation {dictation.issue_id} could not be confirmed ({type(error).__name__}).")
             notify("Linear dictation", "Could not confirm the requested issue changes. Check Linear and the service journal.")
         else:
-            if dry_run:
-                count = len(saved["issues"])
-                print(f"Hex Linear dry run validated {count} drafts and their dependencies.")
-                notify("Linear dictation dry run", f"Validated {count} drafts and their dependencies.")
-                continue
-            for item in saved["issues"]:
-                notify_saved_issue(item, dictation.issue_id)
-            if saved["unconfirmed"]:
-                print(f"Hex Linear dictation {dictation.issue_id} has {len(saved['unconfirmed'])} unconfirmed drafts.")
-                notify("Linear issue changes could not be confirmed", "\n".join(saved["unconfirmed"]))
+            if not dry_run:
+                for item in saved.notifications:
+                    notify_saved_issue(item, dictation.issue_id)
+            if saved.error:
+                print(f"Hex Linear dictation {dictation.issue_id} could not complete. {saved.error}")
+                notify("Linear dictation could not complete", saved.error)
+            elif saved.reply:
+                pending = replace(dictation, session_id=saved.session_id)
+                print(f"Hex Linear dictation {dictation.issue_id} needs a reply in {saved.session_id}.")
+                Thread(target=offer_reply, args=(jobs, pending, saved.reply), daemon=True).start()
+            elif dry_run:
+                print(saved.text)
+                notify("Linear dictation preview", saved.text[:1000])
 
 
 def listen(dry_run):

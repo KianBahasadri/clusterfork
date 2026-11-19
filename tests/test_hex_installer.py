@@ -125,7 +125,13 @@ class HexInstallerTests(unittest.TestCase):
         self.assertTrue((workspace / ".opencode/agents/linear-issue.md").is_file())
         plugin = workspace / ".opencode/plugins/linear-search.js"
         self.assertEqual(plugin.read_bytes(), (ROOT / "hex/linear-search.js").read_bytes())
-        self.assertEqual((workspace / "common/clients.py").read_bytes(), (ROOT / "automation/common/clients.py").read_bytes())
+        self.assertFalse((workspace / "common/clients.py").exists())
+        self.assertEqual((workspace / "common/issue_metadata.py").read_bytes(), (ROOT / "automation/common/issue_metadata.py").read_bytes())
+        preview = (workspace / ".opencode/agents/linear-issue-preview.md").read_text()
+        self.assertIn('action: linear_list_*', preview)
+        self.assertIn('action: linear_get_*', preview)
+        self.assertNotIn('action: linear_*,', preview)
+        self.assertIn('action: hex_upload_clipboard, resource: "*", effect: deny', preview)
         self.assertTrue((self.home / ".local/share/applications" / installer.LINEAR_DESKTOP).is_file())
         self.assertIn(["/fake/systemctl", "--user", "enable", "--now", installer.LINEAR_UNIT], self.processes)
         files = [*self.config.rglob("*.py"), self.config / "hex.config.ts", plugin,
