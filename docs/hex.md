@@ -54,8 +54,16 @@ Hex-owned `AGENTS.md`, `hex.d.ts`, and `tsconfig.json` are left alone. Run
 
 Hold **numpad `/`**, say what to create or update, and release. Say “Make a
 Clusterfork issue to add a relay health check, blocked by KIAN-123” or “Set
-KIAN-123 to High priority and add that it needs to cover timeouts.” One
-recording can contain several independent issue requests. The service copies
+KIAN-123 to High priority and add that it needs to cover timeouts.” Hold for
+at least a quarter second to start the microphone, then speak when Hex shows
+that it is recording. A single quick tap does nothing. **Double-tap numpad `/`**
+to open a text box instead: type the request and select **Send request**.
+Both taps must be shorter than a quarter second, with at most 350 ms between
+them. This uses the same Linear agent without recording audio. Repeated
+double-taps while the text box is open do not create additional windows.
+Cancel, Escape, or closing the box discards an unsent request.
+
+One recording can contain several independent issue requests. The service copies
 the transcript to the clipboard as soon as Hex transcribes it and verifies the
 copy by reading it back, then saves the issues in the background. Hex History
 retains the raw transcript as a **Printed** entry, with its recording when
@@ -140,9 +148,11 @@ Linear save, alongside the OpenCode session ID and any created or updated
 issue IDs. The `attempt=` entry points to a private directory under
 `~/.local/state/hex/linear/runs/`, or the equivalent under `XDG_STATE_HOME`.
 Each reply keeps the dictation ID and gets a new attempt directory.
+Typed requests use the same attempt logs and agent flow, but leave the
+clipboard untouched and are not added to Hex History.
 
-`transcript.txt` holds the verbatim Hex transcript and is saved before the
-Linear catalog is loaded. `prompt.txt` holds the exact bytes supplied on
+`transcript.txt` holds the verbatim Hex transcript or typed request and is saved
+before the Linear catalog is loaded. `prompt.txt` holds the exact bytes supplied on
 OpenCode's stdin. `stdout.jsonl` records OpenCode's events, including Linear
 lookups, project descriptions, write arguments and results, notification/reply
 requests, and the final response. `stderr.txt` records CLI errors.

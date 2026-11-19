@@ -1,4 +1,4 @@
-"""Hold keypad slash to record a Hex dictation for Linear issues."""
+"""Hold keypad slash to dictate a Linear request, or double-tap to type it."""
 
 import argparse
 from dataclasses import replace
@@ -27,6 +27,8 @@ PORTAL = "org.freedesktop.portal.Desktop"
 DESKTOP = "/org/freedesktop/portal/desktop"
 SHORTCUTS = "org.freedesktop.portal.GlobalShortcuts"
 NOTIFY = ["notify-send", "--app-name", "Linear Dictation", "--icon", "accessories-text-editor"]
+HOLD_MS = 250
+DOUBLE_TAP_MS = 350
 IMAGE_REQUEST = re.compile(
     r"(?:^|[.!?,;]\s*|\band\s+)(?:(?:can|could|would) you\s+)?(?:please\s+)?"
     r"(?:(?P<attach>attach|include|copy|add|use|embed|paste)|check|read|inspect|look\s+at)\s+"
@@ -177,6 +179,31 @@ def offer_reply(jobs, dictation, error):
         notify("Linear dictation", "Could not open the reply. Check that notify-send, GTK 4 and Zenity are installed.")
 
 
+def request_from_text(transcript, title, request_id):
+    image_use = image = None
+    if instruction := IMAGE_REQUEST.search(transcript):
+        image_use = "attach" if instruction["attach"] else "reference"
+        image = clipboard_image()
+    return Dictation(transcript, title, request_id, image_use=image_use, image=image)
+
+
+def compose(jobs, stopping, token):
+    request_id = str(uuid4())
+    try:
+        title = focused_title()
+        environment = {**os.environ, "XDG_ACTIVATION_TOKEN": token} if token else os.environ
+        print(f"Hex Linear request {request_id} opened the text box.")
+        entry = subprocess.run([sys.executable, str(Path(__file__).with_name("linear_reply.py")), "--new-request"],
+                               input="Describe the Linear issues to create or update.", env=environment,
+                               capture_output=True, text=True, check=True)
+        if entry.stdout.strip() and not stopping.is_set():
+            jobs.put(request_from_text(entry.stdout, title, request_id))
+            print(f"Hex Linear request {request_id} typed and queued.")
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f"Could not open a Linear request ({type(error).__name__}).")
+        notify("Linear request", "Could not open the text box. Check that GTK 4 is installed.")
+
+
 def capture(released, stopping, jobs):
     dictation_id = str(uuid4())
     try:
@@ -204,14 +231,11 @@ def capture(released, stopping, jobs):
                     pass
         transcript = result["text"]
         if transcript.strip():
-            image_use = image = None
-            if instruction := IMAGE_REQUEST.search(transcript):
-                image_use = "attach" if instruction["attach"] else "reference"
-                image = clipboard_image()
+            dictation = request_from_text(transcript, title, dictation_id)
             if copy_transcript(transcript.strip()):
                 print(f"Hex Linear dictation {dictation_id} clipboard copy verified.")
             print(f"Hex Linear dictation {dictation_id} transcribed and queued.")
-            jobs.put(Dictation(transcript, title, dictation_id, image_use=image_use, image=image))
+            jobs.put(dictation)
         else:
             print(f"Hex Linear dictation {dictation_id} was empty.")
     except FilingError as error:
@@ -267,6 +291,9 @@ def listen(dry_run):
     stopping = Event()
     released = None
     recording = None
+    composing = None
+    hold_timer = None
+    pressed_at = last_tap = activation_token = None
     closed = False
 
     def call(interface, method, parameters, path=DESKTOP):
@@ -302,25 +329,52 @@ def listen(dry_run):
             GLib.source_remove(timer)
             bus.signal_unsubscribe(subscription)
 
+    def begin_capture():
+        nonlocal hold_timer, recording, last_tap
+        hold_timer = last_tap = None
+        if released is None or stopping.is_set():
+            return GLib.SOURCE_REMOVE
+        if recording is not None and recording.is_alive():
+            Thread(target=notify, args=("Linear dictation", "Hex is still transcribing the previous recording."),
+                   daemon=True).start()
+        else:
+            recording = Thread(target=capture, args=(released, stopping, jobs), daemon=True)
+            recording.start()
+        return GLib.SOURCE_REMOVE
+
     def shortcut(_bus, _sender, _path, _interface, member, parameters):
-        nonlocal released, recording
-        handle, name, _timestamp, _options = parameters.unpack()
+        nonlocal released, composing, hold_timer, pressed_at, last_tap, activation_token
+        handle, name, timestamp, options = parameters.unpack()
         if handle != session or name != SHORTCUT:
             return
         if member == "Activated" and released is None:
-            released = Event()
-            if recording is not None and recording.is_alive():
-                Thread(target=notify, args=("Linear dictation", "Hex is still transcribing the previous recording."),
-                       daemon=True).start()
-                return
-            recording = Thread(target=capture, args=(released, stopping, jobs), daemon=True)
-            recording.start()
+            released, pressed_at = Event(), timestamp
+            activation_token = options.get("activation_token")
+            hold_timer = GLib.timeout_add(HOLD_MS, begin_capture)
         if member == "Deactivated" and released is not None:
             released.set()
             released = None
+            if hold_timer is None:
+                return
+            GLib.source_remove(hold_timer)
+            hold_timer = None
+            if timestamp - pressed_at >= HOLD_MS:
+                last_tap = None
+            elif last_tap is not None and pressed_at - last_tap <= DOUBLE_TAP_MS:
+                last_tap = None
+                if composing is None or not composing.is_alive():
+                    token = options.get("activation_token") or activation_token
+                    composing = Thread(target=compose, args=(jobs, stopping, token), daemon=True)
+                    composing.start()
+            else:
+                last_tap = timestamp
 
     def stop(*_args):
+        nonlocal hold_timer
         stopping.set()
+        if hold_timer is not None:
+            GLib.source_remove(hold_timer)
+            hold_timer = None
         if released is not None:
             released.set()
         loop.quit()
@@ -337,7 +391,7 @@ def listen(dry_run):
         if created is None:
             return 0
         session = created["session_handle"]
-        binding = [(SHORTCUT, {"description": GLib.Variant("s", "Hold to dictate a Linear issue"),
+        binding = [(SHORTCUT, {"description": GLib.Variant("s", "Hold to dictate a Linear request; double-tap to type"),
                                "preferred_trigger": GLib.Variant("s", "KP_Divide")})]
         bound = request("BindShortcuts", "(oa(sa{sv})sa{sv})", (session, binding, ""), {}, 300)
         if not bound or not any(name == SHORTCUT and details.get("trigger_description")
