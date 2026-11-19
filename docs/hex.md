@@ -56,8 +56,11 @@ Hold **numpad `/`**, say what to create or update, and release. Say “Make a
 Clusterfork issue to add a relay health check, blocked by KIAN-123” or “Set
 KIAN-123 to High priority and add that it needs to cover timeouts.” One
 recording can contain several independent issue requests. The service copies
-the transcript to the clipboard as soon as Hex transcribes it, then saves
-the issues in the background. Paste the transcript wherever you
+the transcript to the clipboard as soon as Hex transcribes it and verifies the
+copy by reading it back, then saves the issues in the background. Hex History
+retains the raw transcript as a **Printed** entry, with its recording when
+Keep recordings is enabled. A copy failure shows a notification pointing to
+History for recovery. Paste the transcript wherever you
 meant to send it if you pressed the slash shortcut by accident. Each completion
 notification shows the issue link and any confirmed dependency links.
 If you request an issue under a new project, Luna can create the project first
@@ -93,9 +96,11 @@ Linear credential from `~/.config/clusterfork/.env`, honoring an environment
 override, and starts a private OpenCode server with it. Text replies use GTK 4.
 Clipboard image replies use Zenity, and image validation uses Pillow. The
 separate portal registration uses the same running Hex and selected
-transcription model.
-Hex applies its Skip Long Pauses setting to the captured audio. The issue
-transcript goes to OpenCode and the clipboard as raw text.
+transcription model. Capture uses `hex dictation start --raw`, followed on
+release by `hex dictation stop --print`. Hex owns History persistence and
+applies its Skip Long Pauses setting to the captured audio. Printing returns
+the raw transcript without pasting or running the Haiku rewrite. The service
+then sends it to OpenCode and the clipboard.
 
 The helper sends the verbatim transcript, foreground-window hint, local date,
 clipboard metadata and follow-up answers. OpenCode Go runs `gpt-6-luna#max`
@@ -120,7 +125,11 @@ desktop interaction. Each private OpenCode invocation has a twenty-minute limit.
 
 Luna calls `hex_notify` with a verified issue or project URL to queue a GNOME
 notification. The Python service displays it with **Open in Linear** when the
-run finishes, including any completed results from an interrupted run. Luna uses
+run finishes, including any completed results from an interrupted run. Clicking
+the notification itself also opens the link. The click handler stays active
+until the notification is opened or dismissed, and forwards GNOME's activation
+token when launching the browser. Browser-launch failures go to the service
+journal. Luna uses
 `hex_reply` to request missing details or a replacement image. The final response
 is plain text. For image attachments, MCP prepares the signed upload request,
 `hex_upload_clipboard` sends the captured bytes with those headers, and MCP

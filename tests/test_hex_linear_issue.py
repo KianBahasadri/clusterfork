@@ -283,29 +283,31 @@ try {
                                    input=script, text=True, capture_output=True)
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
-    def test_capture_renews_lease_copies_on_release_and_queues_one_transcript(self):
+    def test_capture_uses_raw_hex_printing_and_copies_on_release(self):
         released, stopping, jobs = Event(), Event(), SimpleQueue()
 
-        def post(registration, path, **kwargs):
-            if path == "/dictations":
-                return {"id": 7, "ownerToken": "fixture-owner"}
-            self.assertEqual(kwargs["owner"], "fixture-owner")
-            if path.endswith("/heartbeat"):
-                released.set()
-                return None
-            if path.endswith("/finish"):
+        def command(*arguments, **kwargs):
+            if arguments == ("status",):
+                return {"capture": {"state": "idle"}}
+            if arguments == ("dictation", "start", "--raw"):
+                return {"status": "done", "changed": True}
+            if arguments == ("dictation", "stop", "--print"):
                 self.assertTrue(released.is_set())
-                return {"transcript": " File an issue "}
-            self.fail(f"Unexpected recording operation {path}")
+                self.assertEqual(kwargs["timeout"], 75)
+                return {"status": "transcript", "text": " File an issue "}
+            self.fail(f"Unexpected Hex command {arguments}")
 
-        with (patch.object(shortcut, "HEX_REGISTRATION") as registration, patch.object(shortcut, "hex_request", side_effect=post) as request,
+        def release(_delay):
+            released.set()
+            return True
+
+        with (patch.object(shortcut, "hex_command", side_effect=command) as request,
               patch.object(shortcut, "focused_title", return_value="Clusterfork"),
               patch.object(shortcut, "copy_transcript") as copy, patch.object(shortcut, "clipboard_image") as image,
-              patch.object(released, "wait", side_effect=lambda _delay: released.is_set())):
-            registration.read_text.return_value = '{"token":"fixture","port":1234}'
+              patch.object(released, "wait", side_effect=release)):
             shortcut.capture(released, stopping, jobs)
-        self.assertEqual([call.args[1] for call in request.call_args_list],
-                         ["/dictations", "/dictations/7/heartbeat", "/dictations/7/finish"])
+        self.assertEqual([call.args for call in request.call_args_list],
+                         [("status",), ("dictation", "start", "--raw"), ("dictation", "stop", "--print")])
         dictation = jobs.get_nowait()
         self.assertEqual((dictation.transcript, dictation.title), (" File an issue ", "Clusterfork"))
         self.assertEqual(UUID(dictation.issue_id).version, 4)
@@ -322,11 +324,10 @@ try {
         ):
             with self.subTest(transcript=transcript):
                 sequence = []
-                with (patch.object(shortcut, "HEX_REGISTRATION") as registration,
-                      patch.object(shortcut, "hex_request", side_effect=[{"id": 7, "ownerToken": "fixture"}, {"transcript": transcript}]),
+                with (patch.object(shortcut, "hex_command", side_effect=[
+                        {"capture": {"state": "idle"}}, {"status": "done"}, {"status": "transcript", "text": transcript}]),
                       patch.object(shortcut, "clipboard_image", side_effect=lambda: sequence.append("image") or ("image/png", b"image")),
                       patch.object(shortcut, "copy_transcript", side_effect=lambda text: sequence.append(text))):
-                    registration.read_text.return_value = '{"token":"fixture","port":1234}'
                     shortcut.capture(released, stopping, jobs)
                 self.assertEqual(sequence, ["image", transcript])
                 dictation = jobs.get_nowait()
@@ -337,13 +338,87 @@ try {
         self.assertIsNone(shortcut.IMAGE_REQUEST.search("Do not attach the image in my clipboard."))
 
     def test_clipboard_uses_utf8_input_and_treats_copy_failure_as_nonfatal(self):
-        with patch.object(shortcut.subprocess, "run") as run, patch.object(shortcut, "notify") as notice:
-            shortcut.copy_transcript("First line\nCafé")
-            self.assertEqual(run.call_args.args[0], ["wl-copy", "--type", "text/plain;charset=utf-8"])
-            self.assertEqual(run.call_args.kwargs["input"], b"First line\nCaf\xc3\xa9")
+        with patch.object(shortcut.subprocess, "run", side_effect=[
+                CompletedProcess("wl-copy", 0), CompletedProcess("wl-paste", 0, stdout=b"First line\nCaf\xc3\xa9"),
+        ]) as run, patch.object(shortcut, "notify") as notice:
+            self.assertTrue(shortcut.copy_transcript("First line\nCafé"))
+            self.assertEqual(run.call_args_list[0].args[0], ["wl-copy", "--type", "text/plain;charset=utf-8"])
+            self.assertEqual(run.call_args_list[0].kwargs["input"], b"First line\nCaf\xc3\xa9")
+            self.assertEqual(run.call_args_list[1].args[0],
+                             ["wl-paste", "--no-newline", "--type", "text/plain;charset=utf-8"])
+            notice.assert_not_called()
             run.side_effect = TimeoutExpired("wl-copy", 5)
-            shortcut.copy_transcript("Still file this")
+            self.assertFalse(shortcut.copy_transcript("Still file this"))
             notice.assert_called_once()
+
+    def test_clipboard_readback_detects_missing_or_replaced_contents(self):
+        for readback in [CompletedProcess("wl-paste", 0, stdout=b"previous clipboard"), TimeoutExpired("wl-paste", 5)]:
+            with (self.subTest(readback=readback), patch.object(shortcut.subprocess, "run", side_effect=[
+                    CompletedProcess("wl-copy", 0), readback]), patch.object(shortcut, "notify") as notice):
+                self.assertFalse(shortcut.copy_transcript("Keep this dictation"))
+                self.assertIn("Hex History", notice.call_args.args[1])
+
+    def test_capture_does_not_stop_an_existing_recording_and_cancels_on_shutdown(self):
+        released, stopping, jobs = Event(), Event(), SimpleQueue()
+        with (patch.object(shortcut, "hex_command", return_value={"capture": {"state": "recording"}}) as command,
+              patch.object(shortcut, "notify") as notice):
+            shortcut.capture(released, stopping, jobs)
+        self.assertEqual([call.args for call in command.call_args_list], [("status",)])
+        notice.assert_called_once()
+        self.assertTrue(jobs.empty())
+        stopping.set()
+        with patch.object(shortcut, "hex_command", side_effect=[
+                {"capture": {"state": "idle"}}, {"status": "done"}, {"status": "done"},
+        ]) as command, patch.object(shortcut, "focused_title"):
+            shortcut.capture(released, stopping, jobs)
+        self.assertEqual(command.call_args.args, ("dictation", "cancel"))
+        self.assertTrue(jobs.empty())
+
+    def test_copy_failure_still_queues_the_transcript_and_a_failed_finish_does_not_cancel_new_recordings(self):
+        released, stopping, jobs = Event(), Event(), SimpleQueue()
+        released.set()
+        for finish in ({"status": "transcript", "text": "Keep this"}, issue.FilingError("Transcription failed")):
+            with (self.subTest(finish=finish), patch.object(shortcut, "hex_command", side_effect=[
+                    {"capture": {"state": "idle"}}, {"status": "done"}, finish,
+            ]) as command, patch.object(shortcut, "copy_transcript", return_value=False),
+                  patch.object(shortcut, "notify")):
+                shortcut.capture(released, stopping, jobs)
+            self.assertEqual([call.args[1] for call in command.call_args_list[1:]], ["start", "stop"])
+            if isinstance(finish, dict):
+                self.assertEqual(jobs.get_nowait().transcript, "Keep this")
+            self.assertTrue(jobs.empty())
+
+    def test_hex_control_keeps_no_speech_separate_from_errors(self):
+        with patch.object(shortcut.subprocess, "run", return_value=CompletedProcess("hex", 4, stdout=json.dumps({
+                "status": "error", "code": "no-speech", "message": "No speech heard",
+        }))) as run:
+            self.assertEqual(shortcut.hex_command("dictation", "stop", "--print", timeout=75)["text"], "")
+            self.assertEqual(run.call_args.args[0], ["hex", "dictation", "stop", "--print", "--json"])
+        with patch.object(shortcut.subprocess, "run", return_value=CompletedProcess("hex", 1, stdout=json.dumps({
+                "status": "error", "code": "busy", "message": "Another recording is active",
+        }))):
+            with self.assertRaisesRegex(issue.FilingError, "Another recording is active"):
+                shortcut.hex_command("dictation", "start", "--raw")
+
+    def test_notification_body_and_button_keep_waiting_and_pass_activation_to_the_browser(self):
+        for action in ("default", "open", ""):
+            with self.subTest(action=action):
+                def execute(command, **kwargs):
+                    if command[0] == "notify-send":
+                        self.assertIsNone(kwargs["timeout"])
+                        self.assertIn("--expire-time=0", command)
+                        self.assertIn("--action=default=Open in Linear", command)
+                        self.assertIn("--action=open=Open in Linear", command)
+                        shortcut.os.write(kwargs["pass_fds"][0], b"fixture-activation\n")
+                        return CompletedProcess(command, 0, stdout=action + "\n")
+                    self.assertEqual(command, ["xdg-open", URL])
+                    self.assertEqual(kwargs["env"]["XDG_ACTIVATION_TOKEN"], "fixture-activation")
+                    self.assertTrue(kwargs["check"])
+                    return CompletedProcess(command, 0)
+
+                with patch.object(shortcut.subprocess, "run", side_effect=execute) as run:
+                    shortcut.notify("Created KIAN-3", "Saved.", URL)
+                self.assertEqual(run.call_count, 2 if action else 1)
 
     def test_reply_keeps_its_original_request_identity_and_image(self):
         jobs = SimpleQueue()

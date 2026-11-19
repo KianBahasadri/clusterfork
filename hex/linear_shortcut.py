@@ -3,7 +3,6 @@
 import argparse
 from dataclasses import replace
 from html import escape
-from http.client import HTTPConnection, HTTPException
 import json
 import os
 from pathlib import Path
@@ -27,7 +26,6 @@ SHORTCUT = "file-issue"
 PORTAL = "org.freedesktop.portal.Desktop"
 DESKTOP = "/org/freedesktop/portal/desktop"
 SHORTCUTS = "org.freedesktop.portal.GlobalShortcuts"
-HEX_REGISTRATION = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "hex/local-api.json"
 NOTIFY = ["notify-send", "--app-name", "Linear Dictation", "--icon", "accessories-text-editor"]
 IMAGE_REQUEST = re.compile(
     r"(?:^|[.!?,;]\s*|\band\s+)(?:(?:can|could|would) you\s+)?(?:please\s+)?"
@@ -39,29 +37,14 @@ IMAGE_REQUEST = re.compile(
 )
 
 
-def hex_request(registration, path, *, owner=None, data=None, timeout=4):
-    headers = {"Authorization": "Bearer " + registration["token"]}
-    if owner:
-        headers["X-Hex-Dictation-Token"] = owner
-    if data:
-        headers["Content-Type"] = "application/json"
-    connection = HTTPConnection("127.0.0.1", registration["port"], timeout=timeout)
-    try:
-        connection.request("POST", path, json.dumps(data) if data else None, headers)
-        response = connection.getresponse()
-        if response.status == 204:
-            return None
-        body = json.loads(response.read(262_145))
-        if response.status in (200, 201):
-            return body
-        code = body.get("error") or body.get("code")
-        if code == "capture-discarded":
-            return {"transcript": ""}
-        if code == "dictation-busy":
-            raise FilingError("Hex is already recording. Release that shortcut and try again.")
-        raise FilingError(f"Hex could not record or transcribe this dictation (HTTP {response.status}).")
-    finally:
-        connection.close()
+def hex_command(*arguments, timeout=15):
+    result = subprocess.run(["hex", *arguments, "--json"], capture_output=True, text=True, timeout=timeout)
+    response = json.loads(result.stdout)
+    if result.returncode == 4 and response.get("code") == "no-speech":
+        return {"status": "transcript", "text": ""}
+    if result.returncode or response.get("status") == "error":
+        raise FilingError(response.get("message") or "Hex could not record or transcribe this dictation.")
+    return response
 
 
 def focused_title():
@@ -98,25 +81,36 @@ def focused_title():
 
 
 def notify(title, message, url=None):
-    actions = ["--action=open=Open in Linear"] if url else []
     try:
-        result = subprocess.run([*NOTIFY, *actions, "--", title, escape(message)], text=True, capture_output=True,
-                                timeout=120 if url else 5, check=True)
-        if url and result.stdout.strip() == "open":
-            subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired:
-        pass
+        with TemporaryFile() as token_file:
+            token_fd = token_file.fileno()
+            actions = ["--expire-time=0", "--action=default=Open in Linear", "--action=open=Open in Linear",
+                       f"--activation-token-fd={token_fd}"] if url else []
+            result = subprocess.run([*NOTIFY, *actions, "--", title, escape(message)], text=True, capture_output=True,
+                                    pass_fds=(token_fd,) if url else (), timeout=None if url else 5, check=True)
+            if url and result.stdout.strip() in {"default", "open"}:
+                token_file.seek(0)
+                token = token_file.read(4096).decode().strip()
+                environment = {**os.environ, "XDG_ACTIVATION_TOKEN": token} if token else os.environ
+                subprocess.run(["xdg-open", url], env=environment, capture_output=True, timeout=15, check=True)
     except (OSError, subprocess.SubprocessError) as error:
-        print(f"Could not show Linear notification ({type(error).__name__}).")
+        print(f"Linear notification or link failed ({type(error).__name__}).")
 
 
 def copy_transcript(transcript):
     try:
-        subprocess.run(["wl-copy", "--type", "text/plain;charset=utf-8"], input=transcript.encode("utf-8"),
+        expected = transcript.encode("utf-8")
+        subprocess.run(["wl-copy", "--type", "text/plain;charset=utf-8"], input=expected,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=5)
-    except (OSError, subprocess.SubprocessError) as error:
+        copied = subprocess.run(["wl-paste", "--no-newline", "--type", "text/plain;charset=utf-8"],
+                                capture_output=True, check=True, timeout=5).stdout
+        if copied != expected:
+            raise FilingError("The clipboard did not retain the transcript.")
+    except (OSError, subprocess.SubprocessError, FilingError) as error:
         print(f"Hex Linear clipboard copy failed ({type(error).__name__}).")
-        notify("Linear dictation", "Could not copy the transcript to the clipboard.")
+        notify("Linear dictation", "Could not verify the clipboard copy. Recover the transcript from Hex History.")
+        return False
+    return True
 
 
 def clipboard_image():
@@ -186,33 +180,36 @@ def offer_reply(jobs, dictation, error):
 def capture(released, stopping, jobs):
     dictation_id = str(uuid4())
     try:
-        registration = json.loads(HEX_REGISTRATION.read_text())
-        record = hex_request(registration, "/dictations", data={"source": "clusterfork-linear"})
-        owner, path = record["ownerToken"], f"/dictations/{int(record['id'])}"
-        result = None
+        status = hex_command("status")
+        if status["capture"]["state"] not in {"idle", "transcribing"}:
+            raise FilingError("Hex is already recording or is not ready. Release that shortcut and try again.")
+        hex_command("dictation", "start", "--raw")
+        submitted = False
         try:
             print(f"Hex Linear dictation {dictation_id} started recording.")
             title = None if released.is_set() else focused_title()
-            while not released.wait(3):
-                hex_request(registration, path + "/heartbeat", owner=owner)
+            while not released.wait(0.25):
+                if stopping.is_set():
+                    return
             if stopping.is_set():
                 return
             print(f"Hex Linear dictation {dictation_id} requested transcription after release.")
-            result = hex_request(registration, path + "/finish", owner=owner, timeout=125)
+            submitted = True
+            result = hex_command("dictation", "stop", "--print", timeout=75)
         finally:
-            # Finishing consumes the recording. Cancel only when capture or finish fails.
-            if result is None:
+            if not submitted:
                 try:
-                    hex_request(registration, path + "/cancel", owner=owner)
-                except (OSError, ValueError, HTTPException):
-                    pass  # Hex also cancels the capture when its lease expires.
-        transcript = result["transcript"]
+                    hex_command("dictation", "cancel")
+                except (OSError, ValueError, subprocess.SubprocessError, FilingError):
+                    pass
+        transcript = result["text"]
         if transcript.strip():
             image_use = image = None
             if instruction := IMAGE_REQUEST.search(transcript):
                 image_use = "attach" if instruction["attach"] else "reference"
                 image = clipboard_image()
-            copy_transcript(transcript.strip())
+            if copy_transcript(transcript.strip()):
+                print(f"Hex Linear dictation {dictation_id} clipboard copy verified.")
             print(f"Hex Linear dictation {dictation_id} transcribed and queued.")
             jobs.put(Dictation(transcript, title, dictation_id, image_use=image_use, image=image))
         else:
@@ -220,7 +217,7 @@ def capture(released, stopping, jobs):
     except FilingError as error:
         print(f"Hex Linear dictation {dictation_id} could not record. {error}")
         notify("Linear dictation", str(error))
-    except (OSError, ValueError, KeyError, TypeError, HTTPException) as error:
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         print(f"Hex Linear dictation {dictation_id} capture failed ({type(error).__name__}).")
         notify("Linear dictation", "Could not capture or transcribe audio. Check that Hex is running.")
 
