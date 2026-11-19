@@ -52,7 +52,7 @@ Paths below are relative to the repository unless prefixed with `~`.
 | `statusline/codex/statusline.config.toml` | `~/.local/share/clusterfork-auth/codex/statusline.config.toml`, linked from `~/.codex/clusterfork-statusline.toml` |
 | `hex/{contextual_rewrite,vocabulary_review}.py`, rendered `hex/{hex.config.ts,CONVERSATION_CONTEXT.md}.in` | `~/.config/hex/`; optional when Hex is installed, see [Hex dictation](hex.md) |
 | `hex/hex-vocabulary-review.service` | `~/.config/systemd/user/hex-vocabulary-review.service` |
-| `hex/linear_*`, `hex/linear-agent.md`, and shared image/metadata modules | `~/.config/hex/linear/`, including the execution and read-only preview agents |
+| `hex/linear_*`, `hex/linear-agent.md`, and shared support modules | `~/.config/hex/linear/`, including the execution and read-only preview agents |
 | `hex/hex-linear-issue.service` and Linear Dictation desktop entry | `~/.config/systemd/user/` and `~/.local/share/applications/` |
 | `hex/rewrite.json`, `hex/prompt.md`, `hex/vocabulary.json` | Global rewrite fields and merged vocabulary, applied through the running Hex CLI |
 | `hex/microphones/pcm2902/` (opt-in) | WirePlumber fragment, user service drop-in, and `~/.local/bin/disable-laptop-capture.py`; [profile usage](hex.md#optional-pcm2902-microphone-profile) |

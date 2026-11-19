@@ -132,6 +132,7 @@ class HexInstallerTests(unittest.TestCase):
         self.assertIn('action: linear_get_*', preview)
         self.assertNotIn('action: linear_*,', preview)
         self.assertIn('action: hex_upload_clipboard, resource: "*", effect: deny', preview)
+        self.assertIn('action: hex_notify, resource: "*", effect: deny', preview)
         self.assertTrue((self.home / ".local/share/applications" / installer.LINEAR_DESKTOP).is_file())
         self.assertIn(["/fake/systemctl", "--user", "enable", "--now", installer.LINEAR_UNIT], self.processes)
         files = [*self.config.rglob("*.py"), self.config / "hex.config.ts", plugin,

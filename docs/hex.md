@@ -88,9 +88,12 @@ The integration uses the Global Shortcuts portal and its host app registry. On
 GNOME, approve **Linear Dictation** and its numpad slash binding if the desktop
 prompts. The installed `hex-linear-issue.service` runs in the graphical user
 session and uses system Python with Gio, `notify-send`, `wl-clipboard`, and
-OpenCode Go and Linear credentials. Text replies use GTK 4, clipboard image
-replies use Zenity, and image validation uses Pillow. The separate portal
-registration uses the same running Hex and the selected transcription model.
+OpenCode Go and Linear credentials. For each request the helper reads the shared
+Linear credential from `~/.config/clusterfork/.env`, honoring an environment
+override, and starts a private OpenCode server with it. Text replies use GTK 4.
+Clipboard image replies use Zenity, and image validation uses Pillow. The
+separate portal registration uses the same running Hex and selected
+transcription model.
 Hex applies its Skip Long Pauses setting to the captured audio. The issue
 transcript goes to OpenCode and the clipboard as raw text.
 
@@ -113,8 +116,7 @@ context, supplying priority and estimate, using Backlog for new issues unless
 requested otherwise, checking duplicates, verifying saved changes and correcting
 recoverable errors. After an uncertain save, it checks the result before retrying.
 These checks run in the agent. The Python helper runs the CLI and handles the
-desktop interaction. Each run has a twenty-minute limit, after which the helper
-requests interruption of its OpenCode session.
+desktop interaction. Each private OpenCode invocation has a twenty-minute limit.
 
 Luna calls `hex_notify` with a verified issue or project URL to queue a GNOME
 notification. The Python service displays it with **Open in Linear** when the

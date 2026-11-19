@@ -16,11 +16,13 @@ from typing import Literal
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from common.configuration import settings
 from common.images import EXTENSIONS
 from common.issue_metadata import ISSUE_METADATA_POLICY
 
 
 WORKSPACE = Path(__file__).resolve().parent
+DOTENV = Path.home() / ".config/clusterfork/.env"
 MODEL = "opencode-go/gpt-6-luna#max"
 AGENT = "linear-issue"
 PREVIEW_AGENT = "linear-issue-preview"
@@ -71,11 +73,12 @@ def prompt_for(dictation, *, dry_run=False, image_path=None):
               "\nVerbatim transcript", dictation.transcript]
     for question, answer in dictation.answers:
         lines += ["\nFollow-up question", question, "Follow-up answer", answer]
-    lines += ["\nWhen finished, call hex_notify for each affected issue or project with its verified Linear URL.",
-              "For an essential missing detail, call hex_reply and wait for the answer in this session."]
+    lines += ["\nFor an essential missing detail, call hex_reply and wait for the answer in this session."]
     if dry_run:
         lines += ["Preview only. Read the relevant Linear context and describe the proposed changes in your final reply.",
                   "The preview agent permits reads and clarification requests. Finish with the proposed plan."]
+    else:
+        lines += ["When finished, call hex_notify for each affected issue or project with its verified Linear URL."]
     return "\n".join(lines)
 
 
@@ -153,7 +156,11 @@ def parse_response(output, *, error=None):
 
 def run_opencode(dictation, attempt, *, dry_run=False):
     binary = shutil.which("opencode") or Path.home() / ".opencode/bin/opencode"
-    command = [str(binary), "run", "--agent", PREVIEW_AGENT if dry_run else AGENT,
+    environment = {**os.environ, "PWD": str(WORKSPACE)}
+    token = settings(DOTENV).get("LINEAR_API_KEY")
+    if token:
+        environment["LINEAR_API_KEY"] = token
+    command = [str(binary), "run", "--standalone", "--agent", PREVIEW_AGENT if dry_run else AGENT,
                "--model", MODEL, "--format", "json", "--title", "Hex Linear dictation", "--archived"]
     if dictation.session_id:
         command += ["--session", dictation.session_id]
@@ -180,9 +187,8 @@ def run_opencode(dictation, attempt, *, dry_run=False):
             else:
                 stdout, stderr = response, errors
         output = failure = None
-        timed_out = False
         try:
-            result = subprocess.run(command, input=prompt, cwd=WORKSPACE, env={**os.environ, "PWD": str(WORKSPACE)},
+            result = subprocess.run(command, input=prompt, cwd=WORKSPACE, env=environment,
                                     stdout=stdout or subprocess.PIPE, stderr=stderr or subprocess.PIPE, timeout=1200)
             output = result.stdout
             if result.returncode:
@@ -191,7 +197,6 @@ def run_opencode(dictation, attempt, *, dry_run=False):
                 failure = "OpenCode failed. Check Linear and the Hex service journal."
         except subprocess.TimeoutExpired as error:
             output = error.stdout
-            timed_out = True
             failure = "OpenCode exceeded its time limit. Check Linear and the Hex service journal."
         finally:
             if stdout is not None:
@@ -200,12 +205,6 @@ def run_opencode(dictation, attempt, *, dry_run=False):
     result = parse_response(output, error=failure)
     if result.session_id:
         print(f"Hex Linear dictation {dictation.issue_id} archived OpenCode session {result.session_id}", file=sys.stderr)
-    if timed_out and result.session_id:
-        try:
-            subprocess.run([str(binary), "api", "POST", f"/api/session/{result.session_id}/interrupt",
-                            "--data", '{"resume":false}'], cwd=WORKSPACE, capture_output=True, check=True, timeout=10)
-        except (OSError, subprocess.SubprocessError) as error:
-            print(f"Could not interrupt Hex OpenCode session {result.session_id} ({type(error).__name__}).", file=sys.stderr)
     return result
 
 

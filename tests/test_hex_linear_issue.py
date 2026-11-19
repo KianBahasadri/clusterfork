@@ -40,6 +40,10 @@ class LinearDictationTests(unittest.TestCase):
     def setUp(self):
         state = self.enterContext(TemporaryDirectory())
         self.enterContext(patch.dict(issue.os.environ, {"XDG_STATE_HOME": state}))
+        issue.os.environ.pop("LINEAR_API_KEY", None)
+        credential = Path(state) / "credentials.env"
+        credential.write_text('LINEAR_API_KEY="fixture-linear-key"\n')
+        self.enterContext(patch.object(issue, "DOTENV", credential))
         self.attempts = Path(state) / "hex/linear/runs"
 
     def test_saves_verbatim_stdin_and_mcp_context_without_a_json_draft(self):
@@ -68,8 +72,12 @@ class LinearDictationTests(unittest.TestCase):
         self.assertIsNone(result.error)
         command = run.call_args.args[0]
         self.assertIn("--archived", command)
+        self.assertIn("--standalone", command)
         self.assertEqual(command[command.index("--model") + 1], "opencode-go/gpt-6-luna#max")
         prompt = run.call_args.kwargs["input"].decode()
+        self.assertEqual(run.call_args.kwargs["env"]["LINEAR_API_KEY"], "fixture-linear-key")
+        self.assertNotIn("fixture-linear-key", prompt)
+        self.assertNotIn("fixture-linear-key", logs.getvalue())
         self.assertIn(f"Verbatim transcript\n{transcript}\n\nFollow-up question\nWhich project?\nFollow-up answer\nRelay", prompt)
         self.assertIn("Foreground window: Relay – Linear", prompt)
         self.assertIn("projects, their summaries and descriptions through Linear MCP", prompt)
@@ -89,9 +97,6 @@ class LinearDictationTests(unittest.TestCase):
         for timeout in (True, False):
             with self.subTest(timeout=timeout):
                 def incomplete(command, *, stdout=None, stderr=None, **kwargs):
-                    if command[1] == "api":
-                        self.assertIn("/api/session/ses_fixture123/interrupt", command)
-                        return CompletedProcess(command, 0)
                     stdout.write(partial)
                     stderr.write(diagnostic)
                     if timeout:
@@ -184,6 +189,7 @@ class LinearDictationTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(command[command.index("--agent") + 1], issue.PREVIEW_AGENT)
         self.assertIn("Preview only: true", run.call_args.kwargs["input"].decode())
+        self.assertNotIn("call hex_notify", run.call_args.kwargs["input"].decode())
 
     def test_worker_notifies_completed_work_and_continues_replies_in_the_same_session(self):
         result = issue.AgentResult("Waiting", "ses_fixture123", (NOTICE,), issue.ReplyNeeded("Which issue?"))

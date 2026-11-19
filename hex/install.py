@@ -84,7 +84,7 @@ def install_linear_shortcut(home):
         (SOURCE / LINEAR_UNIT, home / ".config/systemd/user" / LINEAR_UNIT),
     ]
     common = SOURCE.parent / "automation/common"
-    for name in ("__init__", "images", "issue_metadata"):
+    for name in ("__init__", "configuration", "images", "issue_metadata"):
         files.append((common / f"{name}.py", workspace / "common" / f"{name}.py"))
     changed = False
     for source, destination in files:
@@ -95,9 +95,11 @@ def install_linear_shortcut(home):
         '  - {action: linear_get_*, resource: "*", effect: allow}\n'
         '  - {action: linear_extract_images, resource: "*", effect: allow}',
     ).replace('  - {action: hex_upload_clipboard, resource: "*", effect: allow}',
-              '  - {action: hex_upload_clipboard, resource: "*", effect: deny}')
+              '  - {action: hex_upload_clipboard, resource: "*", effect: deny}'
+    ).replace('  - {action: hex_notify, resource: "*", effect: allow}',
+              '  - {action: hex_notify, resource: "*", effect: deny}')
     changed = write_changed(workspace / ".opencode/agents/linear-issue-preview.md", preview.encode()) or changed
-    for name in ("clients", "configuration", "context", "diagnostics", "policy", "reporting", "routing", "selection", "timing"):
+    for name in ("clients", "context", "diagnostics", "policy", "reporting", "routing", "selection", "timing"):
         old = workspace / "common" / f"{name}.py"
         if old.is_file():
             old.unlink()
