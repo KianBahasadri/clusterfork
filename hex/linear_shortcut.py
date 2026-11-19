@@ -1,6 +1,7 @@
 """Hold keypad slash to dictate a Linear request, or double-tap to type it."""
 
 import argparse
+import base64
 from dataclasses import replace
 from html import escape
 import json
@@ -16,7 +17,7 @@ from threading import Event, Thread
 import time
 from uuid import uuid4
 
-from common.images import EXTENSIONS, MAX_IMAGE_BYTES, ImageContextError, validate_image
+from common.images import EXTENSIONS, MAX_IMAGES, MAX_IMAGE_BYTES, MAX_TOTAL_BYTES, ImageContextError, validate_image
 
 from linear_issue import Dictation, FilingError, ReplyNeeded, file_dictation
 
@@ -148,6 +149,25 @@ def reply_image(environment):
     return image
 
 
+def text_entry(question, environment, *, new_request=False):
+    command = [sys.executable, str(Path(__file__).with_name("linear_reply.py"))]
+    if new_request:
+        command.append("--new-request")
+    entry = subprocess.run(command, input=question, env=environment, capture_output=True, text=True, check=True)
+    if not entry.stdout.strip():
+        return None
+    result = json.loads(entry.stdout)
+    images = tuple((image["mime_type"], base64.b64decode(image["data"], validate=True)) for image in result["images"])
+    if len(images) > MAX_IMAGES or sum(len(data) for _mime, data in images) > MAX_TOTAL_BYTES:
+        raise FilingError("Use at most six images and 12 MiB of images per message.")
+    try:
+        for mime, data in images:
+            validate_image(data, mime)
+    except ImageContextError as error:
+        raise FilingError(str(error)) from None
+    return (result["text"], images) if result["text"].strip() else None
+
+
 def offer_reply(jobs, dictation, error):
     question = str(error)
     excerpt = " ".join(dictation.transcript.split())
@@ -168,23 +188,27 @@ def offer_reply(jobs, dictation, error):
         if error.copy_image:
             image = reply_image(environment)
             if image is not None:
-                jobs.put(replace(dictation, image_use=dictation.image_use or "reference", image=image))
+                jobs.put(replace(dictation, image_use=dictation.image_use or "reference", images=(image,)))
             return
-        entry = subprocess.run([sys.executable, str(Path(__file__).with_name("linear_reply.py"))],
-                               input=question, env=environment, capture_output=True, text=True, check=True)
-        if answer := entry.stdout.strip():
-            jobs.put(replace(dictation, answers=(*dictation.answers, (question, answer))))
-    except (OSError, subprocess.SubprocessError) as failure:
+        if entry := text_entry(question, environment):
+            answer, images = entry
+            jobs.put(replace(dictation, answers=(*dictation.answers, (question, answer)),
+                             images=(*dictation.images, *images), image_use="attach" if images else dictation.image_use))
+    except FilingError as failure:
+        notify("Linear dictation", str(failure))
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as failure:
         print(f"Could not open a Linear dictation reply ({type(failure).__name__}).")
         notify("Linear dictation", "Could not open the reply. Check that notify-send, GTK 4 and Zenity are installed.")
 
 
-def request_from_text(transcript, title, request_id):
-    image_use = image = None
+def request_from_text(transcript, title, request_id, images=()):
+    image_use = "attach" if images else None
     if instruction := IMAGE_REQUEST.search(transcript):
         image_use = "attach" if instruction["attach"] else "reference"
-        image = clipboard_image()
-    return Dictation(transcript, title, request_id, image_use=image_use, image=image)
+        if not images:
+            image = clipboard_image()
+            images = (image,) if image else ()
+    return Dictation(transcript, title, request_id, image_use=image_use, images=images)
 
 
 def compose(jobs, stopping, token):
@@ -193,13 +217,14 @@ def compose(jobs, stopping, token):
         title = focused_title()
         environment = {**os.environ, "XDG_ACTIVATION_TOKEN": token} if token else os.environ
         print(f"Hex Linear request {request_id} opened the text box.")
-        entry = subprocess.run([sys.executable, str(Path(__file__).with_name("linear_reply.py")), "--new-request"],
-                               input="Describe the Linear issues to create or update.", env=environment,
-                               capture_output=True, text=True, check=True)
-        if entry.stdout.strip() and not stopping.is_set():
-            jobs.put(request_from_text(entry.stdout, title, request_id))
+        entry = text_entry("Describe the Linear issues to create or update.", environment, new_request=True)
+        if entry and not stopping.is_set():
+            text, images = entry
+            jobs.put(request_from_text(text, title, request_id, images))
             print(f"Hex Linear request {request_id} typed and queued.")
-    except (OSError, subprocess.SubprocessError) as error:
+    except FilingError as error:
+        notify("Linear request", str(error))
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         print(f"Could not open a Linear request ({type(error).__name__}).")
         notify("Linear request", "Could not open the text box. Check that GTK 4 is installed.")
 

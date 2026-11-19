@@ -58,10 +58,17 @@ KIAN-123 to High priority and add that it needs to cover timeouts.” Hold for
 at least a quarter second to start the microphone, then speak when Hex shows
 that it is recording. A single quick tap does nothing. **Double-tap numpad `/`**
 to open a text box instead: type the request and select **Send request**.
+**Ctrl+Enter** also sends the request; Enter adds a new line.
 Both taps must be shorter than a quarter second, with at most 350 ms between
 them. This uses the same Linear agent without recording audio. Repeated
 double-taps while the text box is open do not create additional windows.
 Cancel, Escape, or closing the box discards an unsent request.
+
+Paste screenshots or images with **Ctrl+V** or **Paste image**. Each image has a
+preview and a remove button. You can paste up to six images at a time, at most
+5 MiB each and 12 MiB combined. Images are captured when pasted and stay with
+the request even if the clipboard changes. Pasted images are attached to the
+resulting issues unless you ask to use them only as reference.
 
 One recording can contain several independent issue requests. The service copies
 the transcript to the clipboard as soon as Hex transcribes it and verifies the
@@ -82,7 +89,8 @@ The service asks for a reply when it cannot identify the issue confidently.
 If you get a clarification question, click that notification or its **Reply**
 button to open the multiline answer box. Use your regular Hex shortcut to
 dictate into the box, or type, then select **Send reply**. The answer goes to
-that specific request. A separate numpad `/` recording starts a fresh request.
+that specific request. You can paste images into text replies and send with
+**Ctrl+Enter** too. A separate numpad `/` recording starts a fresh request.
 Pending replies are kept in memory while the service runs. A reply resumes
 the same OpenCode session, preserving lookups and any completed changes.
 
@@ -158,7 +166,7 @@ lookups, project descriptions, write arguments and results, notification/reply
 requests, and the final response. `stderr.txt` records CLI errors.
 Both streams are written as OpenCode runs, preserving partial output on failure
 or timeout. When a session ID is available, its archive also contains tool
-results and any supplied clipboard image.
+results and any supplied images.
 
 For a saved issue, search the journal by issue ID, then by dictation ID. For a
 failed attempt, start with the recent journal entries and open its `attempt=` path.

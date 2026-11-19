@@ -86,7 +86,10 @@ existing issue. Read back each changed issue with includeRelations true to
 verify the project, priority, estimate, due dates, requested content, labels and
 dependency links. Repair omissions before reporting completion.
 
-Assess a supplied clipboard image before making changes. If the speaker asks
+Assess supplied images before making changes. Pasted images are attachments
+unless the request says to use them only as reference. Each supplied image has
+its own local filename, MIME type and exact byte length; inspect every image
+and upload each relevant attachment. If the speaker asks
 you to inspect or attach the current clipboard image and it is absent or
 unrelated, call hex_reply with copy_image true and finish this turn. Use a
 relevant image's details in the affected issue descriptions. For a reference

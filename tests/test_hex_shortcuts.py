@@ -1,5 +1,8 @@
 """Exercise portal key sequences and typed requests without a live microphone or Linear writes."""
 
+import base64
+from io import BytesIO
+import json
 from pathlib import Path
 from queue import SimpleQueue
 from subprocess import CompletedProcess, CalledProcessError
@@ -10,9 +13,17 @@ import unittest
 from unittest.mock import Mock, patch
 from uuid import UUID
 
+from PIL import Image
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "hex"), str(ROOT / "automation")]
 import linear_shortcut as shortcut
+
+
+def dialog_output(text, images=()):
+    return json.dumps({"text": text, "images": [
+        {"mime_type": mime, "data": base64.b64encode(data).decode("ascii")} for mime, data in images
+    ]})
 
 
 class ShortcutTests(unittest.TestCase):
@@ -186,7 +197,7 @@ class TypedRequestTests(unittest.TestCase):
     def test_typed_text_uses_the_same_queue_without_touching_the_microphone_or_clipboard(self):
         jobs = SimpleQueue()
         text = "Create two independent issues.\nKeep the café details.\n"
-        with (patch.object(shortcut.subprocess, "run", return_value=CompletedProcess("dialog", 0, stdout=text)) as run,
+        with (patch.object(shortcut.subprocess, "run", return_value=CompletedProcess("dialog", 0, stdout=dialog_output(text))) as run,
               patch.object(shortcut, "focused_title", return_value="Project context"),
               patch.object(shortcut, "hex_command") as hex_command,
               patch.object(shortcut, "clipboard_image") as image,
@@ -207,13 +218,13 @@ class TypedRequestTests(unittest.TestCase):
     def test_a_typed_image_request_captures_the_image_and_uses_the_same_agent_input(self):
         jobs, image = SimpleQueue(), ("image/png", b"clipboard image")
         text = "Make an issue. Attach the image in my clipboard."
-        with (patch.object(shortcut.subprocess, "run", return_value=CompletedProcess("dialog", 0, stdout=text)),
+        with (patch.object(shortcut.subprocess, "run", return_value=CompletedProcess("dialog", 0, stdout=dialog_output(text))),
               patch.object(shortcut, "focused_title", return_value=None),
               patch.object(shortcut, "clipboard_image", return_value=image)):
             shortcut.compose(jobs, Event(), None)
         request = jobs.get_nowait()
         self.assertEqual(request.image_use, "attach")
-        self.assertEqual(request.image, image)
+        self.assertEqual(request.images, (image,))
         self.assertEqual(request.transcript, text)
 
     def test_cancelling_empty_text_or_shutdown_never_queues_a_request(self):
@@ -222,11 +233,56 @@ class TypedRequestTests(unittest.TestCase):
                 jobs, stopping = SimpleQueue(), Event()
                 if stopped:
                     stopping.set()
-                with (patch.object(shortcut.subprocess, "run", return_value=CompletedProcess("dialog", 0, stdout=text)),
+                with (patch.object(shortcut.subprocess, "run", return_value=CompletedProcess("dialog", 0, stdout=dialog_output(text))),
                       patch.object(shortcut, "focused_title"), patch.object(shortcut, "request_from_text") as prepare):
                     shortcut.compose(jobs, stopping, None)
                 self.assertTrue(jobs.empty())
                 prepare.assert_not_called()
+
+    def test_pasted_images_reach_the_queue_without_reading_a_changed_clipboard(self):
+        jobs = SimpleQueue()
+        images = []
+        for color in ("red", "blue"):
+            data = BytesIO()
+            Image.new("RGB", (2, 2), color).save(data, format="PNG")
+            images.append(("image/png", data.getvalue()))
+        text = "Create an issue with these two screenshots."
+        with (patch.object(shortcut.subprocess, "run", return_value=CompletedProcess("dialog", 0, stdout=dialog_output(text, images))),
+              patch.object(shortcut, "focused_title", return_value=None), patch.object(shortcut, "clipboard_image") as clipboard):
+            shortcut.compose(jobs, Event(), None)
+        request = jobs.get_nowait()
+        self.assertEqual(request.transcript, text)
+        self.assertEqual(request.image_use, "attach")
+        self.assertEqual(request.images, tuple(images))
+        clipboard.assert_not_called()
+
+    def test_corrupt_or_excessive_dialog_images_are_not_submitted(self):
+        for images in ([('image/png', b'corrupt')], [('image/png', b'x')] * 7):
+            with (self.subTest(images=len(images)), patch.object(shortcut.subprocess, "run",
+                    return_value=CompletedProcess("dialog", 0, stdout=dialog_output("Use these images", images)))):
+                with self.assertRaises(shortcut.FilingError):
+                    shortcut.text_entry("Question", {})
+
+    def test_pasting_an_image_into_a_reply_preserves_the_request_and_prior_context(self):
+        jobs = SimpleQueue()
+        data = BytesIO()
+        Image.new("RGB", (2, 2), "red").save(data, format="PNG")
+        image = ("image/png", data.getvalue())
+        request = shortcut.Dictation("Original request", "Project", "fixture-request",
+                                     answers=(("Which project?", "Clusterfork"),),
+                                     images=(("image/png", b"original"),), session_id="ses_fixture")
+        with patch.object(shortcut.subprocess, "run", side_effect=[
+                CompletedProcess("notify-send", 0, stdout="reply\n"),
+                CompletedProcess("dialog", 0, stdout=dialog_output("Use this screenshot too.", (image,))),
+        ]):
+            shortcut.offer_reply(jobs, request, shortcut.ReplyNeeded("What should it look like?"))
+        result = jobs.get_nowait()
+        self.assertEqual(result.issue_id, request.issue_id)
+        self.assertEqual(result.session_id, request.session_id)
+        self.assertEqual(result.transcript, request.transcript)
+        self.assertEqual(result.answers, (*request.answers, ("What should it look like?", "Use this screenshot too.")))
+        self.assertEqual(result.images, (*request.images, image))
+        self.assertEqual(result.image_use, "attach")
 
     def test_dialog_failure_notifies_without_submitting_anything(self):
         jobs = SimpleQueue()

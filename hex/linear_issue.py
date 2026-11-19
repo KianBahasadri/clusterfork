@@ -46,7 +46,7 @@ class Dictation:
     issue_id: str
     answers: tuple[tuple[str, str], ...] = ()
     image_use: Literal["attach", "reference"] | None = None
-    image: tuple[str, bytes] | None = None
+    images: tuple[tuple[str, bytes], ...] = ()
     session_id: str | None = None
 
 
@@ -59,15 +59,14 @@ class AgentResult:
     error: str | None = None
 
 
-def prompt_for(dictation, *, dry_run=False, image_path=None):
+def prompt_for(dictation, *, dry_run=False, image_paths=()):
     lines = [ISSUE_METADATA_POLICY, f"Local date: {date.today().isoformat()}",
              f"Hex request: {dictation.issue_id}", f"Preview only: {str(dry_run).lower()}",
              f"Foreground window: {' '.join((dictation.title or 'unknown').split())}",
-             f"Clipboard image use: {dictation.image_use or 'none'}"]
-    if image_path:
-        mime, image = dictation.image
-        lines += [f"Clipboard file: {image_path}", f"Clipboard MIME type: {mime}",
-                  f"Clipboard byte length: {len(image)}"]
+             f"Image use: {dictation.image_use or 'none'}"]
+    for number, (image_path, (mime, image)) in enumerate(zip(image_paths, dictation.images), 1):
+        lines += [f"Image {number} file: {image_path}", f"Image {number} MIME type: {mime}",
+                  f"Image {number} byte length: {len(image)}"]
     lines += ["\nLoad the current projects, their summaries and descriptions through Linear MCP before choosing a project.",
               "Use the project catalog already in this session when continuing a reply, refreshing it if needed.",
               "\nVerbatim transcript", dictation.transcript]
@@ -165,15 +164,16 @@ def run_opencode(dictation, attempt, *, dry_run=False):
     if dictation.session_id:
         command += ["--session", dictation.session_id]
     with ExitStack() as files:
-        image_path = None
-        if dictation.image:
-            mime, image = dictation.image
+        image_paths = []
+        if dictation.images:
             directory = files.enter_context(TemporaryDirectory(prefix="hex-linear-"))
-            image_path = Path(directory) / f"clipboard.{EXTENSIONS[mime]}"
-            with private_file(image_path) as file:
-                file.write(image)
-            command += ["--file", str(image_path)]
-        prompt = prompt_for(dictation, dry_run=dry_run, image_path=image_path).encode("utf-8")
+            for number, (mime, image) in enumerate(dictation.images, 1):
+                image_path = Path(directory) / f"clipboard-{number}.{EXTENSIONS[mime]}"
+                with private_file(image_path) as file:
+                    file.write(image)
+                image_paths.append(image_path)
+                command += ["--file", str(image_path)]
+        prompt = prompt_for(dictation, dry_run=dry_run, image_paths=image_paths).encode("utf-8")
         stdout = stderr = None
         if attempt is not None:
             try:
@@ -210,7 +210,7 @@ def run_opencode(dictation, attempt, *, dry_run=False):
 
 def file_dictation(dictation, *, dry_run=False):
     attempt = start_attempt_log(dictation)
-    if dictation.image_use and not dictation.image:
+    if dictation.image_use and not dictation.images:
         raise ReplyNeeded(IMAGE_QUESTION, copy_image=True)
     result = run_opencode(dictation, attempt, dry_run=dry_run)
     if not dry_run and not (result.error or result.reply or result.notifications):

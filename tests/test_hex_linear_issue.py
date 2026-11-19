@@ -163,17 +163,17 @@ class LinearDictationTests(unittest.TestCase):
                 self.assertEqual(result.session_id, "ses_fixture123")
 
     def test_image_bytes_are_private_and_the_reply_uses_the_same_session(self):
-        dictation = replace(DICTATION, image_use="attach", image=("image/png", b"clipboard bytes"),
+        dictation = replace(DICTATION, image_use="attach", images=(("image/png", b"clipboard bytes"),),
                             session_id="ses_fixture123")
 
         def complete(command, *, stdout, stderr, **kwargs):
             image_path = Path(command[command.index("--file") + 1])
-            self.assertEqual(image_path.read_bytes(), dictation.image[1])
+            self.assertEqual(image_path.read_bytes(), dictation.images[0][1])
             self.assertEqual(image_path.stat().st_mode & 0o777, 0o600)
             prompt = kwargs["input"].decode()
-            self.assertIn(f"Clipboard file: {image_path}", prompt)
-            self.assertIn("Clipboard MIME type: image/png", prompt)
-            self.assertIn("Clipboard byte length: 15", prompt)
+            self.assertIn(f"Image 1 file: {image_path}", prompt)
+            self.assertIn("Image 1 MIME type: image/png", prompt)
+            self.assertIn("Image 1 byte length: 15", prompt)
             stdout.write(response(tool_event("hex_notify", NOTICE)))
             return CompletedProcess(command, 0)
 
@@ -190,6 +190,28 @@ class LinearDictationTests(unittest.TestCase):
         self.assertEqual(command[command.index("--agent") + 1], issue.PREVIEW_AGENT)
         self.assertIn("Preview only: true", run.call_args.kwargs["input"].decode())
         self.assertNotIn("call hex_notify", run.call_args.kwargs["input"].decode())
+
+    def test_every_image_is_passed_to_opencode_with_exact_metadata_and_private_files(self):
+        images = (("image/png", b"first image"), ("image/jpeg", b"second image"))
+        dictation = replace(DICTATION, image_use="attach", images=images)
+        paths = []
+
+        def complete(command, *, stdout, stderr, **kwargs):
+            paths.extend(Path(command[index + 1]) for index, argument in enumerate(command) if argument == "--file")
+            self.assertEqual(len(paths), 2)
+            prompt = kwargs["input"].decode()
+            for number, (path, (mime, data)) in enumerate(zip(paths, images), 1):
+                self.assertEqual(path.read_bytes(), data)
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                self.assertIn(f"Image {number} file: {path}", prompt)
+                self.assertIn(f"Image {number} MIME type: {mime}", prompt)
+                self.assertIn(f"Image {number} byte length: {len(data)}", prompt)
+            stdout.write(response(tool_event("hex_notify", NOTICE)))
+            return CompletedProcess(command, 0)
+
+        with patch.object(issue.subprocess, "run", side_effect=complete):
+            self.assertFalse(issue.file_dictation(dictation).error)
+        self.assertTrue(all(not path.exists() for path in paths))
 
     def test_worker_notifies_completed_work_and_continues_replies_in_the_same_session(self):
         result = issue.AgentResult("Waiting", "ses_fixture123", (NOTICE,), issue.ReplyNeeded("Which issue?"))
@@ -260,7 +282,7 @@ const ordinary = { agent: "build", tool: "linear_list_projects", input: {} };
 hooks.get("execute.before")(ordinary);
 assert.deepEqual(ordinary.input, {});
 const directory = await mkdtemp(path.join(tmpdir(), "hex-linear-"));
-const file = path.join(directory, "clipboard.png");
+const file = path.join(directory, "clipboard-1.png");
 const bytes = Buffer.from([0, 255, 10, 34]);
 await writeFile(file, bytes, { mode: 0o600 });
 let uploaded;
@@ -332,7 +354,7 @@ try {
                 self.assertEqual(sequence, ["image", transcript])
                 dictation = jobs.get_nowait()
                 self.assertEqual(dictation.image_use, image_use)
-                self.assertEqual(dictation.image, ("image/png", b"image"))
+                self.assertEqual(dictation.images, (("image/png", b"image"),))
         self.assertIsNone(shortcut.IMAGE_REQUEST.search("Add a feature to copy the image in my clipboard."))
         self.assertIsNone(shortcut.IMAGE_REQUEST.search("Add a feature to check the image of my clipboard."))
         self.assertIsNone(shortcut.IMAGE_REQUEST.search("Do not attach the image in my clipboard."))
@@ -422,12 +444,12 @@ try {
 
     def test_reply_keeps_its_original_request_identity_and_image(self):
         jobs = SimpleQueue()
-        dictation = replace(DICTATION, image_use="attach", image=("image/png", b"original"))
+        dictation = replace(DICTATION, image_use="attach", images=(("image/png", b"original"),))
         question = issue.ReplyNeeded("Which project?")
         answer = "Clusterfork\nUse the relay description."
         with patch.object(shortcut.subprocess, "run", side_effect=[
             CompletedProcess("notify-send", 0, stdout="default\n"),
-            CompletedProcess("linear_reply.py", 0, stdout=answer + "\n"),
+            CompletedProcess("linear_reply.py", 0, stdout=json.dumps({"text": answer, "images": []})),
         ]) as run:
             shortcut.offer_reply(jobs, dictation, question)
         self.assertIn("--action=default=Reply", run.call_args_list[0].args[0])
@@ -444,7 +466,7 @@ try {
                 with (patch.object(shortcut.subprocess, "run", return_value=CompletedProcess("notify-send", 0, stdout="reply\n")) as run,
                       patch.object(shortcut, "clipboard_image", return_value=image)):
                     shortcut.offer_reply(jobs, dictation, issue.ReplyNeeded("Copy a new image.", copy_image=True))
-                self.assertEqual(jobs.get_nowait(), replace(dictation, image_use=expected, image=image))
+                self.assertEqual(jobs.get_nowait(), replace(dictation, image_use=expected, images=(image,)))
                 self.assertIn("--action=default=Reply", run.call_args.args[0])
                 run.assert_called_once()
 
@@ -460,7 +482,7 @@ try {
         for call in run.call_args_list[1:]:
             self.assertEqual(call.args[0][0], "zenity")
             self.assertIn("--ok-label=Use Clipboard Image", call.args[0])
-        self.assertEqual(jobs.get_nowait(), replace(DICTATION, image_use="reference", image=image))
+        self.assertEqual(jobs.get_nowait(), replace(DICTATION, image_use="reference", images=(image,)))
         self.assertTrue(jobs.empty())
 
 

@@ -91,7 +91,7 @@ export default {
       });
       editor.add({
         name: "hex_upload_clipboard",
-        description: "PUT the captured clipboard file to the signed upload URL returned by Linear's prepare_file_upload MCP tool. Pass every uploadRequest header verbatim. Then use the MCP-provided assetUrl in the issue description.",
+        description: "PUT a captured image file to the signed upload URL returned by Linear's prepare_file_upload MCP tool. Pass every uploadRequest header verbatim. Then use the MCP-provided assetUrl in the issue description.",
         options: { codemode: false },
         input: {
           type: "object",
@@ -107,8 +107,8 @@ export default {
           const file = path.resolve(input.file);
           const directory = path.dirname(file);
           if (path.dirname(directory) !== tmpdir() || !path.basename(directory).startsWith("hex-linear-") ||
-              !/^clipboard\.(png|jpg|webp)$/.test(path.basename(file))) {
-            throw new Error("Use the captured clipboard file supplied in the Hex request.");
+              !/^clipboard-[1-9]\d*\.(png|jpg|webp)$/.test(path.basename(file))) {
+            throw new Error("Use a captured image file supplied in the Hex request.");
           }
           const url = new URL(input.url);
           if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")) {
