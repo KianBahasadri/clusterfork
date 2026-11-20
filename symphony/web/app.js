@@ -7,15 +7,15 @@ const chatLog = byId("chat-log");
 const composer = byId("composer");
 const messageField = byId("message");
 const commandList = byId("command-list");
-const issueCache = new Map();
 const issueScroll = new Map();
 const expandedPlans = new Set();
+let issueCache = new Map();
+let issueRevision = "";
 let selected = "";
 let lastMessage = 0;
 let tasks = [];
 let projectsKey = "";
-let refreshing = false;
-let initializing = true;
+let issueDay = new Date().toDateString();
 let stream = "";
 let codex = {};
 let canInterrupt = false;
@@ -34,6 +34,21 @@ async function api(path, options) {
   return body;
 }
 
+function issueDeadline(value, today) {
+  if (!value) return null;
+  const date = new Date(value + "T00:00:00");
+  if (!Number.isFinite(date.getTime())) return null;
+  const days = Math.round((date - today) / 86400000);
+  const formatted = date.toLocaleDateString([], {month: "short", day: "numeric",
+    year: date.getFullYear() === today.getFullYear() ? undefined : "numeric"});
+  const label = days < 0 ? "Overdue · " + formatted : days === 0 ? "Today" : days === 1 ? "Tomorrow" : formatted;
+  const time = element("time", label, "issue-deadline");
+  time.dateTime = value;
+  time.title = "Due " + formatted;
+  time.dataset.tone = days < 0 ? "danger" : days <= 1 ? "caution" : "";
+  return time;
+}
+
 function renderIssues() {
   for (const plan of issues.querySelectorAll("details")) {
     if (plan.open) expandedPlans.add(plan.dataset.issue);
@@ -42,33 +57,62 @@ function renderIssues() {
   const scroll = sidebar.scrollTop;
   const focused = issues.contains(document.activeElement) ? document.activeElement.id : "";
   const fragment = document.createDocumentFragment();
-  const cached = issueCache.get(selected);
-  const rows = cached?.rows;
+  const rows = issueCache.get(selected) || [];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
   if (!selected) {
     fragment.append(element("p", "Select a repository to browse its issues.", "muted"));
     for (const task of tasks) {
-      const row = element("div", "", "issue");
-      row.append(element("strong", task.issue), element("span", task.repo, "muted"),
-                 element("span", task.phase.replaceAll("_", " "), "state"));
+      const row = element("article", "", "issue");
+      if (task.phase === "blocked") row.dataset.tone = "danger";
+      const header = element("div", "", "issue-header");
+      header.append(element("strong", task.issue, "issue-link"),
+                    element("span", task.phase.replaceAll("_", " "), "state"));
+      row.append(header, element("p", task.repo, "issue-title"));
       if (task.detail) row.append(element("p", task.detail, "detail"));
       fragment.append(row);
     }
-  } else if (cached?.error) {
-    fragment.append(element("p", cached.error, "detail"));
   }
-  for (const issue of rows || []) {
+  for (const issue of rows) {
     const row = element("article", "", "issue");
-    const title = element("a", issue.identifier, "issue-link");
-    title.id = "issue-link-" + issue.identifier;
+    const link = element("a", issue.identifier, "issue-link");
+    link.id = "issue-link-" + issue.identifier;
     const url = new URL(issue.url);
     if (url.protocol === "https:" && url.hostname === "linear.app") {
-      title.href = url.href;
-      title.target = "_blank";
-      title.rel = "noreferrer";
+      link.href = url.href;
+      link.target = "_blank";
+      link.rel = "noreferrer";
     }
+    const source = element("div", "", "issue-source");
+    if (issue.project) {
+      const project = element("span", issue.project, "issue-project");
+      project.title = issue.project;
+      source.append(project, element("span", "·"));
+    }
+    source.append(link);
+    const header = element("div", "", "issue-header");
+    header.append(source);
+    const deadline = issueDeadline(issue.dueDate, today);
+    if (deadline) header.append(deadline);
+
     const task = tasks.find((item) => item.issue === issue.identifier);
-    row.append(title, element("span", (task?.phase || issue.state.name).replaceAll("_", " "), "state"),
-               element("p", issue.title, "issue-title"));
+    const state = element("span", (task?.phase || issue.state.name).replaceAll("_", " "), "state");
+    const blocked = state.textContent.toLowerCase() === "blocked" || task?.phase === "finish_failed";
+    if (blocked) state.dataset.tone = "danger";
+    const meta = element("div", "", "issue-meta");
+    meta.append(state);
+    const priorityTone = issue.priority === 1 ? "danger" : issue.priority === 2 ? "caution" : "";
+    if (issue.priority) {
+      const priority = element("span", issue.priorityLabel + " priority");
+      priority.dataset.tone = priorityTone;
+      meta.append(priority);
+    }
+    if (issue.estimate != null) meta.append(element("span", "Estimate " + issue.estimate));
+    for (const label of issue.labels) meta.append(element("span", label));
+    const tones = [state.dataset.tone, priorityTone, deadline?.dataset.tone];
+    if (tones.includes("danger")) row.dataset.tone = "danger";
+    else if (tones.includes("caution")) row.dataset.tone = "caution";
+    row.append(header, element("p", issue.title, "issue-title"), meta);
     if (task?.detail) row.append(element("p", task.detail, "detail"));
     if (issue.plan) {
       const plan = element("details");
@@ -84,62 +128,37 @@ function renderIssues() {
     }
     fragment.append(row);
   }
-  if (selected && rows?.length === 0) {
+  if (selected && !rows.length) {
     fragment.append(element("p", "No open issues for this repository.", "muted"));
-  } else if (selected && !cached) {
-    fragment.append(element("p", "Loading issues…", "muted"));
   }
   issues.replaceChildren(fragment);
   sidebar.scrollTop = scroll;
   if (focused) byId(focused)?.focus({preventScroll: true});
 }
 
-async function prefetchIssues(repo) {
-  const previous = issueCache.get(repo);
-  let next;
-  try {
-    next = {rows: await api("/api/issues?repo=" + encodeURIComponent(repo))};
-  } catch (error) {
-    next = {rows: previous?.rows, error: error.message};
+function updateProjects(projects, redraw) {
+  const previous = issueCache.get(selected);
+  issueCache = new Map(projects.map((project) => [project.repo, project.issues]));
+  const key = JSON.stringify(projects.map(({repo, label}) => [repo, label]));
+  if (key === projectsKey) {
+    if (redraw || JSON.stringify(previous) !== JSON.stringify(issueCache.get(selected))) renderIssues();
+    return;
   }
-  if (JSON.stringify(previous) !== JSON.stringify(next)) {
-    issueCache.set(repo, next);
-    if (repo === selected) renderIssues();
-  }
-}
-
-async function loadProjects() {
-  if (refreshing) return;
-  refreshing = true;
-  const notice = byId("project-error");
-  try {
-    const projects = await api("/api/projects");
-    notice.hidden = true;
-    const key = JSON.stringify(projects);
-    if (key !== projectsKey) {
-      projectsKey = key;
-      const focused = repos.contains(document.activeElement);
-      const choices = [{label: "All repositories", repo: ""}, ...projects].map((row, index) => {
-        const tab = element("button", row.label);
-        tab.id = "repo-tab-" + index;
-        tab.type = "button";
-        tab.setAttribute("role", "tab");
-        tab.setAttribute("aria-controls", "issues");
-        tab.dataset.repo = row.repo;
-        tab.addEventListener("click", () => selectRepo(row.repo));
-        return tab;
-      });
-      repos.replaceChildren(...choices);
-      selectRepo(projects.some((project) => project.repo === selected) ? selected : "");
-      if (focused) repos.querySelector('[aria-selected="true"]').focus({preventScroll: true});
-    }
-    await Promise.all(projects.map(({repo}) => prefetchIssues(repo)));
-  } catch (error) {
-    notice.textContent = error.message;
-    notice.hidden = false;
-  } finally {
-    refreshing = false;
-  }
+  projectsKey = key;
+  const focused = repos.contains(document.activeElement);
+  const choices = [{label: "All repositories", repo: ""}, ...projects].map((row, index) => {
+    const tab = element("button", row.label);
+    tab.id = "repo-tab-" + index;
+    tab.type = "button";
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-controls", "issues");
+    tab.dataset.repo = row.repo;
+    tab.addEventListener("click", () => selectRepo(row.repo));
+    return tab;
+  });
+  repos.replaceChildren(...choices);
+  selectRepo(issueCache.has(selected) ? selected : "");
+  if (focused) repos.querySelector('[aria-selected="true"]').focus({preventScroll: true});
 }
 
 function selectRepo(repo) {
@@ -206,8 +225,7 @@ function showCodexStatus() {
     timing.textContent = (working ? "Working for " : "Worked for ") + duration
       + (!working && completedAt ? " · " + clockTime(completedAt) : "");
   }
-  byId("composer-shortcuts").textContent = canInterrupt
-    ? "Enter to send · Esc to interrupt" : "Enter to send · Shift+Enter for a new line";
+  byId("interrupt-hint").hidden = !canInterrupt;
 }
 
 function clockTime(seconds) {
@@ -217,12 +235,7 @@ function clockTime(seconds) {
 async function poll() {
   let delay = 3000;
   try {
-    const state = await api("/api/state?after=" + lastMessage);
-    if (initializing) {
-      initializing = false;
-      selected = state.view;
-      loadProjects();
-    }
+    const state = await api("/api/state?after=" + lastMessage + "&issues=" + issueRevision);
     const pinned = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 80;
     for (const item of state.messages) {
       appendMessage(item.role, item.text);
@@ -237,8 +250,20 @@ async function poll() {
     const tasksChanged = JSON.stringify(tasks) !== JSON.stringify(state.tasks);
     const choicesChanged = JSON.stringify([codex.models, codex.efforts])
       !== JSON.stringify([state.codex.models, state.codex.efforts]);
+    const today = new Date().toDateString();
+    const redrawIssues = tasksChanged || today !== issueDay;
+    issueDay = today;
     tasks = state.tasks;
-    if (tasksChanged) renderIssues();
+    if (state.projects) {
+      if (!issueRevision) selected = state.view;
+      updateProjects(state.projects, redrawIssues);
+      issueRevision = state.issueRevision;
+    } else if (redrawIssues) {
+      renderIssues();
+    }
+    const notice = byId("project-error");
+    if (notice.textContent !== state.issueError) notice.textContent = state.issueError;
+    notice.hidden = !state.issueError;
     codex = state.codex;
     canInterrupt = state.canInterrupt;
     if (choicesChanged || tasksChanged) renderCommands();
@@ -283,8 +308,6 @@ repos.addEventListener("keydown", (event) => {
   tabs[index].focus();
   tabs[index].click();
 });
-byId("refresh").addEventListener("click", loadProjects);
-
 const commands = [
   ["/model ", "Choose the Codex model"],
   ["/effort ", "Set reasoning effort"],
@@ -444,5 +467,4 @@ messageField.addEventListener("keydown", (event) => {
     composer.requestSubmit();
   }
 });
-setInterval(loadProjects, 30000);
 poll();

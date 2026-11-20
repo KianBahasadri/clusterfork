@@ -13,9 +13,13 @@ the coordinator. Approve the plans you want in chat, including plans across
 repositories. The coordinator records each approval, locks the current Linear
 plan, and moves the issue to In Progress before dispatch.
 
-Symphony prefetches every mapped repository's open issues when the page opens
-and refreshes them in the background every 30 seconds. Switching tabs uses the
-cached issues and restores the sidebar scroll position and expanded plans.
+Symphony refreshes a shared cache of every mapped repository's open issues
+every 30 seconds using a batched, paginated Linear query. The browser receives
+the lists through its regular status requests when they change. Switching tabs
+uses the cache and restores the sidebar scroll position and expanded plans.
+Refresh failures keep the last successful lists and slow retries. Issue cards
+show their workflow state and available Linear project, due date, priority,
+estimate, and labels.
 
 Type `/` to see commands. Use the arrow keys to choose one, Tab to complete it,
 or Enter to run it. Enter sends a message, Shift+Enter inserts a newline, and

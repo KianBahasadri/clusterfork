@@ -14,6 +14,7 @@ import signal
 from threading import Thread
 import time
 from urllib.parse import parse_qs, urlsplit
+from uuid import uuid4
 
 from .codex import Codex, TOOL_SPECS
 from .runner import Runner, read_small
@@ -28,6 +29,20 @@ STATIC = {
     "/favicon.png": ("favicon.png", "image/png"),
 }
 BODY_LIMIT = 32000
+ISSUE_REFRESH_SECONDS = 30
+
+
+def project_list(repos):
+    return [{"repo": repo, "label": ", ".join(p["name"] for p in projects)}
+            for repo, projects in sorted(repos.items())]
+
+
+def issue_summary(row):
+    return {**{key: row[key] for key in ("identifier", "title", "url", "state", "priority",
+                                      "priorityLabel", "estimate", "dueDate")},
+            "project": (row["project"] or {}).get("name", ""),
+            "labels": [label["name"] for label in row["labels"]["nodes"]],
+            "plan": proposed_plan(row["description"])}
 
 
 class Symphony:
@@ -43,6 +58,9 @@ class Symphony:
         self.link_problems = {}
         self.fetched_projects = 0
         self.projects_lock = asyncio.Lock()
+        self.issue_snapshot = None
+        self.issue_revision = ""
+        self.issue_error = ""
 
     async def refresh_projects(self):
         async with self.projects_lock:
@@ -51,19 +69,37 @@ class Symphony:
                 self.fetched_projects = time.monotonic()
         return self.repos
 
-    async def project_list(self):
+    async def refresh_issue_snapshot(self):
         repos = await self.refresh_projects()
-        return [{"repo": repo, "label": ", ".join(p["name"] for p in projects)}
-                for repo, projects in sorted(repos.items())]
+        repo_by_project = {project["id"]: repo for repo, projects in repos.items() for project in projects}
+        rows_by_repo = {repo: [] for repo in repos}
+        for row in await self.linear.issues(repo_by_project):
+            repo = repo_by_project.get((row["project"] or {}).get("id"))
+            if repo:
+                rows_by_repo[repo].append(issue_summary(row))
+        snapshot = [{**project, "issues": rows_by_repo[project["repo"]]} for project in project_list(repos)]
+        if snapshot != self.issue_snapshot:
+            self.issue_snapshot = snapshot
+            self.issue_revision = uuid4().hex
+
+    async def poll_issues(self):
+        delay = ISSUE_REFRESH_SECONDS
+        while True:
+            try:
+                await self.refresh_issue_snapshot()
+            except (OSError, RuntimeError, ValueError) as error:
+                self.issue_error = str(error) or "Linear issue refresh timed out."
+                delay = min(delay * 2, 300)
+            else:
+                self.issue_error = ""
+                delay = ISSUE_REFRESH_SECONDS
+            await asyncio.sleep(delay)
 
     async def issues(self, repo):
         projects = (await self.refresh_projects()).get(repo)
         if not projects:
             raise ValueError(f"{repo} has no mapped Linear project.")
-        return [
-            {**{key: row[key] for key in ("identifier", "title", "url", "state")}, "plan": proposed_plan(row["description"])}
-            for row in await self.linear.issues(projects)
-        ]
+        return [issue_summary(row) for row in await self.linear.issues(project["id"] for project in projects)]
 
     async def live_issue(self, identifier):
         issue = await self.linear.issue(identifier)
@@ -82,7 +118,7 @@ class Symphony:
         if issue_id is not None and not ISSUE_ID.fullmatch(issue_id):
             raise ValueError("Use an uppercase Linear issue identifier.")
         if name == "list_repos":
-            return await self.project_list()
+            return project_list(await self.refresh_projects())
         if name == "list_issues":
             return await self.issues(args["repo"])
         if name == "get_issue":
@@ -126,14 +162,17 @@ class Symphony:
             return "Worktree cleaned up."
         raise ValueError("Unknown tool.")
 
-    async def state(self, after):
+    async def state(self, after, issue_revision=""):
         login = self.login if not self.coordinator.account and self.login and time.monotonic() < self.login["expires"] else None
-        return {"messages": self.runner.rows("SELECT * FROM chat WHERE id > ? ORDER BY id LIMIT 200", (after,)),
-                "busy": self.busy, "canInterrupt": bool(self.coordinator.turn),
-                "stream": self.coordinator.stream, "tasks": self.runner.status(),
-                "signedIn": bool(self.coordinator.account), "login": login,
-                "paused": self.runner.setting("paused"), "view": self.runner.setting("view"),
-                "codex": self.coordinator.status()}
+        state = {"messages": self.runner.rows("SELECT * FROM chat WHERE id > ? ORDER BY id LIMIT 200", (after,)),
+                 "busy": self.busy, "canInterrupt": bool(self.coordinator.turn),
+                 "stream": self.coordinator.stream, "tasks": self.runner.status(),
+                 "signedIn": bool(self.coordinator.account), "login": login,
+                 "paused": self.runner.setting("paused"), "view": self.runner.setting("view"),
+                 "codex": self.coordinator.status(), "issueError": self.issue_error}
+        if self.issue_snapshot is not None and issue_revision != self.issue_revision:
+            state.update(projects=self.issue_snapshot, issueRevision=self.issue_revision)
+        return state
 
     async def submit(self, body):
         text = body.get("text")
@@ -267,6 +306,7 @@ class Symphony:
 
     async def start(self):
         self.runner.recover()
+        self.runner.job(self.poll_issues())
         try:
             await self.coordinator.connect()
         except (OSError, RuntimeError, TimeoutError) as error:
@@ -312,12 +352,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if url.path == "/healthz":
                 self.json_response({"status": "ok"})
-            elif url.path == "/api/projects":
-                self.json_response(self.run_async(app.project_list()))
-            elif url.path == "/api/issues":
-                self.json_response(self.run_async(app.issues(params.get("repo", [""])[0])))
             elif url.path == "/api/state":
-                self.json_response(self.run_async(app.state(int(params.get("after", ["0"])[0]))))
+                after = int(params.get("after", ["0"])[0])
+                self.json_response(self.run_async(app.state(after, params.get("issues", [""])[0])))
             else:
                 self.json_response({"error": "Page not found."}, 404)
         except (ValueError, RuntimeError, OSError) as error:

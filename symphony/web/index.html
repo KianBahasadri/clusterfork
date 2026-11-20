@@ -15,10 +15,7 @@
   </header>
   <main>
     <aside aria-label="Linear issues">
-      <div class="sidebar-heading">
-        <h2>Linear issues</h2>
-        <button id="refresh" type="button">Refresh</button>
-      </div>
+      <h2 class="sidebar-heading">Linear issues</h2>
       <div id="repos" role="tablist" aria-label="Repositories"></div>
       <p id="project-error" class="detail" role="status" hidden></p>
       <div id="issues" role="tabpanel" aria-label="Issues"></div>
@@ -38,7 +35,7 @@
           <label class="sr-only" for="message">Message to the coordinator</label>
           <textarea id="message" rows="1" maxlength="23000" placeholder="Message Symphony or type /"
             enterkeyhint="send" autocapitalize="off" autocomplete="off" spellcheck="false" aria-autocomplete="list"
-            aria-controls="command-list" aria-describedby="composer-shortcuts"></textarea>
+            aria-controls="command-list"></textarea>
           <ul id="command-list" role="listbox" aria-label="Slash command suggestions" hidden></ul>
         </div>
         <div class="composer-meta">
@@ -48,7 +45,7 @@
             <span id="status-5h" hidden></span>
             <span id="status-weekly" hidden></span>
           </div>
-          <span id="composer-shortcuts">Enter to send · Shift+Enter for a new line</span>
+          <span id="interrupt-hint" hidden>Esc to interrupt</span>
         </div>
         <p id="request-error" role="alert"></p>
       </form>

@@ -129,26 +129,33 @@ class Linear:
                 return repos, problems
             cursor = page["endCursor"]
 
-    async def issues(self, projects):
+    async def issues(self, project_ids):
+        ids = list(project_ids)
+        if not ids:
+            return []
         issues = []
-        for project in projects:
-            cursor = None
-            while True:
-                data = await self.query("""query($id: String!, $after: String) {
-                    project(id: $id) { issues(first: 50, after: $after, filter: {
-                        state: { type: { nin: ["completed", "canceled"] } }
-                    }) {
-                        nodes { """ + ISSUE_FIELDS + """ }
-                        pageInfo { endCursor hasNextPage }
-                    } }
-                }""", id=project["id"], after=cursor)
-                batch = data["project"]["issues"]
-                issues.extend(batch["nodes"])
-                page = batch["pageInfo"]
-                if not page["hasNextPage"]:
-                    break
-                cursor = page["endCursor"]
-        return issues
+        cursor = None
+        while True:
+            data = await self.query("""query($ids: [ID!]!, $after: String) {
+                issues(first: 50, after: $after, filter: {
+                    project: { id: { in: $ids } }
+                    state: { type: { nin: ["completed", "canceled"] } }
+                }) {
+                    nodes {
+                        identifier title url description priority priorityLabel estimate dueDate
+                        state { name type }
+                        project { id name }
+                        labels(first: 10) { nodes { name } }
+                    }
+                    pageInfo { endCursor hasNextPage }
+                }
+            }""", ids=ids, after=cursor)
+            batch = data["issues"]
+            issues.extend(batch["nodes"])
+            page = batch["pageInfo"]
+            if not page["hasNextPage"]:
+                return issues
+            cursor = page["endCursor"]
 
     async def issue(self, identifier):
         if not ISSUE_ID.fullmatch(identifier):

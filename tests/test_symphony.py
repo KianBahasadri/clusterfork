@@ -234,6 +234,60 @@ Path("verified.txt").write_text("Tested\\n")
             "text": "GPT Fixture max · Context 12% used · 5h 35% left · weekly 61% left\nNo approved work in progress.",
         }])
 
+    async def test_issue_snapshots_batch_projects_and_only_send_changes(self):
+        app = self.app()
+        repos = {REPO: [{"id": "alpha", "name": "Alpha"}], "owner/second": [{"id": "beta", "name": "Beta"}]}
+        alpha = {"identifier": ISSUE, "title": "Alpha issue", "url": "https://linear.app/fixture/issue/KIAN-101",
+                 "state": self.linear.state, "description": "## Proposed Plan\n\nTest alpha.",
+                 "project": {"id": "alpha", "name": "Alpha"}, "priority": 2, "priorityLabel": "High",
+                 "estimate": 3, "dueDate": "2026-11-23", "labels": {"nodes": [{"name": "Feature"}]}}
+        beta = {**alpha, "identifier": "KIAN-102", "title": "Beta issue", "project": {"id": "beta", "name": "Beta"}}
+        first = {"issues": {"nodes": [alpha], "pageInfo": {"hasNextPage": True, "endCursor": "more"}}}
+        second = {"issues": {"nodes": [beta], "pageInfo": {"hasNextPage": False}}}
+        with patch.object(app, "refresh_projects", return_value=repos), patch.object(app.linear, "query") as query:
+            self.assertNotIn("projects", await app.state(0))
+            query.side_effect = [first, second]
+            await app.refresh_issue_snapshot()
+            state = await app.state(0)
+            revision = state["issueRevision"]
+            self.assertEqual([call.kwargs for call in query.await_args_list], [
+                {"ids": ["alpha", "beta"], "after": None},
+                {"ids": ["alpha", "beta"], "after": "more"},
+            ])
+            self.assertEqual([(project["repo"], project["issues"][0]["title"]) for project in state["projects"]], [
+                (REPO, "Alpha issue"), ("owner/second", "Beta issue"),
+            ])
+            card = state["projects"][0]["issues"][0]
+            self.assertEqual((card["project"], card["priorityLabel"], card["estimate"], card["dueDate"], card["labels"]),
+                             ("Alpha", "High", 3, "2026-11-23", ["Feature"]))
+            self.assertNotIn("projects", await app.state(0, revision))
+            self.assertEqual(query.await_count, 2)
+
+            query.side_effect = [first, second]
+            await app.refresh_issue_snapshot()
+            self.assertNotIn("projects", await app.state(0, revision))
+
+            query.side_effect = RuntimeError("Linear is unavailable")
+            with patch("symphony.__main__.asyncio.sleep", side_effect=asyncio.CancelledError) as sleep:
+                with self.assertRaises(asyncio.CancelledError):
+                    await app.poll_issues()
+                sleep.assert_awaited_once_with(60)
+            stale = await app.state(0)
+            self.assertEqual(stale["issueError"], "Linear is unavailable")
+            self.assertEqual(stale["projects"], state["projects"])
+            self.assertEqual(stale["issueRevision"], revision)
+
+            beta["title"] = "Updated issue"
+            query.side_effect = [first, second]
+            with patch("symphony.__main__.asyncio.sleep", side_effect=asyncio.CancelledError) as sleep:
+                with self.assertRaises(asyncio.CancelledError):
+                    await app.poll_issues()
+                sleep.assert_awaited_once_with(30)
+            latest = await app.state(0, revision)
+            self.assertEqual(latest["issueError"], "")
+            self.assertNotEqual(latest["issueRevision"], revision)
+            self.assertEqual(latest["projects"][1]["issues"][0]["title"], "Updated issue")
+
     async def worker_done(self):
         await self.approve()
         self.assertEqual(self.linear.state["name"], "In Progress")
