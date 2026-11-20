@@ -342,7 +342,7 @@ Path("verified.txt").write_text("Tested\\n")
         alpha = {"identifier": ISSUE, "title": "Alpha issue", "url": "https://linear.app/fixture/issue/KIAN-101",
                  "state": {**self.linear.state, "position": 1}, "description": "## Proposed Plan\n\nTest alpha.",
                  "project": {"id": "alpha", "name": "Alpha"}, "priority": 2, "priorityLabel": "High",
-                 "estimate": 3, "dueDate": "2026-11-23",
+                 "estimate": 3, "dueDate": "2026-11-23", "updatedAt": "2026-11-20T12:00:00Z",
                  "labels": {"nodes": [{"name": "Feature", "color": "#bb87fc"}]}}
         beta = {**alpha, "identifier": "KIAN-102", "title": "Beta issue", "project": {"id": "beta", "name": "Beta"}}
         first = {"issues": {"nodes": [alpha], "pageInfo": {"hasNextPage": True, "endCursor": "more"}}}
@@ -363,6 +363,7 @@ Path("verified.txt").write_text("Tested\\n")
             self.assertEqual(state["projects"][0]["projects"], repos[REPO])
             card = state["projects"][0]["issues"][0]
             self.assertEqual(card["projectId"], "alpha")
+            self.assertEqual(card["updatedAt"], alpha["updatedAt"])
             self.assertEqual(card["state"]["position"], 1)
             self.assertEqual((card["project"], card["priorityLabel"], card["estimate"], card["dueDate"], card["labels"]),
                              ("Alpha", "High", 3, "2026-11-23", [{"name": "Feature", "color": "#bb87fc"}]))
@@ -393,6 +394,12 @@ Path("verified.txt").write_text("Tested\\n")
             self.assertEqual(latest["issueError"], "")
             self.assertNotEqual(latest["issueRevision"], revision)
             self.assertEqual(latest["projects"][1]["issues"][0]["title"], "Updated issue")
+            alpha["updatedAt"] = "2026-11-20T12:01:00Z"
+            query.side_effect = [first, second]
+            await app.refresh_issue_snapshot()
+            updated = await app.state(0, latest["issueRevision"])
+            self.assertNotEqual(updated["issueRevision"], latest["issueRevision"])
+            self.assertEqual(updated["projects"][0]["issues"][0]["updatedAt"], alpha["updatedAt"])
 
     async def worker_done(self):
         await self.approve()

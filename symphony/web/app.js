@@ -232,6 +232,7 @@ function updateProjects(projects, redraw) {
   projectCache = new Map(projects.flatMap((row) => row.projects.map((project) => [project.id, project])));
   issueCache = new Map(projects.map((project) => [project.repo, project.issues]));
   issueCache.set("", projects.flatMap((project) => project.issues));
+  preloadIssueDetails([...(issueCache.get(selected) || []), ...issueCache.get("")]);
   const key = JSON.stringify(projects.map((project) => [project.repo, project.projects]));
   if (key === projectsKey) {
     if (redraw || JSON.stringify(previous) !== JSON.stringify(issueCache.get(selected))) renderIssues();
@@ -583,4 +584,3 @@ document.addEventListener("keydown", (event) => {
   }
   event.preventDefault();
 });
-poll();

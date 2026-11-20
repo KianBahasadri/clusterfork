@@ -1,8 +1,46 @@
 const issueDialog = byId("issue-dialog");
 const issueContent = byId("issue-content");
 const issueTitle = byId("issue-dialog-title");
-let detailRequest;
+const detailCache = new Map();
+const detailPreloadQueue = new Set();
+let preloadingDetails = false;
+let detailRequest = 0;
 let invokingIssue = "";
+
+function issueContextPath(identifier) {
+  const params = new URLSearchParams({id: identifier});
+  const issue = issueCache.get("")?.find((row) => row.identifier === identifier);
+  if (issue) params.set("updated", issue.updatedAt);
+  return "/api/issue?" + params;
+}
+
+function loadIssueDetails(identifier) {
+  const path = issueContextPath(identifier);
+  if (!detailCache.has(path)) {
+    const request = api(path).catch((error) => {
+      detailCache.delete(path);
+      throw error;
+    });
+    detailCache.set(path, request);
+  }
+  return detailCache.get(path);
+}
+
+async function preloadIssueDetails(rows) {
+  for (const issue of rows) {
+    if (!detailCache.has(issueContextPath(issue.identifier))) detailPreloadQueue.add(issue.identifier);
+  }
+  if (preloadingDetails) return;
+  preloadingDetails = true;
+  async function preload() {
+    for (const identifier of detailPreloadQueue) {
+      detailPreloadQueue.delete(identifier);
+      await loadIssueDetails(identifier).catch(() => {});
+    }
+  }
+  await Promise.all([preload(), preload()]);
+  preloadingDetails = false;
+}
 
 function issueLink(text, url) {
   const link = element("a", text);
@@ -264,9 +302,7 @@ function renderIssueContext(issue) {
 }
 
 async function openIssue(identifier) {
-  detailRequest?.abort();
-  const request = new AbortController();
-  detailRequest = request;
+  const request = ++detailRequest;
   if (!issueDialog.open) {
     invokingIssue = identifier;
     issueDialog.showModal();
@@ -281,10 +317,10 @@ async function openIssue(identifier) {
   loading.setAttribute("role", "status");
   issueContent.replaceChildren(issueTitle, loading);
   try {
-    const issue = await api("/api/issue?id=" + encodeURIComponent(identifier), {signal: request.signal});
-    if (!request.signal.aborted) renderIssueContext(issue);
+    const issue = await loadIssueDetails(identifier);
+    if (request === detailRequest) renderIssueContext(issue);
   } catch (error) {
-    if (request.signal.aborted) return;
+    if (request !== detailRequest) return;
     const message = element("p", error.message, "detail");
     message.setAttribute("role", "alert");
     const retry = element("button", "Try again");
@@ -292,7 +328,7 @@ async function openIssue(identifier) {
     retry.addEventListener("click", () => openIssue(identifier));
     issueContent.replaceChildren(issueTitle, message, retry);
   } finally {
-    if (!request.signal.aborted) issueContent.setAttribute("aria-busy", "false");
+    if (request === detailRequest) issueContent.setAttribute("aria-busy", "false");
   }
 }
 
@@ -323,8 +359,9 @@ issueDialog.addEventListener("click", (event) => {
   backdropPressed = false;
 });
 issueDialog.addEventListener("close", () => {
-  detailRequest?.abort();
+  detailRequest++;
   issueContent.setAttribute("aria-busy", "false");
   const trigger = byId("issue-open-" + invokingIssue) || repos.querySelector('[aria-selected="true"]');
   trigger?.focus({preventScroll: true});
 });
+poll();

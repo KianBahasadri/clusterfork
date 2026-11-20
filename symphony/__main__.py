@@ -42,7 +42,7 @@ def project_list(repos):
 
 def issue_summary(row):
     return {**{key: row[key] for key in ("identifier", "title", "url", "state", "priority",
-                                      "priorityLabel", "estimate", "dueDate")},
+                                      "priorityLabel", "estimate", "dueDate", "updatedAt")},
             "project": (row["project"] or {}).get("name", ""),
             "projectId": (row["project"] or {}).get("id", ""),
             "labels": row["labels"]["nodes"],
@@ -324,14 +324,15 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
-    def json_response(self, value, status=200):
-        self.respond(json.dumps(value, ensure_ascii=False).encode(), "application/json; charset=utf-8", status)
+    def json_response(self, value, status=200, *, cache_control="no-store"):
+        self.respond(json.dumps(value, ensure_ascii=False).encode(), "application/json; charset=utf-8", status,
+                     cache_control=cache_control)
 
-    def respond(self, data, content_type, status=200):
+    def respond(self, data, content_type, status=200, *, cache_control="no-store"):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache_control)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; "
                          "connect-src 'self'; img-src 'self' https: data:; base-uri 'none'; frame-ancestors 'none'")
@@ -377,7 +378,11 @@ class Handler(BaseHTTPRequestHandler):
                 after = int(params.get("after", ["0"])[0])
                 self.json_response(self.run_async(app.state(after, params.get("issues", [""])[0])))
             elif url.path == "/api/issue":
-                self.json_response(self.run_async(issue_details(app.linear, params.get("id", [""])[0])))
+                issue = self.run_async(issue_details(app.linear, params.get("id", [""])[0]))
+                cache_control = "private, max-age=60"
+                if params.get("updated") == [issue["updatedAt"]]:
+                    cache_control = "private, max-age=31536000, immutable"
+                self.json_response(issue, cache_control=cache_control)
             elif url.path == "/api/linear-asset":
                 self.linear_asset(params.get("url", [""])[0])
             else:

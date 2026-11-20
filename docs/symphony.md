@@ -37,8 +37,12 @@ plans appear on their issues.
 
 Click an issue card to open its details in a modal. The description, attachments,
 documents, comments, and activity appear beside its properties and related issues.
-Related issue links open their context in the same modal. Details load on demand
-without refetching the sidebar. Mistune renders Markdown with raw HTML escaped.
+Related issue links open their context in the same modal. Details preload in the
+background with at most two preloads running at once, prioritizing the selected
+repository. Requests share an in-page cache and use versioned URLs based on
+Linear's `updatedAt`, so the browser's private HTTP cache reuses unchanged details
+across reloads. A changed issue preloads its new version without refetching the
+sidebar. Mistune renders Markdown with raw HTML escaped.
 Linear uploads stream through Symphony using its existing Linear credentials,
 including private images and range requests. The key stays on the server.
 Close the modal with Close, Escape, or the backdrop to return focus to its card.

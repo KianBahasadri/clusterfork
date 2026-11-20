@@ -148,7 +148,7 @@ class Linear:
                     state: { type: { nin: $closed } }
                 }) {
                     nodes {
-                        identifier title url description priority priorityLabel estimate dueDate
+                        identifier title url description priority priorityLabel estimate dueDate updatedAt
                         state { name type color position }
                         project { id name }
                         labels(first: 10) { nodes { name color } }

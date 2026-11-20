@@ -5,7 +5,7 @@ from io import BytesIO
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request
 
 from symphony.__main__ import Handler
@@ -86,7 +86,35 @@ class IssueDetailsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(asset_url("https://example.com/image.png"), "https://example.com/image.png")
 
 
-class LinearAssetTests(unittest.TestCase):
+class IssueHttpTests(unittest.TestCase):
+    def test_issue_http_cache_is_private_and_versioned_and_never_caches_errors(self):
+        updated = "2026-11-20T12:00:00Z"
+        for revision, failure, expected in [
+            (updated, False, "private, max-age=31536000, immutable"),
+            ("older-version", False, "private, max-age=60"),
+            (None, False, "private, max-age=60"),
+            (updated, True, "no-store"),
+        ]:
+            with self.subTest(revision=revision, failure=failure):
+                params = {"id": "KIAN-1077"}
+                if revision is not None:
+                    params["updated"] = revision
+                handler = object.__new__(Handler)
+                handler.path = "/api/issue?" + urlencode(params)
+                handler.server = SimpleNamespace(app=SimpleNamespace(linear=object()))
+                handler.wfile = BytesIO()
+                handler.send_response = Mock()
+                handler.send_header = Mock()
+                handler.end_headers = Mock()
+                handler.run_async = Mock(return_value={"updatedAt": updated})
+                if failure:
+                    handler.run_async.side_effect = RuntimeError("Linear unavailable")
+                with patch("symphony.__main__.issue_details", new=Mock(return_value=object())):
+                    handler.do_GET()
+                headers = dict(call.args for call in handler.send_header.call_args_list)
+                self.assertEqual(headers["Cache-Control"], expected)
+                handler.send_response.assert_called_once_with(503 if failure else 200)
+
     def test_asset_access_is_limited_to_https_linear_uploads(self):
         with patch("symphony.issue_details.build_opener") as opener:
             for url in ("http://uploads.linear.app/file", "https://example.com/file",
