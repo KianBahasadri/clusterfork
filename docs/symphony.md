@@ -23,8 +23,9 @@ All repositories combines the cached lists. Issues appear in collapsible status
 groups in Linear's workflow order. Each group sorts from Urgent to Low priority,
 with unprioritized issues last. Groups start expanded and remember their
 collapsed state separately for each view.
-Status groups open and close with a short spring animation, disabled when the
-browser requests reduced motion.
+Status groups open and close with a visible spring using the standard Web
+Animations API. Rapid clicks reverse from the current height; reduced motion
+disables the animation.
 Refresh failures keep the last successful lists and slow retries. Project
 chips use their Linear names and emoji. Issue cards show the identifier,
 workflow icon and title, with compact pills for priority, due date, estimate,

@@ -110,17 +110,6 @@ aside { overflow: auto; padding: 16px; border-right: 1px solid var(--line); back
 .issue-group-name { min-width: 0; overflow-wrap: anywhere; }
 .issue-count { flex: none; font: 12px/20px var(--mono); }
 .issue-group-list { display: grid; gap: 8px; padding-top: 8px; }
-.issue-group::details-content {
-  interpolate-size: allow-keywords;
-  block-size: 0;
-  overflow: clip;
-  transition: block-size 420ms linear(0, .6 22%, 1.07 48%, .98 76%, 1), content-visibility 420ms;
-  transition-behavior: allow-discrete;
-}
-.issue-group[open]::details-content { block-size: auto; }
-@media (prefers-reduced-motion: reduce) {
-  .issue-group::details-content { transition: none; }
-}
 .issue {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

@@ -151,14 +151,39 @@ function renderIssue(issue, today) {
   return row;
 }
 
+function toggleIssueGroup(event) {
+  event.preventDefault();
+  const summary = event.currentTarget;
+  const group = summary.parentElement;
+  const start = group.getBoundingClientRect().height;
+  for (const animation of group.getAnimations()) animation.cancel();
+  const opening = collapsedGroups.has(group.dataset.group);
+  if (opening) collapsedGroups.delete(group.dataset.group);
+  else collapsedGroups.add(group.dataset.group);
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    group.open = opening;
+    group.style.overflow = "";
+    return;
+  }
+  group.open = true;
+  const end = opening ? group.getBoundingClientRect().height : summary.getBoundingClientRect().height;
+  group.style.overflow = "clip";
+  const animation = group.animate([
+    {height: start + "px", transform: "translateY(0)"},
+    {height: (opening ? end + 16 : end) + "px", transform: "translateY(4px)", offset: .55},
+    {height: (opening ? end - 6 : end + 12) + "px", transform: "translateY(-2px)", offset: .78},
+    {height: end + "px", transform: "translateY(0)"},
+  ], {duration: 480, easing: "ease-out"});
+  animation.onfinish = () => {
+    group.open = opening;
+    group.style.overflow = "";
+  };
+}
+
 function renderIssues() {
   for (const plan of issues.querySelectorAll("details[data-issue]")) {
     if (plan.open) expandedPlans.add(plan.dataset.issue);
     else expandedPlans.delete(plan.dataset.issue);
-  }
-  for (const group of issues.querySelectorAll("details[data-group]")) {
-    if (group.open) collapsedGroups.delete(group.dataset.group);
-    else collapsedGroups.add(group.dataset.group);
   }
   const scroll = sidebar.scrollTop;
   const focused = issues.contains(document.activeElement) ? document.activeElement.id : "";
@@ -178,6 +203,7 @@ function renderIssues() {
     group.open = !collapsedGroups.has(group.dataset.group);
     const summary = element("summary");
     summary.id = "status-summary-" + encodeURIComponent(state.name);
+    summary.addEventListener("click", toggleIssueGroup);
     const heading = element("span", "", "issue-group-heading");
     heading.append(icon(stateIcons[state.type] || "circle"),
                    element("span", state.name, "issue-group-name"),
