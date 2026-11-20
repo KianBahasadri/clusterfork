@@ -14,8 +14,6 @@ spec:
     spec:
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 25
-      imagePullSecrets:
-        - name: symphony-ghcr
       securityContext:
         runAsNonRoot: true
         fsGroup: 10001

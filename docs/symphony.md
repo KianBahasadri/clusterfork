@@ -48,7 +48,6 @@ Create the namespace and provide these Kubernetes secrets:
 | Secret | Required values |
 | --- | --- |
 | `symphony-api` | `LINEAR_API_KEY`, `GITHUB_TOKEN` with repository content and workflow write and Actions read access, and `OPENCODE_GO_API_KEY` |
-| `symphony-ghcr` | Docker registry config with read access to the private GHCR package |
 | `symphony-tailnet` | Single-use, preauthorized auth key in `authkey` for `tag:guaranine-app-gateway` |
 
 Store the input files outside this checkout with mode 0600. The Codex login and
