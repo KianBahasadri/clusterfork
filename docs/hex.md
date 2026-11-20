@@ -52,6 +52,11 @@ Hex-owned `AGENTS.md`, `hex.d.ts`, and `tsconfig.json` are left alone. Run
 
 ## Dictating Linear issues
 
+The Slash agent is a Linear MCP bot for capturing work as issues and managing
+Linear projects and issue fields. Actual task execution happens outside this
+bot. The underlying draft or implementation details are unnecessary when the
+request already supplies enough context to record the task.
+
 Hold **numpad `/`**, say what to create or update, and release. Say “Make a
 Clusterfork issue to add a relay health check, blocked by KIAN-123” or “Set
 KIAN-123 to High priority and add that it needs to cover timeouts.” Hold for
@@ -120,9 +125,11 @@ then sends it to OpenCode and the clipboard.
 
 The helper sends the verbatim transcript, foreground-window hint, local date,
 clipboard metadata and follow-up answers. OpenCode Go runs `gpt-6-luna#max`
-in an archived session with `hex/linear-agent.md` as its instructions. Luna
-loads the current projects, summaries and descriptions through Linear MCP
-before choosing a project. A workspace plugin presents project rows with their
+in an archived session with `hex/linear-agent.md` as its instructions. The
+workspace plugin removes the skill loader; this bot uses its supplied role
+and Linear MCP tools directly. Luna loads the current projects, summaries and
+descriptions through Linear MCP before choosing a project. A workspace plugin
+presents project rows with their
 names, statuses, teams, summaries, descriptions and URLs. Longer descriptions
 can be read through `linear_get_project`. Luna queries issues, labels, workflow
 states and other details as needed. Issue search results contain identifiers,

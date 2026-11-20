@@ -54,6 +54,7 @@ export default {
   id: "hex-linear",
   async setup(ctx) {
     await ctx.tool.transform((editor) => {
+      editor.remove("skill");
       editor.add({
         name: "hex_notify",
         description: "Queue a GNOME notification through Hex after verifying a Linear change. Supply the actual issue or project URL. Hex displays it when this run ends.",

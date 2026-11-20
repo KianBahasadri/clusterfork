@@ -235,13 +235,16 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 const source = await readFile(process.argv[2]);
 const plugin = (await import(`data:text/javascript;base64,${source.toString("base64")}`)).default;
-const tools = new Map();
+const tools = new Map([["skill", {}], ["linear_list_projects", {}]]);
 const hooks = new Map();
 await plugin.setup({ tool: {
-  transform: async (edit) => edit({ add: (tool) => tools.set(tool.name, tool) }),
+  transform: async (edit) => edit({
+    add: (tool) => tools.set(tool.name, tool),
+    remove: (name) => tools.delete(name),
+  }),
   hook: async (name, callback) => hooks.set(name, callback),
 }});
-assert.deepEqual([...tools.keys()], ["hex_notify", "hex_reply", "hex_upload_clipboard"]);
+assert.deepEqual([...tools.keys()], ["linear_list_projects", "hex_notify", "hex_reply", "hex_upload_clipboard"]);
 const notice = { title: "Created KIAN-3", message: "Saved", url: "https://linear.app/w/issue/KIAN-3" };
 const notification = await tools.get("hex_notify").execute(notice);
 assert.equal(notification.output, undefined);
