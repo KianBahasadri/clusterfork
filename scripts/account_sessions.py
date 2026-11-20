@@ -218,32 +218,6 @@ def account_identity(auth, provider="codex"):
     return hashlib.sha256(identity.encode()).hexdigest()
 
 
-def login_fingerprints(auth, provider):
-    """Remember token history and provider session claims, never account/user claims.
-
-    Different rotated tokens alone cannot prove independent sign-ins. Registration
-    additionally requires the operator's explicit fresh-login attestation.
-    """
-    account_identity(auth, provider)
-    tokens = auth if provider == "cursor" else auth["tokens"]
-    access, refresh = (("accessToken", "refreshToken") if provider == "cursor"
-                       else ("access_token", "refresh_token"))
-    result = {hashlib.sha256((kind + ":" + tokens[key]).encode()).hexdigest()
-              for kind, key in (("access", access), ("refresh", refresh))}
-    for key in (access, "id_token", refresh):
-        for claim, value in jwt_payload(tokens.get(key, "")).items():
-            if claim in {"sid", "session_id"} and isinstance(value, str) and value:
-                result.add(hashlib.sha256(("session:" + value).encode()).hexdigest())
-    return sorted(result)
-
-
-def login_id(auth, provider):
-    """A registration identifier retained across subsequent token rotations."""
-    tokens = auth if provider == "cursor" else auth["tokens"]
-    refresh = tokens["refreshToken" if provider == "cursor" else "refresh_token"]
-    return hashlib.sha256(("login:" + refresh).encode()).hexdigest()
-
-
 if __name__ == "__main__":
     try:
         count = share_codex_history(Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex"))

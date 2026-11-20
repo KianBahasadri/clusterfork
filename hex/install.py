@@ -76,16 +76,13 @@ def apply_settings(binary, home, microphone):
 def install_linear_shortcut(home):
     workspace = home / ".config/hex/linear"
     files = [
-        (SOURCE / name, workspace / name) for name in ("linear_issue.py", "linear_reply.py", "linear_shortcut.py")
+        (SOURCE / name, workspace / name) for name in ("linear_images.py", "linear_issue.py", "linear_reply.py", "linear_shortcut.py")
     ] + [
         (SOURCE / "linear-agent.md", workspace / ".opencode/agents/linear-issue.md"),
         (SOURCE / "linear-search.js", workspace / ".opencode/plugins/linear-search.js"),
         (SOURCE / LINEAR_DESKTOP, home / ".local/share/applications" / LINEAR_DESKTOP),
         (SOURCE / LINEAR_UNIT, home / ".config/systemd/user" / LINEAR_UNIT),
     ]
-    common = SOURCE.parent / "automation/common"
-    for name in ("__init__", "configuration", "images", "issue_metadata"):
-        files.append((common / f"{name}.py", workspace / "common" / f"{name}.py"))
     changed = False
     for source, destination in files:
         changed = write_changed(destination, source.read_bytes()) or changed
@@ -99,11 +96,6 @@ def install_linear_shortcut(home):
     ).replace('  - {action: hex_notify, resource: "*", effect: allow}',
               '  - {action: hex_notify, resource: "*", effect: deny}')
     changed = write_changed(workspace / ".opencode/agents/linear-issue-preview.md", preview.encode()) or changed
-    for name in ("clients", "context", "diagnostics", "policy", "reporting", "routing", "selection", "timing"):
-        old = workspace / "common" / f"{name}.py"
-        if old.is_file():
-            old.unlink()
-            changed = True
     return changed
 
 

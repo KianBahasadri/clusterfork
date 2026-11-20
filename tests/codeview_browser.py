@@ -1,6 +1,6 @@
 """Real-browser Codeview checks, using disposable data and offline module snapshots.
 
-Run with uv run --no-project --with-requirements automation/controller/requirements.txt
+Run with uv run --no-project
 --with playwright python tests/codeview_browser.py. Chromium must be installed.
 """
 import csv

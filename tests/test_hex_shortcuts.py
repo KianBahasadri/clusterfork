@@ -16,7 +16,7 @@ from uuid import UUID
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "hex"), str(ROOT / "automation")]
+sys.path[:0] = [str(ROOT / "hex")]
 import linear_shortcut as shortcut
 
 

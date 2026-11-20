@@ -210,21 +210,6 @@ configure_shared_auth() {
   local -A available=()
 
   AUTH_STORE_CONFIGURED=0
-  if [[ "$label" == "Codex" || "$label" == "Cursor" ]]; then
-    # The installed rotator owns local/remote scopes and legacy handoffs.
-    python3 - "$(dirname "$ROTATE_AUTH_DEST")" "$store_dir" <<'PY' || return 1
-import sys
-from pathlib import Path
-
-sys.path.insert(0, sys.argv[1])
-from rotate_auth import normalize_profile_scopes
-
-try:
-    normalize_profile_scopes(Path(sys.argv[2]))
-except (OSError, ValueError, TypeError):
-    raise SystemExit("Cannot read local/remote profile metadata") from None
-PY
-  fi
   agent_link_target="$(realpath -ms --relative-to="$agent_dir" "$current_path")" ||
     return 1
 
@@ -506,13 +491,7 @@ step "codex kickoff timer" "$SYSTEMD_DEST_DIR" "units; enable with systemctl --u
 [[ -f "$ROTATE_AUTH_SRC" ]] || fail "missing $(tildify "$ROTATE_AUTH_SRC")"
 mkdir -p "$(dirname "$ROTATE_AUTH_DEST")"
 cp "$ROTATE_AUTH_SRC" "$ROTATE_AUTH_DEST"
-cp "$REPO_DIR/scripts/account_sessions.py" "$(dirname "$ROTATE_AUTH_DEST")/account_sessions.py"
-cp "$REPO_DIR/scripts/rotate_accounts.py" "$(dirname "$ROTATE_AUTH_DEST")/rotate_accounts.py"
-cp "$REPO_DIR/scripts/rotate_usage.py" "$REPO_DIR/scripts/account_usage.py" "$(dirname "$ROTATE_AUTH_DEST")/"
-mkdir -p "$CLUSTERFORK_CONFIG_DIR/automation/common" "$CLUSTERFORK_CONFIG_DIR/automation/controller"
-cp "$REPO_DIR/automation/accounts.py" "$REPO_DIR/automation/account_client.py" "$CLUSTERFORK_CONFIG_DIR/automation/"
-cp "$REPO_DIR/automation/common/accounts.py" "$REPO_DIR/automation/common/selection.py" "$REPO_DIR/automation/common/__init__.py" "$CLUSTERFORK_CONFIG_DIR/automation/common/"
-cp "$REPO_DIR/automation/controller/projects.json" "$CLUSTERFORK_CONFIG_DIR/automation/controller/"
+cp "$REPO_DIR/scripts/"{account_sessions,account_selection,account_usage,rotate_usage}.py "$(dirname "$ROTATE_AUTH_DEST")/"
 chmod +x "$ROTATE_AUTH_DEST"
 step "rotate-auth" "$ROTATE_AUTH_DEST"
 

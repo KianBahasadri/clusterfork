@@ -10,33 +10,6 @@ permissions:
   contents: read
 
 jobs:
-  monitoring-queries:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-      - run: dotnet restore tests/monitoring/MonitoringQueries.csproj --locked-mode
-      - name: Validate workbook queries without Azure credentials
-        run: dotnet run --project tests/monitoring/MonitoringQueries.csproj --configuration Release --no-restore
-
-  terraform:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
-        with:
-          terraform_version: '1.15.9'
-          terraform_wrapper: false
-      - run: terraform fmt -check -recursive infra
-      - name: Validate Terraform without cloud credentials
-        run: |
-          for stack in infra/bootstrap infra/azure; do
-            terraform -chdir="$stack" init -backend=false -input=false -lockfile=readonly
-            terraform -chdir="$stack" validate
-          done
-
   test:
     runs-on: ubuntu-latest
     steps:
@@ -46,8 +19,7 @@ jobs:
           python-version: "3.x"
       - name: Validate shell syntax
         run: |
-          bash -n bash_profile.sh
-          bash -n shell/*.sh
+          for script in install-clusterfork.sh bash_profile.sh shell/*.sh; do bash -n "$script"; done
           bash -c 'source bash_profile.sh; type _cf_tmux >/dev/null; for fn in cl cc ca o oc occ cmd ag; do type "$fn" >/dev/null; done; echo "all launchers sourceable"'
       - name: Compile codeview python
         run: python3 -m py_compile bin/codeview scripts/codeview/*.py
@@ -55,32 +27,5 @@ jobs:
         run: python3 scripts/sync_upstream_skills.py --check
       - name: Run tests
         run: |
-          python3 -m pip install -r automation/requirements.txt
-          python3 -m unittest discover -s tests -v
-
-  routing-runtime:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install controller runtime dependencies
-        run: python -m pip install -r automation/controller/requirements.txt
-      - name: Verify controller runtime imports on the deployed Python version
-        run: |
-          python - <<'PY'
-          import sys
-          sys.path.insert(0,"automation")
-          import controller_main
-          from azure.identity import ManagedIdentityCredential
-          PY
-          bash -n automation/controller/host/install.sh
-      - uses: ./.github/actions/setup-codex
-      - uses: ./.github/actions/setup-cursor
-      - name: Verify Cursor read-only filesystem boundary without credentials
-        run: python3 automation/check_cursor_sandbox.py
-      - name: Verify related context through headless transports without model calls
-        run: env -u NO_COLOR python3 -m unittest discover -s tests -p 'test_context_transport.py' -v
-      - name: Verify Symphony policy under adverse event orderings and restarts
-        run: env -u NO_COLOR python3 -m unittest discover -s tests -p 'test_symphony_policy.py' -v
+          python3 -m pip install -r tests/requirements.txt
+          env -u NO_COLOR python3 -m unittest discover -s tests -v

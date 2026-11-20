@@ -7,17 +7,17 @@ import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "automation"))
-from common.routing import Registry  # noqa: E402
-from common.selection import AccountQuota, QuotaWindow, select_account  # noqa: E402
+sys.path.insert(0, str(ROOT / "scripts"))
+from rotate_usage import selection_config  # noqa: E402
+from account_selection import AccountQuota, QuotaWindow, select_account  # noqa: E402
 
 NOW = 1_800_000_000
 
 
 class QuotaSelectionTests(unittest.TestCase):
     def setUp(self):
-        config = Registry.load(ROOT / "automation" / "controller" / "projects.json")
-        self.profiles, self.policy = config.agent_profiles, config.agent_selection
+        self.profiles = {provider: selection_config(provider)[0] for provider in ("codex", "cursor")}
+        _, self.policy = selection_config("codex")
 
     def account(self, account_id, agent="codex", used=(10,), **kwargs):
         return AccountQuota(account_id, agent, self.profiles[agent].model, NOW,

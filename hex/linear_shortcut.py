@@ -17,7 +17,7 @@ from threading import Event, Thread
 import time
 from uuid import uuid4
 
-from common.images import EXTENSIONS, MAX_IMAGES, MAX_IMAGE_BYTES, MAX_TOTAL_BYTES, ImageContextError, validate_image
+from linear_images import EXTENSIONS, MAX_IMAGES, MAX_IMAGE_BYTES, MAX_TOTAL_BYTES, ImageContextError, validate_image
 
 from linear_issue import Dictation, FilingError, ReplyNeeded, file_dictation
 

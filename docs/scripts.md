@@ -1,8 +1,7 @@
 # Scripts
 
 `scripts/` utilities use stdlib. [Installation](installation.md) copies rotation
-and codeview; converters/probes run from checkout. Cloud helpers belong to
-[remote development](remote-development.md).
+and codeview. Converters and probes run from the checkout.
 
 ## Account rotation
 

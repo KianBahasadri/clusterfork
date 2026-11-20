@@ -18,7 +18,7 @@ environments. Run checks from the repository root with the pinned requirements:
 
 ```bash
 env -u NO_COLOR uv run --no-project \
-  --with-requirements automation/controller/requirements.txt \
+  --with-requirements tests/requirements.txt \
   python -m unittest discover -s tests -v
 ```
 
@@ -31,12 +31,6 @@ Tests use temporary repositories/homes, fake credentials and mocked services.
 Manual install checks need a disposable checkout/home and fixture `.env`:
 installation writes configs and repairs auth links.
 
-Remote-service tests use `tests/call_budget.py`: wrap the measured operation in
-`CallBudget(self, linear=..., github=..., queue=..., exact={...}, at_most={...})`.
-Unlisted operations must remain zero. `record_api_calls` preserves fake/mock
-behavior. Keep setup and settling outside the scope; check request counts as
-well as final state to catch billed no-op traffic.
-
 Check shell scripts separately:
 
 ```bash
@@ -46,8 +40,5 @@ for script in install-clusterfork.sh bash_profile.sh shell/*.sh bin/notify \
 done
 ```
 
-CI also compiles `bin/codeview` and `scripts/codeview/*.py`, checks Terraform and
-workbook queries, imports the controller with pinned dependencies on Python 3.12,
-and checks Cursor's read-only sandbox. [Remote setup](remote-development-setup.md#local-validation)
-and [diagnostics](remote-development-observability.md#validation-and-post-deployment-smoke-check)
-own those checks; design-guide builds belong to its [skill](../skills/design-guide/SKILL.md).
+CI also compiles `bin/codeview` and `scripts/codeview/*.py` and verifies upstream
+skill snapshots offline. Design-guide builds belong to its [skill](../skills/design-guide/SKILL.md).

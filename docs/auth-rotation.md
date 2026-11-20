@@ -28,11 +28,8 @@ unhooked: installer repair can reconnect the previous profile.
 
 ## Automatic account selection
 
-All six bare commands use Symphony's shared `automation/common/selection.py`
-selector within their own provider's saved profiles. They read live quota before
-switching, using the policy and Codex/Cursor profiles from
-`automation/controller/projects.json` and the shared
-[provider eligibility and ranking rules](remote-development.md#agent-profiles).
+All six bare commands rank saved profiles using live quota and provider-specific
+eligibility rules. `scripts/rotate_usage.py` holds the local model and quota policy.
 The current account participates and can remain selected when it is best; one
 saved profile is sufficient. Aliases with
 the same known identity share a quota probe, preferring the current login and
@@ -72,7 +69,7 @@ idle. This does not reserve accounts against simultaneous launches.
 | --- | --- |
 | `rotate-claude` | OAuth usage, including reported model-specific weekly limits |
 | `rotate-codex` | ChatGPT Codex usage and applicable model limits |
-| `rotate-cursor-cli` | Dashboard included quota for Symphony's Cursor model |
+| `rotate-cursor-cli` | Dashboard included quota for the configured Cursor model |
 | `rotate-grok` | Grok CLI billing credits |
 | `rotate-opencode` | OpenCode Go's per-key rolling, weekly and monthly usage |
 | `rotate-antigravity` | Code Assist quota groups, falling back to raw model buckets |
@@ -84,19 +81,16 @@ is present, fresh (within 300 seconds), and covers the eligible logins, automati
 selection reads the cached quota snapshots directly for sub-second speed; otherwise
 independent accounts are probed concurrently via live HTTP with 15-second timeouts.
 Codex checks coverage separately for idle and busy accounts and also requires the
-registry's snapshot age limit (currently 60 seconds); incomplete Codex windows
+snapshot age limit (currently 60 seconds); incomplete Codex windows
 trigger a live probe instead of establishing fresh capacity.
-Codex/Cursor consider only eligible local logins; automatic selection never installs
-remote credentials or reserves a cloud account. OpenCode profiles need an
-`opencode-go` API key; other provider entries alone do not establish Go capacity.
+OpenCode profiles need an `opencode-go` API key to establish Go capacity.
 
 Automatic selection excludes the personal profile `kian` and any alias sharing its
 account identity (`ROTATE_EXCLUDE_PROFILES`), reserving it for explicit offline
 choice. For the other five providers, unknown, rejected, stale, reset or depleted
 readings are ineligible. If none qualifies with the required reserve, the command
 exits 1 and retains the current credentials/selection. Codex uses the local ladder
-above; cloud worker/controller admission remains on the strict shared selector,
-with no occupancy or depleted-quota fallback and one task per account.
+above.
 Explicit `rotate-* NAME` remains an offline choice and can select any saved profile
 without a quota check. Expired credentials must be renewed by their provider CLI.
 
@@ -212,57 +206,7 @@ Each agent file links relatively to its store's `current`, which links to
 `auth.json.NAME`. Rotation changes only `current`. Save copies the active login,
 selects it and rebuilds the chain even after login replaced the agent link with
 a regular file. Unhook removes only the agent-side symlink, retaining store and
-`current`. [Remote accounts](remote-development-accounts.md) owns remote scope
-and reclaim rules for Codex/Cursor.
-
-## Local and remote account commands
-
-Codex and Cursor accept `--local` and `--remote` in any argument position. Omitted
-scope means local for selection and kickoff. `--save` and `--delete` prompt
-interactively to choose between local and remote scope using keyboard navigation
-(Up/Down arrow keys and Enter); in non-interactive shells, both require an explicit
-`--local` or `--remote` flag and otherwise exit with the command usage. Deletion
-asks for scope before its confirmation; cancelling either prompt preserves both
-sets. `--list` without a scope shows the host's saved profiles in both sets,
-labeling local/remote entries when remote profiles exist; names present in both
-sets show `[local] [remote]`.
-
-```bash
-rotate-codex --local --save work
-rotate-codex --remote --save work
-rotate-codex --local --list
-rotate-codex --remote --list
-rotate-codex --local --unhook
-rotate-codex --local --delete work
-rotate-codex --remote --delete work
-```
-
-Replace `rotate-codex` with `rotate-cursor-cli` for Cursor. Sign in with the provider,
-then use `--save NAME` to save that login in the selected set. For another login,
-use `--unhook`, sign in again, then `--save NAME` with the desired scope.
-Local save selects the saved profile. Remote save transfers the current login and
-reattaches the previous local profile when one exists. These commands never start
-a provider sign-in.
-Remote jobs select their own account, so `--remote` accepts only
-`--save`, `--list` and `--delete`. It never installs remote credentials locally for
-selection or kickoff. Remote operations use the existing Azure CLI operator login;
-the installed helpers need only Python's standard library.
-
-Local save registers a separate provider login automatically when the same account
-also has remote credentials. No additional registration flag is required. The
-[account ownership topic](remote-development-accounts.md#scoped-rotator-management)
-owns independence checks, names, interrupted additions, remote deletion and
-which profiles a migration moves.
-
-`rotate-codex --migrate` prompts for a direction when the terminal is interactive,
-using the same arrow-key menu as `--save`, then a checkbox list of the profiles
-that can move. Space toggles the highlighted row, `a` selects or clears every
-profile, and the `all` row does the same. Enter migrates the checked profiles.
-Leaving every box empty cancels. A non-interactive shell requires
-`--migrate-from-local-to-remote` or `--migrate-from-remote-to-local` and otherwise
-exits with the command usage. Those flags move every eligible profile and do not
-combine with `--local` or `--remote`. `rotate-cursor-cli` accepts the same
-migration flags.
+`current`.
 
 ## Sharing with a container
 
@@ -290,4 +234,4 @@ of a missing agent link.
 
 Repair refuses regular-file agent credentials. Use the provider's `--save NAME`
 to copy that login and rebuild the chain, also when importing a new machine's
-credentials. Legacy remote handoff recovery belongs to [remote accounts](remote-development-accounts.md#enroll-and-reclaim).
+credentials.

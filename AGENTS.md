@@ -11,8 +11,7 @@ Clusterfork is a dotfile-style config installer for multiple AI coding agents.
   - **Flat and explicit over clever:** Use plain functions, direct control flow, and concrete types. Do not create wrappers, factories, or interfaces that only have one implementation.
   - **No speculative extensibility:** Do not add config flags, plugin hooks, or abstraction layers for hypothetical future use cases.
 - **Commit and push every repository change** after running the relevant checks. Apply configuration updates with this repository's installer after pushing.
-- **Autonomous execution:** Symphony executes submitted issues autonomously. Resolve implementation choices and fix failures without requiring human review or a Needs attention handoff. Follow the automatic execution policy in [docs/remote-development-queue.md](docs/remote-development-queue.md#autonomous-execution).
-- **Issue metadata:** Follow the [Symphony issue metadata rule](docs/remote-development-queue.md#issue-metadata) when creating issues, including follow-ups.
+- **Issue metadata:** Set an explicit priority and an estimate from the team's configured scale when creating Linear issues, including follow-ups. Preserve any values supplied by the user.
 - **Skill scope:** When asked to modify a skill, always mean the skills in this repo (`skills/`) — never the installed/global skills under `~/.claude/skills/`, `~/.config/opencode/skills/`, or similar.
 
 ## Documentation (read/write)

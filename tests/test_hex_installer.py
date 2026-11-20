@@ -125,8 +125,7 @@ class HexInstallerTests(unittest.TestCase):
         self.assertTrue((workspace / ".opencode/agents/linear-issue.md").is_file())
         plugin = workspace / ".opencode/plugins/linear-search.js"
         self.assertEqual(plugin.read_bytes(), (ROOT / "hex/linear-search.js").read_bytes())
-        self.assertFalse((workspace / "common/clients.py").exists())
-        self.assertEqual((workspace / "common/issue_metadata.py").read_bytes(), (ROOT / "automation/common/issue_metadata.py").read_bytes())
+        self.assertEqual((workspace / "linear_issue.py").read_bytes(), (ROOT / "hex/linear_issue.py").read_bytes())
         preview = (workspace / ".opencode/agents/linear-issue-preview.md").read_text()
         self.assertIn('action: linear_list_*', preview)
         self.assertIn('action: linear_get_*', preview)

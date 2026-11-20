@@ -1,4 +1,4 @@
-"""Adapt saved local profiles to Symphony's shared, quota-based account selector."""
+"""Rank saved local profiles using provider quota."""
 
 from __future__ import annotations
 
@@ -11,9 +11,7 @@ import sys
 import time
 from types import SimpleNamespace
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "automation"))
-from common.selection import AccountQuota, QuotaWindow, SelectionPolicy, finite_number, select_account
+from account_selection import AccountQuota, QuotaWindow, SelectionPolicy, finite_number, select_account
 from account_sessions import account_identity, jwt_payload
 from account_usage import READERS, UsageError, grok_login, timestamp
 
@@ -34,16 +32,11 @@ CACHE_FILENAMES = {
 
 
 def selection_config(provider):
-    try:
-        data = json.loads((ROOT / "automation/controller/projects.json").read_text())
-        policy = SelectionPolicy.load(data["agent_selection"])
-        row = data["agent_profiles"].get(provider, {"model": "", "effort": ""})
-        profile = SimpleNamespace(model=row["model"], effort=row["effort"])
-        if not isinstance(profile.model, str) or not isinstance(profile.effort, str):
-            raise ValueError("Invalid provider profile")
-        return profile, policy
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        raise UsageError("cannot read Symphony account selection settings; reinstall Clusterfork") from None
+    model, effort = {
+        "codex": ("gpt-6.1-sol", "max"),
+        "cursor": ("grok-4.7-high", "high"),
+    }.get(provider, ("", ""))
+    return SimpleNamespace(model=model, effort=effort), SelectionPolicy(20, 60)
 
 
 def read_credentials(backend, name, provider):

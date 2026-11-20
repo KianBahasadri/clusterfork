@@ -2,158 +2,19 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
-from test_independent_accounts import login
-from common.accounts import account_identity, login_fingerprints
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class InstallerSharedAuthTests(unittest.TestCase):
-    def test_reinstall_updates_both_guards_and_archives_legacy_cloud_profiles(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            home, repo = root / "home", root / "repo"
-            home.mkdir()
-            shutil.copytree(REPO_ROOT, repo, ignore=shutil.ignore_patterns(
-                ".git", ".pytest_cache", ".codeview", ".env", "__pycache__", ".notify-relay.sock"))
-            (repo / ".env").write_text("CONTEXT7_API_KEY=test\nPIXELLAB_API_KEY=test\n")
-            installed = home / ".config/clusterfork/scripts/rotate_auth.py"
-            installed.parent.mkdir(parents=True)
-            # Reproduce a stale installed rotator that only guards Codex.
-            installed.write_text((REPO_ROOT / "scripts/rotate_auth.py").read_text().replace(
-                'if self.command not in {"rotate-codex", "rotate-cursor-cli"}:',
-                'if self.command != "rotate-codex":'))
-            stores, links, manifests = {}, {}, {}
-            for provider, agent_dir in (("codex", home / ".codex"), ("cursor", home / ".config/cursor")):
-                store = home / ".local/share/clusterfork-auth" / provider
-                stores[provider] = store
-                store.mkdir(parents=True)
-                agent_dir.mkdir(parents=True)
-                for name in ("local-a", "local-b", "21kb60"):
-                    (store / f"auth.json.{name}").write_text(json.dumps(login(provider, account=name)))
-                (store / "current").symlink_to("auth.json.local-a")
-                (agent_dir / "auth.json").symlink_to(os.path.relpath(store / "current", agent_dir))
-                links[provider] = (agent_dir / "auth.json").readlink()
-                source = store / "auth.json.21kb60"
-                record = {"account_id": account_identity(login(provider, account="21kb60"), provider),
-                          "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
-                manifests[provider] = {"remote:21kb60": {**record, "ownership": "cloud", "display_name": "21kb60", "legacy_alias": "21kb60",
-                    "fingerprints": login_fingerprints(login(provider, account="21kb60"), provider)}}
-                if provider == "cursor":
-                    backup = store / "remote-staged/auth.json.21kb60"
-                    backup.parent.mkdir()
-                    source.rename(backup)
-                    record.update(local_backup="remote-staged/auth.json.21kb60",
-                                  state="staged", staged_for_issue="KIAN-922")
-                (store / "remote-profiles.json").write_text(json.dumps({"21kb60": record}))
-
-            env = {key: value for key, value in os.environ.items() if not key.startswith("ROTATE_")}
-            env["HOME"] = str(home)
-            fake_bin = root / "bin"
-            fake_bin.mkdir()
-            systemctl_log = root / "systemctl.log"
-            systemctl = fake_bin / "systemctl"
-            systemctl.write_text('''#!/bin/sh
-case "$*" in
-  '--user show-environment') printf 'HOME=%s\\n' "$HOME" ;;
-  *) printf '%s\\n' "$*" >> "$CLUSTERFORK_TEST_SYSTEMCTL_LOG" ;;
-esac
-''')
-            systemctl.chmod(0o755)
-            env.update(PATH=str(fake_bin) + os.pathsep + os.environ["PATH"],
-                       CLUSTERFORK_TEST_SYSTEMCTL_LOG=str(systemctl_log))
-            for _ in range(2):
-                proc = subprocess.run([str(repo / "install-clusterfork.sh")], cwd=repo,
-                                      capture_output=True, text=True, env=env, timeout=20)
-                self.assertEqual(proc.returncode, 0, proc.stderr)
-                self.assertNotIn("shared auth was not configured", proc.stderr)
-                for provider in ("codex", "cursor"):
-                    store = stores[provider]
-                    self.assertFalse((store / "auth.json.21kb60").exists())
-                    self.assertTrue((store / "cloud-reserved/21kb60.json").is_file())
-                    self.assertEqual((store / "current").readlink(), Path("auth.json.local-a"))
-                    self.assertEqual(json.loads((store / "remote-profiles.json").read_text()), manifests[provider])
-                    self.assertEqual(hashlib.sha256((store / "cloud-reserved/21kb60.json").read_bytes()).hexdigest(),
-                                     manifests[provider]["remote:21kb60"]["source_sha256"])
-                    agent_dir = home / (".codex" if provider == "codex" else ".config/cursor")
-                    self.assertEqual((agent_dir / "auth.json").readlink(), links[provider])
-
-            installed_root = home / ".config/clusterfork"
-            for filename in ("bin/clusterfork-codex-kickoff",
-                             "systemd/clusterfork-codex-kickoff.service",
-                             "systemd/clusterfork-codex-kickoff.timer"):
-                self.assertEqual((installed_root / filename).read_bytes(), (repo / filename).read_bytes())
-            self.assertTrue(os.access(installed_root / "bin/clusterfork-codex-kickoff", os.X_OK))
-            service_calls = systemctl_log.read_text().splitlines()
-            self.assertEqual(service_calls, [
-                f"--user link {installed_root}/systemd/clusterfork-codex-kickoff.service "
-                f"{installed_root}/systemd/clusterfork-codex-kickoff.timer",
-                "--user daemon-reload", "--user enable --now clusterfork-codex-kickoff.timer",
-            ] * 2)
-            # The installed command imports its helpers without this checkout,
-            # additional dependencies or a provider request when no cache exists.
-            scheduled = subprocess.run([sys.executable, "-I", "-S",
-                str(installed_root / "bin/clusterfork-codex-kickoff"), "--dry-run"],
-                cwd=root, env={**env, "CONKY_CACHE_DIR": "", "CLUSTERFORK_USAGE_CACHE_DIR": ""},
-                capture_output=True, text=True, timeout=10)
-            self.assertEqual(scheduled.returncode, 0, scheduled.stderr)
-            self.assertIn("no readable usage cache", scheduled.stdout)
-
-            for provider, command in (("codex", "rotate-codex"), ("cursor", "rotate-cursor-cli")):
-                def run_wrapper(*args):
-                    return subprocess.run([
-                        "bash", "--noprofile", "--norc", "-c", 'source "$1"; shift; "$@"',
-                        "test", str(home / f".config/clusterfork/shell/{provider}.sh"), command, *args],
-                        cwd=root, capture_output=True, text=True, env=env, timeout=10)
-                listed = run_wrapper("--list")
-                self.assertEqual(listed.returncode, 0, listed.stderr)
-                self.assertIn("21kb60", listed.stdout)
-                self.assertRegex(listed.stdout, r"21kb60\s+\[remote\]")
-                self.assertNotIn("reserved", listed.stdout)
-                refused = run_wrapper("21kb60")
-                self.assertEqual(refused.returncode, 1)
-                self.assertIn("no local profile named", refused.stderr)
-                self.assertIn(f"{command} --local --save 21kb60", refused.stderr)
-                self.assertEqual((stores[provider] / "current").readlink(), Path("auth.json.local-a"))
-                # Scoped commands run from the installed tree without this
-                # checkout or the worker runtime's third-party packages.
-                scoped = run_wrapper("--remote", "--save", "..")
-                self.assertEqual(scoped.returncode, 1)
-                self.assertIn("Choose a profile name", scoped.stderr)
-                self.assertNotIn("Traceback", scoped.stderr)
-                listed_local = run_wrapper("--local", "--list")
-                self.assertEqual(listed_local.returncode, 0, listed_local.stderr)
-                self.assertNotIn("21kb60", listed_local.stdout)
-                # Exercise the installed quota adapter and shared selector with
-                # no checkout imports, real credentials, HTTP or Azure calls.
-                probe = subprocess.run([sys.executable, "-I", "-c", '''
-import sys, time
-from unittest.mock import patch
-sys.path.insert(0, sys.argv[1])
-import rotate_usage, rotate_auth, account_usage
-def usage(url, token, **kwargs):
-    subject = rotate_usage.jwt_payload(token)["sub"]
-    used = 10 if subject == "local-b" else 50
-    if sys.argv[2] == "codex":
-        return {"rate_limit": {"primary_window": {"used_percent": used, "reset_at": time.time() + 3600}}}
-    return {"enabled": True, "billingCycleStart": (time.time() - 1000) * 1000,
-            "billingCycleEnd": (time.time() + 3600) * 1000, "planUsage": {"apiPercentUsed": used}}
-with patch.object(account_usage, "request_json", side_effect=usage):
-    assert rotate_auth.run([sys.argv[2]]) == 0
-assert rotate_auth.make_backend(sys.argv[2]).current_suffix() == "local-b"
-''', str(installed.parent), provider], cwd=root, env=env, capture_output=True, text=True, timeout=10)
-                self.assertEqual(probe.returncode, 0, probe.stderr)
-
     def test_grok_runtime_lock_is_not_treated_as_a_saved_profile(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

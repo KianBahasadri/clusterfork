@@ -11,20 +11,6 @@ class SelectionPolicy:
     min_remaining_percent: float
     max_snapshot_age_seconds: float
 
-    @classmethod
-    def load(cls, data):
-        if data.get("strategy") != "quota_priority":
-            raise ValueError("agent_selection strategy must be quota_priority")
-        if data.get("max_concurrent_tasks_per_account") != 1:
-            raise ValueError("only one task may use an account at a time")
-        reserve = data.get("min_remaining_percent")
-        age = data.get("max_snapshot_age_seconds")
-        if not finite_number(reserve) or not 0 < reserve < 100:
-            raise ValueError("min_remaining_percent must be between 0 and 100")
-        if not finite_number(age) or age <= 0:
-            raise ValueError("max_snapshot_age_seconds must be positive")
-        return cls(reserve, age)
-
 
 @dataclass(frozen=True)
 class QuotaWindow:

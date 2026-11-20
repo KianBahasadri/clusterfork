@@ -78,7 +78,7 @@ def skip_reason(row, *, now, max_age_seconds):
 
 def run(*, dry_run=False):
     backend = rotate_auth.make_backend("codex")
-    names = backend.local_profiles()
+    names = backend.suffixes()
     if not names:
         print("codex kickoff: no saved local profiles")
         return 0

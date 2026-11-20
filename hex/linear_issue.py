@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -16,13 +17,20 @@ from typing import Literal
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from common.configuration import settings
-from common.images import EXTENSIONS
-from common.issue_metadata import ISSUE_METADATA_POLICY
-
+from linear_images import EXTENSIONS
 
 WORKSPACE = Path(__file__).resolve().parent
 DOTENV = Path.home() / ".config/clusterfork/.env"
+ISSUE_METADATA_POLICY = """Every Symphony Linear issue, including agent-created and follow-up issues,
+must have an explicit priority (1 Urgent, 2 High, 3 Normal, or 4 Low) and an
+estimate from its team's configured estimate scale. No priority (0) and a
+missing estimate are incomplete. Choose values from the issue's urgency, scope,
+complexity and verification work; preserve priorities and estimates already
+supplied by the user. An explicit zero estimate is valid only when the team
+allows it and the scope justifies it. Fill missing fields autonomously before
+implementation; missing metadata alone never requires human review.
+"""
+
 MODEL = "opencode-go/gpt-6-luna#max"
 AGENT = "linear-issue"
 PREVIEW_AGENT = "linear-issue-preview"
@@ -153,10 +161,25 @@ def parse_response(output, *, error=None):
     return AgentResult(text, session_id, tuple(notifications), reply, error)
 
 
+def linear_api_key():
+    if "LINEAR_API_KEY" in os.environ:
+        return os.environ["LINEAR_API_KEY"]
+    token = ""
+    if DOTENV.is_file():
+        for line in DOTENV.read_text().splitlines():
+            match = re.match(r"^\s*(?:export\s+)?LINEAR_API_KEY\s*=(.*)$", line)
+            if match:
+                parts = shlex.split(match[1], comments=True)
+                if len(parts) > 1:
+                    raise ValueError(f"quote the value of LINEAR_API_KEY in {DOTENV}")
+                token = parts[0] if parts else ""
+    return token
+
+
 def run_opencode(dictation, attempt, *, dry_run=False):
     binary = shutil.which("opencode") or Path.home() / ".opencode/bin/opencode"
     environment = {**os.environ, "PWD": str(WORKSPACE)}
-    token = settings(DOTENV).get("LINEAR_API_KEY")
+    token = linear_api_key()
     if token:
         environment["LINEAR_API_KEY"] = token
     command = [str(binary), "run", "--standalone", "--agent", PREVIEW_AGENT if dry_run else AGENT,

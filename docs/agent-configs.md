@@ -138,8 +138,7 @@ and login flows (`codex mcp login linear`, Antigravity MCP authentication). Addi
 removing or rotating a key requires editing checkout `.env` and reinstalling;
 exporting it alone or editing installed `.env` leaves rendered headers unchanged.
 To return to OAuth, remove/empty the checkout value, reinstall, and
-`unset LINEAR_API_KEY` before reloading the profile. Controller OAuth/app identity
-is independent; see [remote setup](remote-development-setup.md#local-configuration).
+`unset LINEAR_API_KEY` before reloading the profile.
 
 For an authorized smoke check, read the same known issue in Codex and Antigravity
 and confirm the intended workspace/team. Repeat after rotation before retiring

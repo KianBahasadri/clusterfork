@@ -14,11 +14,11 @@ from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "scripts"), str(ROOT / "automation")]
+sys.path[:0] = [str(ROOT / "scripts")]
 import rotate_auth
 import rotate_usage
 import account_usage
-from common.selection import AccountQuota, QuotaWindow, select_account
+from account_selection import AccountQuota, QuotaWindow, select_account
 
 NOW = 1_800_000_000
 
@@ -193,18 +193,6 @@ class QuotaRotationTests(unittest.TestCase):
             self.assertEqual(backend.select(None), 0)
         self.assertEqual(reader.call_count, 2)  # alpha/beta share a login; zulu is separate.
         self.assertEqual(backend.current_suffix(), "beta")
-
-    def test_automatic_selection_uses_only_eligible_local_profiles(self):
-        for provider in ("codex", "cursor"):
-            backend = self.backends[provider]
-            identity = rotate_usage.identity(provider, credentials(provider, "beta"))
-            (backend.store_dir / rotate_auth.REMOTE_MANIFEST).write_text(json.dumps({
-                "remote:beta": {"account_id": identity, "ownership": "cloud", "display_name": "beta"}}))
-            reader = self.reader(provider)
-            with self.subTest(provider=provider), patch.dict(account_usage.READERS, {provider: reader}):
-                rotate_auth.run([provider, "--local"])
-            self.assertEqual(backend.current_suffix(), "zulu")
-            self.assertEqual(reader.call_count, 2)
 
     def test_codex_weekly_ranking_has_no_seventy_percent_discontinuity(self):
         backend = self.backends["codex"]

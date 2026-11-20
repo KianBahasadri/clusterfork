@@ -1,3 +1,0 @@
-PyJWT[crypto]==2.15.1
-markdown-it-py==4.2.0
-Pillow==13.0.0

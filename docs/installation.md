@@ -33,8 +33,7 @@ Paths below are relative to the repository unless prefixed with `~`.
 | `.env`, `bell.mp3`, `bash_profile.sh` | Matching files in `~/.config/clusterfork/` |
 | `shell/`, `bin/`, `notify/` | Matching trees in `~/.config/clusterfork/` |
 | `systemd/clusterfork-codex-kickoff.{service,timer}` | `~/.config/clusterfork/systemd/`; activation is covered in [Auth Rotation](auth-rotation.md#scheduled-codex-kickoff) |
-| `scripts/{rotate_auth,rotate_accounts,rotate_usage,account_sessions,account_usage}.py`, `scripts/codeview/` | Matching paths in `~/.config/clusterfork/scripts/` |
-| `automation/{accounts,account_client}.py`, `automation/common/{accounts,selection,__init__}.py`, `automation/controller/projects.json` | Matching paths in `~/.config/clusterfork/automation/`; preserves an existing `venv/` |
+| `scripts/{rotate_auth,rotate_usage,account_selection,account_sessions,account_usage}.py`, `scripts/codeview/` | Matching paths in `~/.config/clusterfork/scripts/` |
 | `tmux.conf` | `~/.tmux.conf` |
 | `agents/opencode.json` | `~/.config/opencode/opencode.json` |
 | `agents/qwen.json` | `~/.qwen/settings.json` |
@@ -52,7 +51,7 @@ Paths below are relative to the repository unless prefixed with `~`.
 | `statusline/codex/statusline.config.toml` | `~/.local/share/clusterfork-auth/codex/statusline.config.toml`, linked from `~/.codex/clusterfork-statusline.toml` |
 | `hex/{contextual_rewrite,vocabulary_review}.py`, rendered `hex/{hex.config.ts,CONVERSATION_CONTEXT.md}.in` | `~/.config/hex/`; optional when Hex is installed, see [Hex dictation](hex.md) |
 | `hex/hex-vocabulary-review.service` | `~/.config/systemd/user/hex-vocabulary-review.service` |
-| `hex/linear_*`, `hex/linear-agent.md`, and shared support modules | `~/.config/hex/linear/`, including the execution and read-only preview agents |
+| `hex/linear_*`, `hex/linear-agent.md`, and the OpenCode plugin | `~/.config/hex/linear/`, including the execution and read-only preview agents |
 | `hex/hex-linear-issue.service` and Linear Dictation desktop entry | `~/.config/systemd/user/` and `~/.local/share/applications/` |
 | `hex/rewrite.json`, `hex/prompt.md`, `hex/vocabulary.json` | Global rewrite fields and merged vocabulary, applied through the running Hex CLI |
 | `hex/microphones/pcm2902/` (opt-in) | WirePlumber fragment, user service drop-in, and `~/.local/bin/disable-laptop-capture.py`; [profile usage](hex.md#optional-pcm2902-microphone-profile) |

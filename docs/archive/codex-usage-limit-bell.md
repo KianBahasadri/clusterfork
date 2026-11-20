@@ -1,8 +1,7 @@
 # Codex completion bell and usage-limit errors
 
 Investigated in upstream source on 2026-08-29. This is a dated explanation of
-the gap; [Notifications](../notifications.md) owns the installed hook and
-[remote development](../remote-development.md) owns headless worker outcomes.
+the gap. [Notifications](../notifications.md) describes the installed hook.
 
 ## Source findings
 

@@ -6,7 +6,7 @@ from datetime import datetime
 import json
 import time
 
-from common.selection import QuotaWindow, finite_number
+from account_selection import QuotaWindow, finite_number
 
 
 class UsageError(Exception):

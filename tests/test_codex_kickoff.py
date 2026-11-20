@@ -152,13 +152,9 @@ class KickoffRunTests(unittest.TestCase):
 
     def test_only_unstarted_local_accounts_ping_once_and_selection_is_restored(self):
         # Scheduled kickoff includes personal accounts even though bare rotation excludes them.
-        for name in ("alias", "used", "rounded", "kian", "cloud", "invalid"):
+        for name in ("alias", "used", "rounded", "kian", "invalid"):
             self.write_profile(name, "active" if name == "alias" else None)
         (self.backend.store_dir / "auth.json.invalid").write_text("invalid JSON")
-        cloud_id = rotate_usage.identity("codex", json.loads(
-            (self.backend.store_dir / "auth.json.cloud").read_text()))
-        (self.backend.store_dir / rotate_auth.REMOTE_MANIFEST).write_text(json.dumps({
-            "remote:cloud": {"ownership": "cloud", "account_id": cloud_id, "display_name": "cloud"}}))
         used, rounded = row(), row()
         used["windows"][0] = window(10, NOW + 100)
         rounded["windows"][0] = window(0, NOW + 100)
@@ -166,7 +162,7 @@ class KickoffRunTests(unittest.TestCase):
         unused_kian["observedAt"] = NOW - 120
         unused_kian["windows"][0] = {**window(0, NOW - 120 + 18002), "resetAfterSeconds": 18000}
         self.write_cache({"active": row(), "used": used, "rounded": rounded,
-                          "kian": unused_kian, "cloud": row()})
+                          "kian": unused_kian})
         pinged = []
 
         def ping(command):

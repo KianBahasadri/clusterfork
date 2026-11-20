@@ -144,6 +144,6 @@ at desktop, zoom-equivalent, and phone widths, including opaque module frames:
 
 ```bash
 env -u NO_COLOR uv run --no-project \
-  --with-requirements automation/controller/requirements.txt --with playwright \
+  --with playwright \
   python tests/codeview_browser.py
 ```

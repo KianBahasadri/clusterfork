@@ -11,7 +11,7 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango
 
-from common.images import MAX_IMAGES, MAX_IMAGE_BYTES, MAX_PIXELS, MAX_SIDE, MAX_TOTAL_BYTES, ImageContextError, validate_image
+from linear_images import MAX_IMAGES, MAX_IMAGE_BYTES, MAX_PIXELS, MAX_SIDE, MAX_TOTAL_BYTES, ImageContextError, validate_image
 
 
 def activate(app, question, new_request=False):

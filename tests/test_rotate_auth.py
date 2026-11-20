@@ -105,31 +105,6 @@ class SortNamesTests(unittest.TestCase):
         self.assertEqual(rotate_auth.sort_names([]), [])
 
 
-class ScopedProfileListTests(unittest.TestCase):
-    def test_names_and_tags_are_column_aligned(self):
-        from io import StringIO
-        from contextlib import redirect_stdout
-
-        rows = [
-            ("a", True, True, False),
-            ("longer-name", False, True, True),
-            ("only-remote", False, False, True),
-        ]
-        buf = StringIO()
-        with redirect_stdout(buf):
-            code = rotate_auth.print_scoped_profile_list("rotate-codex", rows)
-        self.assertEqual(code, 0)
-        lines = [line for line in buf.getvalue().splitlines() if line.startswith("  ")]
-        self.assertEqual(
-            lines,
-            [
-                "  * a            [local]",
-                "    longer-name  [local] [remote]",
-                "    only-remote          [remote]",
-            ],
-        )
-
-
 class EnvPathTests(unittest.TestCase):
     def test_unset_uses_default(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -268,8 +243,7 @@ class DeleteProfileTests(unittest.TestCase):
         return files, dict(self.keyring)
 
     def _delete(self, agent, name):
-        scope = ["--local"] if agent in ("codex", "cursor") else []
-        return rotate_auth.run([agent, *scope, "--delete", name])
+        return rotate_auth.run([agent, "--delete", name])
 
     def test_delete_inactive_profile_preserves_active_credentials(self):
         for agent, backend in self.backends.items():
@@ -665,162 +639,6 @@ class InteractivePromptTests(unittest.TestCase):
             self.assertFalse(rotate_auth.is_interactive())
         with patch("sys.stdin.isatty", return_value=True), patch("sys.stdout.isatty", return_value=False):
             self.assertFalse(rotate_auth.is_interactive())
-
-    def test_prompt_scope_keyboard_navigation(self):
-        import os, pty, select, time
-
-        cases = [
-            (b"\r", "local"),
-            (b"\x1b[B\r", "remote"),
-            (b"\x1b[B\x1b[A\r", "local"),
-            (b"j\r", "remote"),
-            (b"k\r", "local"),
-            (b"j\x1b[B\x1b[B\r", "remote"),
-        ]
-        for keys, expected in cases:
-            with self.subTest(keys=keys, expected=expected):
-                master, slave = pty.openpty()
-                pid = os.fork()
-                if pid == 0:
-                    os.close(master)
-                    os.dup2(slave, 0)
-                    os.dup2(slave, 1)
-                    os.dup2(slave, 2)
-                    if slave > 2:
-                        os.close(slave)
-                    try:
-                        res = rotate_auth.prompt_scope("rotate-codex", "testprof")
-                        sys.stdout.write(f"\nRESULT:{res}\n")
-                        sys.stdout.flush()
-                        os._exit(0)
-                    except Exception:
-                        os._exit(1)
-                else:
-                    os.close(slave)
-                    time.sleep(0.02)
-                    os.write(master, keys)
-                    output = b""
-                    while True:
-                        r, _, _ = select.select([master], [], [], 0.5)
-                        if not r:
-                            break
-                        try:
-                            data = os.read(master, 1024)
-                            if not data:
-                                break
-                            output += data
-                        except OSError:
-                            break
-                    os.close(master)
-                    _, status = os.waitpid(pid, 0)
-                    self.assertEqual(os.waitstatus_to_exitcode(status), 0)
-                    self.assertIn(f"RESULT:{expected}".encode(), output)
-
-    def test_prompt_scope_cancel(self):
-        import fcntl, os, pty, select, time
-
-        for key in (b"\x03", b"q", b"\x1b"):
-            with self.subTest(key=key):
-                master, slave = pty.openpty()
-                pid = os.fork()
-                if pid == 0:
-                    os.close(master)
-                    os.setsid()
-                    try:
-                        fcntl.ioctl(slave, 0x540E, 0)
-                    except OSError:
-                        pass
-                    os.dup2(slave, 0)
-                    os.dup2(slave, 1)
-                    os.dup2(slave, 2)
-                    if slave > 2:
-                        os.close(slave)
-                    try:
-                        rotate_auth.prompt_scope("rotate-codex", "testprof")
-                        os._exit(0)
-                    except KeyboardInterrupt:
-                        os._exit(42)
-                    except Exception:
-                        os._exit(1)
-                else:
-                    os.close(slave)
-                    time.sleep(0.02)
-                    os.write(master, key)
-                    while True:
-                        r, _, _ = select.select([master], [], [], 0.3)
-                        if not r:
-                            break
-                        try:
-                            if not os.read(master, 1024):
-                                break
-                        except OSError:
-                            break
-                    os.close(master)
-                    _, status = os.waitpid(pid, 0)
-                    self.assertEqual(os.waitstatus_to_exitcode(status), 42)
-
-    def test_prompt_migration_maps_menu_choice(self):
-        with patch.object(rotate_auth, "prompt_choice", return_value="remote to local") as menu:
-            self.assertEqual(rotate_auth.prompt_migration("rotate-codex"), "migrate-from-remote-to-local")
-        header, options, confirmation = menu.call_args.args
-        self.assertIn("migration direction", header)
-        self.assertEqual(options, ["local to remote", "remote to local"])
-        self.assertIn("{choice}", confirmation)
-        with patch.object(rotate_auth, "prompt_choice", return_value="local to remote"):
-            self.assertEqual(rotate_auth.prompt_migration("rotate-codex"), "migrate-from-local-to-remote")
-
-    def test_prompt_profile_selection_toggles_and_selects_all(self):
-        import os
-        import pty
-        import select
-        import time
-
-        cases = (
-            (b"\r", ""),
-            (b"\x1b[B \r", "work"),
-            (b" \r", "work,alias"),
-            (b"a\r", "work,alias"),
-            (b"a\x1b[B \r", "alias"),
-        )
-        for keys, expected in cases:
-            with self.subTest(keys=keys, expected=expected):
-                master, slave = pty.openpty()
-                pid = os.fork()
-                if pid == 0:
-                    os.close(master)
-                    os.dup2(slave, 0)
-                    os.dup2(slave, 1)
-                    os.dup2(slave, 2)
-                    if slave > 2:
-                        os.close(slave)
-                    try:
-                        selected = rotate_auth.prompt_profile_selection("rotate-codex", ["work", "alias"])
-                        sys.stdout.write("\nRESULT:" + ",".join(selected) + "\n")
-                        sys.stdout.flush()
-                        os._exit(0)
-                    except Exception:
-                        os._exit(1)
-                else:
-                    os.close(slave)
-                    time.sleep(0.02)
-                    os.write(master, keys)
-                    output = b""
-                    while True:
-                        ready, _, _ = select.select([master], [], [], 0.5)
-                        if not ready:
-                            break
-                        try:
-                            data = os.read(master, 1024)
-                            if not data:
-                                break
-                            output += data
-                        except OSError:
-                            break
-                    os.close(master)
-                    _, status = os.waitpid(pid, 0)
-                    self.assertEqual(os.waitstatus_to_exitcode(status), 0, output)
-                    normalized = output.replace(b"\r\n", b"\n")
-                    self.assertIn(f"RESULT:{expected}\n".encode(), normalized)
 
     def test_prompt_name_returns_entered_name(self):
         with patch("builtins.input", return_value="  my-profile  "):
