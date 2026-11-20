@@ -19,6 +19,10 @@ Symphony refreshes a shared cache of every mapped repository's open issues
 every 30 seconds using a batched, paginated Linear query. The browser receives
 the lists through its regular status requests when they change. Switching tabs
 uses the cache and restores the sidebar scroll position and expanded plans.
+All repositories combines the cached lists. Issues appear in collapsible status
+groups in Linear's workflow order. Each group sorts from Urgent to Low priority,
+with unprioritized issues last. Groups start expanded and remember their
+collapsed state separately for each view.
 Refresh failures keep the last successful lists and slow retries. Project
 chips use their Linear names and emoji. Issue cards show the identifier,
 workflow icon and title, with compact pills for priority, due date, estimate,

@@ -106,6 +106,19 @@ aside { overflow: auto; padding: 16px; border-right: 1px solid var(--line); back
 .project-emoji { flex: none; font-size: 16px; line-height: 18px; }
 .project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #issues { display: grid; gap: 8px; }
+.issue-group > summary {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 20px;
+}
+.issue-group-heading { display: inline-flex; align-items: center; gap: 8px; max-width: calc(100% - 16px); vertical-align: middle; }
+.issue-group-name { min-width: 0; overflow-wrap: anywhere; }
+.issue-count { flex: none; font: 12px/20px var(--mono); }
+.issue-group-list { display: grid; gap: 8px; padding-top: 8px; }
 .issue {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -115,17 +128,6 @@ aside { overflow: auto; padding: 16px; border-right: 1px solid var(--line); back
   border-radius: 6px;
   background: color-mix(in srgb, var(--surface-raised) 50%, transparent);
   overflow-wrap: anywhere;
-}
-.issue[data-tone="danger"] { background: color-mix(in srgb, var(--danger) 7%, transparent); border-radius: 0; }
-.issue-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 16px;
 }
 .issue-link { flex: none; font: 500 12px/16px var(--mono); color: var(--muted); text-decoration: none; white-space: nowrap; }
 .issue-link:hover { color: var(--ink-strong); text-decoration: underline; }
@@ -156,7 +158,6 @@ aside { overflow: auto; padding: 16px; border-right: 1px solid var(--line); back
 .issue-pill > span:not(.sr-only) { overflow: hidden; text-overflow: ellipsis; }
 .issue-pill .icon { width: 14px; height: 14px; }
 .label-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--muted); }
-.state { text-transform: capitalize; }
 .issue [data-tone="caution"] { color: var(--caution); border-radius: 4px; }
 .issue [data-tone="danger"] { color: var(--danger); border-radius: 0; }
 .detail { color: var(--caution); font-size: .86rem; margin-top: 4px; }
@@ -204,7 +205,6 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
   background: transparent;
   font: 14px/1.5 var(--mono);
 }
-#message::placeholder { color: var(--muted); }
 #command-list {
   position: absolute;
   z-index: 1;
@@ -273,5 +273,6 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
 @media (pointer: coarse) {
   button, #repos .project-chip, #interrupt, #command-list [role="option"] { min-height: 44px; }
   #interrupt kbd { display: none; }
+  .issue-group > summary { padding-block: 12px; }
   #command-list [role="option"] { padding-block: 10px; }
 }

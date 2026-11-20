@@ -149,7 +149,7 @@ class Linear:
                 }) {
                     nodes {
                         identifier title url description priority priorityLabel estimate dueDate
-                        state { name type }
+                        state { name type position }
                         project { id name }
                         labels(first: 10) { nodes { name color } }
                     }

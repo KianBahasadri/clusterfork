@@ -340,7 +340,7 @@ Path("verified.txt").write_text("Tested\\n")
         repos = {REPO: [{"id": "alpha", "name": "Alpha", "icon": "🌱"}],
                  "owner/second": [{"id": "beta", "name": "Beta", "icon": ""}]}
         alpha = {"identifier": ISSUE, "title": "Alpha issue", "url": "https://linear.app/fixture/issue/KIAN-101",
-                 "state": self.linear.state, "description": "## Proposed Plan\n\nTest alpha.",
+                 "state": {**self.linear.state, "position": 1}, "description": "## Proposed Plan\n\nTest alpha.",
                  "project": {"id": "alpha", "name": "Alpha"}, "priority": 2, "priorityLabel": "High",
                  "estimate": 3, "dueDate": "2026-11-23",
                  "labels": {"nodes": [{"name": "Feature", "color": "#bb87fc"}]}}
@@ -362,6 +362,7 @@ Path("verified.txt").write_text("Tested\\n")
             ])
             self.assertEqual(state["projects"][0]["projects"], repos[REPO])
             card = state["projects"][0]["issues"][0]
+            self.assertEqual(card["state"]["position"], 1)
             self.assertEqual((card["project"], card["priorityLabel"], card["estimate"], card["dueDate"], card["labels"]),
                              ("Alpha", "High", 3, "2026-11-23", [{"name": "Feature", "color": "#bb87fc"}]))
             self.assertNotIn("projects", await app.state(0, revision))

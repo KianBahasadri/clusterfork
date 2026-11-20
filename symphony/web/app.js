@@ -10,6 +10,9 @@ const commandList = byId("command-list");
 const interrupt = byId("interrupt");
 const issueScroll = new Map();
 const expandedPlans = new Set();
+const collapsedGroups = new Set();
+const stateIcons = {backlog: "circle-dashed", unstarted: "circle", started: "circle-dot",
+  completed: "circle-check", canceled: "circle-x", duplicate: "circle-x"};
 let issueCache = new Map();
 let issueRevision = "";
 let selected = "";
@@ -71,10 +74,74 @@ function issueDeadline(value, today) {
   return time;
 }
 
+function renderIssue(issue, today) {
+  const row = element("article", "", "issue");
+  const link = element("a", issue.identifier, "issue-link");
+  link.id = "issue-link-" + issue.identifier;
+  const url = new URL(issue.url);
+  if (url.protocol === "https:" && url.hostname === "linear.app") {
+    link.href = url.href;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+  }
+  const deadline = issueDeadline(issue.dueDate, today);
+
+  const task = tasks.find((item) => item.issue === issue.identifier);
+  const stateName = (task?.phase || issue.state.name).replaceAll("_", " ");
+  const blocked = stateName.toLowerCase() === "blocked" || task?.phase === "finish_failed";
+  const state = element("span", "", "issue-state");
+  state.title = stateName;
+  state.setAttribute("role", "img");
+  state.setAttribute("aria-label", stateName);
+  state.append(icon(blocked ? "octagon-alert" : stateIcons[issue.state.type] || "circle"));
+  if (blocked) state.dataset.tone = "danger";
+  const heading = element("div", "", "issue-heading");
+  heading.append(state, element("p", issue.title, "issue-title"));
+
+  const meta = element("div", "", "issue-meta");
+  const priorityIcons = ["ellipsis", "octagon-alert", "signal", "signal-medium", "signal-low"];
+  const priority = issuePill("", issue.priorityLabel, priorityIcons[issue.priority]);
+  if (issue.priority === 1) priority.dataset.tone = "danger";
+  meta.append(priority);
+  if (deadline) meta.append(deadline);
+  if (issue.estimate != null) meta.append(issuePill(String(issue.estimate), "Estimate " + issue.estimate, "triangle"));
+  for (const label of issue.labels) {
+    const pill = issuePill(label.name, label.name);
+    const dot = element("span", "", "label-dot");
+    dot.style.backgroundColor = label.color;
+    pill.prepend(dot);
+    meta.append(pill);
+  }
+  if (task) {
+    const phase = issuePill(stateName, "Worker " + stateName);
+    if (blocked) phase.dataset.tone = "danger";
+    meta.append(phase);
+  }
+  row.append(link, heading, meta);
+  if (task?.detail) row.append(element("p", task.detail, "detail"));
+  if (issue.plan) {
+    const plan = element("details");
+    const summary = element("summary", "Proposed plan");
+    summary.id = "plan-summary-" + issue.identifier;
+    plan.dataset.issue = issue.identifier;
+    plan.open = expandedPlans.has(issue.identifier);
+    plan.append(summary, element("div", issue.plan, "plan"));
+    if (!task) {
+      plan.append(element("p", "Tell the coordinator in chat when you approve this plan.", "muted"));
+    }
+    row.append(plan);
+  }
+  return row;
+}
+
 function renderIssues() {
-  for (const plan of issues.querySelectorAll("details")) {
+  for (const plan of issues.querySelectorAll("details[data-issue]")) {
     if (plan.open) expandedPlans.add(plan.dataset.issue);
     else expandedPlans.delete(plan.dataset.issue);
+  }
+  for (const group of issues.querySelectorAll("details[data-group]")) {
+    if (group.open) collapsedGroups.delete(group.dataset.group);
+    else collapsedGroups.add(group.dataset.group);
   }
   const scroll = sidebar.scrollTop;
   const focused = issues.contains(document.activeElement) ? document.activeElement.id : "";
@@ -82,82 +149,30 @@ function renderIssues() {
   const rows = issueCache.get(selected) || [];
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  if (!selected) {
-    fragment.append(element("p", "Select a repository to browse its issues.", "muted"));
-    for (const task of tasks) {
-      const row = element("article", "", "issue");
-      if (task.phase === "blocked") row.dataset.tone = "danger";
-      const header = element("div", "", "issue-header");
-      header.append(element("strong", task.issue, "issue-link"),
-                    element("span", task.phase.replaceAll("_", " "), "state"));
-      row.append(header, element("p", task.repo, "issue-title"));
-      if (task.detail) row.append(element("p", task.detail, "detail"));
-      fragment.append(row);
-    }
+  const grouped = Object.groupBy(rows, (issue) => issue.state.name);
+  const groups = Object.values(grouped).sort((a, b) =>
+    a[0].state.position - b[0].state.position || a[0].state.name.localeCompare(b[0].state.name));
+  for (const groupRows of groups) {
+    groupRows.sort((a, b) => (a.priority || 5) - (b.priority || 5)
+      || a.identifier.localeCompare(b.identifier, undefined, {numeric: true}));
+    const state = groupRows[0].state;
+    const group = element("details", "", "issue-group");
+    group.dataset.group = JSON.stringify([selected, state.name]);
+    group.open = !collapsedGroups.has(group.dataset.group);
+    const summary = element("summary");
+    summary.id = "status-summary-" + encodeURIComponent(state.name);
+    const heading = element("span", "", "issue-group-heading");
+    heading.append(icon(stateIcons[state.type] || "circle"),
+                   element("span", state.name, "issue-group-name"),
+                   element("span", String(groupRows.length), "issue-count"));
+    summary.append(heading);
+    const list = element("div", "", "issue-group-list");
+    list.append(...groupRows.map((issue) => renderIssue(issue, today)));
+    group.append(summary, list);
+    fragment.append(group);
   }
-  for (const issue of rows) {
-    const row = element("article", "", "issue");
-    const link = element("a", issue.identifier, "issue-link");
-    link.id = "issue-link-" + issue.identifier;
-    const url = new URL(issue.url);
-    if (url.protocol === "https:" && url.hostname === "linear.app") {
-      link.href = url.href;
-      link.target = "_blank";
-      link.rel = "noreferrer";
-    }
-    const deadline = issueDeadline(issue.dueDate, today);
-
-    const task = tasks.find((item) => item.issue === issue.identifier);
-    const stateName = (task?.phase || issue.state.name).replaceAll("_", " ");
-    const blocked = stateName.toLowerCase() === "blocked" || task?.phase === "finish_failed";
-    const stateIcons = {backlog: "circle-dashed", unstarted: "circle", started: "circle-dot",
-      completed: "circle-check", canceled: "circle-x", duplicate: "circle-x"};
-    const state = element("span", "", "issue-state");
-    state.title = stateName;
-    state.setAttribute("role", "img");
-    state.setAttribute("aria-label", stateName);
-    state.append(icon(blocked ? "octagon-alert" : stateIcons[issue.state.type] || "circle"));
-    if (blocked) state.dataset.tone = "danger";
-    const heading = element("div", "", "issue-heading");
-    heading.append(state, element("p", issue.title, "issue-title"));
-
-    const meta = element("div", "", "issue-meta");
-    const priorityIcons = ["ellipsis", "octagon-alert", "signal", "signal-medium", "signal-low"];
-    const priority = issuePill("", issue.priorityLabel, priorityIcons[issue.priority]);
-    if (issue.priority === 1) priority.dataset.tone = "danger";
-    meta.append(priority);
-    if (deadline) meta.append(deadline);
-    if (issue.estimate != null) meta.append(issuePill(String(issue.estimate), "Estimate " + issue.estimate, "triangle"));
-    for (const label of issue.labels) {
-      const pill = issuePill(label.name, label.name);
-      const dot = element("span", "", "label-dot");
-      dot.style.backgroundColor = label.color;
-      pill.prepend(dot);
-      meta.append(pill);
-    }
-    if (task) {
-      const phase = issuePill(stateName, "Worker " + stateName);
-      if (blocked) phase.dataset.tone = "danger";
-      meta.append(phase);
-    }
-    row.append(link, heading, meta);
-    if (task?.detail) row.append(element("p", task.detail, "detail"));
-    if (issue.plan) {
-      const plan = element("details");
-      const summary = element("summary", "Proposed plan");
-      summary.id = "plan-summary-" + issue.identifier;
-      plan.dataset.issue = issue.identifier;
-      plan.open = expandedPlans.has(issue.identifier);
-      plan.append(summary, element("div", issue.plan, "plan"));
-      if (!task) {
-        plan.append(element("p", "Tell the coordinator in chat when you approve this plan.", "muted"));
-      }
-      row.append(plan);
-    }
-    fragment.append(row);
-  }
-  if (selected && !rows.length) {
-    fragment.append(element("p", "No open issues for this repository.", "muted"));
+  if (!rows.length) {
+    fragment.append(element("p", selected ? "No open issues for this repository." : "No open issues.", "muted"));
   }
   issues.replaceChildren(fragment);
   sidebar.scrollTop = scroll;
@@ -167,6 +182,7 @@ function renderIssues() {
 function updateProjects(projects, redraw) {
   const previous = issueCache.get(selected);
   issueCache = new Map(projects.map((project) => [project.repo, project.issues]));
+  issueCache.set("", projects.flatMap((project) => project.issues));
   const key = JSON.stringify(projects.map((project) => [project.repo, project.projects]));
   if (key === projectsKey) {
     if (redraw || JSON.stringify(previous) !== JSON.stringify(issueCache.get(selected))) renderIssues();
