@@ -128,7 +128,7 @@ Path("verified.txt").write_text("Tested\\n")
     async def test_codex_has_native_tools_and_uses_oauth(self):
         codex = Codex(self.runner, None)
         with patch.dict(os.environ, {"GITHUB_TOKEN": "github-fixture", "OPENAI_API_KEY": "api-fixture",
-                                     "LINEAR_API_KEY": "linear-fixture"}), \
+                                     "LINEAR_API_KEY": "linear-fixture"}, clear=True), \
              patch("symphony.codex.asyncio.create_subprocess_exec") as launch, \
              patch.object(codex, "read"), patch.object(codex, "send"), \
              patch.object(codex, "request", side_effect=[
