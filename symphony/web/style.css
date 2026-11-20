@@ -160,7 +160,7 @@ aside { overflow: auto; padding: 16px; border-right: 1px solid var(--line); back
 .detail { color: var(--caution); font-size: .86rem; margin-top: 4px; }
 #project-error { margin-bottom: 8px; }
 summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-top: 4px; }
-.plan, .message-text, #stream { white-space: pre-wrap; overflow-wrap: anywhere; }
+.plan, .message-text:not(.issue-markdown) { white-space: pre-wrap; overflow-wrap: anywhere; }
 .plan { margin-top: 8px; padding: 12px; background: var(--canvas); font-size: .85rem; }
 .chat { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .chat-log { flex: 1; overflow: auto; padding: 20px max(16px, calc((100% - 760px)/2)); }

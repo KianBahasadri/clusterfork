@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 from .codex import Codex, TOOL_SPECS
-from .issue_details import issue_details, open_asset
+from .issue_details import issue_details, markdown, open_asset
 from .runner import Runner, read_small
 from .services import ISSUE_ID, Linear, proposed_plan, with_plan
 
@@ -168,9 +168,15 @@ class Symphony:
 
     async def state(self, after, issue_revision=""):
         login = self.login if not self.coordinator.account and self.login and time.monotonic() < self.login["expires"] else None
-        state = {"messages": self.runner.rows("SELECT * FROM chat WHERE id > ? ORDER BY id LIMIT 200", (after,)),
+        messages = self.runner.rows("SELECT * FROM chat WHERE id > ? ORDER BY id LIMIT 200", (after,))
+        for message in messages:
+            if message["role"] == "assistant":
+                message["html"] = markdown(message["text"])
+        state = {"messages": messages,
                  "busy": self.busy, "canInterrupt": bool(self.coordinator.turn),
-                 "stream": self.coordinator.stream, "tasks": self.runner.status(),
+                 "stream": self.coordinator.stream,
+                 "streamHtml": markdown(self.coordinator.stream) if self.coordinator.stream else "",
+                 "tasks": self.runner.status(),
                  "signedIn": bool(self.coordinator.account), "login": login,
                  "paused": self.runner.setting("paused"), "view": self.runner.setting("view"),
                  "codex": self.coordinator.status(), "issueError": self.issue_error}

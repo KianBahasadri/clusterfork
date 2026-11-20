@@ -85,6 +85,23 @@ class IssueDetailsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parse_qs(urlsplit(proxied).query)["url"], [UPLOAD])
         self.assertEqual(asset_url("https://example.com/image.png"), "https://example.com/image.png")
 
+    def test_markdown_chat_links_and_unsafe_content(self):
+        html = markdown(
+            "[Linear](https://linear.app/acme/issue/KIAN-1077) "
+            "[CI](https://github.com/acme/project/actions/runs/123) "
+            "[docs](../docs/symphony.md)\n\n"
+            "**In Progress**\n\n"
+            "<script>alert(1)</script> [bad](javascript:alert%281%29)"
+        )
+        self.assertIn('href="https://linear.app/acme/issue/KIAN-1077"', html)
+        self.assertIn('href="https://github.com/acme/project/actions/runs/123"', html)
+        self.assertIn('href="../docs/symphony.md"', html)
+        self.assertIn("<strong>In Progress</strong>", html)
+        self.assertEqual(html.count("<p>"), 3)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
+        self.assertNotIn("<script>", html)
+        self.assertNotIn('<a href="javascript:', html)
+
 
 class IssueHttpTests(unittest.TestCase):
     def test_issue_http_cache_is_private_and_versioned_and_never_caches_errors(self):

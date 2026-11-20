@@ -274,10 +274,15 @@ function selectRepo(repo) {
   sidebar.scrollTop = issueScroll.get(repo) || 0;
 }
 
-function appendMessage(role, text) {
+function appendMessage(role, text, html) {
   const label = {user: "You", assistant: "Coordinator", system: "Symphony", worker: "Worker"};
   const entry = element("article", "", "message " + role);
-  entry.append(element("h2", label[role] || "Symphony"), element("div", text, "message-text"));
+  const content = element("div", role === "assistant" ? "" : text, "message-text");
+  if (role === "assistant") {
+    content.classList.add("issue-markdown");
+    content.innerHTML = html;
+  }
+  entry.append(element("h2", label[role] || "Symphony"), content);
   messages.append(entry);
 }
 
@@ -338,13 +343,13 @@ async function poll() {
     const state = await api("/api/state?after=" + lastMessage + "&issues=" + issueRevision);
     const pinned = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 80;
     for (const item of state.messages) {
-      appendMessage(item.role, item.text);
+      appendMessage(item.role, item.text, item.html);
       lastMessage = item.id;
     }
     byId("welcome").hidden = Boolean(lastMessage);
     if (stream !== state.stream) {
       stream = state.stream;
-      byId("stream").textContent = stream;
+      byId("stream").innerHTML = state.streamHtml;
     }
     if (pinned) chatLog.scrollTop = chatLog.scrollHeight;
     const tasksChanged = JSON.stringify(tasks) !== JSON.stringify(state.tasks);

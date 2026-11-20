@@ -132,6 +132,52 @@ Path("verified.txt").write_text("Tested\\n")
         self.assertEqual(self.runner.task(ISSUE)["plan"], "Write one verification file.")
         self.assertEqual(self.runner.rows("SELECT * FROM events"), [])
 
+    async def test_chat_state_renders_saved_and_streaming_assistant_markdown(self):
+        app = self.app()
+        reply = (
+            "**KIAN-1077** is now **In Progress**.\n\n"
+            "[Linear issue](https://linear.app/acme/issue/KIAN-1077)\n\n"
+            "[CI run](https://github.com/acme/project/actions/runs/123)\n\n"
+            "[documented work](../docs/symphony.md#plan-and-execute)\n\n"
+            "- List item with `inline code`\n\n"
+            "```text\ncode block\n```"
+        )
+        self.runner.chat("user", "**plain text**")
+        app.coordinator.stream = reply
+
+        live = await app.state(0)
+        self.assertEqual(live["messages"][0]["text"], "**plain text**")
+        self.assertNotIn("html", live["messages"][0])
+        for expected in (
+            '<a href="https://linear.app/acme/issue/KIAN-1077">Linear issue</a>',
+            '<a href="https://github.com/acme/project/actions/runs/123">CI run</a>',
+            '<a href="../docs/symphony.md#plan-and-execute">documented work</a>',
+            "<strong>In Progress</strong>",
+        ):
+            self.assertIn(expected, live["streamHtml"])
+        self.assertEqual(live["streamHtml"].count("<p>"), 4)
+        self.assertIn("<ul>", live["streamHtml"])
+        self.assertIn("<code>inline code</code>", live["streamHtml"])
+        self.assertIn("<pre><code", live["streamHtml"])
+        stream_html = live["streamHtml"]
+
+        app.coordinator.thread = "main"
+        self.runner.save_setting("thread", "main")
+        app.coordinator.notification("item/completed", {
+            "threadId": "main", "item": {"type": "agentMessage", "text": reply},
+        })
+        app.coordinator.notification("turn/completed", {
+            "threadId": "main", "turn": {"id": "turn", "status": "completed"},
+        })
+        complete = await app.state(0)
+        self.assertEqual(complete["stream"], "")
+        self.assertEqual(complete["streamHtml"], "")
+        assistant_messages = [item for item in complete["messages"] if item["role"] == "assistant"]
+        self.assertEqual(len(assistant_messages), 1)
+        self.assertEqual(assistant_messages[0]["text"], reply)
+        self.assertEqual(assistant_messages[0]["html"], stream_html)
+        self.assertEqual(self.runner.rows("SELECT role, text FROM chat")[-1]["text"], reply)
+
     async def test_approval_retry_wakes_the_coordinator(self):
         await self.fail_approval()
         app = self.app()
