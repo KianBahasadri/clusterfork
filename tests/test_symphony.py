@@ -1,9 +1,11 @@
 """Exercise the MVP's approval and publication boundaries without provider calls."""
 
 import asyncio
+import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -211,6 +213,32 @@ Path("verified.txt").write_text("Tested\\n")
         await self.phase("review")
         self.assertEqual(self.runner.task(ISSUE)["session"], "ses_fixture")
         self.assertEqual(self.runner.task(ISSUE)["check_exit"], 0)
+
+    async def test_opencode_error_reporting_and_dispatch_pause(self):
+        await self.approve()
+        expired = "This API key has expired."
+        throttled = "Too many requests."
+        quota = "OpenCode Go quota exhausted."
+        for payload, message, pauses in [
+            ({"type": "provider.auth", "message": expired, "status": 401}, expired, True),
+            ({"type": "provider.api", "message": throttled, "status": 429}, throttled, True),
+            ({"type": "provider.api", "message": quota}, quota, True),
+            ({"type": "provider.network"}, "provider.network", False),
+            ("Worker disconnected.", "Worker disconnected.", False),
+            (None, "OpenCode error", False),
+        ]:
+            with self.subTest(payload=payload):
+                self.runner.save_setting("paused", "")
+                event = json.dumps({"type": "error", "error": payload})
+                args = [sys.executable, "-c", f"print({event!r})"]
+                with (self.root / "worker.log").open("wb") as log:
+                    with self.assertRaises(RuntimeError) as failure:
+                        await self.runner.run_opencode(ISSUE, args, self.root, os.environ, log)
+                self.assertEqual(str(failure.exception), f"{message} See worker.log.")
+                self.assertEqual(self.runner.setting("paused"), f"OpenCode Go: {message}" if pauses else "")
+                if pauses:
+                    with self.assertRaisesRegex(ValueError, "Dispatch is paused"):
+                        self.runner.dispatch(ISSUE, REPO, "")
 
     async def test_approval_verification_notes_push_and_ci(self):
         with self.assertRaisesRegex(ValueError, "No approved plan"):

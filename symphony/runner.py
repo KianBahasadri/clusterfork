@@ -271,6 +271,7 @@ class Runner:
         )
         self.change(issue, pid=process.pid)
         error = ""
+        error_status = None
         try:
             async for line in process.stdout:
                 log.write(line)
@@ -285,13 +286,18 @@ class Runner:
                     if session != self.task(issue)["session"]:
                         self.change(issue, session=session)
                 if event.get("type") == "error":
-                    payload = event.get("error") or {}
-                    error = str(payload.get("data", {}).get("message") or payload.get("name") or "OpenCode error")
+                    payload = event.get("error")
+                    if not isinstance(payload, dict):
+                        payload = {"message": payload}
+                    error = str(payload.get("message") or payload.get("type") or "OpenCode error")
+                    error_status = payload.get("status")
             status = await process.wait()
         finally:
             await stop_process(process)
         if status or error:
-            if re.search("quota|rate.limit|subscription|unauthorized|invalid.api.key", error, re.I):
+            if error_status in (401, 429) or re.search(
+                "quota|rate.limit|subscription|unauthorized|invalid.api.key", error, re.I
+            ):
                 self.save_setting("paused", f"OpenCode Go: {error[:1000]}")
             raise RuntimeError((error[:1000] or f"OpenCode exited {status}.") + " See worker.log.")
 

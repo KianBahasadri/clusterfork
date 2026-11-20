@@ -26,9 +26,11 @@ attempt has a one-hour safety timeout. The checklist is a shell command file
 that Symphony runs a second time, in the worktree, to get its own exit status.
 The worker's notes and log live in `runs/<issue-id>/` on the PVC. The worktree
 stays reserved through audit, rework, and CI. The coordinator reviews notes
-before shipping. A rejected push or failed CI appears in chat and the issue
-sidebar with its worktree preserved. Use `/retry KIAN-123` to revisit a parked
-issue and `/continue` when a shared provider failure has been resolved.
+before shipping. Worker errors, rejected pushes, and failed CI appear in chat
+and the issue sidebar with the worktree preserved. OpenCode Go quota,
+rate-limit, and authentication failures pause new dispatches. Use
+`/retry KIAN-123` to revisit a parked issue and `/continue` when the provider
+failure has been resolved.
 
 Symphony writes one squash commit and pushes directly to `main`. It waits for
 the exact revision's GitHub Actions workflows whose push filters match the
