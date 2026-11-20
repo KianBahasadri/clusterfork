@@ -11,7 +11,7 @@ from .services import ISSUE_ID
 
 
 USER = "name displayName avatarUrl url"
-REFERENCE = "identifier title url state { name type }"
+REFERENCE = "identifier title url state { name type color }"
 REACTIONS = "emoji user { name } externalUser { name }"
 CONNECTIONS = {
     "labels": "name color",
@@ -45,7 +45,7 @@ CONNECTIONS = {
 FIELDS = """id identifier title url description priority priorityLabel estimate dueDate
     createdAt updatedAt startedAt completedAt canceledAt archivedAt snoozedUntilAt
     slaStartedAt slaBreachesAt slaType branchName previousIdentifiers
-    state { name type } team { name key }
+    state { name type color } team { name key }
     creator { """ + USER + " } assignee { " + USER + " } delegate { " + USER + """ }
     project { id name icon url }
     cycle { name number startsAt endsAt }

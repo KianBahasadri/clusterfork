@@ -70,7 +70,7 @@ function detailSection(parent, title) {
 function issueReference(issue) {
   const button = element("button", "", "issue-reference");
   button.type = "button";
-  button.append(icon(stateIcons[issue.state.type] || "circle"),
+  button.append(stateIcon(issue.state),
     element("span", issue.identifier, "issue-link"), element("span", issue.title));
   button.addEventListener("click", () => openIssue(issue.identifier));
   return button;
@@ -129,7 +129,7 @@ function renderIssueContext(issue) {
   source.hidden = false;
   const values = detailSection(properties, "Properties");
   const status = element("p", "", "issue-property");
-  status.append(icon(stateIcons[issue.state.type] || "circle"), element("span", issue.state.name));
+  status.append(stateIcon(issue.state), element("span", issue.state.name));
   values.append(status, issuePill(issue.priorityLabel, issue.priorityLabel, priorityIcons[issue.priority]),
     issuePerson(issue.assignee));
   if (issue.delegate) values.append(issuePerson(issue.delegate));

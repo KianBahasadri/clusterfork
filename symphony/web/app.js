@@ -11,8 +11,6 @@ const interrupt = byId("interrupt");
 const issueScroll = new Map();
 const expandedPlans = new Set();
 const collapsedGroups = new Set();
-const stateIcons = {backlog: "circle-dashed", unstarted: "circle", started: "circle-dot",
-  completed: "circle-check", canceled: "circle-x", duplicate: "circle-x"};
 const priorityIcons = ["ellipsis", "octagon-alert", "signal", "signal-medium", "signal-low"];
 let issueCache = new Map();
 let projectCache = new Map();
@@ -33,15 +31,22 @@ function element(tag, text, className) {
   return node;
 }
 
-function icon(name) {
+function icon(name, namespace = "lucide") {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
   svg.setAttribute("class", "icon");
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("aria-hidden", "true");
   svg.setAttribute("focusable", "false");
-  use.setAttribute("href", "#lucide-" + name);
+  use.setAttribute("href", "#" + namespace + "-" + name);
   svg.append(use);
+  return svg;
+}
+
+function stateIcon(state) {
+  const svg = icon(state.type, "workflow");
+  svg.classList.add("status-icon");
+  svg.style.setProperty("--status-color", state.color);
   return svg;
 }
 
@@ -103,7 +108,7 @@ function renderIssue(issue, today) {
   state.title = stateName;
   state.setAttribute("role", "img");
   state.setAttribute("aria-label", stateName);
-  state.append(icon(blocked ? "octagon-alert" : stateIcons[issue.state.type] || "circle"));
+  state.append(blocked ? icon("octagon-alert") : stateIcon(issue.state));
   if (blocked) state.dataset.tone = "danger";
   const heading = element("span", "", "issue-heading");
   heading.append(state, element("span", issue.title, "issue-title"));
@@ -205,7 +210,7 @@ function renderIssues() {
     summary.id = "status-summary-" + encodeURIComponent(state.name);
     summary.addEventListener("click", toggleIssueGroup);
     const heading = element("span", "", "issue-group-heading");
-    heading.append(icon(stateIcons[state.type] || "circle"),
+    heading.append(stateIcon(state),
                    element("span", state.name, "issue-group-name"),
                    element("span", String(groupRows.length), "issue-count"));
     summary.append(heading);

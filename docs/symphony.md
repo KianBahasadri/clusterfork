@@ -29,7 +29,9 @@ disables the animation.
 Refresh failures keep the last successful lists and slow retries. Project
 chips use their Linear names and emoji. Issue cards show the identifier,
 workflow icon and title, with compact pills for priority, due date, estimate,
-and colored labels. All repositories also shows each issue's project chip.
+and colored labels. Workflow icons match Linear's dotted, empty, half-filled,
+and filled status shapes, using the configured colors with stronger contrast
+in light mode. All repositories also shows each issue's project chip.
 Project names appear in the chips above the list. Worker phases and proposed
 plans appear on their issues.
 

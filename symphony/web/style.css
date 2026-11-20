@@ -70,6 +70,10 @@ h2 { font-size: .94rem; font-weight: 650; }
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+.status-icon { color: color-mix(in srgb, var(--status-color) 55%, var(--ink)); }
+@media (prefers-color-scheme: dark) {
+  .status-icon { color: var(--status-color); }
+}
 main { display: grid; grid-template-columns: minmax(250px, 29vw) minmax(0, 1fr); min-height: 0; }
 aside { overflow: auto; padding: 16px; border-right: 1px solid var(--line); background: var(--surface); }
 .sidebar-heading { padding-bottom: 8px; }
