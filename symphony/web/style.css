@@ -202,6 +202,7 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
 #command-list code { color: var(--ink-strong); font: 600 13px/1.35 var(--mono); }
 .composer-meta {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 4px 12px;
@@ -215,6 +216,9 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
 #status-model { color: var(--ink-strong); font-weight: 600; white-space: normal; overflow-wrap: anywhere; }
 #codex-status [data-level="caution"] { color: var(--caution); }
 #codex-status [data-level="danger"], #request-error { color: var(--danger); }
+#interrupt { min-height: 28px; padding: 2px 8px; }
+#interrupt kbd { margin-inline-start: 4px; color: var(--muted); font: 11px/1 var(--mono); }
+#interrupt:disabled { opacity: 0.45; cursor: not-allowed; }
 #turn-timing { margin-bottom: 8px; color: var(--muted); font: 12px/1.5 var(--mono); }
 #request-error { margin-top: 8px; font-size: .85rem; overflow-wrap: anywhere; }
 #request-error:empty { display: none; }
@@ -226,6 +230,7 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
   #message, .prompt { font-size: 16px; }
 }
 @media (pointer: coarse) {
-  button, #command-list [role="option"] { min-height: 44px; }
+  button, #interrupt, #command-list [role="option"] { min-height: 44px; }
+  #interrupt kbd { display: none; }
   #command-list [role="option"] { padding-block: 10px; }
 }

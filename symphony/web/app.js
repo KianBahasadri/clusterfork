@@ -7,6 +7,7 @@ const chatLog = byId("chat-log");
 const composer = byId("composer");
 const messageField = byId("message");
 const commandList = byId("command-list");
+const interrupt = byId("interrupt");
 const issueScroll = new Map();
 const expandedPlans = new Set();
 let issueCache = new Map();
@@ -225,7 +226,7 @@ function showCodexStatus() {
     timing.textContent = (working ? "Working for " : "Worked for ") + duration
       + (!working && completedAt ? " · " + clockTime(completedAt) : "");
   }
-  byId("interrupt-hint").hidden = !canInterrupt;
+  interrupt.hidden = !canInterrupt;
 }
 
 function clockTime(seconds) {
@@ -294,6 +295,16 @@ async function submit(text) {
   } catch (error) {
     errorField.textContent = error.message;
     return false;
+  }
+}
+
+async function interruptTurn() {
+  if (!canInterrupt || interrupt.disabled) return;
+  interrupt.disabled = true;
+  try {
+    await submit("/interrupt");
+  } finally {
+    interrupt.disabled = false;
   }
 }
 
@@ -434,19 +445,7 @@ messageField.addEventListener("focus", renderCommands);
 messageField.addEventListener("blur", hideCommands);
 messageField.addEventListener("keydown", (event) => {
   if (event.isComposing || event.keyCode === 229) return;
-  if (event.repeat && (event.key === "Escape" || (event.key === "Enter" && !event.shiftKey))) {
-    event.preventDefault();
-    return;
-  }
-  if (event.key === "Escape") {
-    if (!commandList.hidden) {
-      dismissedDraft = messageField.value;
-      hideCommands();
-    } else if (canInterrupt) {
-      submit("/interrupt");
-    } else {
-      return;
-    }
+  if (event.repeat && event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     return;
   }
@@ -466,5 +465,19 @@ messageField.addEventListener("keydown", (event) => {
     event.preventDefault();
     composer.requestSubmit();
   }
+});
+interrupt.addEventListener("click", interruptTurn);
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || event.defaultPrevented || event.repeat || event.isComposing
+      || event.keyCode === 229 || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
+  if (!commandList.hidden) {
+    dismissedDraft = messageField.value;
+    hideCommands();
+  } else if (canInterrupt) {
+    interruptTurn();
+  } else {
+    return;
+  }
+  event.preventDefault();
 });
 poll();

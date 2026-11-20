@@ -180,6 +180,10 @@ class Symphony:
         if not isinstance(text, str) or not text.strip() or not isinstance(repo, str):
             raise ValueError("Enter a message.")
         text = text.strip()
+        if text == "/interrupt":
+            await self.coordinator.interrupt()
+            self.runner.chat("user", text)
+            return
         if repo and repo not in self.repos:
             raise ValueError("The selected repository is unavailable. Refresh the repo list.")
         previous = self.runner.setting("view")
@@ -187,15 +191,12 @@ class Symphony:
             self.runner.save_setting("view", repo)
         message = f"[Switched view: {repo or 'All repositories'}]\n{text}" if repo != previous else text
         self.runner.chat("user", message)
-        if text == "/interrupt":
-            await self.coordinator.interrupt()
-            return
         if self.coordinator.turn and self.turn_repo == repo and not text.startswith("/"):
             try:
                 await self.coordinator.steer(message)
                 return
-            except (RuntimeError, ValueError):
-                pass  # The turn can complete between the check and the steer.
+            except (OSError, RuntimeError, ValueError):
+                pass  # The turn or the server can exit before the steer is accepted.
         self.messages.append((repo, text, message))
         self.runner.wake.set()
 

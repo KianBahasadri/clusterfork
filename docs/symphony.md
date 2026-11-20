@@ -24,10 +24,13 @@ estimate, and labels.
 Type `/` to see commands. Use the arrow keys to choose one, Tab to complete it,
 or Enter to run it. Enter sends a message, Shift+Enter inserts a newline, and
 the up arrow at the start of the prompt recalls previous inputs. Escape closes
-command suggestions or interrupts the active turn. The composer shows the
-current model and reasoning effort, context used, 5-hour and weekly quota when
-available, and turn timing. `/status` also lists approved work. Symphony uses
-the design guide palette and follows the browser's light or dark preference.
+command suggestions first. Press Escape anywhere on the page or use Interrupt
+to stop an active turn. If Codex exits during a turn, Symphony clears the
+partial response and reconnects to the conversation on the next message.
+The composer shows the current model and reasoning effort, context used,
+5-hour and weekly quota when available, and turn timing. `/status` also lists
+approved work. Symphony uses the design guide palette and follows the
+browser's light or dark preference.
 
 A message sent during a turn in the same repo steers the active
 turn. A message for a different repo queues for the next turn. The app uses the

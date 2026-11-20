@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -207,7 +208,7 @@ Path("verified.txt").write_text("Tested\\n")
         app = self.app()
         codex = app.coordinator
         codex.account = "chatgpt"
-        codex.thread = "active"
+        self.runner.save_setting("thread", "active")
         codex.models = {"gpt-fixture": {
             "displayName": "GPT Fixture", "isDefault": True, "defaultReasoningEffort": "medium",
             "supportedReasoningEfforts": [{"reasoningEffort": "medium"}, {"reasoningEffort": "max"}],
@@ -222,7 +223,9 @@ Path("verified.txt").write_text("Tested\\n")
             "secondary": {"usedPercent": 65, "windowDurationMins": 300},
         }})
         codex.notification("account/rateLimits/updated", {"rateLimits": {"limitId": "another-model"}})
-        codex.notification("turn/completed", {"turn": {"startedAt": 100, "completedAt": 106, "durationMs": 6000}})
+        codex.notification("turn/completed", {
+            "threadId": "active", "turn": {"startedAt": 100, "completedAt": 106, "durationMs": 6000},
+        })
 
         status = (await app.state(0))["codex"]
         self.assertEqual(status["contextUsed"], 12)
@@ -233,6 +236,80 @@ Path("verified.txt").write_text("Tested\\n")
         self.assertEqual(self.runner.rows("SELECT text FROM chat"), [{
             "text": "GPT Fixture max · Context 12% used · 5h 35% left · weekly 61% left\nNo approved work in progress.",
         }])
+
+    async def test_codex_exit_clears_the_active_turn(self):
+        app = self.app()
+        codex = app.coordinator
+        codex.ready = True
+        codex.thread = "main"
+        self.runner.save_setting("thread", "main")
+        codex.process = SimpleNamespace(stdout=asyncio.StreamReader())
+        codex.finished = asyncio.get_running_loop().create_future()
+        codex.notification("turn/started", {"threadId": "main", "turn": {"id": "turn", "startedAt": 100}})
+        codex.notification("item/agentMessage/delta", {"threadId": "main", "delta": "Incomplete answer"})
+        self.assertTrue((await app.state(0))["canInterrupt"])
+
+        codex.process.stdout.feed_eof()
+        await codex.read()
+        with self.assertRaisesRegex(RuntimeError, "Codex app-server exited"):
+            await codex.finished
+        state = await app.state(0)
+        self.assertFalse(state["canInterrupt"])
+        self.assertEqual(state["stream"], "")
+        self.assertEqual(state["codex"]["turnTiming"], {})
+        self.assertFalse(codex.ready)
+        self.assertEqual(codex.thread, "")
+        self.assertEqual(self.runner.setting("thread"), "main")
+
+    async def test_broken_codex_pipe_queues_chat_and_reports_interruption(self):
+        app = self.app()
+        app.repos[REPO] = [{"id": "project", "name": "Fixture"}]
+        app.turn_repo = REPO
+        app.coordinator.thread = "main"
+        app.coordinator.turn = "turn"
+        self.runner.save_setting("view", REPO)
+        note = "Pick up where we left off."
+        with patch.object(app.coordinator, "request", side_effect=BrokenPipeError("Fixture pipe closed")) as request:
+            await app.submit({"repo": REPO, "text": note})
+            with self.assertRaisesRegex(RuntimeError, "Codex disconnected"):
+                await app.submit({"repo": REPO, "text": "/interrupt"})
+        self.assertEqual([call.args[0] for call in request.await_args_list], ["turn/steer", "turn/interrupt"])
+        self.assertEqual(list(app.messages), [(REPO, note, note)])
+        self.assertTrue(self.runner.wake.is_set())
+        self.assertEqual(self.runner.rows("SELECT role, text FROM chat"), [{"role": "user", "text": note}])
+
+    async def test_other_threads_cannot_change_or_complete_the_coordinator_turn(self):
+        app = self.app()
+        codex = app.coordinator
+        codex.thread = "main"
+        self.runner.save_setting("thread", "other")
+        codex.finished = asyncio.get_running_loop().create_future()
+        codex.notification("turn/started", {"threadId": "main", "turn": {"id": "parent", "startedAt": 100}})
+        codex.notification("item/agentMessage/delta", {"threadId": "main", "delta": "Main response"})
+        before = await app.state(0)
+        for method, params in (
+            ("turn/started", {"turn": {"id": "child", "startedAt": 101}}),
+            ("item/agentMessage/delta", {"delta": "Child response"}),
+            ("item/completed", {"item": {"type": "agentMessage", "text": "Child response"}}),
+            ("thread/tokenUsage/updated", {"tokenUsage": {"modelContextWindow": 112000,
+                                                          "last": {"totalTokens": 24000}}}),
+            ("turn/completed", {"turn": {"id": "child", "status": "completed", "durationMs": 1000}}),
+        ):
+            with self.subTest(method=method):
+                codex.notification(method, {"threadId": "other", **params})
+                self.assertEqual(await app.state(0), before)
+                self.assertEqual(codex.turn, "parent")
+                self.assertFalse(codex.finished.done())
+
+        codex.notification("item/completed", {"threadId": "main",
+                                              "item": {"type": "agentMessage", "text": "Main response"}})
+        turn = {"id": "parent", "status": "completed", "durationMs": 6000}
+        codex.notification("turn/completed", {"threadId": "main", "turn": turn})
+        self.assertEqual(await codex.finished, turn)
+        self.assertFalse((await app.state(0))["canInterrupt"])
+        self.assertEqual(self.runner.rows("SELECT role, text FROM chat"), [
+            {"role": "assistant", "text": "Main response"},
+        ])
 
     async def test_issue_snapshots_batch_projects_and_only_send_changes(self):
         app = self.app()

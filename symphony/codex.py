@@ -216,12 +216,20 @@ class Codex:
         finally:
             self.ready = False
             self.thread = ""
+            if self.turn:
+                self.turn_timing = {}
+            self.turn = ""
+            self.stream = ""
             error = RuntimeError("Codex app-server exited. See codex/app-server.log.")
             for future in list(self.pending.values()) + [self.finished]:
                 if future and not future.done():
                     future.set_exception(error)
 
     def notification(self, method, params):
+        if method.startswith(("turn/", "item/")) or method == "thread/tokenUsage/updated":
+            thread = self.thread or self.runner.setting("thread")
+            if not thread or params.get("threadId") != thread:
+                return
         if method in ("turn/started", "turn/completed"):
             turn = params["turn"]
             self.turn_timing = {key: turn.get(key) for key in ("startedAt", "completedAt", "durationMs")}
@@ -233,8 +241,7 @@ class Codex:
             if self.finished and not self.finished.done():
                 self.finished.set_result(turn)
         elif method == "thread/tokenUsage/updated":
-            if params["threadId"] == (self.thread or self.runner.setting("thread")):
-                self.context_used = context_used(params["tokenUsage"])
+            self.context_used = context_used(params["tokenUsage"])
         elif method == "account/rateLimits/updated":
             if self.account == "chatgpt":
                 self.update_rate_limits(params["rateLimits"])
@@ -338,7 +345,10 @@ class Codex:
     async def interrupt(self):
         if not self.turn:
             raise ValueError("No active turn to interrupt.")
-        await self.request("turn/interrupt", {"threadId": self.thread, "turnId": self.turn})
+        try:
+            await self.request("turn/interrupt", {"threadId": self.thread, "turnId": self.turn})
+        except ConnectionError:
+            raise RuntimeError("Codex disconnected before it could interrupt the turn.") from None
 
     async def close(self):
         if self.process:
