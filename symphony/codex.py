@@ -1,6 +1,7 @@
 """Codex app-server transport. The web and worker code use this small interface."""
 
 import asyncio
+from contextlib import suppress
 from hashlib import sha256
 import json
 import os
@@ -55,10 +56,23 @@ TOOLS = [
     for name, (description, keys) in TOOL_SPECS.items()
 ]
 TOOLS_HASH = sha256(json.dumps(TOOLS, sort_keys=True).encode()).hexdigest()
+RATE_LIMIT_WINDOWS = {300: "5h", 10080: "weekly"}
 
 
 def text_input(text):
     return [{"type": "text", "text": text, "text_elements": []}]
+
+
+def context_used(usage):
+    window = usage.get("modelContextWindow")
+    if not window:
+        return None
+    # Match the CLI's context readout, which excludes its 12,000-token baseline.
+    available = window - 12000
+    if available <= 0:
+        return 100
+    remaining = max(0, min(available, window - usage["last"]["totalTokens"]))
+    return 100 - int(100 * remaining / available + .5)
 
 
 class Codex:
@@ -77,6 +91,13 @@ class Codex:
         self.stream = ""
         self.account = ""
         self.reader = None
+        self.model = ""
+        self.effort = ""
+        self.models = {}
+        self.context_used = None
+        self.rate_limits = {}
+        self.turn_timing = {}
+        self.status_wake = asyncio.Event()
 
     async def send(self, message):
         encoded = json.dumps(message, separators=(",", ":")).encode() + b"\n"
@@ -125,6 +146,7 @@ class Codex:
                 await self.send({"method": "initialized"})
                 self.ready = True
                 await self.read_account()
+                self.status_wake.set()
             except (OSError, RuntimeError, TimeoutError):
                 self.ready = False
                 await stop_process(self.process)
@@ -139,6 +161,43 @@ class Codex:
     async def login(self):
         await self.connect()
         return await self.request("account/login/start", {"type": "chatgptDeviceCode"})
+
+    def status(self):
+        name = self.runner.setting("model") or self.model
+        if not name:
+            name = next((name for name, model in self.models.items() if model["isDefault"]), "")
+        model = self.models.get(name, {})
+        return {"model": model.get("displayName", name),
+                "effort": self.runner.setting("effort") or self.effort or model.get("defaultReasoningEffort", ""),
+                "contextUsed": self.context_used, "rateLimits": self.rate_limits, "turnTiming": self.turn_timing,
+                "models": {name: model["displayName"] for name, model in self.models.items()},
+                "efforts": [item["reasoningEffort"] for item in model.get("supportedReasoningEfforts", [])]}
+
+    def update_rate_limits(self, snapshot):
+        if snapshot.get("limitId") not in (None, "codex"):
+            return
+        limits = {}
+        for window in (snapshot.get("primary"), snapshot.get("secondary")):
+            if window and (label := RATE_LIMIT_WINDOWS.get(window.get("windowDurationMins"))):
+                limits[label] = {"left": max(0, min(100, 100 - window["usedPercent"])),
+                                 "resetsAt": window.get("resetsAt")}
+        self.rate_limits = limits
+
+    async def poll_status(self):
+        while True:
+            self.status_wake.clear()
+            if self.ready and not self.models:
+                with suppress(OSError, RuntimeError, TimeoutError):
+                    result = await self.request("model/list", {"limit": 100})
+                    self.models = {model["model"]: model for model in result["data"] if not model["hidden"]}
+            if self.ready and self.account == "chatgpt":
+                with suppress(OSError, RuntimeError, TimeoutError):
+                    result = await self.request("account/rateLimits/read")
+                    limits = result.get("rateLimitsByLimitId") or {}
+                    if self.account == "chatgpt":
+                        self.update_rate_limits(limits.get("codex") or result["rateLimits"])
+            with suppress(TimeoutError):
+                await asyncio.wait_for(self.status_wake.wait(), 60)
 
     async def read(self):
         try:
@@ -163,13 +222,25 @@ class Codex:
                     future.set_exception(error)
 
     def notification(self, method, params):
-        if method == "turn/started":
-            self.turn = params["turn"]["id"]
-        elif method == "turn/completed":
+        if method in ("turn/started", "turn/completed"):
+            turn = params["turn"]
+            self.turn_timing = {key: turn.get(key) for key in ("startedAt", "completedAt", "durationMs")}
+            if method == "turn/started":
+                self.turn = turn["id"]
+                return
             self.stream = ""
             self.turn = ""
             if self.finished and not self.finished.done():
-                self.finished.set_result(params["turn"])
+                self.finished.set_result(turn)
+        elif method == "thread/tokenUsage/updated":
+            if params["threadId"] == (self.thread or self.runner.setting("thread")):
+                self.context_used = context_used(params["tokenUsage"])
+        elif method == "account/rateLimits/updated":
+            if self.account == "chatgpt":
+                self.update_rate_limits(params["rateLimits"])
+        elif method == "account/updated" and not params.get("authMode"):
+            self.account = ""
+            self.rate_limits = {}
         elif method == "item/agentMessage/delta":
             self.stream += params["delta"]
         elif method == "item/completed":
@@ -183,6 +254,9 @@ class Codex:
         elif method == "account/login/completed":
             if params["success"]:
                 self.account = "chatgpt"
+                self.models = {}
+                self.rate_limits = {}
+                self.status_wake.set()
                 self.runner.chat("system", "Codex signed in.")
                 self.runner.wake.set()
             else:
@@ -220,9 +294,13 @@ class Codex:
             result = await self.request("thread/resume", {**params, "threadId": thread, "excludeTurns": True})
         else:
             result = await self.request("thread/start", {**params, "dynamicTools": TOOLS})
+            self.context_used = None
+            self.turn_timing = {}
         thread_id = result["thread"]["id"]
         self.runner.save_settings({"thread": thread_id, "tools_hash": TOOLS_HASH})
         self.thread = thread_id
+        self.model = result.get("model") or ""
+        self.effort = result.get("reasoningEffort") or ""
         if thread and tools_changed:
             self.runner.chat("system", "Started a fresh Codex thread to load updated tools.")
 

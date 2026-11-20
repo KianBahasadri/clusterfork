@@ -203,6 +203,37 @@ Path("verified.txt").write_text("Tested\\n")
             {"role": "system", "text": "Started a fresh Codex thread to load updated tools."},
         ])
 
+    async def test_codex_status_reports_active_context_and_usage_windows(self):
+        app = self.app()
+        codex = app.coordinator
+        codex.account = "chatgpt"
+        codex.thread = "active"
+        codex.models = {"gpt-fixture": {
+            "displayName": "GPT Fixture", "isDefault": True, "defaultReasoningEffort": "medium",
+            "supportedReasoningEfforts": [{"reasoningEffort": "medium"}, {"reasoningEffort": "max"}],
+        }}
+        self.runner.save_setting("effort", "max")
+        usage = {"last": {"totalTokens": 24000}, "total": {"totalTokens": 500000}, "modelContextWindow": 112000}
+        codex.notification("thread/tokenUsage/updated", {"threadId": "active", "tokenUsage": usage})
+        codex.notification("thread/tokenUsage/updated", {"threadId": "other", "tokenUsage": {}})
+        codex.notification("account/rateLimits/updated", {"rateLimits": {
+            "limitId": "codex",
+            "primary": {"usedPercent": 39, "windowDurationMins": 10080},
+            "secondary": {"usedPercent": 65, "windowDurationMins": 300},
+        }})
+        codex.notification("account/rateLimits/updated", {"rateLimits": {"limitId": "another-model"}})
+        codex.notification("turn/completed", {"turn": {"startedAt": 100, "completedAt": 106, "durationMs": 6000}})
+
+        status = (await app.state(0))["codex"]
+        self.assertEqual(status["contextUsed"], 12)
+        self.assertEqual(status["models"], {"gpt-fixture": "GPT Fixture"})
+        self.assertEqual(status["efforts"], ["medium", "max"])
+        self.assertEqual(status["turnTiming"], {"startedAt": 100, "completedAt": 106, "durationMs": 6000})
+        await app.handle("", "/status", "/status")
+        self.assertEqual(self.runner.rows("SELECT text FROM chat"), [{
+            "text": "GPT Fixture max · Context 12% used · 5h 35% left · weekly 61% left\nNo approved work in progress.",
+        }])
+
     async def worker_done(self):
         await self.approve()
         self.assertEqual(self.linear.state["name"], "In Progress")

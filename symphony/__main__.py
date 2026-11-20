@@ -132,7 +132,8 @@ class Symphony:
                 "busy": self.busy, "canInterrupt": bool(self.coordinator.turn),
                 "stream": self.coordinator.stream, "tasks": self.runner.status(),
                 "signedIn": bool(self.coordinator.account), "login": login,
-                "paused": self.runner.setting("paused"), "view": self.runner.setting("view")}
+                "paused": self.runner.setting("paused"), "view": self.runner.setting("view"),
+                "codex": self.coordinator.status()}
 
     async def submit(self, body):
         text = body.get("text")
@@ -189,8 +190,16 @@ class Symphony:
             cwd, _ = await self.context(repo)
             await self.coordinator.compact(cwd)
         elif command == "/status":
+            status = self.coordinator.status()
+            usage = [f"{status['model']} {status['effort']}".strip()]
+            if status["contextUsed"] is not None:
+                usage.append(f"Context {status['contextUsed']}% used")
+            usage.extend(f"{label} {status['rateLimits'][label]['left']}% left"
+                         for label in ("5h", "weekly") if label in status["rateLimits"])
             summary = [f"{task['issue']} · {task['phase']}" for task in self.runner.status()]
-            self.runner.chat("system", "\n".join(summary) or "No approved work in progress.")
+            self.runner.chat("system", "\n".join(filter(None, [
+                " · ".join(filter(None, usage)), "\n".join(summary) or "No approved work in progress.",
+            ])))
         elif command in {"/model", "/effort"}:
             if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", argument):
                 raise ValueError(f"Enter a value after {command}.")
@@ -262,6 +271,7 @@ class Symphony:
             await self.coordinator.connect()
         except (OSError, RuntimeError, TimeoutError) as error:
             self.runner.chat("system", str(error) or "Codex startup timed out.")
+        self.runner.job(self.coordinator.poll_status())
         self.runner.wake.set()
 
 

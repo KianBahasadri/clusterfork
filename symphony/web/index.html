@@ -20,6 +20,7 @@
         <button id="refresh" type="button">Refresh</button>
       </div>
       <div id="repos" role="tablist" aria-label="Repositories"></div>
+      <p id="project-error" class="detail" role="status" hidden></p>
       <div id="issues" role="tabpanel" aria-label="Issues"></div>
     </aside>
     <section class="chat" aria-label="Coordinator chat">
@@ -31,15 +32,25 @@
         <div id="stream"></div>
       </div>
       <form id="composer">
-        <label class="sr-only" for="message">Message to the coordinator</label>
-        <textarea id="message" rows="3" maxlength="23000" placeholder="Message the coordinator"></textarea>
-        <div class="composer-actions">
-          <button id="commands" type="button">Commands</button>
-          <span id="request-error" role="alert"></span>
-          <button id="interrupt" type="button" hidden>Interrupt</button>
-          <button class="send" type="submit">Send</button>
+        <p id="turn-timing" hidden></p>
+        <div class="command-entry">
+          <span class="prompt" aria-hidden="true">›</span>
+          <label class="sr-only" for="message">Message to the coordinator</label>
+          <textarea id="message" rows="1" maxlength="23000" placeholder="Message Symphony or type /"
+            enterkeyhint="send" autocapitalize="off" autocomplete="off" spellcheck="false" aria-autocomplete="list"
+            aria-controls="command-list" aria-describedby="composer-shortcuts"></textarea>
+          <ul id="command-list" role="listbox" aria-label="Slash command suggestions" hidden></ul>
         </div>
-        <div id="command-list" hidden></div>
+        <div class="composer-meta">
+          <div id="codex-status" role="group" aria-label="Codex status">
+            <span id="status-model">Codex</span>
+            <span id="status-context" hidden></span>
+            <span id="status-5h" hidden></span>
+            <span id="status-weekly" hidden></span>
+          </div>
+          <span id="composer-shortcuts">Enter to send · Shift+Enter for a new line</span>
+        </div>
+        <p id="request-error" role="alert"></p>
       </form>
     </section>
   </main>

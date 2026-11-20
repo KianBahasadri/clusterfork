@@ -13,8 +13,19 @@ the coordinator. Approve the plans you want in chat, including plans across
 repositories. The coordinator records each approval, locks the current Linear
 plan, and moves the issue to In Progress before dispatch.
 
-The composer supports `/compact`, `/status`, `/model <id>`, `/effort <level>`, and
-`/interrupt`. A message sent during a turn in the same repo steers the active
+Symphony prefetches every mapped repository's open issues when the page opens
+and refreshes them in the background every 30 seconds. Switching tabs uses the
+cached issues and restores the sidebar scroll position and expanded plans.
+
+Type `/` to see commands. Use the arrow keys to choose one, Tab to complete it,
+or Enter to run it. Enter sends a message, Shift+Enter inserts a newline, and
+the up arrow at the start of the prompt recalls previous inputs. Escape closes
+command suggestions or interrupts the active turn. The composer shows the
+current model and reasoning effort, context used, 5-hour and weekly quota when
+available, and turn timing. `/status` also lists approved work. Symphony uses
+the design guide palette and follows the browser's light or dark preference.
+
+A message sent during a turn in the same repo steers the active
 turn. A message for a different repo queues for the next turn. The app uses the
 selected repo's working directory and includes its AGENTS.md and current work
 when starting a turn. Codex uses its shell and live web search inside the
