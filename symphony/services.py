@@ -11,6 +11,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from emoji import emojize, is_emoji
 import yaml
 
 
@@ -106,7 +107,7 @@ class Linear:
         while True:
             data = await self.query("""query($after: String) {
                 projects(first: 50, after: $after) {
-                    nodes { id name description archivedAt externalLinks(first: 50) {
+                    nodes { id name icon description archivedAt externalLinks(first: 50) {
                         nodes { url } pageInfo { hasNextPage }
                     } }
                     pageInfo { endCursor hasNextPage }
@@ -123,7 +124,11 @@ class Linear:
                     problems[project["id"]] = f"{project['name']} needs one GitHub repository link in Linear."
                     continue
                 repo = urls.pop()
-                repos.setdefault(repo, []).append({"id": project["id"], "name": project["name"]})
+                icon = emojize(project["icon"] or "", language="alias")
+                repos.setdefault(repo, []).append({
+                    "id": project["id"], "name": project["name"],
+                    "icon": icon if is_emoji(icon) else "",
+                })
             page = projects["pageInfo"]
             if not page["hasNextPage"]:
                 return repos, problems
@@ -145,7 +150,7 @@ class Linear:
                         identifier title url description priority priorityLabel estimate dueDate
                         state { name type }
                         project { id name }
-                        labels(first: 10) { nodes { name } }
+                        labels(first: 10) { nodes { name color } }
                     }
                     pageInfo { endCursor hasNextPage }
                 }

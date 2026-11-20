@@ -26,14 +26,16 @@ STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "application/javascript; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
-    "/favicon.png": ("favicon.png", "image/png"),
+    "/favicon.ico": ("favicon.ico", "image/vnd.microsoft.icon"),
+    "/logo.png": ("logo.png", "image/png"),
+    "/icons.svg": ("icons.svg", "image/svg+xml"),
 }
 BODY_LIMIT = 32000
 ISSUE_REFRESH_SECONDS = 30
 
 
 def project_list(repos):
-    return [{"repo": repo, "label": ", ".join(p["name"] for p in projects)}
+    return [{"repo": repo, "label": ", ".join(p["name"] for p in projects), "projects": projects}
             for repo, projects in sorted(repos.items())]
 
 
@@ -41,7 +43,7 @@ def issue_summary(row):
     return {**{key: row[key] for key in ("identifier", "title", "url", "state", "priority",
                                       "priorityLabel", "estimate", "dueDate")},
             "project": (row["project"] or {}).get("name", ""),
-            "labels": [label["name"] for label in row["labels"]["nodes"]],
+            "labels": row["labels"]["nodes"],
             "plan": proposed_plan(row["description"])}
 
 

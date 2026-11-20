@@ -28,6 +28,26 @@ function element(tag, text, className) {
   return node;
 }
 
+function icon(name) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  svg.setAttribute("class", "icon");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  use.setAttribute("href", "/icons.svg#" + name);
+  svg.append(use);
+  return svg;
+}
+
+function issuePill(text, description, iconName) {
+  const pill = element("span", "", "issue-pill");
+  pill.title = description;
+  if (iconName) pill.append(icon(iconName));
+  pill.append(element("span", text || description, text ? "" : "sr-only"));
+  return pill;
+}
+
 async function api(path, options) {
   const response = await fetch(path, options);
   const body = await response.json();
@@ -43,7 +63,8 @@ function issueDeadline(value, today) {
   const formatted = date.toLocaleDateString([], {month: "short", day: "numeric",
     year: date.getFullYear() === today.getFullYear() ? undefined : "numeric"});
   const label = days < 0 ? "Overdue · " + formatted : days === 0 ? "Today" : days === 1 ? "Tomorrow" : formatted;
-  const time = element("time", label, "issue-deadline");
+  const time = element("time", "", "issue-pill issue-deadline");
+  time.append(icon("calendar-days"), element("span", label));
   time.dateTime = value;
   time.title = "Due " + formatted;
   time.dataset.tone = days < 0 ? "danger" : days <= 1 ? "caution" : "";
@@ -84,36 +105,42 @@ function renderIssues() {
       link.target = "_blank";
       link.rel = "noreferrer";
     }
-    const source = element("div", "", "issue-source");
-    if (issue.project) {
-      const project = element("span", issue.project, "issue-project");
-      project.title = issue.project;
-      source.append(project, element("span", "·"));
-    }
-    source.append(link);
-    const header = element("div", "", "issue-header");
-    header.append(source);
     const deadline = issueDeadline(issue.dueDate, today);
-    if (deadline) header.append(deadline);
 
     const task = tasks.find((item) => item.issue === issue.identifier);
-    const state = element("span", (task?.phase || issue.state.name).replaceAll("_", " "), "state");
-    const blocked = state.textContent.toLowerCase() === "blocked" || task?.phase === "finish_failed";
+    const stateName = (task?.phase || issue.state.name).replaceAll("_", " ");
+    const blocked = stateName.toLowerCase() === "blocked" || task?.phase === "finish_failed";
+    const stateIcons = {backlog: "circle-dashed", unstarted: "circle", started: "circle-dot",
+      completed: "circle-check", canceled: "circle-x"};
+    const state = element("span", "", "issue-state");
+    state.title = stateName;
+    state.setAttribute("role", "img");
+    state.setAttribute("aria-label", stateName);
+    state.append(icon(blocked ? "octagon-alert" : stateIcons[issue.state.type] || "circle"));
     if (blocked) state.dataset.tone = "danger";
+    const heading = element("div", "", "issue-heading");
+    heading.append(state, element("p", issue.title, "issue-title"));
+
     const meta = element("div", "", "issue-meta");
-    meta.append(state);
-    const priorityTone = issue.priority === 1 ? "danger" : issue.priority === 2 ? "caution" : "";
-    if (issue.priority) {
-      const priority = element("span", issue.priorityLabel + " priority");
-      priority.dataset.tone = priorityTone;
-      meta.append(priority);
+    const priorityIcons = ["ellipsis", "octagon-alert", "signal", "signal-medium", "signal-low"];
+    const priority = issuePill("", issue.priorityLabel, priorityIcons[issue.priority]);
+    if (issue.priority === 1) priority.dataset.tone = "danger";
+    meta.append(priority);
+    if (deadline) meta.append(deadline);
+    if (issue.estimate != null) meta.append(issuePill(String(issue.estimate), "Estimate " + issue.estimate, "triangle"));
+    for (const label of issue.labels) {
+      const pill = issuePill(label.name, label.name);
+      const dot = element("span", "", "label-dot");
+      dot.style.backgroundColor = label.color;
+      pill.prepend(dot);
+      meta.append(pill);
     }
-    if (issue.estimate != null) meta.append(element("span", "Estimate " + issue.estimate));
-    for (const label of issue.labels) meta.append(element("span", label));
-    const tones = [state.dataset.tone, priorityTone, deadline?.dataset.tone];
-    if (tones.includes("danger")) row.dataset.tone = "danger";
-    else if (tones.includes("caution")) row.dataset.tone = "caution";
-    row.append(header, element("p", issue.title, "issue-title"), meta);
+    if (task) {
+      const phase = issuePill(stateName, "Worker " + stateName);
+      if (blocked) phase.dataset.tone = "danger";
+      meta.append(phase);
+    }
+    row.append(link, heading, meta);
     if (task?.detail) row.append(element("p", task.detail, "detail"));
     if (issue.plan) {
       const plan = element("details");
@@ -140,15 +167,25 @@ function renderIssues() {
 function updateProjects(projects, redraw) {
   const previous = issueCache.get(selected);
   issueCache = new Map(projects.map((project) => [project.repo, project.issues]));
-  const key = JSON.stringify(projects.map(({repo, label}) => [repo, label]));
+  const key = JSON.stringify(projects.map((project) => [project.repo, project.projects]));
   if (key === projectsKey) {
     if (redraw || JSON.stringify(previous) !== JSON.stringify(issueCache.get(selected))) renderIssues();
     return;
   }
   projectsKey = key;
   const focused = repos.contains(document.activeElement);
-  const choices = [{label: "All repositories", repo: ""}, ...projects].map((row, index) => {
-    const tab = element("button", row.label);
+  const choices = [{label: "All repositories", repo: "", projects: []}, ...projects].map((row, index) => {
+    const tab = element("button", "", "project-chip");
+    if (!row.repo) tab.append(icon("layers"), element("span", row.label, "project-name"));
+    for (const project of row.projects) {
+      const label = element("span", "", "project-label");
+      const glyph = project.icon ? element("span", project.icon, "project-emoji") : icon("folder");
+      glyph.setAttribute("aria-hidden", "true");
+      label.append(glyph, element("span", project.name, "project-name"));
+      tab.append(label);
+    }
+    tab.title = row.label;
+    tab.setAttribute("aria-label", row.label);
     tab.id = "repo-tab-" + index;
     tab.type = "button";
     tab.setAttribute("role", "tab");

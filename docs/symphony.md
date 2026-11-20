@@ -17,9 +17,11 @@ Symphony refreshes a shared cache of every mapped repository's open issues
 every 30 seconds using a batched, paginated Linear query. The browser receives
 the lists through its regular status requests when they change. Switching tabs
 uses the cache and restores the sidebar scroll position and expanded plans.
-Refresh failures keep the last successful lists and slow retries. Issue cards
-show their workflow state and available Linear project, due date, priority,
-estimate, and labels.
+Refresh failures keep the last successful lists and slow retries. Project
+chips use their Linear names and emoji. Issue cards show the identifier,
+workflow icon and title, with compact pills for priority, due date, estimate,
+and colored labels. Project names appear in the chips above the list. Worker
+phases and proposed plans appear on their issues.
 
 Type `/` to see commands. Use the arrow keys to choose one, Tab to complete it,
 or Enter to run it. Enter sends a message, Shift+Enter inserts a newline, and
@@ -30,7 +32,7 @@ partial response and reconnects to the conversation on the next message.
 The composer shows the current model and reasoning effort, context used,
 5-hour and weekly quota when available, and turn timing. `/status` also lists
 approved work. Symphony uses the design guide palette and follows the
-browser's light or dark preference.
+browser's light or dark preference. The favicon is a multi-size ICO.
 
 A message sent during a turn in the same repo steers the active
 turn. A message for a different repo queues for the next turn. The app uses the
