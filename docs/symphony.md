@@ -116,12 +116,28 @@ kubectl apply -f symphony/kubernetes/namespace.yaml
 kubectl apply -f symphony/kubernetes/storage-and-network.yaml
 kubectl set image --local -f symphony/kubernetes/deployment.yaml \
   symphony=ghcr.io/kianbahasadri/symphony:FULL_COMMIT_SHA -o yaml | kubectl apply -f -
+kubectl apply -f symphony/kubernetes/updater.yaml
 kubectl -n symphony rollout status deployment/symphony
 kubectl -n symphony exec deployment/symphony -c tailscale -- \
   tailscale --socket=/tmp/tailscaled.sock serve status
 ```
 
+`symphony/kubernetes/updater.yaml` installs an idle-aware `CronJob`
+(`symphony-updater`, every two minutes) in a separate restricted pod with RBAC
+limited to `get` and `patch` on `deployment/symphony`. When the published
+`ghcr.io/kianbahasadri/symphony:main` digest changes, the updater checks
+Symphony's internal read-only `/idle` endpoint on port 8081 (reachable only
+from `app: symphony-updater`) and patches the deployment to the pinned
+`@sha256:...` digest once no coordinator turn, queued message, undelivered
+event, or active task (`approving`, `working`, `publishing`, `ci`, `finishing`)
+is running. If `deployment/symphony` has zero ready replicas while scaled up,
+the updater rolls forward even when `/idle` is unreachable so a broken rollout
+can recover on the next push to `main`. The Symphony pod itself keeps
+`automountServiceAccountToken: false` and has no Kubernetes API egress.
+
 Open the HTTPS address reported by Tailscale and verify the repo tabs load.
-Kubernetes NetworkPolicy allows DNS and public TCP 443 egress. The gateway tag
-and Serve configuration control access to the UI. [Deferred work](symphony-follow-ups.md)
-tracks ntfy, additional composer commands, and hostname-level egress.
+Kubernetes NetworkPolicy enforces default-deny in the namespace, allowing the
+Symphony pod only DNS, public TCP 443 egress, and port 8081 ingress from the
+updater. The gateway tag and Serve configuration control access to the UI.
+[Deferred work](symphony-follow-ups.md) tracks ntfy, additional composer
+commands, and hostname-level egress.

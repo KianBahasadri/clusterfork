@@ -33,6 +33,7 @@ STATIC = {
 }
 BODY_LIMIT = 32000
 ISSUE_REFRESH_SECONDS = 30
+ACTIVE_PHASES = {"approving", "working", "publishing", "ci", "finishing"}
 
 
 def project_list(repos):
@@ -183,6 +184,16 @@ class Symphony:
         if self.issue_snapshot is not None and issue_revision != self.issue_revision:
             state.update(projects=self.issue_snapshot, issueRevision=self.issue_revision)
         return state
+
+    async def idle(self):
+        if self.busy or self.messages or self.coordinator.turn:
+            return False
+        if any(task["phase"] in ACTIVE_PHASES for task in self.runner.status()):
+            return False
+        if self.coordinator.account and not self.runner.setting("paused"):
+            if self.runner.rows("SELECT 1 FROM events WHERE delivered=0 LIMIT 1"):
+                return False
+        return True
 
     async def submit(self, body):
         text = body.get("text")
@@ -416,6 +427,32 @@ class Handler(BaseHTTPRequestHandler):
             self.json_response({"error": str(error)}, 400)
 
 
+class IdleHandler(BaseHTTPRequestHandler):
+    def log_message(self, *_):
+        pass
+
+    def do_GET(self):
+        if urlsplit(self.path).path != "/idle":
+            body, status = b'{"error":"Not found."}', 404
+        else:
+            future = asyncio.run_coroutine_threadsafe(self.server.app.idle(), self.server.loop)
+            try:
+                idle = future.result(timeout=5)
+                body, status = json.dumps({"idle": idle}).encode(), 200
+            except RequestTimeout:
+                future.cancel()
+                body, status = b'{"error":"Unavailable."}', 503
+            except (RuntimeError, OSError):
+                body, status = b'{"error":"Unavailable."}', 503
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        with suppress(BrokenPipeError, ConnectionResetError):
+            self.end_headers()
+            self.wfile.write(body)
+
+
 async def serve():
     os.umask(0o077)
     root = Path(os.environ.get("SYMPHONY_DATA", "/data")).resolve()
@@ -431,17 +468,21 @@ async def serve():
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, exit_event.set)
-    with (root / ".symphony.lock").open("w") as lock, ThreadingHTTPServer(("127.0.0.1", 8080), Handler) as http:
+    with ((root / ".symphony.lock").open("w") as lock,
+          ThreadingHTTPServer(("127.0.0.1", 8080), Handler) as http,
+          ThreadingHTTPServer(("0.0.0.0", 8081), IdleHandler) as idle_http):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        http.loop = loop
-        http.app = Symphony(root)
+        http.loop = idle_http.loop = loop
+        http.app = idle_http.app = Symphony(root)
         Thread(target=http.serve_forever, daemon=True).start()
+        Thread(target=idle_http.serve_forever, daemon=True).start()
         pump = asyncio.create_task(http.app.pump())
         http.app.runner.job(http.app.start())
         try:
             await exit_event.wait()
         finally:
             await asyncio.to_thread(http.shutdown)
+            await asyncio.to_thread(idle_http.shutdown)
             pump.cancel()
             with suppress(asyncio.CancelledError):
                 await pump

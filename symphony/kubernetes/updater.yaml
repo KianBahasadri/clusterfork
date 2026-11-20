@@ -1,0 +1,285 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: symphony-idle
+  namespace: symphony
+spec:
+  selector:
+    app: symphony
+  ports:
+    - {name: idle, port: 8081, targetPort: idle}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: symphony-updater
+  namespace: symphony
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: symphony-updater
+  namespace: symphony
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["symphony"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: symphony-updater
+  namespace: symphony
+subjects:
+  - kind: ServiceAccount
+    name: symphony-updater
+    namespace: symphony
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: symphony-updater
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: symphony-updater
+  namespace: symphony
+spec:
+  podSelector:
+    matchLabels: {app: symphony-updater}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+    - to:
+        - podSelector:
+            matchLabels: {app: symphony}
+      ports:
+        - {port: 8081, protocol: TCP}
+    - to:
+        - ipBlock: {cidr: 10.43.0.1/32}
+      ports:
+        - {port: 443, protocol: TCP}
+    - to:
+        - ipBlock: {cidr: 100.64.0.0/10}
+      ports:
+        - {port: 6443, protocol: TCP}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 0.0.0.0/8
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 224.0.0.0/4
+      ports:
+        - {port: 443, protocol: TCP}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: symphony-updater
+  namespace: symphony
+data:
+  updater.py: |
+    """Roll out ghcr.io/kianbahasadri/symphony:main when its digest changes and Symphony is idle."""
+
+    import json
+    import os
+    from pathlib import Path
+    import re
+    import ssl
+    import sys
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, urlopen
+
+    IMAGE_REPO = "ghcr.io/kianbahasadri/symphony"
+    GHCR_PATH = "kianbahasadri/symphony"
+    IMAGE_TAG = "main"
+    DEPLOYMENT = "symphony"
+    CONTAINER = "symphony"
+    SA_DIR = Path("/var/run/secrets/kubernetes.io/serviceaccount")
+    IDLE_URL = "http://symphony-idle.symphony.svc.cluster.local:8081/idle"
+    ACCEPT = ", ".join([
+        "application/vnd.oci.image.index.v1+json",
+        "application/vnd.docker.distribution.manifest.list.v2+json",
+        "application/vnd.oci.image.manifest.v1+json",
+        "application/vnd.docker.distribution.manifest.v2+json",
+    ])
+    DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}\Z")
+    TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z")
+
+
+    def ghcr_token():
+        url = f"https://ghcr.io/token?scope=repository:{GHCR_PATH}:pull"
+        with urlopen(url, timeout=15) as response:
+            token = json.loads(response.read()).get("token", "")
+        if not token:
+            raise RuntimeError("GHCR returned an empty pull token.")
+        return token
+
+
+    def ghcr_digest(token, reference):
+        request = Request(
+            f"https://ghcr.io/v2/{GHCR_PATH}/manifests/{reference}",
+            method="HEAD",
+            headers={"Authorization": f"Bearer {token}", "Accept": ACCEPT},
+        )
+        with urlopen(request, timeout=15) as response:
+            digest = response.headers.get("Docker-Content-Digest", "")
+        if not DIGEST_RE.fullmatch(digest):
+            raise RuntimeError(f"Invalid GHCR digest for {reference}: {digest!r}")
+        return digest
+
+
+    def k8s_request(method, url, token, context, body=None, content_type=None):
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode()
+            headers["Content-Type"] = content_type or "application/json"
+        request = Request(url, data=data, method=method, headers=headers)
+        with urlopen(request, context=context, timeout=15) as response:
+            return json.loads(response.read())
+
+
+    def check_idle(url=IDLE_URL):
+        with urlopen(url, timeout=5) as response:
+            payload = json.loads(response.read())
+        return isinstance(payload, dict) and payload.get("idle") is True
+
+
+    def current_container_image(deployment):
+        for container in deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers", []):
+            if container.get("name") == CONTAINER:
+                return container.get("image", "")
+        raise RuntimeError(f"Container {CONTAINER!r} not found in deployment/{DEPLOYMENT}.")
+
+
+    def image_matches_digest(image, remote_digest, token):
+        if image.startswith(f"{IMAGE_REPO}@"):
+            return image.removeprefix(f"{IMAGE_REPO}@") == remote_digest
+        if image.startswith(f"{IMAGE_REPO}:"):
+            tag = image.removeprefix(f"{IMAGE_REPO}:")
+            if tag != IMAGE_TAG and TAG_RE.fullmatch(tag):
+                try:
+                    return ghcr_digest(token, tag) == remote_digest
+                except (HTTPError, URLError, RuntimeError):
+                    return False
+        return False
+
+
+    def main():
+        namespace = (SA_DIR / "namespace").read_text().strip()
+        sa_token = (SA_DIR / "token").read_text().strip()
+        context = ssl.create_default_context(cafile=str(SA_DIR / "ca.crt"))
+        host = os.environ["KUBERNETES_SERVICE_HOST"]
+        port = os.environ["KUBERNETES_SERVICE_PORT"]
+        host_part = f"[{host}]" if ":" in host else host
+        deployment_url = f"https://{host_part}:{port}/apis/apps/v1/namespaces/{namespace}/deployments/{DEPLOYMENT}"
+
+        token = ghcr_token()
+        remote_digest = ghcr_digest(token, IMAGE_TAG)
+        deployment = k8s_request("GET", deployment_url, sa_token, context)
+
+        if deployment.get("spec", {}).get("replicas", 1) == 0:
+            print("Deployment is scaled to 0; skipping.")
+            return 0
+
+        current_image = current_container_image(deployment)
+        if image_matches_digest(current_image, remote_digest, token):
+            print(f"Up to date ({remote_digest}).")
+            return 0
+
+        ready_replicas = deployment.get("status", {}).get("readyReplicas") or 0
+        try:
+            idle = check_idle()
+        except (HTTPError, URLError, TimeoutError, ValueError, OSError) as error:
+            if ready_replicas > 0:
+                print(f"Idle check failed ({error}) while pod is ready; deferring rollout.")
+                return 0
+            print(f"Symphony has 0 ready replicas ({error}); rolling forward to {remote_digest}.")
+        else:
+            if not idle:
+                print("Symphony is busy; deferring rollout.")
+                return 0
+
+        target_image = f"{IMAGE_REPO}@{remote_digest}"
+        patch = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [{"name": CONTAINER, "image": target_image}],
+                    },
+                },
+            },
+        }
+        k8s_request(
+            "PATCH",
+            deployment_url,
+            sa_token,
+            context,
+            body=patch,
+            content_type="application/strategic-merge-patch+json",
+        )
+        print(f"Updated {DEPLOYMENT} to {target_image}.")
+        return 0
+
+
+    if __name__ == "__main__":
+        sys.exit(main())
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: symphony-updater
+  namespace: symphony
+spec:
+  schedule: "*/2 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  startingDeadlineSeconds: 120
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 60
+      ttlSecondsAfterFinished: 600
+      template:
+        metadata:
+          labels:
+            app: symphony-updater
+        spec:
+          serviceAccountName: symphony-updater
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: updater
+              image: docker.io/library/python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
+              imagePullPolicy: IfNotPresent
+              command: [python3, -B, /updater/updater.py]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL]}
+              resources:
+                requests: {cpu: 10m, memory: 32Mi}
+                limits: {cpu: 200m, memory: 128Mi}
+              volumeMounts:
+                - {name: script, mountPath: /updater, readOnly: true}
+          volumes:
+            - name: script
+              configMap: {name: symphony-updater}

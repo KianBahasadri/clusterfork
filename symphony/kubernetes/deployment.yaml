@@ -22,6 +22,8 @@ spec:
       containers:
         - name: symphony
           image: ghcr.io/kianbahasadri/symphony:main
+          ports:
+            - {name: idle, containerPort: 8081}
           securityContext:
             runAsUser: 10001
             runAsGroup: 10001

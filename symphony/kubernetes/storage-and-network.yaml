@@ -26,12 +26,27 @@ data:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: symphony
+  name: default-deny
   namespace: symphony
 spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
-  ingress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: symphony
+  namespace: symphony
+spec:
+  podSelector:
+    matchLabels: {app: symphony}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app: symphony-updater}
+      ports:
+        - {port: 8081, protocol: TCP}
   egress:
     - to:
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
