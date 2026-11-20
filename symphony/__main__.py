@@ -28,7 +28,6 @@ STATIC = {
     "/style.css": ("style.css", "text/css; charset=utf-8"),
     "/favicon.ico": ("favicon.ico", "image/vnd.microsoft.icon"),
     "/logo.png": ("logo.png", "image/png"),
-    "/icons.svg": ("icons.svg", "image/svg+xml"),
 }
 BODY_LIMIT = 32000
 ISSUE_REFRESH_SECONDS = 30

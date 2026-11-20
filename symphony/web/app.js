@@ -35,7 +35,7 @@ function icon(name) {
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("aria-hidden", "true");
   svg.setAttribute("focusable", "false");
-  use.setAttribute("href", "/icons.svg#" + name);
+  use.setAttribute("href", "#lucide-" + name);
   svg.append(use);
   return svg;
 }

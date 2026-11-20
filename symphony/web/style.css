@@ -68,6 +68,7 @@ h2 { font-size: .94rem; font-weight: 650; }
 }
 .topbar h1 { display: flex; align-items: center; gap: 8px; }
 #connection, .muted { color: var(--muted); font-size: .83rem; }
+.icon-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 .icon {
   width: 16px;
   height: 16px;
