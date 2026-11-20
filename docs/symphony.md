@@ -36,7 +36,9 @@ branch and changed paths. If none match, Symphony advances the repo after the
 push. Keep deployment jobs dependent on successful CI in the repository's
 workflow. After verified publication, Symphony sets Linear to Done and removes
 the worktree. A restart preserves the conversation, approved plans, worker
-sessions and pending CI watches.
+sessions and pending CI watches. When the coordinator's tool definitions
+change, Symphony starts a fresh Codex thread and records the change in the chat
+history.
 
 ## Deploy on Guaranine
 

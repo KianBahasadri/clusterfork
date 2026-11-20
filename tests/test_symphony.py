@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from symphony.__main__ import Symphony
-from symphony.codex import Codex
+from symphony.codex import Codex, TOOLS, TOOLS_HASH
 from symphony.runner import Runner
 from symphony.services import matches_filter, proposed_plan, with_plan
 
@@ -107,10 +107,13 @@ Path("verified.txt").write_text("Tested\\n")
             "project": {"id": "project"}, "description": "## Proposed Plan\n\nWrite one verification file."
         }
 
-    async def test_chat_approval_routes_through_the_coordinator_tool(self):
+    def app(self):
         with patch.dict(os.environ, {"LINEAR_API_KEY": "fixture"}), \
              patch("symphony.__main__.Runner", return_value=self.runner):
-            app = Symphony(self.root)
+            return Symphony(self.root)
+
+    async def test_chat_approval_routes_through_the_coordinator_tool(self):
+        app = self.app()
         text = "Looks good, go ahead with the plan."
         with patch.object(app, "respond") as respond:
             await app.submit({"text": text})
@@ -124,6 +127,31 @@ Path("verified.txt").write_text("Tested\\n")
                 await app.tool("approve_issue", {"issue_id": ISSUE})
         self.assertEqual(self.linear.state["name"], "In Progress")
         self.assertEqual(self.runner.task(ISSUE)["plan"], "Write one verification file.")
+        self.assertEqual(self.runner.rows("SELECT * FROM events"), [])
+
+    async def test_approval_retry_wakes_the_coordinator(self):
+        await self.fail_approval()
+        app = self.app()
+        text = f"/retry {ISSUE}"
+        await app.handle("", text, text)
+        self.assert_dispatch_event()
+
+    async def test_approval_recovery_wakes_the_coordinator(self):
+        await self.fail_approval()
+        await self.runner.recover_approval(ISSUE)
+        self.assert_dispatch_event()
+
+    async def fail_approval(self):
+        with patch.object(self.linear, "set_state", side_effect=RuntimeError("Linear is unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "Linear is unavailable"):
+                await self.approve()
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "approving")
+
+    def assert_dispatch_event(self):
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "approved")
+        self.assertEqual(self.runner.rows("SELECT issue, detail, delivered FROM events"), [
+            {"issue": ISSUE, "detail": "Plan approved. Ready for dispatch.", "delivered": 0},
+        ])
 
     async def test_codex_has_native_tools_and_uses_oauth(self):
         codex = Codex(self.runner, None)
@@ -147,6 +175,31 @@ Path("verified.txt").write_text("Tested\\n")
         self.assertEqual(params["sandbox"], "danger-full-access")
         self.assertEqual(params["approvalPolicy"], "never")
         self.assertIn("approve_issue", [tool["name"] for tool in params["dynamicTools"]])
+
+    async def test_thread_refreshes_tools_and_resumes_afterward(self):
+        self.runner.save_setting("thread", "previous-thread")
+        self.runner.chat("user", "Earlier chat")
+        codex = Codex(self.runner, None)
+        codex.account = "chatgpt"
+        with patch.object(codex, "connect"), \
+             patch.object(codex, "request", return_value={"thread": {"id": "current-thread"}}) as request:
+            await codex.ensure_thread(self.root)
+            method, params = request.await_args.args
+            self.assertEqual(method, "thread/start")
+            self.assertEqual(params["dynamicTools"], TOOLS)
+            self.assertEqual(self.runner.setting("thread"), "current-thread")
+            self.assertEqual(self.runner.setting("tools_hash"), TOOLS_HASH)
+
+            codex.thread = ""
+            await codex.ensure_thread(self.root)
+            method, params = request.await_args.args
+            self.assertEqual(method, "thread/resume")
+            self.assertEqual(params["threadId"], "current-thread")
+
+        self.assertEqual(self.runner.rows("SELECT role, text FROM chat ORDER BY id"), [
+            {"role": "user", "text": "Earlier chat"},
+            {"role": "system", "text": "Started a fresh Codex thread to load updated tools."},
+        ])
 
     async def worker_done(self):
         await self.approve()

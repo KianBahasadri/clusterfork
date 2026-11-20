@@ -1,6 +1,7 @@
 """Codex app-server transport. The web and worker code use this small interface."""
 
 import asyncio
+from hashlib import sha256
 import json
 import os
 
@@ -53,6 +54,7 @@ TOOLS = [
                      "required": list(keys), "additionalProperties": False}}
     for name, (description, keys) in TOOL_SPECS.items()
 ]
+TOOLS_HASH = sha256(json.dumps(TOOLS, sort_keys=True).encode()).hexdigest()
 
 
 def text_input(text):
@@ -213,12 +215,16 @@ class Codex:
         params = {"cwd": str(cwd), "approvalPolicy": "never", "sandbox": "danger-full-access",
                   "developerInstructions": INSTRUCTIONS}
         thread = self.runner.setting("thread")
-        if thread:
+        tools_changed = self.runner.setting("tools_hash") != TOOLS_HASH
+        if thread and not tools_changed:
             result = await self.request("thread/resume", {**params, "threadId": thread, "excludeTurns": True})
         else:
             result = await self.request("thread/start", {**params, "dynamicTools": TOOLS})
-        self.thread = result["thread"]["id"]
-        self.runner.save_setting("thread", self.thread)
+        thread_id = result["thread"]["id"]
+        self.runner.save_settings({"thread": thread_id, "tools_hash": TOOLS_HASH})
+        self.thread = thread_id
+        if thread and tools_changed:
+            self.runner.chat("system", "Started a fresh Codex thread to load updated tools.")
 
     async def turn_request(self, method, params):
         self.finished = asyncio.get_running_loop().create_future()

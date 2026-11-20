@@ -86,8 +86,11 @@ class Runner:
         return row["value"] if row else default
 
     def save_setting(self, key, value):
+        self.save_settings({key: value})
+
+    def save_settings(self, values):
         with self.db:
-            self.db.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", (key, value))
+            self.db.executemany("INSERT OR REPLACE INTO settings VALUES (?, ?)", values.items())
 
     def chat(self, role, text):
         with self.db:
@@ -163,9 +166,10 @@ class Runner:
                 raise ValueError(f"{identifier} already has a recorded approval.")
         await self.activate(identifier)
 
-    async def activate(self, issue):
+    async def activate(self, issue, *, notify=False):
         await self.linear.set_state(issue, "In Progress", "started")
-        self.change(issue, phase="approved", event="Plan approved. Ready for dispatch.")
+        event = "Plan approved. Ready for dispatch." if notify else None
+        self.change(issue, phase="approved", event=event)
 
     def dispatch(self, issue, repo, instruction, *, resume=False):
         row = self.task(issue)
@@ -422,7 +426,7 @@ class Runner:
 
     async def recover_approval(self, issue):
         try:
-            await self.activate(issue)
+            await self.activate(issue, notify=True)
         except (RuntimeError, ValueError) as error:
             self.change(issue, event=f"Approval saved. Linear activation failed: {error}", detail=str(error))
 

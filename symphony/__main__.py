@@ -21,8 +21,12 @@ from .services import ISSUE_ID, Linear, proposed_plan, with_plan
 
 
 WEB = Path(__file__).parent / "web"
-STATIC = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "application/javascript"),
-          "/style.css": ("style.css", "text/css")}
+STATIC = {
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/app.js": ("app.js", "application/javascript; charset=utf-8"),
+    "/style.css": ("style.css", "text/css; charset=utf-8"),
+    "/favicon.png": ("favicon.png", "image/png"),
+}
 BODY_LIMIT = 32000
 
 
@@ -198,7 +202,7 @@ class Symphony:
         elif command == "/retry":
             row = self.runner.task(argument.upper())
             if row["phase"] == "approving":
-                await self.runner.activate(row["issue"])
+                await self.runner.activate(row["issue"], notify=True)
             elif row["phase"] == "finish_failed":
                 self.runner.change(row["issue"], phase="finishing")
                 self.runner.job(self.runner.finish(row["issue"]))
@@ -266,16 +270,16 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def json_response(self, value, status=200):
-        self.respond(json.dumps(value, ensure_ascii=False).encode(), "application/json", status)
+        self.respond(json.dumps(value, ensure_ascii=False).encode(), "application/json; charset=utf-8", status)
 
     def respond(self, data, content_type, status=200):
         self.send_response(status)
-        self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; "
-                         "connect-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+                         "connect-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'")
         self.end_headers()
         self.wfile.write(data)
 

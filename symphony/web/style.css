@@ -52,6 +52,7 @@ h2 { font-size: .94rem; font-weight: 650; }
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
+.topbar h1 { display: flex; align-items: center; gap: 8px; }
 #connection, .muted { color: var(--muted); font-size: .83rem; }
 main { display: grid; grid-template-columns: minmax(250px, 29vw) 1fr; height: calc(100dvh - 52px); }
 aside { overflow: auto; padding: 14px; border-right: 1px solid var(--border); background: var(--surface); }
