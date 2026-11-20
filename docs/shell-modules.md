@@ -66,7 +66,7 @@ Automatic/terminal renaming is disabled; direct launches have no label.
 `tmux.conf` uses the terminal's default background and foreground for the status
 bar, with cyan active-window and active-pane-border accents from its palette.
 These colors follow the terminal's light or dark theme without a separate tmux
-theme switch.
+theme switch. Terminal passthrough is enabled for all panes.
 
 ## Grok confirmation
 
