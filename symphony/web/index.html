@@ -7,6 +7,7 @@
   <link rel="icon" href="/favicon.ico" type="image/vnd.microsoft.icon" sizes="16x16 32x32 48x48 64x64">
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
+  <script src="/issue.js" defer></script>
 </head>
 <body>
   <svg xmlns="http://www.w3.org/2000/svg" class="icon-sprite" aria-hidden="true" focusable="false">
@@ -86,10 +87,6 @@
       <path d="M13.73 4a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
     </symbol>
   </svg>
-  <header class="topbar">
-    <h1><img src="/logo.png" width="28" height="28" alt="">Symphony</h1>
-    <div id="connection" role="status">Connecting…</div>
-  </header>
   <main>
     <aside aria-label="Linear issues">
       <h2 class="sidebar-heading">Linear issues</h2>
@@ -98,6 +95,7 @@
       <div id="issues" role="tabpanel" aria-label="Issues"></div>
     </aside>
     <section class="chat" aria-label="Coordinator chat">
+      <div id="connection-error" class="notice" role="status" hidden>Connection lost. Reconnecting…</div>
       <div id="paused" class="notice" hidden></div>
       <div id="login" class="notice" hidden></div>
       <div id="chat-log" class="chat-log" role="log" aria-live="polite">
@@ -108,7 +106,6 @@
       <form id="composer">
         <p id="turn-timing" hidden></p>
         <div class="command-entry">
-          <span class="prompt" aria-hidden="true">›</span>
           <label class="sr-only" for="message">Message to the coordinator</label>
           <textarea id="message" rows="1" maxlength="23000"
             enterkeyhint="send" autocapitalize="off" autocomplete="off" spellcheck="false" aria-autocomplete="list"
@@ -130,5 +127,17 @@
       </form>
     </section>
   </main>
+  <dialog id="issue-dialog" aria-labelledby="issue-dialog-title">
+    <header class="issue-dialog-header">
+      <p id="issue-dialog-identifier" class="muted"></p>
+      <div class="issue-dialog-actions">
+        <a id="issue-source" target="_blank" rel="noreferrer" hidden>Open in Linear</a>
+        <button id="issue-close" type="button" autofocus>Close</button>
+      </div>
+    </header>
+    <div id="issue-content" aria-busy="false">
+      <h2 id="issue-dialog-title">Issue details</h2>
+    </div>
+  </dialog>
 </body>
 </html>

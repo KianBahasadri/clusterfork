@@ -23,11 +23,24 @@ All repositories combines the cached lists. Issues appear in collapsible status
 groups in Linear's workflow order. Each group sorts from Urgent to Low priority,
 with unprioritized issues last. Groups start expanded and remember their
 collapsed state separately for each view.
+Status groups open and close with a short spring animation, disabled when the
+browser requests reduced motion.
 Refresh failures keep the last successful lists and slow retries. Project
 chips use their Linear names and emoji. Issue cards show the identifier,
 workflow icon and title, with compact pills for priority, due date, estimate,
-and colored labels. Project names appear in the chips above the list. Worker
-phases and proposed plans appear on their issues.
+and colored labels. All repositories also shows each issue's project chip.
+Project names appear in the chips above the list. Worker phases and proposed
+plans appear on their issues.
+
+Click an issue card to open its details in a modal. The description, attachments,
+documents, comments, and activity appear beside its properties and related issues.
+Related issue links open their context in the same modal. Details load on demand
+without refetching the sidebar. Mistune renders Markdown with raw HTML escaped.
+Linear uploads stream through Symphony using its existing Linear credentials,
+including private images and range requests. The key stays on the server.
+Close the modal with Close, Escape, or the backdrop to return focus to its card.
+The app fills the viewport without a branding or connection header. Connection
+failures appear as a temporary notice while Symphony reconnects.
 
 Type `/` to see commands. Use the arrow keys to choose one, Tab to complete it,
 or Enter to run it. Enter sends a message, Shift+Enter inserts a newline, and

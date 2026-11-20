@@ -362,6 +362,7 @@ Path("verified.txt").write_text("Tested\\n")
             ])
             self.assertEqual(state["projects"][0]["projects"], repos[REPO])
             card = state["projects"][0]["issues"][0]
+            self.assertEqual(card["projectId"], "alpha")
             self.assertEqual(card["state"]["position"], 1)
             self.assertEqual((card["project"], card["priorityLabel"], card["estimate"], card["dueDate"], card["labels"]),
                              ("Alpha", "High", 3, "2026-11-23", [{"name": "Feature", "color": "#bb87fc"}]))

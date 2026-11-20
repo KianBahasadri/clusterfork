@@ -13,7 +13,9 @@ const expandedPlans = new Set();
 const collapsedGroups = new Set();
 const stateIcons = {backlog: "circle-dashed", unstarted: "circle", started: "circle-dot",
   completed: "circle-check", canceled: "circle-x", duplicate: "circle-x"};
+const priorityIcons = ["ellipsis", "octagon-alert", "signal", "signal-medium", "signal-low"];
 let issueCache = new Map();
+let projectCache = new Map();
 let issueRevision = "";
 let selected = "";
 let lastMessage = 0;
@@ -51,6 +53,14 @@ function issuePill(text, description, iconName) {
   return pill;
 }
 
+function projectLabel(project) {
+  const label = element("span", "", "project-label");
+  const glyph = project.icon ? element("span", project.icon, "project-emoji") : icon("folder");
+  glyph.setAttribute("aria-hidden", "true");
+  label.append(glyph, element("span", project.name, "project-name"));
+  return label;
+}
+
 async function api(path, options) {
   const response = await fetch(path, options);
   const body = await response.json();
@@ -76,14 +86,14 @@ function issueDeadline(value, today) {
 
 function renderIssue(issue, today) {
   const row = element("article", "", "issue");
-  const link = element("a", issue.identifier, "issue-link");
+  const preview = element("button", "", "issue-preview");
+  preview.type = "button";
+  preview.id = "issue-open-" + issue.identifier;
+  preview.setAttribute("aria-haspopup", "dialog");
+  preview.setAttribute("aria-controls", "issue-dialog");
+  preview.addEventListener("click", () => openIssue(issue.identifier));
+  const link = element("span", issue.identifier, "issue-link");
   link.id = "issue-link-" + issue.identifier;
-  const url = new URL(issue.url);
-  if (url.protocol === "https:" && url.hostname === "linear.app") {
-    link.href = url.href;
-    link.target = "_blank";
-    link.rel = "noreferrer";
-  }
   const deadline = issueDeadline(issue.dueDate, today);
 
   const task = tasks.find((item) => item.issue === issue.identifier);
@@ -95,15 +105,21 @@ function renderIssue(issue, today) {
   state.setAttribute("aria-label", stateName);
   state.append(icon(blocked ? "octagon-alert" : stateIcons[issue.state.type] || "circle"));
   if (blocked) state.dataset.tone = "danger";
-  const heading = element("div", "", "issue-heading");
-  heading.append(state, element("p", issue.title, "issue-title"));
+  const heading = element("span", "", "issue-heading");
+  heading.append(state, element("span", issue.title, "issue-title"));
 
-  const meta = element("div", "", "issue-meta");
-  const priorityIcons = ["ellipsis", "octagon-alert", "signal", "signal-medium", "signal-low"];
+  const meta = element("span", "", "issue-meta");
   const priority = issuePill("", issue.priorityLabel, priorityIcons[issue.priority]);
   if (issue.priority === 1) priority.dataset.tone = "danger";
   meta.append(priority);
   if (deadline) meta.append(deadline);
+  const project = projectCache.get(issue.projectId);
+  if (!selected && project) {
+    const chip = element("span", "", "issue-pill issue-project");
+    chip.title = project.name;
+    chip.append(projectLabel(project));
+    meta.append(chip);
+  }
   if (issue.estimate != null) meta.append(issuePill(String(issue.estimate), "Estimate " + issue.estimate, "triangle"));
   for (const label of issue.labels) {
     const pill = issuePill(label.name, label.name);
@@ -117,7 +133,8 @@ function renderIssue(issue, today) {
     if (blocked) phase.dataset.tone = "danger";
     meta.append(phase);
   }
-  row.append(link, heading, meta);
+  preview.append(link, heading, meta);
+  row.append(preview);
   if (task?.detail) row.append(element("p", task.detail, "detail"));
   if (issue.plan) {
     const plan = element("details");
@@ -181,6 +198,7 @@ function renderIssues() {
 
 function updateProjects(projects, redraw) {
   const previous = issueCache.get(selected);
+  projectCache = new Map(projects.flatMap((row) => row.projects.map((project) => [project.id, project])));
   issueCache = new Map(projects.map((project) => [project.repo, project.issues]));
   issueCache.set("", projects.flatMap((project) => project.issues));
   const key = JSON.stringify(projects.map((project) => [project.repo, project.projects]));
@@ -194,11 +212,7 @@ function updateProjects(projects, redraw) {
     const tab = element("button", "", "project-chip");
     if (!row.repo) tab.append(icon("layers"), element("span", row.label, "project-name"));
     for (const project of row.projects) {
-      const label = element("span", "", "project-label");
-      const glyph = project.icon ? element("span", project.icon, "project-emoji") : icon("folder");
-      glyph.setAttribute("aria-hidden", "true");
-      label.append(glyph, element("span", project.name, "project-name"));
-      tab.append(label);
+      tab.append(projectLabel(project));
     }
     tab.title = row.label;
     tab.setAttribute("aria-label", row.label);
@@ -322,13 +336,13 @@ async function poll() {
     canInterrupt = state.canInterrupt;
     if (choicesChanged || tasksChanged) renderCommands();
     showCodexStatus();
-    byId("connection").textContent = state.busy ? "Coordinator working" : "Connected";
+    byId("connection-error").hidden = true;
     byId("paused").hidden = !state.paused;
     byId("paused").textContent = state.paused ? "Dispatch paused. " + state.paused : "";
     showLogin(state);
     delay = state.messages.length === 200 ? 0 : state.busy ? 600 : 2000;
   } catch {
-    byId("connection").textContent = "Reconnecting…";
+    byId("connection-error").hidden = false;
   } finally {
     setTimeout(poll, delay);
   }
@@ -521,6 +535,7 @@ messageField.addEventListener("keydown", (event) => {
 });
 interrupt.addEventListener("click", interruptTurn);
 document.addEventListener("keydown", (event) => {
+  if (document.querySelector("dialog[open]")) return;
   if (event.key !== "Escape" || event.defaultPrevented || event.repeat || event.isComposing
       || event.keyCode === 229 || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
   if (!commandList.hidden) {

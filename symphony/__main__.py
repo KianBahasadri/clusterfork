@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 from threading import Thread
 import time
@@ -17,6 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 from .codex import Codex, TOOL_SPECS
+from .issue_details import issue_details, open_asset
 from .runner import Runner, read_small
 from .services import ISSUE_ID, Linear, proposed_plan, with_plan
 
@@ -25,9 +27,9 @@ WEB = Path(__file__).parent / "web"
 STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "application/javascript; charset=utf-8"),
+    "/issue.js": ("issue.js", "application/javascript; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
     "/favicon.ico": ("favicon.ico", "image/vnd.microsoft.icon"),
-    "/logo.png": ("logo.png", "image/png"),
 }
 BODY_LIMIT = 32000
 ISSUE_REFRESH_SECONDS = 30
@@ -42,6 +44,7 @@ def issue_summary(row):
     return {**{key: row[key] for key in ("identifier", "title", "url", "state", "priority",
                                       "priorityLabel", "estimate", "dueDate")},
             "project": (row["project"] or {}).get("name", ""),
+            "projectId": (row["project"] or {}).get("id", ""),
             "labels": row["labels"]["nodes"],
             "plan": proposed_plan(row["description"])}
 
@@ -331,9 +334,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; "
-                         "connect-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'")
-        self.end_headers()
-        self.wfile.write(data)
+                         "connect-src 'self'; img-src 'self' https: data:; base-uri 'none'; frame-ancestors 'none'")
+        with suppress(BrokenPipeError, ConnectionResetError):
+            self.end_headers()
+            self.wfile.write(data)
 
     def run_async(self, task):
         future = asyncio.run_coroutine_threadsafe(task, self.server.loop)
@@ -342,6 +346,21 @@ class Handler(BaseHTTPRequestHandler):
         except RequestTimeout:
             future.cancel()
             raise ValueError("The request timed out.") from None
+
+    def linear_asset(self, url):
+        with open_asset(self.server.app.linear.token, url, self.headers.get("Range")) as response:
+            self.send_response(response.status)
+            for name in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Content-Disposition"):
+                if value := response.headers.get(name):
+                    self.send_header(name, value)
+            self.send_header("Cache-Control", "private, max-age=300")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'")
+            try:
+                self.end_headers()
+                shutil.copyfileobj(response, self.wfile)
+            except OSError:
+                self.close_connection = True
 
     def do_GET(self):
         url = urlsplit(self.path)
@@ -357,6 +376,10 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == "/api/state":
                 after = int(params.get("after", ["0"])[0])
                 self.json_response(self.run_async(app.state(after, params.get("issues", [""])[0])))
+            elif url.path == "/api/issue":
+                self.json_response(self.run_async(issue_details(app.linear, params.get("id", [""])[0])))
+            elif url.path == "/api/linear-asset":
+                self.linear_asset(params.get("url", [""])[0])
             else:
                 self.json_response({"error": "Page not found."}, 404)
         except (ValueError, RuntimeError, OSError) as error:
