@@ -9,7 +9,7 @@ import re
 import sqlite3
 import time
 
-from .services import ci_runs, ci_workflows, command, git, proposed_plan, stop_process
+from .services import CLOSED_STATES, ci_runs, ci_workflows, command, git, proposed_plan, stop_process
 
 
 WORKER_LIMIT = 3
@@ -155,7 +155,7 @@ class Runner:
         plan = proposed_plan(issue["description"])
         if not plan or len(plan) > 24000:
             raise ValueError("The proposed plan must contain between 1 and 24,000 characters.")
-        if issue["state"]["type"] in {"completed", "canceled"}:
+        if issue["state"]["type"] in CLOSED_STATES:
             raise ValueError(f"{identifier} is already {issue['state']['name']}.")
         with self.db:
             inserted = self.db.execute("""INSERT INTO tasks(issue,project,repo,title,plan,phase,updated)

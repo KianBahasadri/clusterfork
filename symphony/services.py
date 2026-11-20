@@ -16,6 +16,7 @@ import yaml
 
 
 ISSUE_ID = re.compile(r"[A-Z][A-Z0-9]*-[0-9]+\Z")
+CLOSED_STATES = {"completed", "canceled", "duplicate"}
 REPO_URL = re.compile(r"https://github\.com/([A-Za-z0-9_-]+/[A-Za-z0-9_.-]+)(?=/?(?:[\s>)\],;]|$))", re.I)
 PLAN_HEADING = re.compile(r"^ {0,3}##[ \t]+Proposed Plan[ \t]*#*[ \t]*$")
 HEADING = re.compile(r"^ {0,3}#{1,2}[ \t]+\S")
@@ -141,10 +142,10 @@ class Linear:
         issues = []
         cursor = None
         while True:
-            data = await self.query("""query($ids: [ID!]!, $after: String) {
+            data = await self.query("""query($ids: [ID!]!, $after: String, $closed: [String!]!) {
                 issues(first: 50, after: $after, filter: {
                     project: { id: { in: $ids } }
-                    state: { type: { nin: ["completed", "canceled"] } }
+                    state: { type: { nin: $closed } }
                 }) {
                     nodes {
                         identifier title url description priority priorityLabel estimate dueDate
@@ -154,7 +155,7 @@ class Linear:
                     }
                     pageInfo { endCursor hasNextPage }
                 }
-            }""", ids=ids, after=cursor)
+            }""", ids=ids, after=cursor, closed=sorted(CLOSED_STATES))
             batch = data["issues"]
             issues.extend(batch["nodes"])
             page = batch["pageInfo"]
@@ -183,7 +184,7 @@ class Linear:
         issue = await self.issue(identifier)
         if issue["state"] == {"name": name, "type": kind}:
             return
-        if issue["state"]["type"] in {"completed", "canceled"}:
+        if issue["state"]["type"] in CLOSED_STATES:
             raise ValueError(f"{identifier} is already {issue['state']['name']}.")
         data = await self.query("""query($id: String!) {
             team(id: $id) { states(first: 100) { nodes { id name type } } }

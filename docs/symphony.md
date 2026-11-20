@@ -12,6 +12,8 @@ prompted. Choose a repo tab, expand an issue's proposed plan, and refine it with
 the coordinator. Approve the plans you want in chat, including plans across
 repositories. The coordinator records each approval, locks the current Linear
 plan, and moves the issue to In Progress before dispatch.
+Completed, Canceled, and Duplicate are terminal states across issue lists,
+approvals, and state transitions.
 
 Symphony refreshes a shared cache of every mapped repository's open issues
 every 30 seconds using a batched, paginated Linear query. The browser receives

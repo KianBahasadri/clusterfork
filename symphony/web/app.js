@@ -111,7 +111,7 @@ function renderIssues() {
     const stateName = (task?.phase || issue.state.name).replaceAll("_", " ");
     const blocked = stateName.toLowerCase() === "blocked" || task?.phase === "finish_failed";
     const stateIcons = {backlog: "circle-dashed", unstarted: "circle", started: "circle-dot",
-      completed: "circle-check", canceled: "circle-x"};
+      completed: "circle-check", canceled: "circle-x", duplicate: "circle-x"};
     const state = element("span", "", "issue-state");
     state.title = stateName;
     state.setAttribute("role", "img");

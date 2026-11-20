@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, patch
 from symphony.__main__ import Symphony
 from symphony.codex import Codex, TOOLS, TOOLS_HASH
 from symphony.runner import Runner
-from symphony.services import matches_filter, proposed_plan, with_plan
+from symphony.services import Linear, matches_filter, proposed_plan, with_plan
 
 
 ISSUE = "KIAN-101"
@@ -138,6 +138,30 @@ Path("verified.txt").write_text("Tested\\n")
         text = f"/retry {ISSUE}"
         await app.handle("", text, text)
         self.assert_dispatch_event()
+
+    async def test_closed_issues_cannot_be_approved(self):
+        app = self.app()
+        for kind in ("completed", "canceled", "duplicate"):
+            with self.subTest(state=kind):
+                issue = {**self.proposed_issue(), "state": {"name": kind.title(), "type": kind}}
+                with patch.object(app, "live_issue", return_value=(issue, REPO)), \
+                     patch.object(self.linear, "set_state") as set_state:
+                    with self.assertRaisesRegex(ValueError, "already " + kind.title()):
+                        await app.tool("approve_issue", {"issue_id": ISSUE})
+                    set_state.assert_not_awaited()
+                self.assertEqual(self.runner.rows("SELECT * FROM tasks"), [])
+
+    async def test_closed_state_transitions_are_rejected_and_noops_are_allowed(self):
+        linear = Linear("fixture")
+        for kind in ("completed", "canceled", "duplicate"):
+            with self.subTest(state=kind):
+                state = {"name": kind.title(), "type": kind}
+                with patch.object(linear, "issue", return_value={"state": state}), \
+                     patch.object(linear, "query", side_effect=AssertionError("Unexpected state update")) as query:
+                    with self.assertRaisesRegex(ValueError, "already " + state["name"]):
+                        await linear.set_state(ISSUE, "In Progress", "started")
+                    await linear.set_state(ISSUE, state["name"], kind)
+                    query.assert_not_awaited()
 
     async def test_approval_recovery_wakes_the_coordinator(self):
         await self.fail_approval()
@@ -330,8 +354,8 @@ Path("verified.txt").write_text("Tested\\n")
             state = await app.state(0)
             revision = state["issueRevision"]
             self.assertEqual([call.kwargs for call in query.await_args_list], [
-                {"ids": ["alpha", "beta"], "after": None},
-                {"ids": ["alpha", "beta"], "after": "more"},
+                {"ids": ["alpha", "beta"], "after": None, "closed": ["canceled", "completed", "duplicate"]},
+                {"ids": ["alpha", "beta"], "after": "more", "closed": ["canceled", "completed", "duplicate"]},
             ])
             self.assertEqual([(project["repo"], project["issues"][0]["title"]) for project in state["projects"]], [
                 (REPO, "Alpha issue"), ("owner/second", "Beta issue"),
