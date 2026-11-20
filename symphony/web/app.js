@@ -58,7 +58,7 @@ function renderIssues() {
       plan.open = expanded.has(issue.identifier);
       plan.append(element("summary", "Proposed plan"), element("div", issue.plan, "plan"));
       if (!task) {
-        plan.append(element("p", 'Approve in chat with “Approve ' + issue.identifier + '”.', "muted"));
+        plan.append(element("p", "Tell the coordinator in chat when you approve this plan.", "muted"));
       }
       row.append(plan);
     }

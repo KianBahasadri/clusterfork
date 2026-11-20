@@ -8,8 +8,10 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from symphony.__main__ import Symphony
+from symphony.codex import Codex
 from symphony.runner import Runner
-from symphony.services import proposed_plan, with_plan
+from symphony.services import matches_filter, proposed_plan, with_plan
 
 
 ISSUE = "KIAN-101"
@@ -47,7 +49,11 @@ class SymphonyTests(unittest.IsolatedAsyncioTestCase):
         (self.repo / "README.md").write_text("Fixture repository\n")
         workflows = self.repo / ".github/workflows"
         workflows.mkdir(parents=True)
-        (workflows / "test.yml").write_text("on:\n  push:\n    branches: [main]\n")
+        (workflows / "test.yml").write_text(
+            "on:\n  push:\n    branches: [main]\n"
+            "    paths: ['**/*.txt', '!verified.txt', 'verified.txt']\n"
+        )
+        (workflows / "ignore-text.yml").write_text("on:\n  push:\n    paths-ignore: ['**/*.txt']\n")
         (workflows / "nightly.yml").write_text("on: schedule\n")
         self.git(self.repo, "add", ".")
         self.git(self.repo, "commit", "-m", "Initial fixture")
@@ -93,10 +99,54 @@ Path("verified.txt").write_text("Tested\\n")
                 await asyncio.sleep(0.01)
 
     async def approve(self):
-        await self.runner.approve({
+        await self.runner.approve(self.proposed_issue(), REPO)
+
+    def proposed_issue(self):
+        return {
             "identifier": ISSUE, "title": "Fixture change", "state": self.linear.state,
             "project": {"id": "project"}, "description": "## Proposed Plan\n\nWrite one verification file."
-        }, REPO)
+        }
+
+    async def test_chat_approval_routes_through_the_coordinator_tool(self):
+        with patch.dict(os.environ, {"LINEAR_API_KEY": "fixture"}), \
+             patch("symphony.__main__.Runner", return_value=self.runner):
+            app = Symphony(self.root)
+        text = "Looks good, go ahead with the plan."
+        with patch.object(app, "respond") as respond:
+            await app.submit({"text": text})
+            await app.handle(*app.messages.popleft())
+            respond.assert_awaited_once_with("", text)
+        self.assertEqual(self.linear.state["name"], "Todo")
+
+        with patch.object(app, "live_issue", return_value=(self.proposed_issue(), REPO)):
+            await app.tool("approve_issue", {"issue_id": ISSUE})
+            with self.assertRaisesRegex(ValueError, "already has a recorded approval"):
+                await app.tool("approve_issue", {"issue_id": ISSUE})
+        self.assertEqual(self.linear.state["name"], "In Progress")
+        self.assertEqual(self.runner.task(ISSUE)["plan"], "Write one verification file.")
+
+    async def test_codex_has_native_tools_and_uses_oauth(self):
+        codex = Codex(self.runner, None)
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "github-fixture", "OPENAI_API_KEY": "api-fixture",
+                                     "LINEAR_API_KEY": "linear-fixture"}), \
+             patch("symphony.codex.asyncio.create_subprocess_exec") as launch, \
+             patch.object(codex, "read"), patch.object(codex, "send"), \
+             patch.object(codex, "request", side_effect=[
+                 {}, {"account": {"type": "chatgpt"}}, {"thread": {"id": "test-thread"}},
+             ]) as request:
+            await codex.ensure_thread(self.root)
+        self.assertIn('web_search="live"', launch.await_args.args)
+        self.assertNotIn("features.shell_tool=false", launch.await_args.args)
+        env = launch.await_args.kwargs["env"]
+        self.assertEqual(env["GH_TOKEN"], "github-fixture")
+        self.assertEqual(env["GITHUB_TOKEN"], "github-fixture")
+        self.assertEqual(env["LINEAR_API_KEY"], "linear-fixture")
+        self.assertNotIn("OPENAI_API_KEY", env)
+        method, params = request.await_args.args
+        self.assertEqual(method, "thread/start")
+        self.assertEqual(params["sandbox"], "danger-full-access")
+        self.assertEqual(params["approvalPolicy"], "never")
+        self.assertIn("approve_issue", [tool["name"] for tool in params["dynamicTools"]])
 
     async def worker_done(self):
         await self.approve()
@@ -140,6 +190,19 @@ Path("verified.txt").write_text("Tested\\n")
         self.assertFalse(self.runner.worktree(ISSUE).exists())
         self.assertEqual(self.git(self.remote, "show", "main:verified.txt"), "Tested")
 
+    async def test_push_without_matching_workflows_finishes_immediately(self):
+        (self.repo / ".github/workflows/test.yml").write_text("on:\n  push:\n    paths: ['docs/**']\n")
+        self.git(self.repo, "commit", "-am", "Filter tests to docs")
+        self.git(self.repo, "push", "origin", "main")
+        await self.worker_done()
+        self.runner.read_notes(ISSUE)
+        with patch("symphony.runner.ci_runs") as ci:
+            self.runner.ship(ISSUE)
+            await self.phase("done")
+            ci.assert_not_awaited()
+        self.assertEqual(self.linear.state["name"], "Done")
+        self.assertEqual(self.git(self.remote, "show", "main:verified.txt"), "Tested")
+
     async def test_rejected_direct_push_keeps_worktree_and_reports_git(self):
         await self.worker_done()
         hook = self.remote / "hooks/pre-receive"
@@ -162,3 +225,22 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(proposed_plan(updated), "New plan\n\n### Details\n\nRun the checks.")
         self.assertTrue(updated.startswith("## Context\n\nKeep these lines."))
         self.assertTrue(updated.endswith("## Acceptance\n\nKeep this too."))
+
+
+class WorkflowFilterTests(unittest.TestCase):
+    def test_path_patterns_use_github_globs(self):
+        for value, patterns, expected in [
+            ("README.md", ["**/README.md"], True),
+            ("src/README.md", ["**/README.md"], True),
+            ("src/nested/README.md", ["src/*.md"], False),
+            ("docs/a/b.md", ["docs/**/*.md"], True),
+            ("docs/file.md", ["docs/**/*.md"], True),
+            ("src/button.js", ["src/*.jsx?"], True),
+            ("src/button.jsx", ["src/*.jsx?"], True),
+            ("src/button.jst", ["src/*.jsx?"], False),
+            ("release/v12.3", ["release/v[0-9]+.[0-9]+"], True),
+            ("package[old].json", [r"package\[old\].json"], True),
+            ("docs/draft.md", ["**/*.md", "!docs/**"], False),
+        ]:
+            with self.subTest(value=value, patterns=patterns):
+                self.assertEqual(matches_filter(value, patterns), expected)

@@ -155,9 +155,12 @@ class Runner:
         if issue["state"]["type"] in {"completed", "canceled"}:
             raise ValueError(f"{identifier} is already {issue['state']['name']}.")
         with self.db:
-            self.db.execute("""INSERT INTO tasks(issue,project,repo,title,plan,phase,updated)
-                               VALUES (?,?,?,?,?,'approving',?)""",
-                            (identifier, issue["project"]["id"], repo, issue["title"], plan, time.time()))
+            inserted = self.db.execute("""INSERT INTO tasks(issue,project,repo,title,plan,phase,updated)
+                                          VALUES (?,?,?,?,?,'approving',?)
+                                          ON CONFLICT(issue) DO NOTHING""",
+                                       (identifier, issue["project"]["id"], repo, issue["title"], plan, time.time()))
+            if not inserted.rowcount:
+                raise ValueError(f"{identifier} already has a recorded approval.")
         await self.activate(identifier)
 
     async def activate(self, issue):
@@ -334,7 +337,7 @@ class Runner:
                 cwd, "-c", "user.name=Symphony", "-c", "user.email=symphony@users.noreply.github.com",
                 "commit-tree", tree, "-p", row["base"], "-m", f"{issue} {row['title']}",
             )
-            workflows = await ci_workflows(cwd, revision)
+            workflows = await ci_workflows(cwd, row["base"], revision)
             self.change(issue, revision=revision, workflows=json.dumps(workflows))
             try:
                 await git(cwd, "push", "origin", f"{revision}:refs/heads/main")

@@ -20,7 +20,6 @@ from .runner import Runner, read_small
 from .services import ISSUE_ID, Linear, proposed_plan, with_plan
 
 
-APPROVE = re.compile(r"(?:(?:I )?approve)(?: the plan for)? ([A-Z][A-Z0-9]*-[0-9]+)[.!]?\Z", re.I)
 WEB = Path(__file__).parent / "web"
 STATIC = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "application/javascript"),
           "/style.css": ("style.css", "text/css")}
@@ -76,7 +75,7 @@ class Symphony:
         if not isinstance(args, dict) or set(args) != set(keys) or any(not isinstance(args[key], str) for key in keys):
             raise ValueError("Invalid tool arguments.")
         issue_id = args.get("issue_id")
-        if issue_id and not ISSUE_ID.fullmatch(issue_id):
+        if issue_id is not None and not ISSUE_ID.fullmatch(issue_id):
             raise ValueError("Use an uppercase Linear issue identifier.")
         if name == "list_repos":
             return await self.project_list()
@@ -97,6 +96,10 @@ class Symphony:
                 raise ValueError("Use level-three headings within the Proposed Plan.")
             await self.linear.update(issue["id"], description=description)
             return f"Saved the Proposed Plan section for {issue_id}."
+        if name == "approve_issue":
+            issue, repo = await self.live_issue(issue_id)
+            await self.runner.approve(issue, repo)
+            return f"Approved {issue_id}. Its plan is locked and the issue is In Progress."
         if name == "worker_status":
             return self.runner.status()
         if name == "spawn_worker":
@@ -143,8 +146,7 @@ class Symphony:
         if text == "/interrupt":
             await self.coordinator.interrupt()
             return
-        if (self.coordinator.turn and self.turn_repo == repo and not text.startswith("/")
-                and not APPROVE.fullmatch(text)):
+        if self.coordinator.turn and self.turn_repo == repo and not text.startswith("/"):
             try:
                 await self.coordinator.steer(message)
                 return
@@ -174,15 +176,8 @@ class Symphony:
         return await self.coordinator.respond(text, cwd)
 
     async def handle(self, repo, text, message):
-        match = APPROVE.fullmatch(text)
         command, _, argument = text.partition(" ")
-        if match:
-            identifier = match[1].upper()
-            if self.runner.rows("SELECT 1 FROM tasks WHERE issue=?", (identifier,)):
-                raise ValueError(f"{identifier} already has a recorded approval.")
-            issue, verified_repo = await self.live_issue(identifier)
-            await self.runner.approve(issue, verified_repo)
-        elif command == "/login":
+        if command == "/login":
             result = await self.coordinator.login()
             self.login = {"url": result["verificationUrl"], "code": result["userCode"],
                           "expires": time.monotonic() + 900}

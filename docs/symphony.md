@@ -9,15 +9,17 @@ worktree queue.
 
 Open Symphony on the tailnet and sign in to Codex with the device flow if
 prompted. Choose a repo tab, expand an issue's proposed plan, and refine it with
-the coordinator. Send `Approve KIAN-123` in chat to lock the current Linear plan
-and move the issue to In Progress. The coordinator sequences approved issues
-across repositories in the same conversation.
+the coordinator. Approve the plans you want in chat, including plans across
+repositories. The coordinator records each approval, locks the current Linear
+plan, and moves the issue to In Progress before dispatch.
 
 The composer supports `/compact`, `/status`, `/model <id>`, `/effort <level>`, and
 `/interrupt`. A message sent during a turn in the same repo steers the active
 turn. A message for a different repo queues for the next turn. The app uses the
 selected repo's working directory and includes its AGENTS.md and current work
-when starting a turn.
+when starting a turn. Codex uses its shell and live web search inside the
+restricted pod. It can inspect checkouts and worker logs and use `gh` to diagnose
+CI. OpenCode workers handle implementation by default.
 
 OpenCode uses the Go subscription and caps concurrent workers at three. Each
 attempt has a one-hour safety timeout. The checklist is a shell command file
@@ -28,13 +30,13 @@ before shipping. A rejected push or failed CI appears in chat and the issue
 sidebar with its worktree preserved. Use `/retry KIAN-123` to revisit a parked
 issue and `/continue` when a shared provider failure has been resolved.
 
-Symphony writes one squash commit, pushes directly to `main`, and waits for the
-exact revision's GitHub Actions runs before advancing that repo. No workflow
-files means no CI wait. A repository with workflow files needs a workflow that
-runs on every push to `main`. Keep any deployment jobs dependent on successful
-CI in the repository's workflow. After verified publication, Symphony sets
-Linear to Done and removes the worktree. A restart preserves the conversation,
-approved plans, worker sessions and pending CI watches.
+Symphony writes one squash commit and pushes directly to `main`. It waits for
+the exact revision's GitHub Actions workflows whose push filters match the
+branch and changed paths. If none match, Symphony advances the repo after the
+push. Keep deployment jobs dependent on successful CI in the repository's
+workflow. After verified publication, Symphony sets Linear to Done and removes
+the worktree. A restart preserves the conversation, approved plans, worker
+sessions and pending CI watches.
 
 ## Deploy on Guaranine
 

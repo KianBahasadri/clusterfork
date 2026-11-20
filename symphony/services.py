@@ -1,7 +1,7 @@
 """Linear discovery, GitHub checks, and the subprocess boundary."""
 
 import asyncio
-from fnmatch import fnmatchcase
+from functools import lru_cache
 import json
 import os
 from pathlib import Path
@@ -218,17 +218,38 @@ async def git(path, *args):
                          *args, cwd=path, env=github_env())
 
 
-def matches_main(patterns):
-    match = False
-    for pattern in patterns:
-        if fnmatchcase("main", pattern.removeprefix("!")):
-            match = not pattern.startswith("!")
-    return match
+FILTER_TOKENS = re.compile(r"\\.|(?:^|(?<=/))\*\*/|\*\*|\[[a-zA-Z0-9-]+\]|.", re.DOTALL)
+FILTER_WILDCARDS = {"**/": "(?:.*/)?", "**": ".*", "*": "[^/]*"}
 
 
-async def ci_workflows(repo, commit):
+@lru_cache(maxsize=128)
+def workflow_pattern(pattern):
+    parts = []
+    for token in FILTER_TOKENS.findall(pattern):
+        if token in FILTER_WILDCARDS:
+            parts.append(FILTER_WILDCARDS[token])
+        elif token in {"?", "+"} and parts:
+            parts[-1] = f"(?:{parts[-1]}){token}"
+        elif token.startswith("[") and len(token) > 1:
+            parts.append(token)
+        else:
+            parts.append(re.escape(token[1:] if token.startswith("\\") and len(token) > 1 else token))
+    return re.compile("".join(parts), re.DOTALL)
+
+
+def matches_filter(value, patterns):
+    for pattern in reversed(patterns):
+        if workflow_pattern(pattern.removeprefix("!")).fullmatch(value):
+            return not pattern.startswith("!")
+    return False
+
+
+async def ci_workflows(repo, base, commit):
     files = (await git(repo, "ls-tree", "-r", "--name-only", commit, ".github/workflows/")).splitlines()
     files = [name for name in files if Path(name).suffix in {".yml", ".yaml"}]
+    changed = [path for path in (await git(
+        repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", base, commit,
+    )).split("\0") if path]
     workflows = []
     for name in files:
         config = yaml.load(await git(repo, "show", f"{commit}:{name}"), Loader=yaml.BaseLoader)
@@ -240,14 +261,17 @@ async def ci_workflows(repo, commit):
         push = (triggers.get("push") or {}) if isinstance(triggers, dict) else {}
         if not isinstance(push, dict):
             push = {}
-        if "branches" in push and not matches_main(push["branches"]):
+        if "branches" in push and not matches_filter("main", push["branches"]):
             continue
-        if matches_main(push.get("branches-ignore", [])) or "tags" in push and "branches" not in push:
+        if matches_filter("main", push.get("branches-ignore", [])):
             continue
-        if not {"paths", "paths-ignore"} & push.keys():
-            workflows.append(name)
-    if files and not workflows:
-        raise RuntimeError("GitHub Actions needs at least one workflow that runs on every push to main.")
+        if {"tags", "tags-ignore"} & push.keys() and not {"branches", "branches-ignore"} & push.keys():
+            continue
+        if "paths" in push and not any(matches_filter(path, push["paths"]) for path in changed):
+            continue
+        if "paths-ignore" in push and all(matches_filter(path, push["paths-ignore"]) for path in changed):
+            continue
+        workflows.append(name)
     return workflows
 
 
