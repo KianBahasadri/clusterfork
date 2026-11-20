@@ -243,7 +243,7 @@ async function poll() {
     canInterrupt = state.canInterrupt;
     if (choicesChanged || tasksChanged) renderCommands();
     showCodexStatus();
-    byId("connection").textContent = "Connected";
+    byId("connection").textContent = state.busy ? "Coordinator working" : "Connected";
     byId("paused").hidden = !state.paused;
     byId("paused").textContent = state.paused ? "Dispatch paused. " + state.paused : "";
     showLogin(state);
