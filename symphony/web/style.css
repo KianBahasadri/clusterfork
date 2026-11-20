@@ -183,7 +183,10 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
   border-radius: 6px;
   background: var(--canvas);
 }
-.command-entry:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+.command-entry:has(#message:focus-visible:not(.pointer-focus)) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
 #message {
   width: 100%;
   min-height: 45px;

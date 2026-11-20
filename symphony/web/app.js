@@ -535,7 +535,11 @@ messageField.addEventListener("input", () => {
   renderCommands();
 });
 messageField.addEventListener("focus", renderCommands);
-messageField.addEventListener("blur", hideCommands);
+messageField.addEventListener("pointerdown", () => messageField.classList.add("pointer-focus"));
+messageField.addEventListener("blur", () => {
+  messageField.classList.remove("pointer-focus");
+  hideCommands();
+});
 messageField.addEventListener("keydown", (event) => {
   if (event.isComposing || event.keyCode === 229) return;
   if (event.repeat && event.key === "Enter" && !event.shiftKey) {

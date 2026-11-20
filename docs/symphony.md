@@ -46,7 +46,9 @@ failures appear as a temporary notice while Symphony reconnects.
 Type `/` to see commands. Use the arrow keys to choose one, Tab to complete it,
 or Enter to run it. Enter sends a message, Shift+Enter inserts a newline, and
 the up arrow at the start of the prompt recalls previous inputs. Escape closes
-command suggestions first. Press Escape anywhere on the page or use Interrupt
+command suggestions first. Clicking or tapping the composer leaves its border
+neutral; keyboard navigation shows its focus ring.
+Press Escape anywhere on the page or use Interrupt
 to stop an active turn. If Codex exits during a turn, Symphony clears the
 partial response and reconnects to the conversation on the next message.
 The composer shows the current model and reasoning effort, context used,
