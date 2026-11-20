@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: symphony
+  namespace: symphony
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: symphony}
+  template:
+    metadata:
+      labels: {app: symphony}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 25
+      imagePullSecrets:
+        - name: symphony-ghcr
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: symphony
+          image: ghcr.io/kianbahasadri/symphony:main
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          envFrom:
+            - secretRef: {name: symphony-api}
+          env:
+            - {name: SYMPHONY_DATA, value: /data/symphony}
+            - {name: UV_CACHE_DIR, value: /data/symphony/cache/uv}
+            - {name: PIP_CACHE_DIR, value: /data/symphony/cache/pip}
+            - {name: PNPM_STORE_DIR, value: /data/symphony/cache/pnpm}
+            - {name: NPM_CONFIG_STORE_DIR, value: /data/symphony/cache/pnpm}
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "3", memory: 3Gi}
+          readinessProbe:
+            exec:
+              command: [python, -c, "from urllib.request import urlopen; urlopen('http://127.0.0.1:8080/healthz', timeout=2).close()"]
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: [python, -c, "from urllib.request import urlopen; urlopen('http://127.0.0.1:8080/healthz', timeout=2).close()"]
+            timeoutSeconds: 3
+            failureThreshold: 6
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: app-tmp, mountPath: /tmp}
+        - name: tailscale
+          image: tailscale/tailscale:v1.104.7@sha256:72c1e19e0aedca96b8533bbb0b4368564410ff20b17e53b804eb6c1f04a31be4
+          securityContext:
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          env:
+            - {name: TS_HOSTNAME, value: symphony}
+            - {name: TS_AUTH_ONCE, value: "true"}
+            - {name: TS_USERSPACE, value: "true"}
+            - {name: TS_ACCEPT_DNS, value: "false"}
+            - {name: TS_KUBE_SECRET, value: ""}
+            - {name: TS_EXTRA_ARGS, value: "--accept-routes=false --ssh=false"}
+            - {name: TS_STATE_DIR, value: /data/tailscale}
+            - {name: TS_SOCKET, value: /tmp/tailscaled.sock}
+            - {name: TS_SERVE_CONFIG, value: /etc/tailscale/serve.json}
+            - {name: TS_ENABLE_HEALTH_CHECK, value: "true"}
+            - {name: TS_LOCAL_ADDR_PORT, value: "0.0.0.0:9002"}
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef: {name: symphony-tailnet, key: authkey}
+          resources:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 9002}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tailscale-tmp, mountPath: /tmp}
+            - {name: serve, mountPath: /etc/tailscale, readOnly: true}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: symphony}
+        - name: serve
+          configMap: {name: symphony-serve}
+        - name: app-tmp
+          emptyDir: {}
+        - name: tailscale-tmp
+          emptyDir: {sizeLimit: 16Mi}

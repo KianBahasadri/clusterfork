@@ -27,5 +27,37 @@ jobs:
         run: python3 scripts/sync_upstream_skills.py --check
       - name: Run tests
         run: |
-          python3 -m pip install -r tests/requirements.txt
+          python3 -m pip install -r tests/requirements.txt -r symphony/requirements.txt
           env -u NO_COLOR python3 -m unittest discover -s tests -v
+
+  image:
+    if: github.repository == 'KianBahasadri/clusterfork' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: [test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/kianbahasadri/symphony
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Symphony
+        run: docker build -f symphony/Dockerfile -t "$IMAGE:$GITHUB_SHA" .
+      - name: Verify image tools and restricted user
+        run: |
+          docker run --rm --entrypoint sh "$IMAGE:$GITHUB_SHA" -ec '
+            test "$(id -u)" = 10001
+            for name in git gh python uv node pnpm lua shellcheck terraform opencode codex; do
+              command -v "$name"
+            done
+            python -c "import symphony.__main__"
+          '
+      - name: Publish the tested image
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker push "$IMAGE:$GITHUB_SHA"
+          docker tag "$IMAGE:$GITHUB_SHA" "$IMAGE:main"
+          docker push "$IMAGE:main"

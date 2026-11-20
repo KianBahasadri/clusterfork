@@ -18,7 +18,7 @@ environments. Run checks from the repository root with the pinned requirements:
 
 ```bash
 env -u NO_COLOR uv run --no-project \
-  --with-requirements tests/requirements.txt \
+  --with-requirements tests/requirements.txt --with-requirements symphony/requirements.txt \
   python -m unittest discover -s tests -v
 ```
 

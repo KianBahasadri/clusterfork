@@ -1,0 +1,10 @@
+**
+!symphony/
+!symphony/__main__.py
+!symphony/__init__.py
+!symphony/services.py
+!symphony/runner.py
+!symphony/codex.py
+!symphony/requirements.txt
+!symphony/web/
+!symphony/web/**

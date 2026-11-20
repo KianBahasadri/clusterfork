@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Symphony</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>Symphony</h1>
+    <div id="connection" role="status">Connecting…</div>
+  </header>
+  <main>
+    <aside aria-label="Linear issues">
+      <div class="sidebar-heading">
+        <h2>Linear issues</h2>
+        <button id="refresh" type="button">Refresh</button>
+      </div>
+      <div id="repos" role="tablist" aria-label="Repositories"></div>
+      <div id="issues" role="tabpanel" aria-label="Issues"></div>
+    </aside>
+    <section class="chat" aria-label="Coordinator chat">
+      <div id="paused" class="notice" hidden></div>
+      <div id="login" class="notice" hidden></div>
+      <div id="chat-log" class="chat-log" role="log" aria-live="polite">
+        <p id="welcome">Choose a repository or ask the coordinator to draft a plan.</p>
+        <div id="messages"></div>
+        <div id="stream"></div>
+      </div>
+      <form id="composer">
+        <label class="sr-only" for="message">Message to the coordinator</label>
+        <textarea id="message" rows="3" maxlength="23000" placeholder="Message the coordinator"></textarea>
+        <div class="composer-actions">
+          <button id="commands" type="button">Commands</button>
+          <span id="request-error" role="alert"></span>
+          <button id="interrupt" type="button" hidden>Interrupt</button>
+          <button class="send" type="submit">Send</button>
+        </div>
+        <div id="command-list" hidden></div>
+      </form>
+    </section>
+  </main>
+</body>
+</html>
