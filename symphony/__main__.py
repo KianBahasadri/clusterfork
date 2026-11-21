@@ -28,6 +28,7 @@ from .execution import card_stage, execution_payload, history_summary
 from .issue_details import issue_details, markdown, open_asset
 from .runner import Runner, read_small
 from .services import CLOSED_STATES, ISSUE_ID, Linear, proposed_plan, with_plan
+from .updates import CHECK_SECONDS as UPDATE_CHECK_SECONDS, UpdateChecker
 
 
 WEB = Path(__file__).parent / "web"
@@ -40,6 +41,7 @@ STATIC = {
     "/favicon.ico": ("favicon.ico", "image/vnd.microsoft.icon"),
 }
 BODY_LIMIT = 14 * 1024 * 1024
+DRAIN_BODY_LIMIT = 1024
 TEXT_LIMIT = 23000
 IMAGE_COUNT = 4
 IMAGE_BYTES = 5 * 1024 * 1024
@@ -63,6 +65,7 @@ WEBHOOK_ACTIONS = {"create", "update", "remove"}
 HISTORY_CONCURRENCY = 3
 RECENT_DONE = timedelta(hours=24)
 ACTIVE_PHASES = {"approving", "working", "publishing", "ci", "finishing"}
+DRAINING_PHASES = {"review", "blocked", "finish_failed"}
 
 
 def image_matches(mime, data):
@@ -183,6 +186,7 @@ class Symphony:
         self.issue_error = ""
         self.history_cache = {}
         self.webhook_secret = os.environ.get("LINEAR_WEBHOOK_SECRET", "")
+        self.updates = UpdateChecker()
 
     async def refresh_projects(self):
         async with self.projects_lock:
@@ -407,6 +411,20 @@ class Symphony:
             return "Worktree cleaned up."
         raise ValueError("Unknown tool.")
 
+    async def check_updates(self):
+        while True:
+            try:
+                await asyncio.to_thread(self.updates.check)
+            except (OSError, RuntimeError, TimeoutError, ValueError):
+                pass
+            await asyncio.sleep(UPDATE_CHECK_SECONDS)
+
+    async def set_draining(self, draining):
+        self.runner.draining = draining
+        if not draining:
+            self.runner.wake.set()
+        return {"draining": self.runner.draining}
+
     async def state(self, after, issue_revision=""):
         login = self.login if not self.coordinator.account and self.login and time.monotonic() < self.login["expires"] else None
         messages = self.runner.rows("SELECT * FROM chat WHERE id > ? ORDER BY id LIMIT 200", (after,))
@@ -425,7 +443,9 @@ class Symphony:
                  "tasks": self.runner.status(),
                  "signedIn": bool(self.coordinator.account), "login": login,
                  "paused": self.runner.setting("paused"), "view": self.runner.setting("view"),
-                 "codex": self.coordinator.status(), "issueError": self.issue_error}
+                 "codex": self.coordinator.status(), "issueError": self.issue_error,
+                 "updateAvailable": self.updates.available,
+                 "draining": self.runner.draining}
         if self.issue_snapshot is not None and issue_revision != self.issue_revision:
             state.update(projects=self.issue_snapshot, issueRevision=self.issue_revision)
         return state
@@ -433,7 +453,10 @@ class Symphony:
     async def idle(self):
         if self.busy or self.messages or self.coordinator.turn:
             return False
-        if any(task["phase"] in ACTIVE_PHASES for task in self.runner.status()):
+        tasks = self.runner.status()
+        if any(task["phase"] in ACTIVE_PHASES for task in tasks):
+            return False
+        if self.runner.draining and any(task["phase"] in DRAINING_PHASES for task in tasks):
             return False
         if self.coordinator.account and not self.runner.setting("paused"):
             if self.runner.rows("SELECT 1 FROM events WHERE delivered=0 LIMIT 1"):
@@ -621,6 +644,7 @@ class Symphony:
     async def start(self):
         self.runner.recover()
         self.runner.job(self.poll_issues())
+        self.runner.job(self.check_updates())
         try:
             await self.coordinator.connect()
         except (OSError, RuntimeError, TimeoutError) as error:
@@ -708,7 +732,7 @@ class Handler(BaseHTTPRequestHandler):
             self.json_response({"error": str(error)}, 503)
 
     def do_POST(self):
-        if self.path != "/api/chat":
+        if self.path not in {"/api/chat", "/api/drain"}:
             self.json_response({"error": "Page not found."}, 404)
             return
         if (self.headers.get("X-Symphony") != "1" or self.headers.get_content_type() != "application/json"
@@ -717,9 +741,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers["Content-Length"])
-            if not 0 < length <= BODY_LIMIT:
-                raise ValueError("Message is too large.")
+            limit = DRAIN_BODY_LIMIT if self.path == "/api/drain" else BODY_LIMIT
+            if not 0 < length <= limit:
+                raise ValueError("Request is too large." if self.path == "/api/drain"
+                                 else "Message is too large.")
             body = json.loads(self.rfile.read(length))
+            if self.path == "/api/drain":
+                if (not isinstance(body, dict) or set(body) != {"draining"}
+                        or not isinstance(body["draining"], bool)):
+                    raise ValueError("Expected a draining boolean.")
+                self.json_response(self.run_async(self.server.app.set_draining(body["draining"])))
+                return
             if not isinstance(body, dict):
                 raise ValueError("Expected a chat message.")
             self.json_response(self.run_async(self.server.app.submit(body)), 202)

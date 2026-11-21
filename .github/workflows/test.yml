@@ -52,11 +52,13 @@ jobs:
           load: true
           push: false
           provenance: false
+          build-args: SYMPHONY_COMMIT=${{ github.sha }}
           cache-from: type=gha,scope=symphony
       - name: Verify image tools and restricted user
         run: |
-          docker run --rm --entrypoint sh "$IMAGE:$GITHUB_SHA" -ec '
+          docker run --rm -e EXPECTED_COMMIT="$GITHUB_SHA" --entrypoint sh "$IMAGE:$GITHUB_SHA" -ec '
             test "$(id -u)" = 10001
+            test "$SYMPHONY_COMMIT" = "$EXPECTED_COMMIT"
             for name in git gh python uv node pnpm lua shellcheck terraform opencode codex jq rg sqlite3 tmux gawk patch file zip chromium; do
               command -v "$name"
             done
@@ -81,5 +83,6 @@ jobs:
             ${{ env.IMAGE }}:main
           push: true
           provenance: false
+          build-args: SYMPHONY_COMMIT=${{ github.sha }}
           cache-from: type=gha,scope=symphony
           cache-to: type=gha,scope=symphony,mode=max

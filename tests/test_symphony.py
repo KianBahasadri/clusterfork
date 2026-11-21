@@ -1400,6 +1400,113 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         self.assertEqual(restarted.task(ISSUE)["attempts"], 1)
         self.assertEqual(restarted.rows("SELECT issue FROM tasks WHERE phase='working'"), [{"issue": ISSUE}])
 
+    async def test_draining_holds_new_dispatch_and_cancel_resumes_queued_approval(self):
+        app = self.app()
+        await self.approve()
+        self.runner.draining = True
+        self.runner.wake.clear()
+        self.assertEqual(await self.runner.dispatch_approved(), [])
+        with self.assertRaisesRegex(ValueError, "draining"):
+            await self.runner.dispatch(ISSUE, REPO, "")
+        task = self.runner.task(ISSUE)
+        self.assertEqual((task["phase"], task["attempts"]), ("approved", 0))
+        self.assertEqual(self.linear.state["name"], "Todo")
+
+        self.assertEqual(await app.set_draining(False), {"draining": False})
+        self.assertTrue(self.runner.wake.is_set())
+        pending = []
+        with patch.object(self.runner, "job", side_effect=pending.append):
+            self.assertEqual(await self.runner.dispatch_approved(), [ISSUE])
+        for coroutine in pending:
+            coroutine.close()
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "working")
+        self.assertEqual(self.runner.task(ISSUE)["attempts"], 1)
+
+    async def test_drain_during_awaited_dispatch_keeps_reservation_and_rejects_new_work(self):
+        await self.approve()
+        gate = asyncio.Event()
+        original = self.linear.issue
+
+        async def delayed(identifier):
+            await gate.wait()
+            return await original(identifier)
+
+        pending = []
+        with patch.object(self.linear, "issue", side_effect=delayed), \
+             patch.object(self.runner, "job", side_effect=pending.append):
+            first = asyncio.create_task(self.runner.dispatch(ISSUE, REPO, ""))
+            async with asyncio.timeout(2):
+                while self.runner.task(ISSUE)["phase"] != "working":
+                    await asyncio.sleep(0)
+            self.runner.draining = True
+            gate.set()
+            await first
+        for coroutine in pending:
+            coroutine.close()
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "working")
+        self.assertEqual(self.runner.task(ISSUE)["attempts"], 1)
+
+        with self.runner.db:
+            self.runner.db.execute(
+                """INSERT INTO tasks(issue,project,repo,title,plan,phase,updated)
+                   VALUES ('KIAN-102','project','owner/second','Second','Plan','approved',0)"""
+            )
+        self.linear.configure("KIAN-102", state={"name": "Todo", "type": "unstarted"})
+        with self.assertRaisesRegex(ValueError, "draining"):
+            await self.runner.dispatch("KIAN-102", "owner/second", "")
+        task = self.runner.task("KIAN-102")
+        self.assertEqual((task["phase"], task["attempts"]), ("approved", 0))
+        self.assertEqual(self.linear.state["name"], "In Progress")
+
+    async def test_draining_preserves_resume_admission_for_existing_work(self):
+        await self.approve()
+        with self.runner.db:
+            self.runner.db.execute(
+                "UPDATE tasks SET phase='blocked', attempts=1, detail='Paused' WHERE issue=?",
+                (ISSUE,),
+            )
+        self.linear.configure(ISSUE, state={"name": "In Progress", "type": "started"})
+        self.runner.draining = True
+        pending = []
+        with patch.object(self.runner, "job", side_effect=pending.append):
+            result = await self.runner.dispatch(ISSUE, REPO, "Resume the work.", resume=True)
+        for coroutine in pending:
+            coroutine.close()
+        self.assertEqual(result, {"issue": ISSUE, "phase": "working"})
+        self.assertEqual(self.runner.task(ISSUE)["attempts"], 2)
+
+    async def test_draining_preserves_publication_admission(self):
+        await self.worker_done()
+        self.runner.read_notes(ISSUE)
+        self.runner.draining = True
+        pending = []
+        with patch.object(self.runner, "job", side_effect=pending.append):
+            result = self.runner.ship(ISSUE)
+        for coroutine in pending:
+            coroutine.close()
+        self.assertEqual(result, {"issue": ISSUE, "phase": "publishing"})
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "publishing")
+
+    async def test_continue_clears_provider_pause_but_not_draining(self):
+        app = self.app()
+        await self.approve()
+        self.runner.save_setting("paused", "OpenCode Go: quota")
+        self.runner.draining = True
+        await app.handle(REPO, "/continue", "/continue")
+        self.assertEqual(self.runner.setting("paused"), "")
+        self.assertTrue(self.runner.draining)
+        self.assertEqual(await self.runner.dispatch_approved(), [])
+        self.assertEqual(self.runner.task(ISSUE)["attempts"], 0)
+
+    async def test_draining_resets_with_a_new_runner_and_application(self):
+        self.runner.draining = True
+        restarted = Runner(self.root, self.linear)
+        self.addCleanup(restarted.db.close)
+        self.assertFalse(restarted.draining)
+        app = self.app(restarted)
+        self.assertFalse((await app.state(0))["draining"])
+        self.assertFalse(restarted.draining)
+
     async def test_opencode_error_reporting_and_dispatch_pause(self):
         await self.approve()
         expired = "This API key has expired."

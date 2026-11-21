@@ -34,10 +34,12 @@ RUN python3 -m venv /opt/symphony \
     && groupadd -g 10001 symphony && useradd -u 10001 -g 10001 -M -d /data/symphony/home symphony
 COPY symphony /app/symphony
 
+ARG SYMPHONY_COMMIT=""
 ENV PATH="/opt/symphony/bin:$PATH" \
     HOME="/data/symphony/home" \
     CHROME_PATH="/usr/bin/chromium" \
     PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH="/usr/bin/chromium" \
+    SYMPHONY_COMMIT="${SYMPHONY_COMMIT}" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 USER 10001:10001

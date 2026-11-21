@@ -249,6 +249,7 @@ class Runner:
         self.wake = asyncio.Event()
         self.issue_refresh = asyncio.Event()
         self.projects_changed = False
+        self.draining = False
 
     def request_issue_refresh(self, projects=False):
         if projects:
@@ -494,6 +495,8 @@ class Runner:
             raise ValueError(f"{issue} is {row['phase']}.")
         if self.setting("paused"):
             raise ValueError(f"Dispatch is paused. {self.setting('paused')}")
+        if self.draining and not resume:
+            raise ValueError("Symphony is draining for an update. Cancel draining to resume dispatch.")
         if row["attempts"] >= ATTEMPT_LIMIT:
             raise ValueError(f"{issue} reached its rework limit. Park it and ask the operator to /retry {issue}.")
         if len(self.rows("SELECT 1 FROM tasks WHERE phase='working'")) >= WORKER_LIMIT:
@@ -560,7 +563,7 @@ class Runner:
         return {"issue": issue, "phase": "working"}
 
     async def dispatch_approved(self):
-        if self.setting("paused"):
+        if self.setting("paused") or self.draining:
             return []
         ready = []
         for row in self.rows("SELECT * FROM tasks WHERE phase='approved'"):

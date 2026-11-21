@@ -11,11 +11,12 @@ import types
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import yaml
 
-from symphony.__main__ import IdleHandler, Symphony
+from symphony import updates
+from symphony.__main__ import Handler, IdleHandler, Symphony
 from symphony.runner import Runner
 
 
@@ -98,6 +99,33 @@ class IdleEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.runner.save_setting("paused", "quota")
         self.assertTrue(await self.app.idle())
 
+    async def test_draining_holds_unfinished_work_but_not_queued_todo(self):
+        self._insert_task("approved")
+        self.assertTrue(await self.app.idle())
+        self.runner.draining = True
+        for phase in ("working", "publishing", "ci", "finishing"):
+            self._set_phase(phase)
+            self.assertFalse(await self.app.idle(), f"{phase} should never be idle")
+        for phase in ("review", "blocked", "finish_failed"):
+            self._set_phase(phase)
+            self.assertFalse(await self.app.idle(), f"{phase} should hold draining")
+        for phase in ("approved", "done"):
+            self._set_phase(phase)
+            self.assertTrue(await self.app.idle(), f"{phase} should not hold draining")
+
+        self.runner.draining = False
+        self._set_phase("blocked")
+        self.assertTrue(await self.app.idle())
+
+    async def test_state_uses_cached_update_status_without_registry_requests(self):
+        self.app.updates.available = True
+        self.runner.draining = True
+        with patch.object(self.app.updates, "check", side_effect=AssertionError("registry request")), \
+             patch.object(updates, "urlopen", side_effect=AssertionError("registry request")):
+            state = await self.app.state(0)
+        self.assertTrue(state["updateAvailable"])
+        self.assertTrue(state["draining"])
+
     async def test_idle_http_handler(self):
         loop = asyncio.get_running_loop()
         server = ThreadingHTTPServer(("127.0.0.1", 0), IdleHandler)
@@ -125,6 +153,215 @@ class IdleEndpointTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HTTPError) as ctx:
             await asyncio.to_thread(fetch, "/api/state")
         self.assertEqual(ctx.exception.code, 404)
+
+    async def test_background_update_check_recovers_after_failure(self):
+        calls = []
+
+        def check():
+            calls.append(1)
+            if len(calls) == 1:
+                raise OSError("registry unavailable")
+            raise asyncio.CancelledError
+
+        with patch.object(self.app.updates, "check", side_effect=check), \
+             patch("symphony.__main__.UPDATE_CHECK_SECONDS", 0):
+            with self.assertRaises(asyncio.CancelledError):
+                await self.app.check_updates()
+        self.assertEqual(len(calls), 2)
+
+
+class DrainHttpTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        temp = TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.runner = Runner(self.root, None)
+        self.addCleanup(self.runner.db.close)
+        with patch.dict(os.environ, {"LINEAR_API_KEY": "fixture"}), \
+             patch("symphony.__main__.Runner", return_value=self.runner):
+            self.app = Symphony(self.root)
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.loop = asyncio.get_running_loop()
+        self.server.app = self.app
+        thread = Thread(target=self.server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+
+    async def send(self, payload=None, *, raw=None, headers=None, path="/api/drain"):
+        data = json.dumps(payload).encode() if raw is None else raw
+        request_headers = {
+            "Content-Type": "application/json",
+            "X-Symphony": "1",
+            "Sec-Fetch-Site": "same-origin",
+        }
+        if headers is not None:
+            request_headers = headers
+
+        def post():
+            request = Request(f"http://127.0.0.1:{self.server.server_address[1]}{path}",
+                              data=data, method="POST", headers=request_headers)
+            try:
+                with urlopen(request, timeout=5) as response:
+                    return response.status, json.loads(response.read())
+            except HTTPError as error:
+                with error:
+                    return error.code, json.loads(error.read())
+
+        return await asyncio.to_thread(post)
+
+    async def test_valid_drain_requests_confirm_state_and_cancel_wakes_dispatch(self):
+        with self.runner.db:
+            self.runner.db.execute(
+                """INSERT INTO tasks(issue,project,repo,title,plan,phase,updated)
+                   VALUES ('KIAN-1','proj','owner/repo','Title','Plan','approved',0)"""
+            )
+        tasks = self.runner.rows("SELECT * FROM tasks")
+        chat = self.runner.rows("SELECT * FROM chat")
+
+        status, body = await self.send({"draining": True})
+        self.assertEqual((status, body), (200, {"draining": True}))
+        self.assertTrue(self.runner.draining)
+        self.assertTrue((await self.app.state(0))["draining"])
+        self.assertEqual(self.runner.rows("SELECT * FROM tasks"), tasks)
+        self.assertEqual(self.runner.rows("SELECT * FROM chat"), chat)
+        self.assertFalse(self.app.busy)
+
+        self.runner.wake.clear()
+        status, body = await self.send({"draining": False})
+        self.assertEqual((status, body), (200, {"draining": False}))
+        self.assertFalse(self.runner.draining)
+        self.assertTrue(self.runner.wake.is_set())
+        self.assertEqual(self.runner.rows("SELECT * FROM tasks"), tasks)
+
+    async def test_malformed_drain_requests_are_rejected_without_changing_state(self):
+        payloads = [
+            {}, {"draining": 1}, {"draining": "true"}, {"draining": None},
+            {"draining": True, "extra": 1}, [], "true",
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                status, body = await self.send(payload)
+                self.assertEqual(status, 400)
+                self.assertIn("error", body)
+                self.assertFalse(self.runner.draining)
+        for raw in (b"not json", b'{"draining":true'):
+            with self.subTest(raw=raw):
+                status, body = await self.send(raw=raw)
+                self.assertEqual(status, 400)
+                self.assertFalse(self.runner.draining)
+        status, _ = await self.send({"draining": True, "pad": "x" * 2000})
+        self.assertEqual(status, 400)
+        self.assertFalse(self.runner.draining)
+
+    async def test_drain_request_requires_the_chat_same_origin_policy(self):
+        headers = [
+            {"Content-Type": "application/json", "Sec-Fetch-Site": "same-origin"},
+            {"Content-Type": "text/plain", "X-Symphony": "1", "Sec-Fetch-Site": "same-origin"},
+            {"Content-Type": "application/json", "X-Symphony": "1", "Sec-Fetch-Site": "cross-site"},
+        ]
+        for case in headers:
+            with self.subTest(headers=case):
+                status, body = await self.send({"draining": True}, headers=case)
+                self.assertEqual(status, 403)
+                self.assertIn("error", body)
+                self.assertFalse(self.runner.draining)
+        status, _ = await self.send({"draining": True}, path="/api/other")
+        self.assertEqual(status, 404)
+
+
+class UpdateCheckTests(unittest.TestCase):
+    commit = "1" * 40
+
+    def test_missing_or_invalid_build_identity_never_claims_an_update(self):
+        for value in ("", "main", "a" * 39, "a" * 41, "g" * 40, "sha256:" + "a" * 64):
+            with self.subTest(value=value), \
+                 patch.dict(os.environ, {"SYMPHONY_COMMIT": value}), \
+                 patch.object(updates, "urlopen") as open_url:
+                checker = updates.UpdateChecker()
+                self.assertFalse(checker.check())
+                self.assertFalse(checker.available)
+                open_url.assert_not_called()
+
+    def test_matching_and_differing_digests_cache_the_running_digest(self):
+        calls = []
+
+        def digest(token, reference):
+            calls.append(reference)
+            return DIGEST_OLD if reference == self.commit else DIGEST_NEW
+
+        with patch.dict(os.environ, {"SYMPHONY_COMMIT": self.commit.upper()}), \
+             patch.object(updates, "ghcr_token", return_value="token"), \
+             patch.object(updates, "ghcr_digest", side_effect=digest):
+            checker = updates.UpdateChecker()
+            self.assertTrue(checker.check())
+            self.assertTrue(checker.check())
+        self.assertEqual(calls, [self.commit, "main", "main"])
+
+        with patch.dict(os.environ, {"SYMPHONY_COMMIT": self.commit}), \
+             patch.object(updates, "ghcr_token", return_value="token"), \
+             patch.object(updates, "ghcr_digest", return_value=DIGEST_OLD):
+            checker = updates.UpdateChecker()
+            self.assertFalse(checker.check())
+
+    def test_initial_digest_failures_do_not_claim_an_update(self):
+        checker = updates.UpdateChecker()
+        with patch.dict(os.environ, {"SYMPHONY_COMMIT": self.commit}), \
+             patch.object(updates, "ghcr_token", return_value="token"), \
+             patch.object(updates, "ghcr_digest", side_effect=URLError("down")):
+            with self.assertRaises(URLError):
+                checker.check()
+        self.assertFalse(checker.available)
+        self.assertEqual(checker.running_digest, "")
+
+    def test_transient_failures_preserve_the_last_confirmed_result(self):
+        checker = updates.UpdateChecker()
+        checker.running_digest = DIGEST_OLD
+        checker.available = True
+        with patch.dict(os.environ, {"SYMPHONY_COMMIT": self.commit}), \
+             patch.object(updates, "ghcr_token", return_value="token"), \
+             patch.object(updates, "ghcr_digest", side_effect=TimeoutError("slow")):
+            with self.assertRaises(TimeoutError):
+                checker.check()
+        self.assertTrue(checker.available)
+
+        with patch.dict(os.environ, {"SYMPHONY_COMMIT": self.commit}), \
+             patch.object(updates, "ghcr_token", side_effect=URLError("down")):
+            with self.assertRaises(URLError):
+                checker.check()
+        self.assertTrue(checker.available)
+
+        with patch.dict(os.environ, {"SYMPHONY_COMMIT": self.commit}), \
+             patch.object(updates, "ghcr_token", return_value="token"), \
+             patch.object(updates, "ghcr_digest", return_value=DIGEST_OLD):
+            self.assertFalse(checker.check())
+        self.assertFalse(checker.available)
+
+    def test_malformed_digest_and_empty_token_are_rejected(self):
+        class FakeResponse:
+            def __init__(self, body=b"", headers=None):
+                self.body = body
+                self.headers = headers or {}
+
+            def read(self):
+                return self.body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with patch.object(updates, "urlopen", return_value=FakeResponse(
+                headers={"Docker-Content-Digest": "sha256:not-hex"})):
+            with self.assertRaisesRegex(RuntimeError, "Invalid GHCR digest"):
+                updates.ghcr_digest("token", "main")
+        with patch.object(updates, "urlopen", return_value=FakeResponse(body=b"{}")):
+            with self.assertRaisesRegex(RuntimeError, "empty pull token"):
+                updates.ghcr_token()
+        with patch.object(updates, "urlopen", side_effect=TimeoutError("slow")):
+            with self.assertRaises(TimeoutError):
+                updates.ghcr_token()
 
 
 class UpdaterScriptTests(unittest.TestCase):

@@ -103,6 +103,11 @@
     </aside>
     <section class="chat" aria-label="Coordinator chat">
       <div id="connection-error" class="notice" role="status" hidden>Connection lost. Reconnecting…</div>
+      <div id="update-notice" class="notice" role="status" hidden>
+        <span id="update-text"></span>
+        <button id="update-action" type="button"></button>
+        <p id="update-error" role="alert" hidden></p>
+      </div>
       <div id="paused" class="notice" hidden></div>
       <div id="login" class="notice" hidden></div>
       <div id="chat-log" class="chat-log" role="log" aria-live="polite">

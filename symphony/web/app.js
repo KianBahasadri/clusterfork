@@ -31,6 +31,9 @@ let issueDay = new Date().toDateString();
 let stream = "";
 let codex = {};
 let canInterrupt = false;
+let updateState = {updateAvailable: false, draining: false};
+let updatePending = false;
+let updateError = "";
 
 function element(tag, text, className) {
   const node = document.createElement(tag);
@@ -428,6 +431,48 @@ function showLogin(state) {
   }
 }
 
+function renderUpdateNotice() {
+  const notice = byId("update-notice");
+  const text = byId("update-text");
+  const action = byId("update-action");
+  const error = byId("update-error");
+  const visible = updateState.draining || updateState.updateAvailable;
+  notice.hidden = !visible;
+  if (!visible) {
+    error.hidden = true;
+    return;
+  }
+  notice.dataset.tone = updateState.draining ? "draining" : "";
+  text.textContent = updateState.draining
+    ? "New tasks are held until current work finishes."
+    : "New Symphony version available.";
+  action.textContent = updateState.draining ? "Cancel" : "Update";
+  action.disabled = updatePending;
+  error.textContent = updateError;
+  error.hidden = !updateError;
+}
+
+async function toggleDrain() {
+  if (updatePending) return;
+  const draining = !updateState.draining;
+  updatePending = true;
+  updateError = "";
+  renderUpdateNotice();
+  try {
+    const result = await api("/api/drain", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "X-Symphony": "1"},
+      body: JSON.stringify({draining}),
+    });
+    updateState = {updateAvailable: updateState.updateAvailable, draining: result.draining === true};
+  } catch (error) {
+    updateError = error.message;
+  } finally {
+    updatePending = false;
+    renderUpdateNotice();
+  }
+}
+
 function showCodexStatus() {
   byId("status-model").textContent = [codex.model || "Codex", codex.effort].filter(Boolean).join(" ");
   const context = byId("status-context");
@@ -495,8 +540,10 @@ async function poll() {
     notice.hidden = !state.issueError;
     codex = state.codex;
     canInterrupt = state.canInterrupt;
+    updateState = {updateAvailable: Boolean(state.updateAvailable), draining: Boolean(state.draining)};
     if (choicesChanged || tasksChanged) renderCommands();
     showCodexStatus();
+    renderUpdateNotice();
     byId("connection-error").hidden = true;
     byId("paused").hidden = !state.paused;
     byId("paused").textContent = state.paused ? "Dispatch paused. " + state.paused : "";
@@ -727,6 +774,7 @@ messageField.addEventListener("keydown", (event) => {
   }
 });
 interrupt.addEventListener("click", interruptTurn);
+byId("update-action").addEventListener("click", toggleDrain);
 document.addEventListener("keydown", (event) => {
   if (document.querySelector("dialog[open]")) return;
   if (event.key !== "Escape" || event.defaultPrevented || event.repeat || event.isComposing

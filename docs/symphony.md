@@ -255,6 +255,22 @@ the updater rolls forward even when `/idle` is unreachable so a broken rollout
 can recover on the next push to `main`. The Symphony pod itself keeps
 `automountServiceAccountToken: false` and has no Kubernetes API egress.
 
+Each image bakes its source commit as `SYMPHONY_COMMIT`. Symphony resolves that
+commit tag to a digest and compares it with the published `:main` digest at
+startup and every 60 seconds. Status polls read only the cached result, and an
+invalid or missing build identity or unavailable digest never reports an
+update. When a newer image is confirmed, chat offers **Update**. Updating holds
+new automatic Todo dispatches and `spawn_worker` admissions across every
+repository while work already in progress continues; resumes, review,
+publication, CI watching, completion, coordinator chat, and worker events are
+not blocked. The notice then offers **Cancel**, which restores automatic
+dispatch immediately. Draining is process-local and never persisted, so a
+restart begins with normal automatic dispatch. While draining, `/idle` also
+waits for work in review, blocked rework, or failed completion, while queued
+approved Todo issues alone do not hold it. The two-minute updater schedule
+means a confirmed update is not rolled out immediately, and the browser does
+not reload by itself.
+
 Open the private HTTPS address reported by the UI gateway and verify the project
 chips and panes load. Register one Linear webhook for Issue and Project events
 against the HTTPS address reported by the webhook gateway, ending in
