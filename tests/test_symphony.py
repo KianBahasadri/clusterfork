@@ -15,7 +15,9 @@ from unittest.mock import AsyncMock, patch
 
 from symphony.__main__ import Symphony
 from symphony.codex import Codex, TOOLS, TOOLS_HASH
-from symphony.runner import Runner
+from symphony.runner import (
+    REVIEW_LINES, Runner, bounded_review, validate_review,
+)
 from symphony.services import Linear, matches_filter, proposed_plan, with_plan
 
 
@@ -77,15 +79,79 @@ class SymphonyTests(unittest.IsolatedAsyncioTestCase):
 import json
 from pathlib import Path
 import os
+import subprocess
 import sys
+import time
 workspace = Path(os.environ["FIXTURE_ROOT"]) / "runs/KIAN-101"
+config = json.loads(os.environ.get("OPENCODE_CONFIG_CONTENT", "{}"))
+if "mcp" in config:
+    prompt = sys.stdin.read()
+    with (workspace / "review-runs").open("a") as stream:
+        stream.write("review\\n")
+    (workspace / "review-env.json").write_text(json.dumps({
+        "args": sys.argv,
+        "config": config,
+        "github": "GITHUB_TOKEN" in os.environ,
+        "linear": "LINEAR_API_KEY" in os.environ,
+        "api_key": "OPENCODE_GO_API_KEY" in os.environ,
+        "prompt": prompt,
+    }))
+    assert "independent read-only code reviewer" in prompt
+    mode = os.environ.get("FIXTURE_REVIEW", "")
+    def emit(kind, message, **part):
+        print(json.dumps({"type": kind, "sessionID": "ses_review",
+                          "part": {"messageID": message, **part}}))
+    def finish(message, text, reason):
+        emit("step_start", message, type="step-start")
+        if text is not None:
+            emit("text", message, type="text", text=text)
+        emit("step_finish", message, type="step-finish", reason=reason)
+    if mode == "timeout":
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        (workspace / "review-pids").write_text(f"{os.getpid()} {child.pid}")
+        time.sleep(60)
+        sys.exit(0)
+    if mode == "fail":
+        print(json.dumps({"type": "error", "sessionID": "ses_review",
+                          "error": {"type": "provider.api", "message": "Fixture review failed"}}))
+        sys.exit(2)
+    if mode == "toolonly":
+        emit("tool_use", "msg_tool", type="tool", tool="grep")
+        emit("text", "msg_tool", type="text", text="VERDICT: NO ISSUES")
+        emit("step_finish", "msg_tool", type="step-finish", reason="tool-calls")
+    elif mode == "nonterminal":
+        finish("msg_tool", "VERDICT: NO ISSUES", "tool-calls")
+    elif mode == "progress":
+        finish("msg_progress", "Reviewing the diff.", "tool-calls")
+        finish("msg_final", "VERDICT: NO ISSUES", "stop")
+    elif mode == "intermediate":
+        finish("msg_early", "VERDICT: NO ISSUES", "tool-calls")
+        finish("msg_final", "VERDICT: ISSUES\\n- symphony/runner.py:1 - Final finding.", "stop")
+    elif mode == "malformed":
+        finish("msg_final", "Looks fine to me.", "stop")
+    elif mode == "empty":
+        finish("msg_final", None, "stop")
+    elif mode == "findings":
+        finish("msg_final", "VERDICT: ISSUES\\n- symphony/runner.py:1 - Fixture finding.\\n", "stop")
+    elif mode == "large":
+        finish("msg_final", "VERDICT: ISSUES\\n- symphony/runner.py:1 - Fixture finding.\\n"
+               + "detail\\n" * 300, "stop")
+    elif mode == "mutate":
+        Path("verified.txt").write_text("Reviewed\\n")
+        finish("msg_final", "VERDICT: NO ISSUES", "stop")
+    else:
+        finish("msg_final", "VERDICT: NO ISSUES", "stop")
+    sys.exit(0)
 assert "Write one verification file." in sys.argv[-1]
 assert "Never ship from the worker." in sys.argv[-1]
 assert sys.argv[sys.argv.index("--model") + 1] == "opencode-go/deepseek-v4.1-flash#max"
 assert "GITHUB_TOKEN" not in os.environ
+if os.environ.get("FIXTURE_LARGE_DIFF"):
+    Path("large.txt").write_text("x" * 60000 + "\\nEND-OF-LARGE-DIFF\\n")
 print(json.dumps({"type":"text","sessionID":"ses_fixture"}))
 Path("verified.txt").write_text("Tested\\n")
-(workspace / "checks.sh").write_text('test "$(cat verified.txt)" = Tested\\n')
+checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat verified.txt)" = Tested\\n'
+(workspace / "checks.sh").write_text(checks)
 (workspace / "notes.md").write_text("None\\n")
 """)
         worker.chmod(0o755)
@@ -525,7 +591,7 @@ Path("verified.txt").write_text("Tested\\n")
             self.assertEqual([issue["identifier"] for issue in aged["projects"][0]["issues"]],
                              ["KIAN-101", "KIAN-102"])
 
-    async def worker_done(self):
+    async def worker_done(self, status=0):
         await self.approve()
         self.assertEqual(self.linear.state["name"], "Todo")
         result = await self.runner.dispatch(ISSUE, REPO, "Never ship from the worker.")
@@ -535,7 +601,18 @@ Path("verified.txt").write_text("Tested\\n")
             await self.runner.dispatch(ISSUE, REPO, "Duplicate")
         await self.phase("review")
         self.assertEqual(self.runner.task(ISSUE)["session"], "ses_fixture")
-        self.assertEqual(self.runner.task(ISSUE)["check_exit"], 0)
+        self.assertEqual(self.runner.task(ISSUE)["check_exit"], status)
+
+    def review_environment(self):
+        return json.loads((self.runner.artifacts(ISSUE) / "review-env.json").read_text())
+
+    @staticmethod
+    def pid_alive(pid):
+        try:
+            with open(f"/proc/{pid}/stat") as stream:
+                return stream.read().split()[2] != "Z"
+        except (FileNotFoundError, IndexError):
+            return False
 
     async def test_approval_queues_todo_and_auto_dispatch_moves_to_in_progress(self):
         await self.approve()
@@ -909,7 +986,9 @@ Path("verified.txt").write_text("Tested\\n")
         await self.worker_done()
         with self.assertRaisesRegex(ValueError, "Read the latest"):
             self.runner.ship(ISSUE)
-        self.assertEqual(self.runner.read_notes(ISSUE), "None\n")
+        audit = self.runner.read_notes(ISSUE)
+        self.assertIn("None\n", audit)
+        self.assertIn("VERDICT: NO ISSUES", audit)
 
         observe = asyncio.Event()
 
@@ -934,9 +1013,257 @@ Path("verified.txt").write_text("Tested\\n")
         self.assertFalse(self.runner.worktree(ISSUE).exists())
         self.assertEqual(self.git(self.remote, "show", "main:verified.txt"), "Tested")
         execution = {row["kind"]: row for row in self.runner.rows("SELECT * FROM execution")}
-        for kind in ("startup", "worker", "verification", "attempt", "publication", "completion"):
+        for kind in ("startup", "worker", "verification", "review", "attempt",
+                     "publication", "completion"):
             self.assertIn(kind, execution)
             self.assertIsNotNone(execution[kind]["ended"])
+
+    async def test_successful_verification_runs_one_read_only_review(self):
+        await self.worker_done()
+        artifacts = self.runner.artifacts(ISSUE)
+        environment = self.review_environment()
+        self.assertEqual((artifacts / "review-runs").read_text(), "review\n")
+        self.assertEqual(environment["args"][environment["args"].index("--model") + 1],
+                         "opencode-go/muse-spark-1.3-contributor")
+        for flag in ("run", "--standalone", "--auto", "--format"):
+            self.assertIn(flag, environment["args"])
+        self.assertNotIn("--session", environment["args"])
+        self.assertFalse(environment["github"])
+        self.assertFalse(environment["linear"])
+        self.assertFalse(environment["api_key"])
+        permissions = environment["config"]["permissions"]
+        self.assertEqual(permissions[0], {"action": "*", "resource": "*", "effect": "deny"})
+        for action in ("edit", "write", "shell", "subagent"):
+            self.assertIn({"action": action, "resource": "*", "effect": "deny"}, permissions)
+        self.assertIn({"action": "shell", "resource": "git push *", "effect": "deny"},
+                      permissions)
+        self.assertIn({"action": "shell", "resource": "gh pr create *", "effect": "deny"},
+                      permissions)
+        self.assertIn({"action": "read", "resource": "*", "effect": "allow"}, permissions)
+        self.assertIn({"action": "external_directory", "resource": "*", "effect": "deny"},
+                      permissions)
+        self.assertFalse(any(rule["effect"] == "allow" and rule["action"] in
+                             {"edit", "write", "shell", "subagent"} for rule in permissions))
+        self.assertEqual(environment["config"]["mcp"], {"servers": {}})
+        self.assertIn("Write one verification file.", environment["prompt"])
+        self.assertIn("None\n", environment["prompt"])
+        self.assertIn("SYMPHONY_DIFF_BEGIN", environment["prompt"])
+        self.assertIn("verified.txt", environment["prompt"])
+        base = self.runner.task(ISSUE)["base"]
+        self.assertIsNotNone(base)
+        self.assertIn(f"recorded base {base}", environment["prompt"])
+        self.assertNotIn("recorded base None", environment["prompt"])
+        diff = self.git(self.runner.worktree(ISSUE), "diff", "--no-ext-diff",
+                        self.runner.task(ISSUE)["base"], "--")
+        self.assertEqual((artifacts / "review.diff").read_text(), diff)
+        self.assertIn("ses_review", (artifacts / "review.log").read_text())
+        report = (artifacts / "review.md").read_text()
+        self.assertIn("VERDICT: NO ISSUES", report)
+        self.assertNotIn("VERDICT: UNAVAILABLE", report)
+        self.assertIn("VERDICT: NO ISSUES", self.runner.read_notes(ISSUE))
+        self.assertEqual(self.runner.task(ISSUE)["session"], "ses_fixture")
+        review = self.runner.rows("SELECT * FROM execution WHERE kind='review'")
+        self.assertEqual(len(review), 1)
+        self.assertIsNotNone(review[0]["ended"])
+        self.assertEqual(review[0]["detail"], "Review completed: NO ISSUES.")
+
+    async def test_review_model_can_be_overridden(self):
+        with patch.dict(os.environ, {"SYMPHONY_REVIEW_MODEL": "opencode-go/review-fixture"}):
+            await self.worker_done()
+        environment = self.review_environment()
+        self.assertEqual(environment["args"][environment["args"].index("--model") + 1],
+                         "opencode-go/review-fixture")
+        self.assertIn("opencode-go/review-fixture",
+                      (self.runner.artifacts(ISSUE) / "review.log").read_text())
+
+    async def test_review_receives_the_full_diff_beyond_read_diff_limit(self):
+        with patch.dict(os.environ, {"FIXTURE_LARGE_DIFF": "1"}):
+            await self.worker_done()
+        artifacts = self.runner.artifacts(ISSUE)
+        diff = (artifacts / "review.diff").read_text()
+        self.assertGreater(len(diff), 48000)
+        self.assertIn("END-OF-LARGE-DIFF", diff)
+        self.assertIn("END-OF-LARGE-DIFF", self.review_environment()["prompt"])
+
+    async def test_failed_verification_skips_review_and_clears_a_stale_report(self):
+        artifacts = self.runner.artifacts(ISSUE)
+        artifacts.mkdir(parents=True)
+        (artifacts / "review.md").write_text("VERDICT: NO ISSUES\nStale report.\n")
+        with patch.dict(os.environ, {"FIXTURE_CHECKS_FAIL": "1"}):
+            await self.worker_done(status=1)
+        report = (artifacts / "review.md").read_text()
+        self.assertIn("VERDICT: UNAVAILABLE", report)
+        self.assertIn("verification exited 1", report)
+        self.assertNotIn("Stale report", report)
+        self.assertFalse((artifacts / "review-runs").exists())
+        self.assertFalse((artifacts / "review.log").exists())
+        review = self.runner.rows("SELECT * FROM execution WHERE kind='review'")
+        self.assertEqual(len(review), 1)
+        self.assertIn("skipped", review[0]["detail"])
+
+    async def test_review_findings_are_readable_audit_advice(self):
+        with patch.dict(os.environ, {"FIXTURE_REVIEW": "findings"}):
+            await self.worker_done()
+        report = (self.runner.artifacts(ISSUE) / "review.md").read_text()
+        self.assertIn("VERDICT: ISSUES", report)
+        audit = self.runner.read_notes(ISSUE)
+        self.assertIn("- symphony/runner.py:1 - Fixture finding.", audit)
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "review")
+
+    async def test_malformed_review_output_is_unavailable(self):
+        with patch.dict(os.environ, {"FIXTURE_REVIEW": "malformed"}):
+            await self.worker_done()
+        report = (self.runner.artifacts(ISSUE) / "review.md").read_text()
+        self.assertIn("VERDICT: UNAVAILABLE", report)
+        self.assertIn("no valid structured verdict", report)
+        self.assertIn("Looks fine to me.", (self.runner.artifacts(ISSUE) / "review.log").read_text())
+
+    async def test_empty_review_output_is_unavailable(self):
+        with patch.dict(os.environ, {"FIXTURE_REVIEW": "empty"}):
+            await self.worker_done()
+        report = (self.runner.artifacts(ISSUE) / "review.md").read_text()
+        self.assertIn("VERDICT: UNAVAILABLE", report)
+        self.assertIn("terminal response contained no report", report)
+
+    async def test_review_uses_only_the_terminal_response_after_progress(self):
+        with patch.dict(os.environ, {"FIXTURE_REVIEW": "progress"}):
+            await self.worker_done()
+        artifacts = self.runner.artifacts(ISSUE)
+        report = (artifacts / "review.md").read_text()
+        self.assertIn("VERDICT: NO ISSUES", report)
+        self.assertNotIn("Reviewing the diff.", report)
+        log = (artifacts / "review.log").read_text()
+        self.assertIn("Reviewing the diff.", log)
+        self.assertIn('"reason": "stop"', log)
+
+    async def test_review_ignores_intermediate_clean_text_before_final_issues(self):
+        with patch.dict(os.environ, {"FIXTURE_REVIEW": "intermediate"}):
+            await self.worker_done()
+        report = (self.runner.artifacts(ISSUE) / "review.md").read_text()
+        self.assertIn("VERDICT: ISSUES", report)
+        self.assertIn("- symphony/runner.py:1 - Final finding.", report)
+        self.assertNotIn("VERDICT: NO ISSUES", report)
+
+    async def test_tool_call_only_review_is_unavailable(self):
+        with patch.dict(os.environ, {"FIXTURE_REVIEW": "toolonly"}):
+            await self.worker_done()
+        report = (self.runner.artifacts(ISSUE) / "review.md").read_text()
+        self.assertIn("VERDICT: UNAVAILABLE", report)
+        self.assertIn("stopped before a final response", report)
+
+    async def test_nonterminal_review_text_is_unavailable(self):
+        with patch.dict(os.environ, {"FIXTURE_REVIEW": "nonterminal"}):
+            await self.worker_done()
+        report = (self.runner.artifacts(ISSUE) / "review.md").read_text()
+        self.assertIn("VERDICT: UNAVAILABLE", report)
+        self.assertIn("stopped before a final response", report)
+        self.assertNotIn("VERDICT: NO ISSUES", report)
+
+    async def test_reviewer_error_is_unavailable_and_preserves_worker_outcome(self):
+        with patch.dict(os.environ, {"FIXTURE_REVIEW": "fail"}):
+            await self.worker_done()
+        artifacts = self.runner.artifacts(ISSUE)
+        report = (artifacts / "review.md").read_text()
+        self.assertIn("VERDICT: UNAVAILABLE", report)
+        self.assertIn("Fixture review failed", report)
+        self.assertIn("Fixture review failed", (artifacts / "review.log").read_text())
+        task = self.runner.task(ISSUE)
+        self.assertEqual(task["session"], "ses_fixture")
+        self.assertEqual(task["check_exit"], 0)
+        self.assertIn("Fixture review failed",
+                      self.runner.rows("SELECT * FROM execution WHERE kind='review'")[0]["detail"])
+
+    async def test_review_timeout_cleans_up_the_process_group(self):
+        with patch("symphony.runner.REVIEW_SECONDS", 0.2), \
+             patch.dict(os.environ, {"FIXTURE_REVIEW": "timeout"}):
+            await self.worker_done()
+        artifacts = self.runner.artifacts(ISSUE)
+        report = (artifacts / "review.md").read_text()
+        self.assertIn("VERDICT: UNAVAILABLE", report)
+        self.assertIn("exceeded", report)
+        pids = [int(value) for value in (artifacts / "review-pids").read_text().split()]
+        async with asyncio.timeout(2):
+            while any(self.pid_alive(pid) for pid in pids):
+                await asyncio.sleep(0.01)
+
+    async def test_review_process_pid_is_recorded_without_replacing_session(self):
+        artifacts = self.runner.artifacts(ISSUE)
+        artifacts.mkdir(parents=True)
+        prompt = artifacts / "review-input.md"
+        prompt.write_text("fixture")
+        with self.runner.db:
+            self.runner.db.execute("""INSERT INTO tasks(issue,project,repo,title,plan,phase,
+                                      session,updated)
+                                      VALUES (?,?,?,?,?,'working',?,?)""",
+                                   (ISSUE, "project", REPO, "Fixture", "Plan",
+                                    "ses_fixture", 1))
+        script = ("import json; "
+                  "print(json.dumps({'type':'text','sessionID':'ses_review',"
+                  "'part':{'messageID':'msg_final','type':'text',"
+                  "'text':'VERDICT: NO ISSUES'}})); "
+                  "print(json.dumps({'type':'step_finish','sessionID':'ses_review',"
+                  "'part':{'messageID':'msg_final','type':'step-finish',"
+                  "'reason':'stop'}}))")
+        with (artifacts / "review.log").open("ab") as log, \
+             patch.object(self.runner, "change", wraps=self.runner.change) as change:
+            report, error = await self.runner.run_review(
+                ISSUE, [sys.executable, "-c", script], self.root, os.environ, log, prompt)
+        self.assertEqual((report, error), ("VERDICT: NO ISSUES", ""))
+        change.assert_called_once()
+        self.assertEqual(change.call_args.args, (ISSUE,))
+        self.assertIn("pid", change.call_args.kwargs)
+        self.assertNotIn("session", change.call_args.kwargs)
+        task = self.runner.task(ISSUE)
+        self.assertEqual(task["session"], "ses_fixture")
+        self.assertEqual(task["pid"], change.call_args.kwargs["pid"])
+
+    async def test_reviewer_tree_mutation_blocks_handoff(self):
+        with patch.dict(os.environ, {"FIXTURE_REVIEW": "mutate"}):
+            await self.approve()
+            await self.runner.dispatch(ISSUE, REPO, "Never ship from the worker.")
+            await self.phase("blocked")
+        task = self.runner.task(ISSUE)
+        self.assertIn("changed during review", task["detail"])
+        self.assertEqual(task["check_exit"], 0)
+        self.assertEqual(task["session"], "ses_fixture")
+        report = (self.runner.artifacts(ISSUE) / "review.md").read_text()
+        self.assertIn("VERDICT: UNAVAILABLE", report)
+        self.assertIn("changed during review", report)
+        self.assertTrue(self.runner.worktree(ISSUE).is_dir())
+
+    async def test_large_review_report_is_bounded(self):
+        with patch.dict(os.environ, {"FIXTURE_REVIEW": "large"}):
+            await self.worker_done()
+        report = (self.runner.artifacts(ISSUE) / "review.md").read_text()
+        self.assertIn("VERDICT: ISSUES", report)
+        self.assertIn("[Review truncated.]", report)
+        self.assertLessEqual(len(report.splitlines()), REVIEW_LINES + 2)
+
+    def test_review_validation_requires_a_leading_verdict_and_location(self):
+        self.assertEqual(validate_review("\n\nVERDICT: NO ISSUES"), "VERDICT: NO ISSUES")
+        self.assertEqual(validate_review("No issues found."), "No issues found.")
+        self.assertIsNone(validate_review("Looks fine to me."))
+        self.assertIsNone(validate_review(""))
+        self.assertIsNone(validate_review(" \n\t"))
+        self.assertIsNone(validate_review("No issues found.\nExtra commentary."))
+        self.assertIsNone(validate_review("Preamble.\nVERDICT: NO ISSUES"))
+        self.assertIsNone(validate_review("VERDICT: NO ISSUES\n- a.py:12 - Finding."))
+        self.assertIsNone(validate_review("VERDICT: NO ISSUES\nExtra commentary."))
+        self.assertIsNone(validate_review("VERDICT: NO ISSUES\nVERDICT: NO ISSUES"))
+        self.assertIsNone(validate_review("VERDICT: NO ISSUES\nVERDICT: ISSUES\n- a.py:12 - Finding."))
+        self.assertIsNone(validate_review("VERDICT: ISSUES\n- a.py:12 - Finding.\n"
+                                          "VERDICT: NO ISSUES"))
+        self.assertIsNone(validate_review("VERDICT: ISSUES\n- no file location"))
+        self.assertIsNotNone(validate_review("VERDICT: ISSUES\n- a.py:12 - Finding."))
+        self.assertIsNotNone(validate_review("VERDICT: ISSUES\nsymphony/a.py:4 - Finding."))
+        report = bounded_review("VERDICT: ISSUES\n- a.py:1 - Finding.\n" + "detail\n" * 300)
+        self.assertLessEqual(len(report.splitlines()), REVIEW_LINES + 2)
+
+    async def test_existing_work_without_a_review_report_shows_unavailable(self):
+        await self.worker_done()
+        (self.runner.artifacts(ISSUE) / "review.md").unlink()
+        self.assertIn("Review unavailable: no reviewer report",
+                      self.runner.read_notes(ISSUE))
 
     async def test_push_without_matching_workflows_finishes_immediately(self):
         (self.repo / ".github/workflows/test.yml").write_text("on:\n  push:\n    paths: ['docs/**']\n")

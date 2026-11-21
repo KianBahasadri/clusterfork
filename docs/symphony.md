@@ -106,12 +106,28 @@ OpenCode uses the Go subscription and caps concurrent workers at three. Each
 attempt has a one-hour safety timeout. The checklist is a shell command file
 that Symphony runs a second time, in the worktree, to get its own exit status.
 The worker's notes and log live in `runs/<issue-id>/` on the PVC. The worktree
-stays reserved through audit, rework, and CI. The coordinator reviews notes
-before shipping. Worker errors, rejected pushes, and failed CI appear in chat
-and the issue panes with the worktree preserved. OpenCode Go quota, rate-limit,
-and authentication failures pause new dispatches. Use `/retry KIAN-123` to
-revisit a parked issue and `/continue` when the provider failure has been
-resolved.
+stays reserved through audit, rework, and CI. After verification exits 0 and
+before the coordinator audit, Symphony runs one stateless read-only OpenCode
+reviewer in a fresh session. It uses `opencode-go/muse-spark-1.3-contributor`
+unless `SYMPHONY_REVIEW_MODEL` overrides the model. The reviewer receives the
+approved plan, notes, and full diff against the recorded base, with repository
+edits, writes, shell, subagents, and MCP tools denied. Symphony writes a bounded
+`runs/<issue-id>/review.md` with a structured verdict and file/line findings,
+or an honest unavailable/error report; raw output and the diff remain in
+`review.log` and `review.diff`. Only the terminal assistant message ending in
+the final stop step becomes the report; progress and tool-call text stay in the
+log, and a missing or nonterminal stop is unavailable. A clean verdict must
+stand alone. Review has a ten-minute ceiling, and missing, malformed, failed, or
+timed-out output is reported as unavailable rather than as a clean verdict.
+Failed verification skips review, stale reports are cleared
+on every attempt, and the tested tree is compared after review so a changed
+tree blocks handoff. Reviewer findings are advice, not approval.
+Existing work without a report shows review unavailable. The coordinator reads
+notes and review before shipping. Worker errors, rejected pushes, and failed CI
+appear in chat and the issue panes with the worktree preserved. OpenCode Go
+quota, rate-limit, and authentication failures pause new dispatches. Use
+`/retry KIAN-123` to revisit a parked issue and `/continue` when the provider
+failure has been resolved.
 
 Symphony records each issue's attempts, worker startup, verification,
 coordinator work that is explicitly tied to the issue, publication, CI waiting,

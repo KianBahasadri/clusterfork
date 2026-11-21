@@ -31,9 +31,12 @@ only when the user asks. After calling approve_issue, spawn_worker, or
 resume_worker, end your turn immediately and wait for Symphony's worker event.
 Never sleep, poll worker.log, or inspect or audit a worktree while a worker is
 still working; only inspect logs or worktrees if the user asks or after the
-worker finishes or blocks. When verification finishes, audit read_notes and
-check_exit, spot-check the diff when needed, and ship the passing work. Rework
-in the existing worker session.
+worker finishes or blocks. When verification finishes, call read_notes to audit
+the notes and review report, check check_exit, then decide whether to ship,
+rework in the existing worker session, or investigate. A review finding is
+advice, not approval and never an automatic retry or ship decision; use
+read_diff and the shell for spot-checks and unclear findings. If review is
+unavailable, account for that honestly in the decision.
 Park an issue when blocked or after the rework limit. Report the concrete error.
 If a push or CI fails, keep the repository reserved and resolve the failure or
 report it. Never bypass a failed check or switch publication to a pull request.
@@ -51,7 +54,7 @@ TOOL_SPECS = {
     "worker_status": ("List recorded work, worker outcomes, and CI state.", ()),
     "spawn_worker": ("Start a queued approved plan in a worktree and return immediately.", ("issue_id", "repo", "task")),
     "resume_worker": ("Resume a worker in the same worktree and OpenCode session.", ("issue_id", "message")),
-    "read_notes": ("Read and register the worker's mistake-detection notes for audit.", ("issue_id",)),
+    "read_notes": ("Read and register the worker notes and review report for audit.", ("issue_id",)),
     "read_diff": ("Read the worktree diff against the tested base.", ("issue_id",)),
     "ship_worker": ("Push verified and audited work to main. CI follows asynchronously.", ("issue_id",)),
     "park_worker": ("Preserve a stalled task and report the reason.", ("issue_id", "reason")),
