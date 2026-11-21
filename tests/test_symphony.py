@@ -471,12 +471,23 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         app = self.app()
         repos = {REPO: [{"id": "alpha", "name": "Alpha", "icon": "🌱"}],
                  "owner/second": [{"id": "beta", "name": "Beta", "icon": ""}]}
+        plan = (
+            "### Steps\n\n"
+            "- **Read** the [Linear issue](https://linear.app/fixture/issue/KIAN-101)\n"
+            "- Run `uv`\n"
+            "- ~~Skip~~ the **unsafe** markup:\n\n"
+            "```python\nprint(\"ok\")\n```\n\n"
+            "<script>alert(1)</script>\n\n"
+            "[bad](javascript:alert%281%29)\n\n"
+            "| Check | Result |\n| --- | --- |\n| Tests | Pass |"
+        )
         alpha = {"identifier": ISSUE, "title": "Alpha issue", "url": "https://linear.app/fixture/issue/KIAN-101",
-                 "state": {**self.linear.state, "position": 1}, "description": "## Proposed Plan\n\nTest alpha.",
+                 "state": {**self.linear.state, "position": 1}, "description": "## Proposed Plan\n\n" + plan,
                  "project": {"id": "alpha", "name": "Alpha"}, "priority": 2, "priorityLabel": "High",
                  "estimate": 3, "dueDate": "2026-11-23", "updatedAt": "2026-11-20T12:00:00Z",
                  "completedAt": None, "labels": {"nodes": [{"name": "Feature", "color": "#bb87fc"}]}}
-        beta = {**alpha, "identifier": "KIAN-102", "title": "Beta issue", "project": {"id": "beta", "name": "Beta"}}
+        beta = {**alpha, "identifier": "KIAN-102", "title": "Beta issue", "description": "",
+                "project": {"id": "beta", "name": "Beta"}}
         first = {"issues": {"nodes": [alpha], "pageInfo": {"hasNextPage": True, "endCursor": "more"}}}
         second = {"issues": {"nodes": [beta], "pageInfo": {"hasNextPage": False}}}
         cutoff = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
@@ -506,6 +517,18 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
             self.assertEqual(card["state"]["position"], 1)
             self.assertEqual((card["project"], card["priorityLabel"], card["estimate"], card["dueDate"], card["labels"]),
                              ("Alpha", "High", 3, "2026-11-23", [{"name": "Feature", "color": "#bb87fc"}]))
+            self.assertEqual(card["plan"], plan)
+            for expected in (
+                "<h3>Steps</h3>", "<strong>Read</strong>",
+                '<a href="https://linear.app/fixture/issue/KIAN-101">Linear issue</a>',
+                "<code>uv</code>", "<del>Skip</del>", "<pre><code", "<table>",
+                "&lt;script&gt;alert(1)&lt;/script&gt;", 'href="#harmful-link"',
+            ):
+                self.assertIn(expected, card["planHtml"])
+            self.assertNotIn("<script>", card["planHtml"])
+            self.assertNotIn('href="javascript:', card["planHtml"])
+            empty = state["projects"][1]["issues"][0]
+            self.assertEqual((empty["plan"], empty["planHtml"]), ("", ""))
             self.assertNotIn("projects", await app.state(0, revision))
             self.assertEqual(query.await_count, 2)
 

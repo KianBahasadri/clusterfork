@@ -163,7 +163,9 @@ function renderIssue(issue, today) {
     summary.id = "plan-summary-" + issue.identifier;
     plan.dataset.issue = issue.identifier;
     plan.open = expandedPlans.has(issue.identifier);
-    plan.append(summary, element("div", issue.plan, "plan"));
+    const body = element("div", "", "plan issue-markdown");
+    body.innerHTML = issue.planHtml;
+    plan.append(summary, body);
     if (!task) {
       plan.append(element("p", issue.state.name === "Todo"
         ? "This issue is awaiting plan approval in chat and will not run."

@@ -69,13 +69,14 @@ def current_issue(row, cutoff):
 
 
 def issue_summary(row, stage=None):
+    plan = proposed_plan(row["description"])
     summary = {**{key: row.get(key) for key in ("identifier", "title", "url", "state", "priority",
                                                 "priorityLabel", "estimate", "dueDate", "updatedAt",
                                                 "createdAt", "completedAt")},
                "project": (row["project"] or {}).get("name", ""),
                "projectId": (row["project"] or {}).get("id", ""),
                "labels": row["labels"]["nodes"],
-               "plan": proposed_plan(row["description"])}
+               "plan": plan, "planHtml": markdown(plan)}
     if stage is not None:
         summary["stage"] = stage
     return summary
