@@ -982,7 +982,7 @@ Path("verified.txt").write_text("Tested\\n")
 
         app.coordinator.respond = AsyncMock(side_effect=fake_respond)
         pump = asyncio.create_task(app.pump())
-        self.addAsyncCleanup(lambda: self._cancel_task(pump))
+        self.addAsyncCleanup(self._cancel_task, pump)
         app.runner.wake.set()
         async with asyncio.timeout(5):
             await done.wait()
