@@ -431,6 +431,7 @@ class Symphony:
                     continue
                 if not self.coordinator.account:
                     break
+                self.runner.discard_stale_events()
                 events = self.runner.rows("SELECT * FROM events WHERE delivered=0 ORDER BY id")
                 if not events:
                     break

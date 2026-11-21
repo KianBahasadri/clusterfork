@@ -163,6 +163,13 @@ diagnostic. A restart recovers queued approvals once without duplicate
 dispatch; issues moved back to Backlog, canceled, or moved to another project
 are skipped.
 
+The coordinator pump batches pending worker events into one turn. A committed
+lifecycle change acknowledges the issue's earlier pending notifications, and
+events whose recorded phase no longer matches the task are dropped before
+delivery; the transition's own review, blocked, publication, completion, or
+cleanup notification remains deliverable. Only the delivered batch is
+acknowledged, so events arriving during that turn stay pending.
+
 Symphony writes one squash commit and pushes directly to `main`. It waits for
 the exact revision's GitHub Actions workflows whose push filters match the
 branch and changed paths. If none match, Symphony advances the repo after the

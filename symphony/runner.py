@@ -63,7 +63,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS repository_owner ON tasks(repo)
     WHERE phase NOT IN ('approving', 'approved', 'done');
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY, issue TEXT NOT NULL, detail TEXT NOT NULL,
-    delivered INTEGER NOT NULL DEFAULT 0
+    delivered INTEGER NOT NULL DEFAULT 0, phase TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS chat (
     id INTEGER PRIMARY KEY, role TEXT NOT NULL, text TEXT NOT NULL
@@ -209,6 +209,25 @@ def dispatch_problem(live, row, resume):
     return ""
 
 
+def current_event(row):
+    phase = row["phase"]
+    if phase == "review":
+        if row["check_exit"] is None:
+            return "Worker finished. Audit notes.md and review.md."
+        return (f"Worker finished. Verification exited {row['check_exit']}. "
+                f"Audit notes.md and review.md.")
+    if phase == "blocked":
+        detail = (row["detail"] or "Interrupted.").strip()
+        return detail if detail.startswith("Blocked. ") else f"Blocked. {detail}"
+    if phase == "finish_failed":
+        return row["detail"] or "Publication verified. Cannot mark Linear Done."
+    if phase == "done":
+        return row["detail"] or "Done."
+    if phase == "ci":
+        return "Pushed to main. Waiting for GitHub Actions."
+    return None
+
+
 class Runner:
     def __init__(self, directory, linear):
         self.directory = directory
@@ -216,6 +235,10 @@ class Runner:
         self.db = sqlite3.connect(directory / "symphony.sqlite3")
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        with self.db:
+            if "phase" not in {row["name"] for row in self.db.execute("PRAGMA table_info(events)")}:
+                self.db.execute("ALTER TABLE events ADD COLUMN phase TEXT NOT NULL DEFAULT ''")
+        self.migrate_unphased_events()
         self.jobs = set()
         self.cloning = {}
         self.wake = asyncio.Event()
@@ -284,15 +307,58 @@ class Runner:
         return self.rows("""SELECT issue, repo, phase, attempts, session, check_exit, detail, revision
                             FROM tasks WHERE phase != 'done' ORDER BY updated DESC""")
 
-    def change(self, issue, event=None, **fields):
+    def change(self, issue, event=None, *, supersede=False, **fields):
         fields["updated"] = time.time()
         assignments = ", ".join(f"{field}=?" for field in fields)
         with self.db:
             self.db.execute(f"UPDATE tasks SET {assignments} WHERE issue=?", (*fields.values(), issue))
+            if supersede:
+                self.db.execute("UPDATE events SET delivered=1 WHERE issue=? AND delivered=0", (issue,))
             if event:
-                self.db.execute("INSERT INTO events(issue,detail) VALUES (?,?)", (issue, event))
+                phase = fields.get("phase")
+                if phase is None:
+                    phase = self.db.execute("SELECT phase FROM tasks WHERE issue=?", (issue,)).fetchone()["phase"]
+                self.db.execute("INSERT INTO events(issue,detail,phase) VALUES (?,?,?)", (issue, event, phase))
                 self.db.execute("INSERT INTO chat(role,text) VALUES ('worker',?)", (f"{issue} · {event}",))
         self.wake.set()
+
+    def acknowledge_events(self, issue):
+        with self.db:
+            self.db.execute("UPDATE events SET delivered=1 WHERE issue=? AND delivered=0", (issue,))
+
+    def migrate_unphased_events(self):
+        rows = self.rows("""SELECT events.id, events.issue, tasks.phase, tasks.detail,
+                                   tasks.check_exit,
+                                   EXISTS(SELECT 1 FROM events AS pending
+                                          WHERE pending.issue=events.issue
+                                            AND pending.delivered=0
+                                            AND pending.phase = tasks.phase) AS current
+                            FROM events LEFT JOIN tasks ON tasks.issue=events.issue
+                            WHERE events.delivered=0 AND events.phase=''
+                            ORDER BY events.id""")
+        issues = {}
+        for row in rows:
+            issues.setdefault(row["issue"], []).append(row)
+        with self.db:
+            for issue, events in issues.items():
+                self.db.execute("""UPDATE events SET delivered=1
+                                   WHERE issue=? AND delivered=0 AND phase=''""", (issue,))
+                row = events[-1]
+                detail = None if row["current"] else current_event(row)
+                if detail:
+                    self.db.execute("INSERT INTO events(issue,detail,phase) VALUES (?,?,?)",
+                                    (issue, detail, row["phase"]))
+
+    def discard_stale_events(self, issue=None):
+        query = """UPDATE events SET delivered=1
+                   WHERE delivered=0
+                     AND phase != (SELECT phase FROM tasks WHERE tasks.issue=events.issue)"""
+        parameters = ()
+        if issue is not None:
+            query += " AND issue=?"
+            parameters = (issue,)
+        with self.db:
+            self.db.execute(query, parameters)
 
     def job(self, coroutine):
         task = asyncio.create_task(coroutine)
@@ -303,7 +369,8 @@ class Runner:
         detail = detail.strip() or "Interrupted."
         self.close_open_execution(issue)
         self.record_execution(issue, "failure", started=time.time(), ended=time.time(), detail=detail)
-        self.change(issue, event=f"Blocked. {detail}", phase="blocked", pid=None, detail=detail)
+        self.change(issue, event=f"Blocked. {detail}", phase="blocked", pid=None, detail=detail,
+                    supersede=True)
 
     def repo_dir(self, repo):
         return self.directory / "repos" / repo
@@ -348,7 +415,7 @@ class Runner:
     async def activate(self, issue, *, notify=False):
         await self.linear.set_state(issue, "Todo", "unstarted")
         event = "Plan approved. Queued in Todo." if notify else None
-        self.change(issue, phase="approved", event=event)
+        self.change(issue, phase="approved", event=event, supersede=bool(event))
 
     def dispatch_busy(self, issue, repo):
         if len(self.rows("SELECT 1 FROM tasks WHERE phase='working'")) >= WORKER_LIMIT:
@@ -440,6 +507,7 @@ class Runner:
             if self.task(issue)["phase"] == "working":
                 self.change(issue, **previous)
             raise
+        self.acknowledge_events(issue)
         attempt = row["attempts"] + 1
         self.open_execution(issue, "startup", started=dispatch_started,
                             detail=f"Attempt {attempt} startup started.",
@@ -471,7 +539,8 @@ class Runner:
                     and live["state"] == {"name": "In Progress", "type": "started"}):
                 detail = (f"{row['issue']} is In Progress without a reserved worker. "
                           f"Verify Linear and use /retry {row['issue']}.")
-                self.change(row["issue"], phase="blocked", detail=detail, event=detail)
+                self.change(row["issue"], phase="blocked", detail=detail, event=detail,
+                            supersede=True)
                 continue
             if dispatch_problem(live, row, False):
                 continue
@@ -578,7 +647,7 @@ class Runner:
                                       detail=f"Attempt finished. Verification exited {status}.")
             self.change(issue, event=f"Worker finished. Verification exited {status}. "
                                      f"Audit notes.md and review.md.",
-                        phase="review", pid=None, check_exit=status, tree=tree)
+                        phase="review", pid=None, check_exit=status, tree=tree, supersede=True)
         except TimeoutError:
             self.block(issue, "The worker exceeded its one-hour safety timeout.")
         except (RuntimeError, OSError, ValueError) as error:
@@ -798,7 +867,7 @@ class Runner:
             raise ValueError(f"{issue} needs a completed worker with passing verification.")
         if sha256(self.audit_text(issue).encode()).hexdigest() != row["audit"]:
             raise ValueError("Read the latest notes.md and review.md before shipping.")
-        self.change(issue, phase="publishing")
+        self.change(issue, phase="publishing", supersede=True)
         self.job(self.publish(issue))
         return {"issue": issue, "phase": "publishing"}
 
@@ -841,7 +910,8 @@ class Runner:
     async def after_push(self, issue):
         workflows = json.loads(self.task(issue)["workflows"])
         if workflows:
-            self.change(issue, phase="ci", event="Pushed to main. Waiting for GitHub Actions.")
+            self.change(issue, phase="ci", event="Pushed to main. Waiting for GitHub Actions.",
+                        supersede=True)
             self.job(self.watch_ci(issue))
         else:
             self.change(issue, phase="finishing")
@@ -962,6 +1032,7 @@ class Runner:
         row = self.task(issue)
         if row["phase"] not in {"done", "finishing"}:
             raise ValueError("Clean up only after verified publication.")
+        self.discard_stale_events(issue)
         repo = self.repo_dir(row["repo"])
         path = self.worktree(issue)
         if path.exists():
@@ -977,7 +1048,7 @@ class Runner:
             detail = f"Publication verified. Cannot mark Linear Done: {error}"
             self.close_open_execution(issue)
             self.record_execution(issue, "failure", started=time.time(), ended=time.time(), detail=detail)
-            self.change(issue, phase="finish_failed", detail=detail, event=detail)
+            self.change(issue, phase="finish_failed", detail=detail, event=detail, supersede=True)
             return
         detail = "Done."
         try:
@@ -987,7 +1058,7 @@ class Runner:
         self.close_open_execution(issue)
         if not self.rows("SELECT 1 FROM execution WHERE issue=? AND kind='completion'", (issue,)):
             self.record_execution(issue, "completion", started=time.time(), ended=time.time(), detail=detail)
-        self.change(issue, phase="done", detail=detail, event=detail)
+        self.change(issue, phase="done", detail=detail, event=detail, supersede=True)
 
     async def recover_publish(self, issue):
         row = self.task(issue)

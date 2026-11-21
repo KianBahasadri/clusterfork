@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -195,10 +196,21 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
             "project": {"id": "project"}, "description": "## Proposed Plan\n\nWrite one verification file."
         }
 
-    def app(self):
+    def app(self, runner=None):
+        runner = runner or self.runner
         with patch.dict(os.environ, {"LINEAR_API_KEY": "fixture"}), \
-             patch("symphony.__main__.Runner", return_value=self.runner):
+             patch("symphony.__main__.Runner", return_value=runner):
             return Symphony(self.root)
+
+    async def pump_until(self, app, predicate):
+        pump = asyncio.create_task(app.pump())
+        self.addAsyncCleanup(self._cancel_task, pump)
+        app.runner.wake.set()
+        async with asyncio.timeout(5):
+            while not predicate():
+                await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        return pump
 
     async def test_chat_approval_routes_through_the_coordinator_tool(self):
         app = self.app()
@@ -1360,12 +1372,327 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         self.assertTrue(self.runner.worktree(ISSUE).is_dir())
         self.assertEqual(self.linear.state["name"], "In Progress")
 
+    async def test_successful_dispatch_acknowledges_old_events_without_a_turn(self):
+        await self.fail_approval()
+        await self.runner.recover_approval(ISSUE)
+        self.assertEqual(self.runner.rows("SELECT detail, delivered, phase FROM events"), [{
+            "detail": "Plan approved. Queued in Todo.", "delivered": 0, "phase": "approved",
+        }])
+        pending = []
+        with patch.object(self.runner, "job", side_effect=pending.append):
+            await self.runner.dispatch(ISSUE, REPO, "")
+        for coroutine in pending:
+            coroutine.close()
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "working")
+        self.assertEqual(self.runner.rows("SELECT delivered FROM events"), [{"delivered": 1}])
+
+        app = self.app()
+        app.coordinator.account = "chatgpt"
+        with patch.object(app.coordinator, "respond", new_callable=AsyncMock) as respond:
+            await self.pump_until(app, lambda: not self.runner.rows(
+                "SELECT 1 FROM events WHERE delivered=0"))
+            respond.assert_not_awaited()
+
+    async def test_successful_resume_acknowledges_blocked_event_without_a_turn(self):
+        await self.approve()
+        self.runner.block(ISSUE, "Retry when ready.")
+        self.assertEqual(self.runner.rows("SELECT detail, delivered, phase FROM events"), [{
+            "detail": "Blocked. Retry when ready.", "delivered": 0, "phase": "blocked",
+        }])
+        self.linear.configure(ISSUE, state={"name": "In Progress", "type": "started"})
+        pending = []
+        with patch.object(self.runner, "job", side_effect=pending.append):
+            await self.runner.dispatch(ISSUE, REPO, "", resume=True)
+        for coroutine in pending:
+            coroutine.close()
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "working")
+        self.assertEqual(self.runner.rows("SELECT delivered FROM events"), [{"delivered": 1}])
+
+        app = self.app()
+        app.coordinator.account = "chatgpt"
+        with patch.object(app.coordinator, "respond", new_callable=AsyncMock) as respond:
+            await self.pump_until(app, lambda: not self.runner.rows(
+                "SELECT 1 FROM events WHERE delivered=0"))
+            respond.assert_not_awaited()
+
+    async def test_continue_dispatch_acknowledges_stale_events_without_a_turn(self):
+        await self.fail_approval()
+        await self.runner.recover_approval(ISSUE)
+        self.runner.save_setting("paused", "quota")
+        app = self.app()
+        app.coordinator.account = "chatgpt"
+        pending = []
+        with patch.object(self.runner, "job", side_effect=pending.append), \
+             patch.object(app.coordinator, "respond", new_callable=AsyncMock) as respond:
+            await app.handle("", "/continue", "/continue")
+            await self.pump_until(
+                app, lambda: self.runner.task(ISSUE)["phase"] == "working"
+                and not self.runner.rows("SELECT 1 FROM events WHERE delivered=0"))
+            respond.assert_not_awaited()
+        for coroutine in pending:
+            coroutine.close()
+        self.assertEqual(self.runner.rows("SELECT delivered FROM events"), [{"delivered": 1}])
+
+    async def test_shipping_acknowledges_review_event_but_reading_audit_does_not(self):
+        await self.worker_done()
+        review = {
+            "detail": "Worker finished. Verification exited 0. Audit notes.md and review.md.",
+            "delivered": 0, "phase": "review",
+        }
+        self.assertEqual(self.runner.rows("SELECT detail, delivered, phase FROM events"), [review])
+        self.runner.read_notes(ISSUE)
+        self.assertEqual(self.runner.rows("SELECT delivered FROM events"), [{"delivered": 0}])
+
+        app = self.app()
+        pending = []
+        with patch.object(self.runner, "job", side_effect=pending.append):
+            await app.tool("ship_worker", {"issue_id": ISSUE})
+        for coroutine in pending:
+            coroutine.close()
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "publishing")
+        self.assertEqual(self.runner.rows("SELECT delivered FROM events"), [{"delivered": 1}])
+
+        app.coordinator.account = "chatgpt"
+        with patch.object(app.coordinator, "respond", new_callable=AsyncMock) as respond:
+            await self.pump_until(app, lambda: not self.runner.rows(
+                "SELECT 1 FROM events WHERE delivered=0"))
+            respond.assert_not_awaited()
+
+    async def test_parking_replaces_stale_review_event_with_blocked_notification(self):
+        await self.worker_done()
+        self.runner.block(ISSUE, "Parked for inspection.")
+        events = self.runner.rows("SELECT detail, delivered, phase FROM events ORDER BY id")
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0]["phase"], "review")
+        self.assertEqual(events[0]["delivered"], 1)
+        self.assertEqual(events[1], {
+            "detail": "Blocked. Parked for inspection.", "delivered": 0, "phase": "blocked",
+        })
+
+        app = self.app()
+        app.coordinator.account = "chatgpt"
+        received = []
+
+        async def respond(text, cwd):
+            received.append(text)
+            return "completed"
+
+        app.coordinator.respond = AsyncMock(side_effect=respond)
+        await self.pump_until(app, lambda: not self.runner.rows(
+            "SELECT 1 FROM events WHERE delivered=0"))
+        self.assertEqual(len(received), 1)
+        self.assertIn(f"Worker event for {ISSUE}: Blocked. Parked for inspection.", received[0])
+        self.assertNotIn("Worker finished", received[0])
+
+    async def test_completion_keeps_done_and_cleanup_error_for_one_turn(self):
+        await self.worker_done()
+        self.runner.change(ISSUE, phase="finishing")
+        with patch.object(self.runner, "cleanup",
+                          side_effect=RuntimeError("Fixture cleanup failure.")):
+            await self.runner.finish(ISSUE)
+        events = self.runner.rows("SELECT detail, delivered, phase FROM events ORDER BY id")
+        self.assertEqual(events[0]["phase"], "review")
+        self.assertEqual(events[0]["delivered"], 1)
+        self.assertEqual(events[1]["phase"], "done")
+        self.assertEqual(events[1]["delivered"], 0)
+        self.assertEqual(
+            events[1]["detail"], "Done. Worktree cleanup needs attention: Fixture cleanup failure.")
+
+        app = self.app()
+        app.coordinator.account = "chatgpt"
+        received = []
+
+        async def respond(text, cwd):
+            received.append(text)
+            return "completed"
+
+        app.coordinator.respond = AsyncMock(side_effect=respond)
+        await self.pump_until(app, lambda: not self.runner.rows(
+            "SELECT 1 FROM events WHERE delivered=0"))
+        self.assertEqual(len(received), 1)
+        self.assertIn(f"Worker event for {ISSUE}: {events[1]['detail']}", received[0])
+        self.assertNotIn("Worker finished", received[0])
+
+    async def test_cleanup_discards_stale_events_but_keeps_done_notification(self):
+        await self.worker_done()
+        self.runner.change(ISSUE, phase="finishing")
+        await self.runner.finish(ISSUE)
+        with self.runner.db:
+            self.runner.db.execute(
+                "INSERT INTO events(issue,detail,delivered,phase) VALUES (?,?,0,'ci')",
+                (ISSUE, "Stale CI notice."),
+            )
+        await self.runner.cleanup(ISSUE)
+        events = {event["detail"]: event for event in self.runner.rows(
+            "SELECT detail, delivered, phase FROM events")}
+        self.assertEqual(events["Stale CI notice."], {
+            "detail": "Stale CI notice.", "delivered": 1, "phase": "ci",
+        })
+        self.assertEqual(events["Done."], {"detail": "Done.", "delivered": 0, "phase": "done"})
+
+        app = self.app()
+        app.coordinator.account = "chatgpt"
+        with patch.object(app.coordinator, "respond",
+                          new_callable=AsyncMock, return_value="completed") as respond:
+            await self.pump_until(app, lambda: not self.runner.rows(
+                "SELECT 1 FROM events WHERE delivered=0"))
+        self.assertEqual(respond.await_count, 1)
+        self.assertIn(f"Worker event for {ISSUE}: Done.", respond.await_args.args[0])
+        self.assertNotIn("Stale CI notice", respond.await_args.args[0])
+
+    async def test_mixed_issue_batch_filters_only_stale_events(self):
+        other = "KIAN-102"
+        await self.approve()
+        self.runner.change(ISSUE, phase="done", supersede=True)
+        with self.runner.db:
+            self.runner.db.execute(
+                "INSERT INTO events(issue,detail,delivered,phase) VALUES (?,?,0,'review')",
+                (ISSUE, "Stale review notice."),
+            )
+        await self.runner.approve({**self.proposed_issue(), "identifier": other}, REPO)
+        self.runner.block(other, "Second issue needs a decision.")
+
+        app = self.app()
+        app.coordinator.account = "chatgpt"
+        received = []
+
+        async def respond(text, cwd):
+            received.append(text)
+            return "completed"
+
+        app.coordinator.respond = AsyncMock(side_effect=respond)
+        await self.pump_until(app, lambda: not self.runner.rows(
+            "SELECT 1 FROM events WHERE delivered=0"))
+        self.assertEqual(len(received), 1)
+        self.assertIn(f"Worker event for {other}: Blocked. Second issue needs a decision.",
+                      received[0])
+        self.assertNotIn("Stale review notice", received[0])
+        self.assertEqual(self.runner.rows(
+            "SELECT detail, delivered FROM events WHERE issue=? ORDER BY id", (ISSUE,)), [
+            {"detail": "Stale review notice.", "delivered": 1},
+        ])
+
+    async def test_failed_transitions_preserve_pending_notifications(self):
+        await self.fail_approval()
+        await self.runner.recover_approval(ISSUE)
+        self.assertEqual(self.runner.rows("SELECT delivered FROM events"), [{"delivered": 0}])
+        with patch.object(self.linear, "issue", side_effect=RuntimeError("Linear is down.")):
+            with self.assertRaisesRegex(RuntimeError, "Linear is down"):
+                await self.runner.dispatch(ISSUE, REPO, "")
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "approved")
+        self.assertEqual(self.runner.rows("SELECT delivered FROM events"), [{"delivered": 0}])
+
+        self.runner.block(ISSUE, "Needs retry.")
+        with self.assertRaisesRegex(ValueError, "not In Progress"):
+            await self.runner.dispatch(ISSUE, REPO, "", resume=True)
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "blocked")
+        self.assertEqual(self.runner.rows("SELECT detail, delivered FROM events ORDER BY id")[-1],
+                         {"detail": "Blocked. Needs retry.", "delivered": 0})
+
+    async def test_current_review_event_survives_metadata_updates(self):
+        await self.approve()
+        self.runner.change(ISSUE, phase="review", event="Worker finished.")
+        for fields in ({"pid": 123}, {"session": "ses_fixture"}, {"audit": "digest"}):
+            self.runner.change(ISSUE, **fields)
+            self.assertEqual(self.runner.rows("SELECT delivered FROM events"), [{"delivered": 0}])
+
+        app = self.app()
+        app.coordinator.account = "chatgpt"
+        with patch.object(app.coordinator, "respond",
+                          new_callable=AsyncMock, return_value="completed") as respond:
+            await self.pump_until(app, lambda: not self.runner.rows(
+                "SELECT 1 FROM events WHERE delivered=0"))
+        self.assertEqual(respond.await_count, 1)
+        self.assertIn(f"Worker event for {ISSUE}: Worker finished.", respond.await_args.args[0])
+
+    async def test_stale_event_filtering_survives_restart(self):
+        await self.approve()
+        self.runner.change(ISSUE, phase="review", event="Worker finished.")
+        restarted = Runner(self.root, self.linear)
+        self.addCleanup(restarted.db.close)
+        self.assertEqual(restarted.rows("SELECT detail, delivered, phase FROM events"), [{
+            "detail": "Worker finished.", "delivered": 0, "phase": "review",
+        }])
+        with restarted.db:
+            restarted.db.execute("UPDATE tasks SET phase='done' WHERE issue=?", (ISSUE,))
+
+        app = self.app(restarted)
+        app.coordinator.account = "chatgpt"
+        with patch.object(app.coordinator, "respond", new_callable=AsyncMock) as respond:
+            await self.pump_until(app, lambda: not restarted.rows(
+                "SELECT 1 FROM events WHERE delivered=0"))
+            respond.assert_not_awaited()
+
+    async def test_database_upgrade_resolves_pending_events_once_for_current_state(self):
+        legacy = self.root / "legacy"
+        legacy.mkdir()
+        with sqlite3.connect(legacy / "symphony.sqlite3") as db:
+            db.executescript("""
+                CREATE TABLE tasks (
+                    issue TEXT PRIMARY KEY, project TEXT NOT NULL, repo TEXT NOT NULL,
+                    title TEXT NOT NULL, plan TEXT NOT NULL, phase TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0, session TEXT, pid INTEGER,
+                    base TEXT, tree TEXT, audit TEXT, check_exit INTEGER, detail TEXT,
+                    revision TEXT, workflows TEXT, updated REAL NOT NULL
+                );
+                CREATE TABLE events (
+                    id INTEGER PRIMARY KEY, issue TEXT NOT NULL,
+                    detail TEXT NOT NULL, delivered INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE chat (
+                    id INTEGER PRIMARY KEY, role TEXT NOT NULL, text TEXT NOT NULL
+                );
+                INSERT INTO tasks(issue,project,repo,title,plan,phase,attempts,detail,updated)
+                VALUES ('KIAN-201','project','owner/stale','Stale','Plan','working',1,NULL,0),
+                       ('KIAN-202','project','owner/current','Current','Plan','blocked',0,
+                        'Needs a decision.',0);
+                INSERT INTO events(issue,detail) VALUES
+                    ('KIAN-201','Worker finished. Verification exited 0. Audit notes.md and review.md.'),
+                    ('KIAN-202','Blocked. Older notice.'),
+                    ('KIAN-202','Blocked. Needs a decision.');
+                INSERT INTO chat(role,text) VALUES
+                    ('worker','KIAN-202 · Blocked. Needs a decision.');
+            """)
+        runner = Runner(legacy, self.linear)
+        self.addCleanup(runner.db.close)
+        self.assertEqual(runner.rows("""SELECT issue, detail, delivered, phase FROM events
+                                        WHERE delivered=0"""), [{
+            "issue": "KIAN-202", "detail": "Blocked. Needs a decision.",
+            "delivered": 0, "phase": "blocked",
+        }])
+        self.assertEqual(runner.rows("SELECT role, text FROM chat"), [{
+            "role": "worker", "text": "KIAN-202 · Blocked. Needs a decision.",
+        }])
+
+        reopened = Runner(legacy, self.linear)
+        self.addCleanup(reopened.db.close)
+        self.assertEqual(reopened.rows("SELECT COUNT(*) AS count FROM events"), [{"count": 4}])
+        self.assertEqual(len(reopened.rows("SELECT 1 FROM events WHERE delivered=0")), 1)
+
+        app = self.app(reopened)
+        app.coordinator.account = "chatgpt"
+        with patch.object(app, "respond",
+                          new_callable=AsyncMock, return_value="completed") as respond:
+            await self.pump_until(app, lambda: not reopened.rows(
+                "SELECT 1 FROM events WHERE delivered=0"))
+        self.assertEqual(respond.await_count, 1)
+        prompt = respond.await_args.args[1]
+        self.assertIn("Worker event for KIAN-202: Blocked. Needs a decision.", prompt)
+        self.assertNotIn("KIAN-201", prompt)
+
+        restarted = Runner(legacy, self.linear)
+        self.addCleanup(restarted.db.close)
+        self.assertEqual(restarted.rows("SELECT COUNT(*) AS count FROM events"), [{"count": 4}])
+        self.assertEqual(restarted.rows(
+            "SELECT 1 FROM events WHERE delivered=0 AND phase=''"), [])
+
     async def test_pump_batches_queued_worker_events_in_one_turn(self):
         app = self.app()
         app.coordinator.account = "chatgpt"
         await self.approve()
-        self.runner.change(ISSUE, phase="ci", event="Pushed to main. Waiting for GitHub Actions.")
-        self.runner.change(ISSUE, phase="done", event="Done.")
+        self.runner.change(ISSUE, phase="ci",
+                           event="Pushed to main. Waiting for GitHub Actions.", supersede=True)
+        self.runner.change(ISSUE, event="GitHub Actions are still running.")
 
         received = []
         done = asyncio.Event()
@@ -1391,7 +1718,7 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         self.assertEqual(first_cwd, self.repo)
         self.assertIn("Worker events (2):", first_text)
         self.assertIn(f"- {ISSUE}: Pushed to main. Waiting for GitHub Actions.", first_text)
-        self.assertIn(f"- {ISSUE}: Done.", first_text)
+        self.assertIn(f"- {ISSUE}: GitHub Actions are still running.", first_text)
         self.assertEqual(first_text.count(f"Approved plan for {ISSUE}:"), 1)
 
         second_text, _ = received[1]
