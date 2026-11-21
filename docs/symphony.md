@@ -128,12 +128,14 @@ through `OPENCODE_CONFIG_CONTENT`, while OpenCode's interactive built-in
 and reviewer environments strip GitHub, Linear, OpenAI, Codex, OpenCode Go API
 key, and Linear webhook signing-secret variables. The container image includes
 standard CLI utilities (`jq`, `rg`, `sqlite3`, `tmux`, `gawk`, `patch`, `file`,
-`zip`) and headless system
-`chromium` (`/usr/bin/chromium`, invoked with `--headless --no-sandbox
---disable-dev-shm-usage --disable-gpu` under restricted PodSecurity); Docker,
-QEMU, Go, and privileged networking tools remain out of scope for the Symphony
-image. The checklist is a shell command file
-that Symphony runs a second time, in the worktree, to get its own exit status.
+`zip`) and pinned Python Playwright in `/opt/symphony` with its managed Chromium
+under `/opt/playwright-browsers`, discovered through
+`PLAYWRIGHT_BROWSERS_PATH`. Launch Chromium through Playwright from
+`/opt/symphony/bin/python` with `--no-sandbox`, `--disable-dev-shm-usage`, and
+`--disable-gpu` under restricted PodSecurity; Docker, QEMU, Go, and privileged
+networking tools remain out of scope for the Symphony image.
+The checklist is a shell command file that Symphony runs a second time, in the
+worktree, to get its own exit status.
 The worker's notes and log live in `runs/<issue-id>/` on the PVC. The worktree
 stays reserved through audit, rework, and CI. After verification exits 0 and
 before the coordinator audit, Symphony runs one stateless read-only OpenCode

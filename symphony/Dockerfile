@@ -6,8 +6,8 @@ ARG TERRAFORM_VERSION=1.15.9
 LABEL org.opencontainers.image.source="https://github.com/KianBahasadri/clusterfork"
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates chromium curl \
-         file fonts-dejavu-core gawk git gh jq lua5.4 patch python3 python3-venv \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+         file gawk git gh jq libatomic1 lua5.4 patch python3 python3-venv \
          ripgrep shellcheck sqlite3 tini tmux unzip zip \
     && rm -rf /var/lib/apt/lists/*
 
@@ -31,14 +31,19 @@ WORKDIR /app
 COPY symphony/requirements.txt /app/requirements.txt
 RUN python3 -m venv /opt/symphony \
     && uv pip install --python /opt/symphony/bin/python --no-cache -r /app/requirements.txt \
+    && uv pip install --python /opt/symphony/bin/python --no-cache playwright==1.65.2 \
     && groupadd -g 10001 symphony && useradd -u 10001 -g 10001 -M -d /data/symphony/home symphony
+
+RUN PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers \
+      /opt/symphony/bin/python -m playwright install --with-deps chromium \
+    && chmod -R a+rX /opt/playwright-browsers \
+    && rm -rf /var/lib/apt/lists/*
 COPY symphony /app/symphony
 
 ARG SYMPHONY_COMMIT=""
 ENV PATH="/opt/symphony/bin:$PATH" \
     HOME="/data/symphony/home" \
-    CHROME_PATH="/usr/bin/chromium" \
-    PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH="/usr/bin/chromium" \
+    PLAYWRIGHT_BROWSERS_PATH="/opt/playwright-browsers" \
     SYMPHONY_COMMIT="${SYMPHONY_COMMIT}" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1

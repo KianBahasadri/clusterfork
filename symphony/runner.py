@@ -114,8 +114,11 @@ anything outside the repository code, stop immediately, write the concrete block
 to {artifacts / 'blocked.txt'}, and report back to the coordinator—never try to
 install missing system tooling or work around environment blockers on your own.
 Use the configured Context7 and Exa MCP tools for library docs and web search.
-For browser checks, use the preinstalled `/usr/bin/chromium` with
-`--headless --no-sandbox --disable-dev-shm-usage --disable-gpu` rather than downloading browsers.
+For browser checks, use the preinstalled Playwright package from
+`/opt/symphony/bin/python`; its managed Chromium is under
+`/opt/playwright-browsers` via `PLAYWRIGHT_BROWSERS_PATH`. Launch Chromium
+headless with `--no-sandbox`, `--disable-dev-shm-usage`, and `--disable-gpu`
+rather than downloading browsers.
 
 Approved plan:
 {row['plan']}
