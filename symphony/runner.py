@@ -45,12 +45,17 @@ def worker_prompt(row, artifacts, instruction):
     return f"""Implement {row['issue']} in this Git worktree. Read and follow the repository's AGENTS.md.
 Keep changes scoped to the approved plan below and leave all code changes in the worktree.
 The coordinator owns publication. Do not push, change Linear, or open a pull request.
-Run the relevant repository checks. Write their shell commands, joined with && where needed,
-to {artifacts / 'checks.sh'} so the runner can repeat them and report the exit status.
+Run only the tests and checks relevant to the changed area rather than unrelated
+repo-wide suites that CI already runs. Write their shell commands, joined with &&
+where needed, to {artifacts / 'checks.sh'} so the runner can repeat them and report
+the exit status.
 Keep {artifacts / 'notes.md'} at 120 lines or fewer, updating it in place. Include only
 assumptions and judgment calls, blockers or workarounds, and deviations or risks.
 Write "None" if there are none. Do not include checks run or open questions.
-If blocked, stop and write the reason to {artifacts / 'blocked.txt'}.
+If blocked by missing dependencies, build environments, tools, credentials, or
+anything outside the repository code, stop immediately, write the concrete blocker
+to {artifacts / 'blocked.txt'}, and report back to the coordinator—never try to
+install missing system tooling or work around environment blockers on your own.
 
 Approved plan:
 {row['plan']}
