@@ -1,20 +1,26 @@
 """Send Hex requests to Luna for execution through Linear's MCP tools."""
 
 import argparse
-from contextlib import ExitStack
+import base64
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 from datetime import date
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 from tempfile import TemporaryDirectory, mkdtemp
+import time
 from typing import Literal
+import urllib.error
 from urllib.parse import urlsplit
+import urllib.request
 from uuid import uuid4
 
 from linear_images import EXTENSIONS
@@ -35,6 +41,10 @@ MODEL = "opencode-go/gpt-6-luna#max"
 AGENT = "linear-issue"
 PREVIEW_AGENT = "linear-issue-preview"
 IMAGE_QUESTION = "Copy an image for this request, then click Reply."
+MCP_SERVER = "linear"
+MCP_STARTUP_SECONDS = 45
+MCP_POLL_SECONDS = 0.25
+SERVER_STOP_SECONDS = 5
 
 
 class FilingError(ValueError):
@@ -65,6 +75,13 @@ class AgentResult:
     notifications: tuple[dict, ...]
     reply: ReplyNeeded | None = None
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class OpenCodeServer:
+    url: str
+    password: str
+    process: subprocess.Popen
 
 
 def prompt_for(dictation, *, dry_run=False, image_paths=()):
@@ -118,6 +135,142 @@ def linear_url(value):
         return False
     return parsed.scheme == "https" and parsed.netloc == "linear.app" and bool(
         re.fullmatch(r"/[^/]+/(?:issue|project)/[^/]+(?:/[^?#]*)?", parsed.path))
+
+
+def free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return listener.getsockname()[1]
+
+
+def stop_server(process):
+    try:
+        if process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=SERVER_STOP_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            try:
+                process.wait(timeout=SERVER_STOP_SECONDS)
+            except subprocess.TimeoutExpired:
+                pass
+    except OSError:
+        pass
+
+
+@contextmanager
+def private_server(binary, environment):
+    port = free_port()
+    password = secrets.token_urlsafe(32)
+    try:
+        process = subprocess.Popen(
+            [str(binary), "serve", "--hostname", "127.0.0.1", "--port", str(port)],
+            cwd=WORKSPACE, env={**environment, "OPENCODE_PASSWORD": password},
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except OSError as error:
+        raise FilingError("OpenCode could not start the Linear MCP server. Check the Hex service journal.") from error
+    try:
+        yield OpenCodeServer(f"http://127.0.0.1:{port}", password, process)
+    finally:
+        stop_server(process)
+
+
+def mcp_servers(server, timeout):
+    authorization = base64.b64encode(f"opencode:{server.password}".encode()).decode("ascii")
+    request = urllib.request.Request(
+        f"{server.url}/api/mcp", headers={"Authorization": f"Basic {authorization}"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        payload = json.load(response)
+    servers = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(servers, list):
+        raise ValueError("Malformed MCP status response")
+    return servers
+
+
+def redact_diagnostic(value, secret):
+    if isinstance(value, dict):
+        return {key: redact_diagnostic(item, secret) for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact_diagnostic(item, secret) for item in value]
+    if isinstance(value, str):
+        text = re.sub(r"(?i)(bearer\s+)\S+", r"\1[redacted]", value)
+        return text.replace(secret, "[redacted]") if secret else text
+    return value
+
+
+def save_mcp_diagnostic(attempt, *, outcome, servers, process=None, secret=""):
+    if attempt is None:
+        return
+    diagnostic = {"outcome": outcome, "timeout_seconds": MCP_STARTUP_SECONDS, "servers": servers}
+    if process is not None:
+        diagnostic["server_exit"] = process.poll()
+    try:
+        with private_file(attempt / "mcp.json") as file:
+            text = json.dumps(redact_diagnostic(diagnostic, secret), ensure_ascii=False, indent=2)
+            file.write(text.encode("utf-8"))
+            file.write(b"\n")
+    except OSError as error:
+        print(f"Hex Linear dictation {attempt.name} could not save MCP startup diagnostics "
+              f"({type(error).__name__}).", file=sys.stderr)
+
+
+def linear_status(servers):
+    for item in servers:
+        if isinstance(item, dict) and item.get("name") == MCP_SERVER:
+            status = item.get("status")
+            return status if isinstance(status, dict) else {}
+    return None
+
+
+def wait_for_linear_mcp(server, attempt, secret=""):
+    deadline = time.monotonic() + MCP_STARTUP_SECONDS
+    servers = []
+    responded = False
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            save_mcp_diagnostic(attempt, outcome="timeout", servers=servers, process=server.process, secret=secret)
+            if responded and linear_status(servers) is None:
+                return ("Linear MCP is not configured in the Hex workspace. "
+                        "Reinstall Hex and check the Hex service journal.")
+            return (f"Linear MCP did not connect within {MCP_STARTUP_SECONDS} seconds. "
+                    "Check the Linear credential and the Hex service journal.")
+        if server.process.poll() is not None:
+            save_mcp_diagnostic(attempt, outcome="server-exit", servers=servers, process=server.process,
+                                secret=secret)
+            return ("OpenCode exited before Linear MCP was ready. "
+                    "Check the Hex service journal.")
+        try:
+            servers = mcp_servers(server, timeout=max(1, min(remaining, 5)))
+        except (OSError, ValueError, urllib.error.URLError):
+            pass
+        else:
+            responded = True
+            status = linear_status(servers)
+            state = status.get("status") if status else None
+            if state == "connected":
+                save_mcp_diagnostic(attempt, outcome="connected", servers=servers, process=server.process,
+                                    secret=secret)
+                return None
+            if state == "needs_auth":
+                save_mcp_diagnostic(attempt, outcome="needs_auth", servers=servers, process=server.process,
+                                    secret=secret)
+                return ("Linear MCP needs authentication. Check LINEAR_API_KEY in "
+                        "~/.config/clusterfork/.env and the Hex service journal.")
+            if state == "failed":
+                save_mcp_diagnostic(attempt, outcome="failed", servers=servers, process=server.process,
+                                    secret=secret)
+                return "Linear MCP failed to start. Check the Linear credential and the Hex service journal."
+            if state == "disabled":
+                save_mcp_diagnostic(attempt, outcome="disabled", servers=servers, process=server.process,
+                                    secret=secret)
+                return ("Linear MCP is disabled in the Hex OpenCode workspace. "
+                        "Reinstall Hex and check the Hex service journal.")
+        time.sleep(max(0, min(MCP_POLL_SECONDS, deadline - time.monotonic())))
 
 
 def parse_response(output, *, error=None):
@@ -182,7 +335,7 @@ def run_opencode(dictation, attempt, *, dry_run=False):
     token = linear_api_key()
     if token:
         environment["LINEAR_API_KEY"] = token
-    command = [str(binary), "run", "--standalone", "--agent", PREVIEW_AGENT if dry_run else AGENT,
+    command = [str(binary), "run", "--agent", PREVIEW_AGENT if dry_run else AGENT,
                "--model", MODEL, "--format", "json", "--title", "Hex Linear dictation", "--archived"]
     if dictation.session_id:
         command += ["--session", dictation.session_id]
@@ -211,16 +364,27 @@ def run_opencode(dictation, attempt, *, dry_run=False):
                 stdout, stderr = response, errors
         output = failure = None
         try:
-            result = subprocess.run(command, input=prompt, cwd=WORKSPACE, env=environment,
-                                    stdout=stdout or subprocess.PIPE, stderr=stderr or subprocess.PIPE, timeout=1200)
-            output = result.stdout
-            if result.returncode:
-                print(f"Hex Linear dictation {dictation.issue_id} OpenCode exited with status {result.returncode}.",
-                      file=sys.stderr)
-                failure = "OpenCode failed. Check Linear and the Hex service journal."
+            # The server defaults to WORKSPACE because it starts with that cwd;
+            # run_opencode uses the same directory and server for the model turn.
+            with private_server(binary, environment) as server:
+                startup_error = wait_for_linear_mcp(server, attempt, token)
+                if startup_error:
+                    return AgentResult("", None, (), error=startup_error)
+                environment["OPENCODE_PASSWORD"] = server.password
+                command = command[:2] + ["--server", server.url] + command[2:]
+                result = subprocess.run(command, input=prompt, cwd=WORKSPACE, env=environment,
+                                        stdout=stdout or subprocess.PIPE, stderr=stderr or subprocess.PIPE, timeout=1200)
+                output = result.stdout
+                if result.returncode:
+                    print(f"Hex Linear dictation {dictation.issue_id} OpenCode exited with status {result.returncode}.",
+                          file=sys.stderr)
+                    failure = "OpenCode failed. Check Linear and the Hex service journal."
         except subprocess.TimeoutExpired as error:
             output = error.stdout
             failure = "OpenCode exceeded its time limit. Check Linear and the Hex service journal."
+        except FilingError as error:
+            save_mcp_diagnostic(attempt, outcome="server-start-failed", servers=[])
+            return AgentResult("", None, (), error=str(error))
         finally:
             if stdout is not None:
                 stdout.seek(0)

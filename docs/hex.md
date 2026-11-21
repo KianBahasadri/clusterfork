@@ -21,6 +21,11 @@ uv run --no-project python hex/install.py
 ```
 
 The source files and destinations are listed in [Installation](installation.md).
+The installer also writes `~/.config/hex/linear/opencode.json`, the workspace
+configuration for Linear requests. That workspace enables `linear` and disables
+the shared-roster servers plus `opencode_console`, so unrelated MCP servers do
+not start or race Linear for the first model turn. Global OpenCode settings and
+other workspaces are left alone.
 The installer updates only the Global mode's rewrite fields and places
 `conversation-context` first in its transformations, preserving the other
 transformations' order. It preserves replacements, mode vocabulary, app/site
@@ -114,7 +119,12 @@ prompts. The installed `hex-linear-issue.service` runs in the graphical user
 session and uses system Python with Gio, `notify-send`, `wl-clipboard`, and
 OpenCode Go and Linear credentials. For each request the helper reads the shared
 Linear credential from `~/.config/clusterfork/.env`, honoring an environment
-override, and starts a private OpenCode server with it. Text replies use GTK 4.
+override, and starts a short-lived private OpenCode server with it. Before
+submitting the prompt, the helper waits up to 45 seconds for that server's
+`/api/mcp` status to report Linear connected with its tools loaded. A missing,
+failed, unauthenticated or disabled Linear server produces a specific
+notification and attempt diagnostic instead of sending the request. The private
+server is stopped after success, failure or timeout. Text replies use GTK 4.
 Clipboard image replies use Zenity, and image validation uses Pillow. The
 separate portal registration uses the same running Hex and selected
 transcription model. Capture uses `hex dictation start --raw`, followed on
@@ -172,8 +182,10 @@ OpenCode's stdin. `stdout.jsonl` records OpenCode's events, including Linear
 lookups, project descriptions, write arguments and results, notification/reply
 requests, and the final response. `stderr.txt` records CLI errors.
 Both streams are written as OpenCode runs, preserving partial output on failure
-or timeout. When a session ID is available, its archive also contains tool
-results and any supplied images.
+or timeout. `mcp.json` records the Linear MCP startup outcome, the configured
+server statuses and the private server's exit status; credentials are redacted.
+When a session ID is available, its archive also contains tool results and any
+supplied images.
 
 For a saved issue, search the journal by issue ID, then by dictation ID. For a
 failed attempt, start with the recent journal entries and open its `attempt=` path.
@@ -186,8 +198,9 @@ opencode api GET '/api/session/<session-id>/message'
 ```
 
 To check the workflow with text, the dry run uses a separate OpenCode agent
-whose permissions allow Linear reads and clarification requests. It prints
-the proposed actions:
+whose permissions allow Linear reads and clarification requests. It uses the
+same Linear MCP readiness gate and private server lifecycle. It prints the
+proposed actions:
 
 ```bash
 printf '%s\n' 'Make a Clusterfork issue to add a relay health check' |

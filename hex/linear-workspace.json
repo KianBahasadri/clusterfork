@@ -1,0 +1,41 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "linear": {
+        "type": "remote",
+        "url": "https://mcp.linear.app/mcp",
+        "headers": {
+          "Authorization": "Bearer {env:LINEAR_API_KEY}"
+        },
+        "disabled": false
+      },
+      "context7": {
+        "type": "remote",
+        "url": "https://mcp.context7.com/mcp",
+        "disabled": true
+      },
+      "ElevenLabs": {
+        "type": "local",
+        "command": ["bash", "-c", "exec \"$HOME/.config/clusterfork/bin/elevenlabs-mcp\""],
+        "disabled": true
+      },
+      "chrome-devtools": {
+        "type": "local",
+        "command": ["pnpm", "dlx", "chrome-devtools-mcp@latest", "--no-usage-statistics",
+                    "--browserUrl", "http://127.0.0.1:9222"],
+        "disabled": true
+      },
+      "pixellab": {
+        "type": "remote",
+        "url": "https://api.pixellab.ai/mcp",
+        "disabled": true
+      },
+      "opencode_console": {
+        "type": "remote",
+        "url": "https://console.opencode.ai/mcp",
+        "disabled": true
+      }
+    }
+  }
+}

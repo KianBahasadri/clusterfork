@@ -1,6 +1,6 @@
 """Check Hex's MCP execution, trace, notification and recording boundaries."""
 
-from contextlib import redirect_stderr
+from contextlib import nullcontext, redirect_stderr
 from dataclasses import replace
 from io import StringIO
 import json
@@ -45,6 +45,16 @@ class LinearDictationTests(unittest.TestCase):
         credential.write_text('LINEAR_API_KEY="fixture-linear-key"\n')
         self.enterContext(patch.object(issue, "DOTENV", credential))
         self.attempts = Path(state) / "hex/linear/runs"
+        self.server = issue.OpenCodeServer(
+            "http://127.0.0.1:4321", "fixture-server-password", Mock(poll=Mock(return_value=None)),
+        )
+        self.real_private_server = issue.private_server
+        self.enterContext(patch.object(
+            issue, "private_server", side_effect=lambda *args, **kwargs: nullcontext(self.server),
+        ))
+        self.enterContext(patch.object(
+            issue, "mcp_servers", return_value=[{"name": "linear", "status": {"status": "connected"}}],
+        ))
 
     def test_saves_verbatim_stdin_and_mcp_context_without_a_json_draft(self):
         stdout_bytes = response(
@@ -72,10 +82,12 @@ class LinearDictationTests(unittest.TestCase):
         self.assertIsNone(result.error)
         command = run.call_args.args[0]
         self.assertIn("--archived", command)
-        self.assertIn("--standalone", command)
+        self.assertNotIn("--standalone", command)
+        self.assertEqual(command[command.index("--server") + 1], self.server.url)
         self.assertEqual(command[command.index("--model") + 1], "opencode-go/gpt-6-luna#max")
         prompt = run.call_args.kwargs["input"].decode()
         self.assertEqual(run.call_args.kwargs["env"]["LINEAR_API_KEY"], "fixture-linear-key")
+        self.assertEqual(run.call_args.kwargs["env"]["OPENCODE_PASSWORD"], self.server.password)
         self.assertNotIn("fixture-linear-key", prompt)
         self.assertNotIn("fixture-linear-key", logs.getvalue())
         self.assertIn(f"Verbatim transcript\n{transcript}\n\nFollow-up question\nWhich project?\nFollow-up answer\nRelay", prompt)
@@ -88,7 +100,10 @@ class LinearDictationTests(unittest.TestCase):
         self.assertEqual(attempt.stat().st_mode & 0o777, 0o700)
         expected = {"transcript.txt": transcript.encode(), "prompt.txt": run.call_args.kwargs["input"],
                     "stdout.jsonl": stdout_bytes, "stderr.txt": stderr_bytes}
-        self.assertEqual({path.name: path.read_bytes() for path in attempt.iterdir()}, expected)
+        self.assertEqual({path.name: path.read_bytes() for path in attempt.iterdir()},
+                         {**expected, "mcp.json": (attempt / "mcp.json").read_bytes()})
+        self.assertEqual(json.loads((attempt / "mcp.json").read_text())["outcome"], "connected")
+        self.assertNotIn("fixture-linear-key", (attempt / "mcp.json").read_text())
         self.assertTrue(all(path.stat().st_mode & 0o777 == 0o600 for path in attempt.iterdir()))
 
     def test_partial_failures_keep_completed_notifications_and_exact_output(self):
@@ -141,6 +156,108 @@ class LinearDictationTests(unittest.TestCase):
         with patch.object(issue, "run_opencode", return_value=issue.AgentResult("Done", "ses_fixture123", ())):
             self.assertTrue(issue.file_dictation(DICTATION).error)
             self.assertIsNone(issue.file_dictation(DICTATION, dry_run=True).error)
+
+    def test_delayed_linear_mcp_connection_blocks_the_first_turn(self):
+        states = ["pending", "pending", "connected"]
+
+        def status(*_args, **_kwargs):
+            self.assertFalse(run.called)
+            return [{"name": "linear", "status": {"status": states.pop(0)}}]
+
+        def complete(command, **_kwargs):
+            return CompletedProcess(command, 0, stdout=response())
+
+        with (patch.object(issue, "mcp_servers", side_effect=status) as check,
+              patch.object(issue.time, "sleep") as sleep,
+              patch.object(issue.subprocess, "run", side_effect=complete) as run):
+            result = issue.run_opencode(DICTATION, None)
+        self.assertIsNone(result.error)
+        self.assertEqual(check.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0][run.call_args.args[0].index("--server") + 1], self.server.url)
+
+    def test_linear_mcp_startup_failure_prevents_prompt_submission(self):
+        for state, message in (
+            ("failed", "failed to start"),
+            ("needs_auth", "needs authentication"),
+            ("disabled", "disabled in the Hex OpenCode workspace"),
+        ):
+            with self.subTest(state=state):
+                attempt = issue.start_attempt_log(DICTATION)
+                status = {"status": state, "error": "fixture failure with fixture-linear-key"}
+                with (patch.object(issue, "mcp_servers",
+                                   return_value=[{"name": "linear", "status": status}]),
+                      patch.object(issue.subprocess, "run") as run):
+                    result = issue.run_opencode(DICTATION, attempt)
+                self.assertIn(message, result.error)
+                run.assert_not_called()
+                diagnostic = (attempt / "mcp.json").read_text()
+                self.assertIn(f'"outcome": "{state}"', diagnostic)
+                self.assertNotIn("fixture-linear-key", diagnostic)
+
+    def test_mcp_diagnostics_redact_bearer_text_without_breaking_json(self):
+        attempt = issue.start_attempt_log(DICTATION)
+        issue.save_mcp_diagnostic(
+            attempt,
+            outcome="failed",
+            servers=[{
+                "name": "linear",
+                "title": "known-secret",
+                "status": {"status": "failed", "error": "Unauthorized Bearer fixture-token"},
+            }],
+            secret="known-secret",
+        )
+        text = (attempt / "mcp.json").read_text()
+        diagnostic = json.loads(text)
+        self.assertNotIn("fixture-token", text)
+        self.assertNotIn("known-secret", text)
+        self.assertEqual(diagnostic["servers"][0]["status"]["error"], "Unauthorized Bearer [redacted]")
+        self.assertEqual(diagnostic["servers"][0]["title"], "[redacted]")
+
+    def test_linear_mcp_timeout_prevents_prompt_submission(self):
+        attempt = issue.start_attempt_log(DICTATION)
+        status = [{"name": "linear", "status": {"status": "pending"}}]
+        with (patch.object(issue, "MCP_STARTUP_SECONDS", 1),
+              patch.object(issue.time, "monotonic", side_effect=[0, 0, 0, 1]),
+              patch.object(issue.time, "sleep"),
+              patch.object(issue, "mcp_servers", return_value=status),
+              patch.object(issue.subprocess, "run") as run):
+            result = issue.run_opencode(DICTATION, attempt)
+        self.assertIn("did not connect within 1 seconds", result.error)
+        run.assert_not_called()
+        self.assertEqual(json.loads((attempt / "mcp.json").read_text())["outcome"], "timeout")
+
+    def test_private_server_stops_its_child_on_success_and_failure(self):
+        for failure in (None, ValueError("fixture failure")):
+            with self.subTest(failure=failure):
+                process = Mock()
+                process.poll.return_value = None
+                with (patch.object(issue, "free_port", return_value=4321),
+                      patch.object(issue.subprocess, "Popen", return_value=process)):
+                    if failure is None:
+                        with self.real_private_server("opencode", {}) as server:
+                            self.assertEqual(server.url, "http://127.0.0.1:4321")
+                    else:
+                        with self.assertRaisesRegex(ValueError, "fixture failure"):
+                            with self.real_private_server("opencode", {}):
+                                raise failure
+                process.terminate.assert_called_once()
+                process.wait.assert_called()
+
+    def test_run_opencode_stops_private_server_when_mcp_fails(self):
+        process = Mock()
+        process.poll.return_value = None
+        with (patch.object(issue, "private_server", self.real_private_server),
+              patch.object(issue, "free_port", return_value=4321),
+              patch.object(issue.subprocess, "Popen", return_value=process),
+              patch.object(issue, "mcp_servers",
+                           return_value=[{"name": "linear", "status": {"status": "failed"}}]),
+              patch.object(issue.subprocess, "run") as run):
+            result = issue.run_opencode(DICTATION, None)
+        self.assertIn("failed to start", result.error)
+        run.assert_not_called()
+        process.terminate.assert_called_once()
 
     def test_missing_clipboard_image_waits_before_starting_opencode(self):
         dictation = replace(DICTATION, image_use="attach")

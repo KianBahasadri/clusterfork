@@ -100,7 +100,11 @@ class HexInstallerTests(unittest.TestCase):
         return subprocess.CompletedProcess(arguments, 0, stdout=output, stderr="")
 
     def test_install_merges_owned_keys_and_reinstall_has_no_writes_or_restart(self):
+        global_config = self.home / ".config/opencode/opencode.json"
+        global_config.parent.mkdir(parents=True)
+        global_config.write_bytes(b'{"mcp": {"servers": {"global": {}}}}\n')
         installer.install(self.home)
+        self.assertEqual(global_config.read_bytes(), b'{"mcp": {"servers": {"global": {}}}}\n')
         for key in ("name", "applications", "browser_hosts", "vocabulary", "replacements"):
             self.assertEqual(self.mode[key], self.original[key])
         self.assertEqual(self.mode["transformations"], ["conversation-context", "lowercase", "no-trailing-punctuation"])
@@ -126,6 +130,13 @@ class HexInstallerTests(unittest.TestCase):
         plugin = workspace / ".opencode/plugins/linear-search.js"
         self.assertEqual(plugin.read_bytes(), (ROOT / "hex/linear-search.js").read_bytes())
         self.assertEqual((workspace / "linear_issue.py").read_bytes(), (ROOT / "hex/linear_issue.py").read_bytes())
+        workspace_config = json.loads((workspace / "opencode.json").read_text())
+        servers = workspace_config["mcp"]["servers"]
+        self.assertEqual(servers["linear"]["url"], "https://mcp.linear.app/mcp")
+        self.assertFalse(servers["linear"]["disabled"])
+        self.assertEqual(servers["linear"]["headers"], {"Authorization": "Bearer {env:LINEAR_API_KEY}"})
+        for name in ("context7", "ElevenLabs", "chrome-devtools", "pixellab", "opencode_console"):
+            self.assertTrue(servers[name]["disabled"], name)
         preview = (workspace / ".opencode/agents/linear-issue-preview.md").read_text()
         self.assertIn('action: linear_list_*', preview)
         self.assertIn('action: linear_get_*', preview)
@@ -135,7 +146,7 @@ class HexInstallerTests(unittest.TestCase):
         self.assertTrue((self.home / ".local/share/applications" / installer.LINEAR_DESKTOP).is_file())
         self.assertIn(["/fake/systemctl", "--user", "enable", "--now", installer.LINEAR_UNIT], self.processes)
         files = [*self.config.rglob("*.py"), self.config / "hex.config.ts", plugin,
-                 *(self.home / ".config/systemd/user").glob("*.service")]
+                 workspace / "opencode.json", *(self.home / ".config/systemd/user").glob("*.service")]
         timestamps = {path: path.stat().st_mtime_ns for path in files}
         self.commands.clear()
         self.processes.clear()
