@@ -6,6 +6,10 @@ const detailPreloadQueue = new Set();
 let preloadingDetails = false;
 let detailRequest = 0;
 let invokingIssue = "";
+let currentIssue = null;
+let activeIssueTab = "issue";
+let executionTimer = 0;
+let executionRequest = 0;
 
 function issueContextPath(identifier) {
   const params = new URLSearchParams({id: identifier});
@@ -156,15 +160,10 @@ function historyDescription(entry) {
   return changes.join(" · ") || "Updated the issue";
 }
 
-function renderIssueContext(issue) {
-  byId("issue-dialog-identifier").textContent = issue.identifier;
-  issueTitle.textContent = issue.title;
+function issueLayout(issue) {
   const layout = element("div", "", "issue-detail-layout");
   const body = element("div", "", "issue-detail-main");
   const properties = element("div", "", "issue-properties");
-  const source = byId("issue-source");
-  source.href = issue.url;
-  source.hidden = false;
   const values = detailSection(properties, "Properties");
   const status = element("p", "", "issue-property");
   status.append(stateIcon(issue.state), element("span", issue.state.name));
@@ -243,7 +242,7 @@ function renderIssueContext(issue) {
   if (issue.branchName) dates.append(element("code", issue.branchName));
   if (issue.previousIdentifiers.length) dates.append(element("p", "Previously " + issue.previousIdentifiers.join(", "), "muted"));
 
-  body.append(issueTitle, issue.descriptionHtml ? issueMarkdown(issue.descriptionHtml) : element("p", "No description.", "muted"));
+  body.append(issue.descriptionHtml ? issueMarkdown(issue.descriptionHtml) : element("p", "No description.", "muted"));
   showReactions(body, issue.reactions);
   if (issue.attachments.length) {
     const resources = detailSection(body, "Attachments");
@@ -298,11 +297,326 @@ function renderIssueContext(issue) {
   history.append(events);
   body.append(history);
   layout.append(body, properties);
-  issueContent.replaceChildren(layout);
+  return layout;
 }
+
+function stopExecutionRefresh() {
+  clearInterval(executionTimer);
+  executionTimer = 0;
+}
+
+function selectIssueTab(name, focus = false) {
+  activeIssueTab = name;
+  for (const tab of issueContent.querySelectorAll(".issue-tab")) {
+    const active = tab.dataset.tab === name;
+    tab.setAttribute("aria-selected", active);
+    tab.tabIndex = active ? 0 : -1;
+    if (active && focus) tab.focus();
+  }
+  for (const panel of issueContent.querySelectorAll(".issue-tab-panel")) {
+    panel.hidden = panel.dataset.panel !== name;
+  }
+  stopExecutionRefresh();
+  if (!executionNeedsLoad(name, currentIssue)) return;
+  loadExecutionPanel(currentIssue.identifier);
+  executionTimer = setInterval(() => {
+    if (executionShouldRefresh(issueDialog.open, activeIssueTab, currentIssue)) {
+      loadExecutionPanel(currentIssue.identifier);
+    }
+  }, 15000);
+}
+
+function renderIssueContext(issue) {
+  currentIssue = issue;
+  byId("issue-dialog-identifier").textContent = issue.identifier;
+  issueTitle.textContent = issue.title;
+  const source = byId("issue-source");
+  source.href = issue.url;
+  source.hidden = false;
+
+  const tabs = element("div", "", "issue-tabs");
+  tabs.setAttribute("role", "tablist");
+  tabs.setAttribute("aria-label", "Issue details");
+  const issueTab = element("button", "Issue", "issue-tab");
+  issueTab.type = "button";
+  issueTab.id = "issue-tab-issue";
+  issueTab.dataset.tab = "issue";
+  issueTab.setAttribute("role", "tab");
+  issueTab.setAttribute("aria-controls", "issue-panel-issue");
+  issueTab.addEventListener("click", () => selectIssueTab("issue"));
+  const executionTab = element("button", "Execution", "issue-tab");
+  executionTab.type = "button";
+  executionTab.id = "issue-tab-execution";
+  executionTab.dataset.tab = "execution";
+  executionTab.setAttribute("role", "tab");
+  executionTab.setAttribute("aria-controls", "issue-panel-execution");
+  executionTab.addEventListener("click", () => selectIssueTab("execution"));
+  tabs.append(issueTab, executionTab);
+  tabs.addEventListener("keydown", (event) => {
+    const items = [...tabs.querySelectorAll('[role="tab"]')];
+    const next = nextIssueTab(items.map((item) => item.dataset.tab),
+      document.activeElement?.dataset?.tab, event.key);
+    if (!next) return;
+    event.preventDefault();
+    selectIssueTab(next, true);
+  });
+
+  const issuePanel = element("div", "", "issue-tab-panel");
+  issuePanel.id = "issue-panel-issue";
+  issuePanel.dataset.panel = "issue";
+  issuePanel.setAttribute("role", "tabpanel");
+  issuePanel.setAttribute("aria-labelledby", "issue-tab-issue");
+  issuePanel.append(issueLayout(issue));
+  const executionPanel = element("div", "", "issue-tab-panel");
+  executionPanel.id = "issue-panel-execution";
+  executionPanel.dataset.panel = "execution";
+  executionPanel.setAttribute("role", "tabpanel");
+  executionPanel.setAttribute("aria-labelledby", "issue-tab-execution");
+  executionPanel.hidden = true;
+  issueContent.replaceChildren(issueTitle, tabs, issuePanel, executionPanel);
+  selectIssueTab("issue");
+}
+
+function executionSection(parent, title) {
+  const section = element("section", "", "execution-section");
+  section.append(element("h3", title));
+  parent.append(section);
+  return section;
+}
+
+function executionMetric(label, value, detail) {
+  const item = element("div", "", "execution-metric");
+  item.append(element("span", label, "execution-metric-label"),
+    element("strong", value), element("span", detail || "", "muted"));
+  return item;
+}
+
+function executionCoverage(value, reason) {
+  return element("p", value + (reason ? " · " + reason : ""), "muted execution-coverage");
+}
+
+function executionKind(kind) {
+  const labels = {
+    attempt: "Worker attempt", startup: "Worker startup", worker: "Worker run",
+    verification: "Verification", coordinator: "Coordinator", publication: "Publication",
+    ci_wait: "CI waiting", ci_discovery: "CI discovery", ci_run: "CI run",
+    ci_error: "CI detail failure", approval: "Approval", failure: "Failure",
+    completion: "Completion", interruption: "Restart", gap: "Unobserved outage",
+  };
+  return labels[kind] || kind.replaceAll("_", " ");
+}
+
+function renderExecutionStages(panel, stages) {
+  const section = executionSection(panel, "Linear stages");
+  section.append(executionCoverage(stages.coverage, stages.reason));
+  const grid = element("div", "", "execution-metrics");
+  for (const stage of stages.stages) {
+    const detail = stages.coverage === "complete" ? stage.visits + " visit" + (stage.visits === 1 ? "" : "s")
+      + (stage.open ? " · open" : "") : "History incomplete";
+    grid.append(executionMetric(stage.name,
+      stages.coverage === "complete" ? formatSeconds(stage.seconds) : "Unavailable", detail));
+  }
+  section.append(grid);
+  if (stages.current) {
+    const current = element("p", "Current stage: " + stages.current.name + " since ", "muted");
+    current.append(issueTime(stages.current.startedAt),
+      document.createTextNode(" (" + stages.current.source + ")."));
+    section.append(current);
+  }
+  if (stages.transitions.length) {
+    const transitions = element("details", "", "execution-transitions");
+    transitions.append(element("summary", "Status transitions · " + stages.transitions.length));
+    const list = element("ol");
+    for (const entry of stages.transitions) {
+      const item = element("li");
+      item.append(issueTime(entry.at), document.createTextNode(
+        " · " + (entry.from?.name || "Unknown") + " → " + (entry.to?.name || "Unknown")));
+      list.append(item);
+    }
+    transitions.append(list);
+    section.append(transitions);
+  }
+}
+
+function renderExecutionBreakdown(panel, execution) {
+  const section = executionSection(panel, "In Progress breakdown");
+  section.append(executionCoverage(execution.coverage, execution.reason));
+  const unavailable = execution.coverage === "unavailable";
+  const grid = element("div", "", "execution-metrics");
+  const order = ["startup", "worker", "verification", "coordinator", "publication",
+    "ci_workflow", "ci_wait", "ci_discovery"];
+  for (const kind of order) {
+    const value = execution.breakdown[kind];
+    grid.append(executionMetric(executionKind(kind),
+      unavailable ? "Unavailable" : formatSeconds(value),
+      value == null ? "Not recorded"
+        : kind === "ci_workflow" ? "Sum of workflow runs; may overlap"
+          : kind === "ci_wait" ? "Waiting while CI ran" : "Recorded interval"));
+  }
+  grid.append(executionMetric("Measured total",
+    unavailable ? "Unavailable" : formatSeconds(execution.measuredSeconds),
+    execution.lowerBound ? "Lower bound; some categories were not recorded" : "Sum of recorded intervals"));
+  grid.append(executionMetric("Concurrent wall time",
+    unavailable ? "Unavailable" : formatSeconds(execution.wallSeconds),
+    execution.lowerBound ? "Lower bound; some categories were not recorded" : "Union of recorded intervals"));
+  grid.append(executionMetric("Overlap",
+    unavailable ? "Unavailable" : formatSeconds(execution.overlapSeconds),
+    execution.lowerBound ? "Lower bound; some categories were not recorded" : "Measured minus wall time"));
+  section.append(grid);
+}
+
+function renderExecutionCi(panel, ci) {
+  const section = executionSection(panel, "GitHub CI");
+  section.append(executionCoverage(ci.coverage, ci.reason));
+  const unavailable = ci.coverage === "unavailable";
+  const grid = element("div", "", "execution-metrics");
+  grid.append(
+    executionMetric("Workflow total", unavailable ? "Unavailable" : formatSeconds(ci.workflowSeconds),
+      ci.lowerBound ? "Lower bound; some boundaries were not observed" : "Sum of retained run durations"),
+    executionMetric("Concurrent wall", unavailable ? "Unavailable" : formatSeconds(ci.wallSeconds),
+      ci.lowerBound ? "Lower bound; some boundaries were not observed" : "Union of retained run durations"),
+    executionMetric("Job total", formatSeconds(ci.jobSeconds),
+      ci.jobLowerBound ? "Lower bound; job details incomplete" : "Sum of retained job durations"),
+    executionMetric("Job wall", formatSeconds(ci.jobWallSeconds),
+      ci.jobLowerBound ? "Lower bound; job details incomplete" : "Union of retained job durations"),
+    executionMetric("Waiting", unavailable ? "Unavailable" : formatSeconds(ci.waitingSeconds),
+      "CI watcher waiting"),
+    executionMetric("Attempts", unavailable ? "Unavailable" : String(ci.attemptCount), "Retained run attempts"),
+    executionMetric("Failures", unavailable ? "Unavailable" : String(ci.failureCount),
+      "Retained non-success conclusions"),
+    executionMetric("Jobs", unavailable ? "Unavailable" : String(ci.jobCount), "Recorded job identities"),
+  );
+  section.append(grid);
+  for (const run of ci.runs) {
+    const article = element("article", "", "execution-resource");
+    const heading = element("div", "", "execution-resource-heading");
+    heading.append(element("strong", run.workflow),
+      element("span", "attempt " + run.attempt + " · " + run.status
+        + (run.conclusion ? " · " + run.conclusion : ""), "muted"));
+    article.append(heading);
+    if (run.attemptUrl || run.url) article.append(issueLink("Open run in GitHub", run.attemptUrl || run.url));
+    if (run.diagnostic) article.append(element("p", run.diagnostic, "detail"));
+    for (const job of run.jobs) {
+      const row = element("div", "", "execution-job");
+      row.append(element("span", job.name + " · " + job.status
+        + (job.conclusion ? " · " + job.conclusion : ""), "muted"));
+      if (job.url) row.append(issueLink("Job log", job.url));
+      if (job.diagnostic) row.append(element("p", job.diagnostic, "detail"));
+      article.append(row);
+    }
+    section.append(article);
+  }
+}
+
+function renderExecutionTimeline(panel, events) {
+  const section = executionSection(panel, "Timeline");
+  if (!events.length) {
+    section.append(element("p", "No execution events were recorded.", "muted"));
+    return;
+  }
+  const list = element("ol", "", "execution-timeline");
+  for (const event of events) {
+    const item = element("li", "", "execution-event");
+    const heading = element("div", "", "execution-event-heading");
+    heading.append(element("strong", executionKind(event.kind)), issueTime(event.startedAt));
+    item.append(heading);
+    if (event.detail) item.append(element("p", event.detail));
+    if (event.endedAt && !event.open) {
+      const ended = element("p", "Ended ", "muted");
+      ended.append(issueTime(event.endedAt));
+      item.append(ended);
+    } else if (event.endedAt) {
+      const observed = element("p", "Last observed ", "muted");
+      observed.append(issueTime(event.endedAt));
+      item.append(observed);
+    }
+    if (event.open) item.append(element("p", "Ongoing or boundary unavailable.", "muted"));
+    if (event.data?.unknown) item.append(element("p", "Duration unavailable.", "muted"));
+    if (event.data?.url) item.append(issueLink("Open GitHub run", event.data.url));
+    list.append(item);
+  }
+  section.append(list);
+}
+
+function renderExecutionDiagnostics(panel, diagnostics) {
+  const section = executionSection(panel, "Diagnostics");
+  const verification = diagnostics.verification;
+  section.append(element("p", verification.available
+    ? "Verification exited " + verification.exit + (verification.detail ? " · " + verification.detail : "")
+    : "Verification outcome unavailable.", verification.available ? "" : "muted"));
+  if (diagnostics.checks.available) {
+    const checks = element("details", "", "execution-transitions");
+    checks.append(element("summary", "Verification command"),
+      element("pre", diagnostics.checks.command, "execution-log"));
+    section.append(checks);
+  } else {
+    section.append(element("p", diagnostics.checks.detail, "muted"));
+  }
+  const log = element("details", "", "execution-transitions");
+  log.append(element("summary", "Worker log excerpt"
+    + (diagnostics.workerLog.truncated ? " · truncated" : "")));
+  if (diagnostics.workerLog.available) {
+    log.append(element("pre", diagnostics.workerLog.text, "execution-log"));
+  } else {
+    log.append(element("p", diagnostics.workerLog.detail, "muted"));
+  }
+  section.append(log);
+}
+
+function renderExecution(data, panel) {
+  panel.replaceChildren();
+  const summary = element("div", "", "execution-summary");
+  summary.append(element("h3", "Execution details"),
+    element("p", "Updated " + new Date(data.generatedAt).toLocaleString([], {
+      dateStyle: "medium", timeStyle: "medium"}), "muted"));
+  panel.append(summary);
+  renderExecutionStages(panel, data.stages);
+  renderExecutionBreakdown(panel, data.execution);
+  renderExecutionCi(panel, data.execution.ci);
+  renderExecutionTimeline(panel, data.execution.events);
+  renderExecutionDiagnostics(panel, data.execution.diagnostics);
+}
+
+async function loadExecutionPanel(identifier) {
+  const panel = byId("issue-panel-execution");
+  if (!panel) return;
+  const request = ++executionRequest;
+  if (!panel.dataset.loaded) {
+    panel.setAttribute("aria-busy", "true");
+    const loading = element("p", "Loading execution details…", "muted");
+    loading.setAttribute("role", "status");
+    panel.replaceChildren(loading);
+  }
+  try {
+    const data = await api("/api/execution?id=" + encodeURIComponent(identifier));
+    if (!executionRequestCurrent(request, executionRequest, activeIssueTab, issueDialog.open,
+      identifier, currentIssue?.identifier)) return;
+    const view = panel.dataset.loaded
+      ? captureExecutionView(panel, issueContent, getSelection(), document.activeElement) : null;
+    renderExecution(data, panel);
+    restoreExecutionView(panel, view, issueContent, getSelection());
+    panel.dataset.loaded = "true";
+  } catch (error) {
+    if (!executionRequestCurrent(request, executionRequest, activeIssueTab, issueDialog.open,
+      identifier, currentIssue?.identifier)) return;
+    const message = element("p", error.message, "detail");
+    message.setAttribute("role", "alert");
+    const retry = element("button", "Try again");
+    retry.type = "button";
+    retry.addEventListener("click", () => loadExecutionPanel(identifier));
+    panel.replaceChildren(message, retry);
+  } finally {
+    if (request === executionRequest) panel.setAttribute("aria-busy", "false");
+  }
+}
+
 
 async function openIssue(identifier) {
   const request = ++detailRequest;
+  stopExecutionRefresh();
+  executionRequest++;
+  activeIssueTab = "issue";
+  currentIssue = null;
   if (!issueDialog.open) {
     invokingIssue = identifier;
     issueDialog.showModal();
@@ -360,6 +674,10 @@ issueDialog.addEventListener("click", (event) => {
 });
 issueDialog.addEventListener("close", () => {
   detailRequest++;
+  executionRequest++;
+  stopExecutionRefresh();
+  currentIssue = null;
+  activeIssueTab = "issue";
   issueContent.setAttribute("aria-busy", "false");
   const trigger = byId("issue-open-" + invokingIssue) || repos.querySelector('[aria-selected="true"]');
   trigger?.focus({preventScroll: true});

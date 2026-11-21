@@ -9,7 +9,9 @@ import re
 import sqlite3
 import time
 
-from .services import CLOSED_STATES, ci_runs, ci_workflows, command, git, proposed_plan, stop_process
+from .services import (
+    CLOSED_STATES, ci_jobs, ci_runs, ci_workflows, command, git, proposed_plan, stop_process,
+)
 
 
 WORKER_LIMIT = 3
@@ -38,6 +40,29 @@ CREATE TABLE IF NOT EXISTS chat (
     id INTEGER PRIMARY KEY, role TEXT NOT NULL, text TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS execution (
+    id INTEGER PRIMARY KEY, issue TEXT NOT NULL, kind TEXT NOT NULL,
+    started REAL NOT NULL, ended REAL, detail TEXT NOT NULL DEFAULT '',
+    data TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS execution_issue ON execution(issue, started);
+CREATE TABLE IF NOT EXISTS ci_runs (
+    run_id INTEGER NOT NULL, attempt INTEGER NOT NULL, issue TEXT NOT NULL,
+    repo TEXT NOT NULL, revision TEXT NOT NULL, workflow TEXT NOT NULL,
+    path TEXT NOT NULL, status TEXT NOT NULL, conclusion TEXT,
+    url TEXT, created_at TEXT, run_started_at TEXT, updated_at TEXT,
+    completed_at TEXT, diagnostic TEXT NOT NULL DEFAULT '',
+    jobs_fetched INTEGER NOT NULL DEFAULT 0, observed REAL NOT NULL,
+    PRIMARY KEY (run_id, attempt)
+);
+CREATE INDEX IF NOT EXISTS ci_runs_issue ON ci_runs(issue, run_started_at);
+CREATE TABLE IF NOT EXISTS ci_jobs (
+    run_id INTEGER NOT NULL, attempt INTEGER NOT NULL, job_id INTEGER NOT NULL,
+    issue TEXT NOT NULL, name TEXT NOT NULL, status TEXT NOT NULL,
+    conclusion TEXT, started_at TEXT, completed_at TEXT, url TEXT,
+    diagnostic TEXT NOT NULL DEFAULT '', observed REAL NOT NULL,
+    PRIMARY KEY (run_id, attempt, job_id)
+);
 """
 
 
@@ -120,6 +145,42 @@ class Runner:
             raise ValueError(f"No approved plan for {issue}.")
         return rows[0]
 
+    def record_execution(self, issue, kind, *, started=None, ended=None, detail="", data=None):
+        started = time.time() if started is None else started
+        with self.db:
+            cursor = self.db.execute(
+                """INSERT INTO execution(issue,kind,started,ended,detail,data)
+                   VALUES (?,?,?,?,?,?)""",
+                (issue, kind, started, ended, detail, json.dumps(data or {}, ensure_ascii=False)),
+            )
+        return cursor.lastrowid
+
+    def open_execution(self, issue, kind, *, detail="", data=None, started=None):
+        started = time.time() if started is None else started
+        for row in self.rows("""SELECT id FROM execution WHERE issue=? AND kind=? AND ended IS NULL""",
+                             (issue, kind)):
+            self.close_execution(row["id"], ended=started,
+                                 detail=f"Superseded by a new {kind} interval.")
+        return self.record_execution(issue, kind, started=started, detail=detail, data=data)
+
+    def close_execution(self, execution_id, *, ended=None, detail=None):
+        fields = {"ended": time.time() if ended is None else ended}
+        if detail is not None:
+            fields["detail"] = detail
+        assignments = ", ".join(f"{field}=?" for field in fields)
+        with self.db:
+            self.db.execute(f"UPDATE execution SET {assignments} WHERE id=? AND ended IS NULL",
+                            (*fields.values(), execution_id))
+
+    def close_execution_kind(self, issue, kind, *, ended=None, detail=None):
+        for row in self.rows("""SELECT id FROM execution WHERE issue=? AND kind=? AND ended IS NULL""",
+                             (issue, kind)):
+            self.close_execution(row["id"], ended=ended, detail=detail)
+
+    def close_open_execution(self, issue, *, ended=None, detail=None):
+        for row in self.rows("SELECT id FROM execution WHERE issue=? AND ended IS NULL", (issue,)):
+            self.close_execution(row["id"], ended=ended, detail=detail)
+
     def status(self):
         return self.rows("""SELECT issue, repo, phase, attempts, session, check_exit, detail, revision
                             FROM tasks WHERE phase != 'done' ORDER BY updated DESC""")
@@ -141,6 +202,8 @@ class Runner:
 
     def block(self, issue, detail):
         detail = detail.strip() or "Interrupted."
+        self.close_open_execution(issue)
+        self.record_execution(issue, "failure", started=time.time(), ended=time.time(), detail=detail)
         self.change(issue, event=f"Blocked. {detail}", phase="blocked", pid=None, detail=detail)
 
     def repo_dir(self, repo):
@@ -179,6 +242,8 @@ class Runner:
                                        (identifier, issue["project"]["id"], repo, issue["title"], plan, time.time()))
             if not inserted.rowcount:
                 raise ValueError(f"{identifier} already has a recorded approval.")
+        self.record_execution(identifier, "approval", started=time.time(), ended=time.time(),
+                              detail="Plan approved and queued in Todo.")
         await self.activate(identifier)
 
     async def activate(self, issue, *, notify=False):
@@ -231,6 +296,7 @@ class Runner:
                              AND phase NOT IN ('approving','approved','done')""", (repo, issue))
         if owner:
             raise ValueError(f"{repo} is reserved by {owner[0]['issue']}.")
+        dispatch_started = time.time()
         previous = {key: row[key] for key in ("phase", "attempts", "check_exit", "tree", "audit", "detail")}
         self.change(issue, phase="working", check_exit=None, tree=None, audit=None, detail=None,
                     attempts=row["attempts"] + 1)
@@ -275,6 +341,12 @@ class Runner:
             if self.task(issue)["phase"] == "working":
                 self.change(issue, **previous)
             raise
+        attempt = row["attempts"] + 1
+        self.open_execution(issue, "startup", started=dispatch_started,
+                            detail=f"Attempt {attempt} startup started.",
+                            data={"attempt": attempt})
+        self.record_execution(issue, "attempt", detail=f"Attempt {attempt} started.",
+                              data={"attempt": attempt})
         self.job(self.run_worker(issue, instruction))
         return {"issue": issue, "phase": "working"}
 
@@ -357,10 +429,14 @@ class Runner:
                     "--model", os.environ.get("SYMPHONY_WORKER_MODEL", "opencode-go/deepseek-v4.1-flash#max")]
             if row["session"]:
                 args += ["--session", row["session"]]
+            self.close_execution_kind(issue, "startup", detail="Worker started.")
+            self.open_execution(issue, "worker", detail="OpenCode worker started.",
+                                data={"attempt": row["attempts"]})
             with (artifacts / "worker.log").open("ab") as log:
                 log.write(f"\n--- attempt {row['attempts']} ---\n".encode())
                 async with asyncio.timeout(WORKER_SECONDS):
                     await self.run_opencode(issue, args + [worker_prompt(row, artifacts, instruction)], worktree, env, log)
+                    self.close_execution_kind(issue, "worker", detail="OpenCode worker exited.")
                     if (artifacts / "blocked.txt").exists():
                         raise RuntimeError(read_small(artifacts / "blocked.txt", 4000))
                     checks = read_small(artifacts / "checks.sh", 16000).strip()
@@ -368,6 +444,8 @@ class Runner:
                         raise RuntimeError("The worker supplied no verification command in checks.sh.")
                     log.write(f"\n--- verification ---\n{checks}\n".encode())
                     log.flush()
+                    self.open_execution(issue, "verification", detail="Verification started.",
+                                        data={"command": checks[:4000]})
                     process = await asyncio.create_subprocess_exec(
                         "bash", "-e", "-o", "pipefail", "-c", checks, cwd=worktree, env=env,
                         stdout=log, stderr=log, start_new_session=True,
@@ -377,12 +455,16 @@ class Runner:
                         status = await process.wait()
                     finally:
                         await stop_process(process)
+                    self.close_execution_kind(issue, "verification",
+                                              detail=f"Verification exited {status}.")
             try:
                 await git(worktree, "merge-base", "--is-ancestor", base, "HEAD")
             except RuntimeError:
                 raise RuntimeError("Rebase the worktree onto origin/main and repeat verification.") from None
             await git(worktree, "add", "-A")
             tree = await git(worktree, "write-tree")
+            self.close_execution_kind(issue, "attempt",
+                                      detail=f"Attempt finished. Verification exited {status}.")
             self.change(issue, event=f"Worker finished. Verification exited {status}. Audit notes.md.",
                         phase="review", pid=None, check_exit=status, tree=tree)
         except TimeoutError:
@@ -456,6 +538,7 @@ class Runner:
 
     async def publish(self, issue):
         row = self.task(issue)
+        publication = self.open_execution(issue, "publication", detail="Publication started.")
         try:
             await self.require_in_progress(row)
             cwd = self.worktree(issue)
@@ -467,6 +550,7 @@ class Runner:
             if row["base"] != await git(cwd, "rev-parse", "origin/main"):
                 raise RuntimeError("origin/main moved after verification. Rebase and run checks again.")
             if tree == await git(cwd, "rev-parse", f"{row['base']}^{{tree}}"):
+                self.close_execution(publication, detail="No repository changes to publish.")
                 self.change(issue, phase="finishing")
                 return await self.finish(issue)
             revision = await git(
@@ -483,6 +567,7 @@ class Runner:
                     await git(cwd, "merge-base", "--is-ancestor", revision, "origin/main")
                 except (RuntimeError, TimeoutError):
                     raise RuntimeError("Git push failed. " + (str(push_error) or "Timed out.")) from None
+            self.close_execution(publication, detail=f"Pushed {revision} to main.")
             await self.after_push(issue)
         except (RuntimeError, OSError, ValueError, TimeoutError) as error:
             self.block(issue, str(error) or "GitHub operation timed out. Verify origin/main before retrying.")
@@ -499,15 +584,28 @@ class Runner:
     async def watch_ci(self, issue):
         row = self.task(issue)
         expected = set(json.loads(row["workflows"]))
+        self.open_execution(issue, "ci_wait", detail="Waiting for GitHub Actions.")
+        self.open_execution(issue, "ci_discovery", detail="Waiting for push CI to appear.")
+        discovered = False
         while True:
             try:
                 runs = await ci_runs(row["repo"], row["revision"])
+                try:
+                    await self.observe_ci(issue, row, runs)
+                except (OSError, RuntimeError, ValueError, TimeoutError) as error:
+                    self.record_execution(issue, "ci_error", started=time.time(), ended=time.time(),
+                                          detail=f"CI details are unavailable: {error}")
                 by_path = {run["path"].split("@", 1)[0]: run for run in reversed(runs)}
+                if not discovered and expected & by_path.keys():
+                    self.close_execution_kind(issue, "ci_discovery", detail="GitHub Actions appeared.")
+                    discovered = True
                 for path in expected & by_path.keys():
                     current = by_path[path]
                     if current["status"] == "completed" and current["conclusion"] != "success":
                         raise ValueError(f"{path} ended with {current['conclusion']}. {current['html_url']}")
                 if all(by_path.get(path, {}).get("conclusion") == "success" for path in expected):
+                    self.close_execution_kind(issue, "ci_wait", detail="GitHub Actions succeeded.")
+                    self.close_execution_kind(issue, "ci_discovery", detail="GitHub Actions succeeded.")
                     self.change(issue, phase="finishing")
                     return await self.finish(issue)
                 if expected - by_path.keys() and time.time() - row["updated"] > CI_DISCOVERY_SECONDS:
@@ -517,6 +615,82 @@ class Runner:
                 self.block(issue, str(error))
                 return
             await asyncio.sleep(20)
+
+    async def observe_ci(self, issue, row, runs):
+        expected = set(json.loads(row["workflows"] or "[]"))
+        for run in runs:
+            path = (run.get("path") or "").split("@", 1)[0]
+            run_id = run.get("id")
+            if path not in expected or not run_id:
+                continue
+            attempt = int(run.get("run_attempt") or 1)
+            conclusion = run.get("conclusion")
+            diagnostic = ("" if conclusion in (None, "success")
+                          else f"{run.get('name') or path} ended with {conclusion}.")
+            with self.db:
+                self.db.execute(
+                    """INSERT INTO ci_runs(run_id,attempt,issue,repo,revision,workflow,path,
+                                           status,conclusion,url,created_at,run_started_at,
+                                           updated_at,completed_at,diagnostic,observed)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                       ON CONFLICT(run_id,attempt) DO UPDATE SET
+                           status=excluded.status, conclusion=excluded.conclusion,
+                           url=excluded.url, created_at=excluded.created_at,
+                           run_started_at=excluded.run_started_at,
+                           updated_at=excluded.updated_at, completed_at=excluded.completed_at,
+                           diagnostic=CASE WHEN excluded.diagnostic='' THEN ci_runs.diagnostic
+                                           ELSE excluded.diagnostic END,
+                           observed=excluded.observed""",
+                    (run_id, attempt, issue, row["repo"], row["revision"],
+                     run.get("name") or path, path, run.get("status") or "", conclusion,
+                     run.get("html_url") or "", run.get("created_at"),
+                     run.get("run_started_at"), run.get("updated_at"),
+                     run.get("completed_at"), diagnostic, time.time()),
+                )
+            if run.get("status") != "completed":
+                continue
+            current = self.rows("SELECT jobs_fetched FROM ci_runs WHERE run_id=? AND attempt=?",
+                                (run_id, attempt))[0]
+            if current["jobs_fetched"]:
+                continue
+            try:
+                jobs = await ci_jobs(row["repo"], run_id, attempt)
+            except (OSError, RuntimeError, ValueError, TimeoutError) as error:
+                with self.db:
+                    self.db.execute("UPDATE ci_runs SET diagnostic=? WHERE run_id=? AND attempt=?",
+                                    (f"GitHub job details are unavailable: {error}", run_id, attempt))
+                continue
+            details = []
+            with self.db:
+                self.db.execute("DELETE FROM ci_jobs WHERE run_id=? AND attempt=?", (run_id, attempt))
+                for job in jobs:
+                    job_conclusion = job.get("conclusion")
+                    failed_steps = [
+                        step.get("name") for step in job.get("steps") or []
+                        if step.get("conclusion") in {"failure", "timed_out", "cancelled", "action_required"}
+                    ]
+                    job_diagnostic = ""
+                    if job_conclusion not in (None, "success"):
+                        job_diagnostic = f"{job.get('name') or 'Job'} ended with {job_conclusion}."
+                        if failed_steps:
+                            job_diagnostic += " Failed steps: " + ", ".join(failed_steps[:5]) + "."
+                        details.append(job_diagnostic)
+                    self.db.execute(
+                        """INSERT OR REPLACE INTO ci_jobs(run_id,attempt,job_id,issue,name,status,
+                                                          conclusion,started_at,completed_at,url,
+                                                          diagnostic,observed)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (run_id, attempt, job.get("id") or 0, issue,
+                         job.get("name") or "Job", job.get("status") or "",
+                         job_conclusion, job.get("started_at"), job.get("completed_at"),
+                         job.get("html_url") or "", job_diagnostic, time.time()),
+                    )
+                joined = " ".join(details[:8])
+                combined = " ".join(part for part in (diagnostic, joined) if part)
+                self.db.execute(
+                    """UPDATE ci_runs SET jobs_fetched=1, diagnostic=? WHERE run_id=? AND attempt=?""",
+                    (combined, run_id, attempt),
+                )
 
     async def cleanup(self, issue):
         row = self.task(issue)
@@ -535,6 +709,8 @@ class Runner:
             await self.linear.set_state(issue, "Done", "completed")
         except (RuntimeError, ValueError) as error:
             detail = f"Publication verified. Cannot mark Linear Done: {error}"
+            self.close_open_execution(issue)
+            self.record_execution(issue, "failure", started=time.time(), ended=time.time(), detail=detail)
             self.change(issue, phase="finish_failed", detail=detail, event=detail)
             return
         detail = "Done."
@@ -542,6 +718,9 @@ class Runner:
             await self.cleanup(issue)
         except (RuntimeError, OSError, TimeoutError) as error:
             detail = f"Done. Worktree cleanup needs attention: {error}"
+        self.close_open_execution(issue)
+        if not self.rows("SELECT 1 FROM execution WHERE issue=? AND kind='completion'", (issue,)):
+            self.record_execution(issue, "completion", started=time.time(), ended=time.time(), detail=detail)
         self.change(issue, phase="done", detail=detail, event=detail)
 
     async def recover_publish(self, issue):
@@ -563,8 +742,32 @@ class Runner:
             self.change(issue, event=f"Approval saved. Linear activation failed: {error}", detail=str(error))
 
     def recover(self):
+        now = time.time()
         for row in self.status():
             issue = row["issue"]
+            opened = self.rows("""SELECT started FROM execution WHERE issue=? AND ended IS NULL""", (issue,))
+            if opened:
+                observed = [self.task(issue)["updated"], *(item["started"] for item in opened)]
+                for query in (
+                    "SELECT MAX(observed) AS value FROM ci_runs WHERE issue=?",
+                    "SELECT MAX(observed) AS value FROM ci_jobs WHERE issue=?",
+                    "SELECT MAX(COALESCE(ended, started)) AS value FROM execution WHERE issue=?",
+                ):
+                    value = self.rows(query, (issue,))[0]["value"]
+                    if value is not None:
+                        observed.append(value)
+                last_observed = min(now, max(observed))
+                self.close_open_execution(issue, ended=last_observed)
+                if now > last_observed:
+                    self.record_execution(
+                        issue, "gap", started=last_observed, ended=now,
+                        detail="Unobserved outage after the last recorded activity; duration is unknown.",
+                        data={"unknown": True},
+                    )
+                self.record_execution(
+                    issue, "interruption", started=now, ended=now,
+                    detail="Recovered after a restart. Open intervals ended at the last recorded activity.",
+                )
             if row["phase"] == "working":
                 self.block(issue, "The pod restarted. Resume the saved worker in its existing worktree.")
             elif row["phase"] == "approving":

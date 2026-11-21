@@ -1,6 +1,7 @@
 """Linear discovery, GitHub checks, and the subprocess boundary."""
 
 import asyncio
+from datetime import datetime
 from functools import lru_cache
 import json
 import os
@@ -25,6 +26,51 @@ ISSUE_FIELDS = """
     id identifier title url description priority estimate
     state { name type } team { id } project { id }
 """
+HISTORY_FIELDS = """
+    history(first: 100) {
+        nodes {
+            id createdAt
+            fromState { id name type }
+            toState { id name type }
+        }
+        pageInfo { endCursor hasNextPage }
+    }
+"""
+HISTORY_QUERY = """query($id: String!, $after: String) {
+    issue(id: $id) {
+        history(first: 100, after: $after) {
+            nodes {
+                id createdAt
+                fromState { id name type }
+                toState { id name type }
+            }
+            pageInfo { endCursor hasNextPage }
+        }
+    }
+}"""
+HISTORY_PAGES = 20
+
+
+def valid_history_connection(connection):
+    return (isinstance(connection, dict)
+            and isinstance(connection.get("nodes"), list)
+            and isinstance(connection.get("pageInfo"), dict)
+            and isinstance(connection["pageInfo"].get("hasNextPage"), bool))
+
+
+def valid_history_node(node):
+    if not isinstance(node, dict):
+        return False
+    if not (node.get("fromState") or node.get("toState")):
+        return True
+    if any(node.get(key) is not None and not isinstance(node.get(key), dict)
+           for key in ("fromState", "toState")):
+        return False
+    try:
+        datetime.fromisoformat(str(node.get("createdAt") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
 
 
 def plan_bounds(description):
@@ -159,11 +205,13 @@ class Linear:
                     """ + where + """
                 }) {
                     nodes {
+                        id createdAt
                         identifier title url description priority priorityLabel estimate dueDate
                         updatedAt completedAt
                         state { name type color position }
                         project { id name }
                         labels(first: 10) { nodes { name color } }
+                        """ + HISTORY_FIELDS + """
                     }
                     pageInfo { endCursor hasNextPage }
                 }
@@ -174,6 +222,40 @@ class Linear:
             if not page["hasNextPage"]:
                 return issues
             cursor = page["endCursor"]
+
+    async def issue_history(self, issue_id, connection=None):
+        if connection is None:
+            data = await self.query(HISTORY_QUERY, id=issue_id, after=None)
+            issue = data.get("issue") if isinstance(data, dict) else None
+            if not isinstance(issue, dict):
+                raise RuntimeError(f"Linear issue {issue_id} history is unavailable.")
+            connection = issue.get("history")
+        entries = []
+        seen = set()
+        pages = 0
+        while True:
+            if not valid_history_connection(connection):
+                raise RuntimeError("Linear returned malformed issue history.")
+            nodes = connection["nodes"]
+            if not all(valid_history_node(node) for node in nodes):
+                raise RuntimeError("Linear issue history contains a malformed status transition.")
+            entries.extend(nodes)
+            page = connection["pageInfo"]
+            if not page["hasNextPage"]:
+                return {"entries": entries, "complete": True, "error": ""}
+            cursor = page.get("endCursor")
+            if not cursor or cursor in seen:
+                raise RuntimeError("Linear issue history pagination did not advance.")
+            seen.add(cursor)
+            if pages >= HISTORY_PAGES:
+                return {"entries": entries, "complete": False,
+                        "error": f"History exceeds {HISTORY_PAGES} pages."}
+            pages += 1
+            data = await self.query(HISTORY_QUERY, id=issue_id, after=cursor)
+            issue = data.get("issue") if isinstance(data, dict) else None
+            if not isinstance(issue, dict):
+                raise RuntimeError(f"Linear issue {issue_id} history page is unavailable.")
+            connection = issue.get("history")
 
     async def issue(self, identifier):
         if not ISSUE_ID.fullmatch(identifier):
@@ -307,3 +389,26 @@ async def ci_runs(repo, commit):
         {"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}", "Accept": "application/vnd.github+json"},
     )
     return response["workflow_runs"]
+
+
+async def ci_jobs(repo, run_id, attempt):
+    jobs = []
+    for page in range(1, 6):
+        query = urlencode({"per_page": 100, "page": page})
+        response = await asyncio.to_thread(
+            request_json,
+            f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?{query}",
+            {"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}", "Accept": "application/vnd.github+json"},
+        )
+        batch = response.get("jobs")
+        if not isinstance(batch, list):
+            raise RuntimeError("GitHub returned a malformed job list.")
+        jobs.extend(batch)
+        total = response.get("total_count")
+        if isinstance(total, int) and len(jobs) >= total:
+            return jobs
+        if not isinstance(total, int) and len(batch) < 100:
+            return jobs
+        if page == 5:
+            raise RuntimeError("GitHub job list exceeds the 500-job recording limit.")
+    return jobs

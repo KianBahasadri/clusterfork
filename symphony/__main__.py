@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 from .codex import Codex, TOOL_SPECS
+from .execution import card_stage, execution_payload, history_summary
 from .issue_details import issue_details, markdown, open_asset
 from .runner import Runner, read_small
 from .services import CLOSED_STATES, ISSUE_ID, Linear, proposed_plan, with_plan
@@ -35,6 +36,7 @@ STATIC = {
 }
 BODY_LIMIT = 32000
 ISSUE_REFRESH_SECONDS = 30
+HISTORY_CONCURRENCY = 3
 RECENT_DONE = timedelta(hours=24)
 ACTIVE_PHASES = {"approving", "working", "publishing", "ci", "finishing"}
 
@@ -66,14 +68,17 @@ def current_issue(row, cutoff):
     return kind not in CLOSED_STATES
 
 
-def issue_summary(row):
-    return {**{key: row.get(key) for key in ("identifier", "title", "url", "state", "priority",
-                                            "priorityLabel", "estimate", "dueDate", "updatedAt",
-                                            "completedAt")},
-            "project": (row["project"] or {}).get("name", ""),
-            "projectId": (row["project"] or {}).get("id", ""),
-            "labels": row["labels"]["nodes"],
-            "plan": proposed_plan(row["description"])}
+def issue_summary(row, stage=None):
+    summary = {**{key: row.get(key) for key in ("identifier", "title", "url", "state", "priority",
+                                                "priorityLabel", "estimate", "dueDate", "updatedAt",
+                                                "createdAt", "completedAt")},
+               "project": (row["project"] or {}).get("name", ""),
+               "projectId": (row["project"] or {}).get("id", ""),
+               "labels": row["labels"]["nodes"],
+               "plan": proposed_plan(row["description"])}
+    if stage is not None:
+        summary["stage"] = stage
+    return summary
 
 
 class Symphony:
@@ -92,6 +97,7 @@ class Symphony:
         self.issue_snapshot = None
         self.issue_revision = ""
         self.issue_error = ""
+        self.history_cache = {}
 
     async def refresh_projects(self):
         async with self.projects_lock:
@@ -100,16 +106,61 @@ class Symphony:
                 self.fetched_projects = time.monotonic()
         return self.repos
 
+    @staticmethod
+    def history_key(row):
+        state = row.get("state") or {}
+        return (row["identifier"], row.get("updatedAt"), row.get("completedAt"),
+                state.get("name"), state.get("type"))
+
+    async def history_for(self, row, *, fetch_missing=False):
+        key = self.history_key(row)
+        cached = self.history_cache.get(key)
+        if cached is not None:
+            return cached
+        connection = row.get("history")
+        if connection is None and not fetch_missing:
+            result = {"entries": [], "complete": False,
+                      "error": "Linear did not return issue history."}
+        else:
+            try:
+                result = await self.linear.issue_history(
+                    row.get("id") or row["identifier"], connection)
+            except (OSError, RuntimeError, ValueError, TimeoutError) as error:
+                nodes = connection.get("nodes") if isinstance(connection, dict) else None
+                result = {"entries": nodes if isinstance(nodes, list) else [], "complete": False,
+                          "error": str(error) or "Linear issue history is unavailable."}
+        if result.get("complete"):
+            self.history_cache[key] = result
+        return result
+
     async def refresh_issue_snapshot(self):
         repos = await self.refresh_projects()
         repo_by_project = {project["id"]: repo for repo, projects in repos.items() for project in projects}
         cutoff = done_cutoff()
         rows_by_project = {project_id: [] for project_id in repo_by_project}
         done_since = cutoff.isoformat().replace("+00:00", "Z")
+        accepted = []
         for row in await self.linear.issues(repo_by_project, done_since=done_since):
             project = (row["project"] or {}).get("id")
             if project in rows_by_project and current_issue(row, cutoff):
-                rows_by_project[project].append(issue_summary(row))
+                accepted.append((project, row))
+        semaphore = asyncio.Semaphore(HISTORY_CONCURRENCY)
+
+        async def history(row):
+            async with semaphore:
+                return await self.history_for(row)
+
+        histories = await asyncio.gather(*(history(row) for _, row in accepted))
+        now = datetime.now(timezone.utc)
+        keep = set()
+        for (project, row), record in zip(accepted, histories):
+            key = self.history_key(row)
+            keep.add(key)
+            stage = card_stage(row, history_summary(row, record, now))
+            rows_by_project[project].append(issue_summary(row, stage))
+        self.history_cache = {
+            key: value for key, value in self.history_cache.items() if key in keep
+        }
         snapshot = [{**project, "repo": repo, "issues": rows_by_project[project["id"]]}
                     for repo, projects in sorted(repos.items()) for project in projects]
         if snapshot != self.issue_snapshot:
@@ -136,6 +187,16 @@ class Symphony:
         if not projects:
             raise ValueError(f"{repo} has no mapped Linear project.")
         return [issue_summary(row) for row in await self.linear.issues(project["id"] for project in projects)]
+
+    async def execution(self, identifier):
+        if not ISSUE_ID.fullmatch(identifier):
+            raise ValueError("Use a Linear issue ID such as KIAN-1077.")
+        row = next((issue for project in self.issue_snapshot or []
+                    for issue in project["issues"] if issue["identifier"] == identifier), None)
+        if row is None:
+            raise ValueError(f"{identifier} is not in the current issue list.")
+        history = await self.history_for(row, fetch_missing=True)
+        return execution_payload(identifier, row, history, self.runner)
 
     def mapped_project(self, project_id):
         for repo, projects in self.repos.items():
@@ -281,7 +342,22 @@ class Symphony:
     async def respond(self, repo, message, issues=()):
         cwd, context = await self.context(repo, issues)
         text = f"{message}\n\n--- Current Symphony context ---\n{context}" if context else message
-        return await self.coordinator.respond(text, cwd)
+        attributed = list(dict.fromkeys(issues))
+        started = time.time()
+        open_turns = [(issue, self.runner.record_execution(
+            issue, "coordinator", started=started, detail="Coordinator turn started.",
+            data={"issues": attributed},
+        )) for issue in attributed]
+        detail = "Coordinator handled worker events."
+        try:
+            return await self.coordinator.respond(text, cwd)
+        except (OSError, RuntimeError, TimeoutError, ValueError) as error:
+            detail = f"Coordinator turn failed: {error}"
+            raise
+        finally:
+            ended = time.time()
+            for _, execution_id in open_turns:
+                self.runner.close_execution(execution_id, ended=ended, detail=detail)
 
     async def handle(self, repo, text, message):
         command, _, argument = text.partition(" ")
@@ -452,6 +528,8 @@ class Handler(BaseHTTPRequestHandler):
                 if params.get("updated") == [issue["updatedAt"]]:
                     cache_control = "private, max-age=31536000, immutable"
                 self.json_response(issue, cache_control=cache_control)
+            elif url.path == "/api/execution":
+                self.json_response(self.run_async(app.execution(params.get("id", [""])[0])))
             elif url.path == "/api/linear-asset":
                 self.linear_asset(params.get("url", [""])[0])
             else:

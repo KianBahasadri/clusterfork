@@ -933,6 +933,10 @@ Path("verified.txt").write_text("Tested\\n")
         self.assertEqual(self.linear.state["name"], "Done")
         self.assertFalse(self.runner.worktree(ISSUE).exists())
         self.assertEqual(self.git(self.remote, "show", "main:verified.txt"), "Tested")
+        execution = {row["kind"]: row for row in self.runner.rows("SELECT * FROM execution")}
+        for kind in ("startup", "worker", "verification", "attempt", "publication", "completion"):
+            self.assertIn(kind, execution)
+            self.assertIsNotNone(execution[kind]["ended"])
 
     async def test_push_without_matching_workflows_finishes_immediately(self):
         (self.repo / ".github/workflows/test.yml").write_text("on:\n  push:\n    paths: ['docs/**']\n")

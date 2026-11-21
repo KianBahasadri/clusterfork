@@ -91,6 +91,21 @@ function issueDeadline(value, today) {
   return time;
 }
 
+function issueStagePill(issue) {
+  const stage = issue.stage || {};
+  const pill = issuePill("Unavailable", stage.reason || "Stage duration is unavailable.", "clock");
+  if (!stage.startedAt) {
+    pill.dataset.tone = "caution";
+    return pill;
+  }
+  pill.dataset.stageStart = stage.startedAt;
+  pill.dataset.stageName = stage.name || issue.state.name;
+  pill.dataset.stageCoverage = stage.coverage || "complete";
+  pill.dataset.stageReason = stage.reason || "";
+  updateStagePill(pill);
+  return pill;
+}
+
 function renderIssue(issue, today) {
   const row = element("article", "", "issue");
   const preview = element("button", "", "issue-preview");
@@ -118,7 +133,7 @@ function renderIssue(issue, today) {
   const meta = element("span", "", "issue-meta");
   const priority = issuePill("", issue.priorityLabel, priorityIcons[issue.priority]);
   if (issue.priority === 1) priority.dataset.tone = "danger";
-  meta.append(priority);
+  meta.append(priority, issueStagePill(issue));
   if (deadline) meta.append(deadline);
   if (!task && issue.state.name === "Todo") {
     const awaiting = issuePill("Awaiting approval",
@@ -588,3 +603,7 @@ document.addEventListener("keydown", (event) => {
   }
   event.preventDefault();
 });
+
+setInterval(() => {
+  for (const pill of document.querySelectorAll("[data-stage-start]")) updateStagePill(pill);
+}, 30000);

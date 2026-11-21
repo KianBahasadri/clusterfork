@@ -56,11 +56,27 @@ project. Requests share an in-page cache and use versioned URLs based on
 Linear's `updatedAt`, so the browser's private HTTP cache reuses unchanged details
 across reloads. A changed issue preloads its new version without refetching the
 panes. Mistune renders Markdown with raw HTML escaped.
+Issue cards also show the time spent in their current Backlog, Todo, In Progress,
+or Done stage. Symphony reads paginated Linear status history, uses the issue's
+creation time only when complete history establishes the initial status, and
+keeps the open interval moving in the browser without refetching Linear or
+rebuilding the cards. Incomplete, inconsistent, or unavailable history shows an
+unavailable chip instead of a guessed duration.
 Linear uploads stream through Symphony using its existing Linear credentials,
 including private images and range requests. The key stays on the server.
 Close the modal with Close, Escape, or the backdrop to return focus to its card.
-The app fills the viewport below the project header. Connection failures appear
-as a temporary notice while Symphony reconnects.
+The modal opens on the Issue tab; the Execution tab loads on demand from a
+non-cached endpoint and refreshes while it is open. It shows tracked stage totals,
+the recorded In Progress breakdown with measured, concurrent wall, waiting, and
+overlap values, retained GitHub workflow/job/attempt details, and a chronological
+timeline. Coverage is labeled when records are partial, lower-bound, or
+unavailable; active CI runs stop at their last observed GitHub response rather
+than growing through unobserved time. Diagnostic worker-log and verification
+excerpts are bounded, redacted server-side, and rendered as text; CI entries link
+to their exact GitHub runs and job logs. Live refreshes preserve expanded
+diagnostics, focus, selection, and scroll position. Closing the tab stops its
+refresh. The app fills the viewport below the project header. Connection failures
+appear as a temporary notice while Symphony reconnects.
 
 Type `/` to see commands. Use the arrow keys to choose one, Tab to complete it,
 or Enter to run it. Enter sends a message, Shift+Enter inserts a newline, and
@@ -97,6 +113,14 @@ and authentication failures pause new dispatches. Use `/retry KIAN-123` to
 revisit a parked issue and `/continue` when the provider failure has been
 resolved.
 
+Symphony records each issue's attempts, worker startup, verification,
+coordinator work that is explicitly tied to the issue, publication, CI waiting,
+failures, completion, and interruption in the existing SQLite ledger. These
+records survive worktree cleanup and restarts. A restart ends an open interval
+at the last recorded activity and marks the unobserved gap instead of extending
+the interval through the outage. Historical periods before these records existed
+are shown as unavailable rather than as zero time.
+
 The coordinator pump dispatches recorded approvals whose live issues are still
 Todo in their approved project. The shared dispatcher rechecks that live state
 for manual spawns too, and resume requires the issue to still be In Progress.
@@ -114,10 +138,15 @@ the exact revision's GitHub Actions workflows whose push filters match the
 branch and changed paths. If none match, Symphony advances the repo after the
 push. Keep deployment jobs dependent on successful CI in the repository's
 workflow. After verified publication, Symphony sets Linear to Done and removes
-the worktree. A restart preserves the conversation, queued and approved plans,
-worker sessions and pending CI watches. When the coordinator's tool definitions
-change, Symphony starts a fresh Codex thread and records the change in the chat
-history.
+the worktree. The CI watcher retains workflow run, job, and attempt identities,
+timestamps, conclusions, URLs, and failure diagnostics. Repeated observations
+update the same attempt, while old failed attempts and earlier revisions remain
+visible. Timing distinguishes workflow and job totals, concurrent wall time,
+and CI waiting so overlaps are not counted twice; missing or partial GitHub
+details are labeled unavailable. A restart preserves the conversation, queued
+and approved plans, worker sessions and pending CI watches. When the
+coordinator's tool definitions change, Symphony starts a fresh Codex thread and
+records the change in the chat history.
 
 ## Deploy on Guaranine
 
