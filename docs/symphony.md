@@ -3,26 +3,40 @@
 Symphony runs Codex as one coordinator across Linear projects. Each project
 needs a GitHub repository URL in its description or external links. Repositories
 are cloned on first use. Projects that link to the same repository share its
-worktree queue.
+worktree queue. Project chips select a Linear project ID, so projects that share
+a repository remain distinct.
 
 ## Plan and execute
 
 Open Symphony on the tailnet and sign in to Codex with the device flow if
-prompted. Choose a repo tab, expand an issue's proposed plan, and refine it with
-the coordinator. Approve the plans you want in chat, including plans across
-repositories. The coordinator records each approval, locks the current Linear
-plan, and moves the issue to In Progress before dispatch.
-Completed, Canceled, and Duplicate are terminal states across issue lists,
-approvals, and state transitions.
+prompted. Choose a project chip in the page header. The desktop layout puts that
+project's Backlog on the left, coordinator chat in the middle, and Todo, In
+Progress, and Done on the right. Narrow screens stack the same panes.
+Backlog is the unapproved idea list. Expand an issue's proposed plan and refine
+it with the coordinator. Approve the plans you want in chat, including plans
+across projects. The coordinator records
+each approval, locks the current Linear plan, and moves the issue to Todo. A
+Todo issue without that recorded approval is visibly awaiting approval and
+never runs; writing a plan or changing its Linear status is not approval.
+Recorded Todo approvals dispatch automatically when a repository, worker slot,
+and provider are available, moving the issue to In Progress as work starts.
+Issues returned to Backlog, canceled, or moved out of the approved project do
+not start. Completed, Canceled, and Duplicate are terminal states across issue
+lists, approvals, and state transitions.
 
-Symphony refreshes a shared cache of every mapped repository's open issues
-every 30 seconds using a batched, paginated Linear query. The browser receives
-the lists through its regular status requests when they change. Switching tabs
-uses the cache and restores the sidebar scroll position and expanded plans.
-All repositories combines the cached lists. Issues appear in collapsible status
-groups in Linear's workflow order. Each group sorts from Urgent to Low priority,
-with unprioritized issues last. Groups start expanded and remember their
-collapsed state separately for each view.
+Symphony refreshes a shared cache of every mapped project's issues every 30
+seconds using a batched, paginated Linear query. The cache includes open issues
+and Done issues completed within the last rolling 24 hours, using `completedAt`
+rather than `updatedAt`. Older Done, Canceled, and Duplicate issues stay out of
+both panes, and expired Done entries disappear on a normal refresh without an
+issue edit. The browser receives the lists through its regular status requests
+when they change. Switching projects uses the cache and restores each pane's
+scroll position and expanded plans. Backlog stays on the left. Todo, In
+Progress, and Done are collapsible groups on the right, labeled with those
+status names. Todo and In Progress sort from Urgent to Low priority with
+unprioritized issues last; recent Done sorts newest completed first. Groups
+start expanded, remember their collapsed state per project, and show an empty
+state when they have no issues.
 Status groups open and close with a visible spring using the standard Web
 Animations API. Rapid clicks reverse from the current height; reduced motion
 disables the animation.
@@ -31,23 +45,22 @@ chips use their Linear names and emoji. Issue cards show the identifier,
 workflow icon and title, with compact pills for priority, due date, estimate,
 and colored labels. Workflow icons match Linear's dotted, empty, half-filled,
 and filled status shapes, using the configured colors with stronger contrast
-in light mode. All repositories also shows each issue's project chip.
-Project names appear in the chips above the list. Worker phases and proposed
-plans appear on their issues.
+in light mode. Worker phases, proposed plans, and an awaiting-approval badge
+appear on their issues.
 
 Click an issue card to open its details in a modal. The description, attachments,
 documents, comments, and activity appear beside its properties and related issues.
 Related issue links open their context in the same modal. Details preload in the
 background with at most two preloads running at once, prioritizing the selected
-repository. Requests share an in-page cache and use versioned URLs based on
+project. Requests share an in-page cache and use versioned URLs based on
 Linear's `updatedAt`, so the browser's private HTTP cache reuses unchanged details
 across reloads. A changed issue preloads its new version without refetching the
-sidebar. Mistune renders Markdown with raw HTML escaped.
+panes. Mistune renders Markdown with raw HTML escaped.
 Linear uploads stream through Symphony using its existing Linear credentials,
 including private images and range requests. The key stays on the server.
 Close the modal with Close, Escape, or the backdrop to return focus to its card.
-The app fills the viewport without a branding or connection header. Connection
-failures appear as a temporary notice while Symphony reconnects.
+The app fills the viewport below the project header. Connection failures appear
+as a temporary notice while Symphony reconnects.
 
 Type `/` to see commands. Use the arrow keys to choose one, Tab to complete it,
 or Enter to run it. Enter sends a message, Shift+Enter inserts a newline, and
@@ -68,10 +81,10 @@ browser's light or dark preference. The favicon is a multi-size ICO.
 
 A message sent during a turn in the same repo steers the active
 turn. A message for a different repo queues for the next turn. The app uses the
-selected repo's working directory and includes its AGENTS.md and current work
-when starting a turn. Codex uses its shell and live web search inside the
-restricted pod. It can inspect checkouts and worker logs and use `gh` to diagnose
-CI. OpenCode workers handle implementation by default.
+selected project's repository working directory and includes its AGENTS.md and
+current work when starting a turn. Codex uses its shell and live web search
+inside the restricted pod. It can inspect checkouts and worker logs and use
+`gh` to diagnose CI. OpenCode workers handle implementation by default.
 
 OpenCode uses the Go subscription and caps concurrent workers at three. Each
 attempt has a one-hour safety timeout. The checklist is a shell command file
@@ -79,18 +92,30 @@ that Symphony runs a second time, in the worktree, to get its own exit status.
 The worker's notes and log live in `runs/<issue-id>/` on the PVC. The worktree
 stays reserved through audit, rework, and CI. The coordinator reviews notes
 before shipping. Worker errors, rejected pushes, and failed CI appear in chat
-and the issue sidebar with the worktree preserved. OpenCode Go quota,
-rate-limit, and authentication failures pause new dispatches. Use
-`/retry KIAN-123` to revisit a parked issue and `/continue` when the provider
-failure has been resolved.
+and the issue panes with the worktree preserved. OpenCode Go quota, rate-limit,
+and authentication failures pause new dispatches. Use `/retry KIAN-123` to
+revisit a parked issue and `/continue` when the provider failure has been
+resolved.
+
+The coordinator pump dispatches recorded approvals whose live issues are still
+Todo in their approved project. The shared dispatcher rechecks that live state
+for manual spawns too, and resume requires the issue to still be In Progress.
+It checks the existing worker cap, repository reservation, provider pause, and
+rework limit before reserving the slot and moving the issue to In Progress.
+Waiting for capacity stays idle without waking the coordinator or consuming
+attempts. Linear failures remain visible on the issue while queued work retries
+after a normal refresh, and an unconfirmed status update is parked with a
+diagnostic. A restart recovers queued approvals once without duplicate
+dispatch; issues moved back to Backlog, canceled, or moved to another project
+are skipped.
 
 Symphony writes one squash commit and pushes directly to `main`. It waits for
 the exact revision's GitHub Actions workflows whose push filters match the
 branch and changed paths. If none match, Symphony advances the repo after the
 push. Keep deployment jobs dependent on successful CI in the repository's
 workflow. After verified publication, Symphony sets Linear to Done and removes
-the worktree. A restart preserves the conversation, approved plans, worker
-sessions and pending CI watches. When the coordinator's tool definitions
+the worktree. A restart preserves the conversation, queued and approved plans,
+worker sessions and pending CI watches. When the coordinator's tool definitions
 change, Symphony starts a fresh Codex thread and records the change in the chat
 history.
 
@@ -135,7 +160,7 @@ the updater rolls forward even when `/idle` is unreachable so a broken rollout
 can recover on the next push to `main`. The Symphony pod itself keeps
 `automountServiceAccountToken: false` and has no Kubernetes API egress.
 
-Open the HTTPS address reported by Tailscale and verify the repo tabs load.
+Open the HTTPS address reported by Tailscale and verify the project chips and panes load.
 Kubernetes NetworkPolicy enforces default-deny in the namespace, allowing the
 Symphony pod only DNS, public TCP 443 egress, and port 8081 ingress from the
 updater. The gateway tag and Serve configuration control access to the UI.

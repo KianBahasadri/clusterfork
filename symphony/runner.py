@@ -70,6 +70,16 @@ def read_small(path, limit):
     return data.decode()
 
 
+def dispatch_problem(live, row, resume):
+    if (live["project"] or {}).get("id") != row["project"]:
+        return f"{row['issue']} must still be in its approved Linear project."
+    expected = {"name": "In Progress", "type": "started"} if resume else {
+        "name": "Todo", "type": "unstarted"}
+    if live["state"] != expected:
+        return f"{row['issue']} is {live['state']['name']}, not {expected['name']}."
+    return ""
+
+
 class Runner:
     def __init__(self, directory, linear):
         self.directory = directory
@@ -167,11 +177,39 @@ class Runner:
         await self.activate(identifier)
 
     async def activate(self, issue, *, notify=False):
-        await self.linear.set_state(issue, "In Progress", "started")
-        event = "Plan approved. Ready for dispatch." if notify else None
+        await self.linear.set_state(issue, "Todo", "unstarted")
+        event = "Plan approved. Queued in Todo." if notify else None
         self.change(issue, phase="approved", event=event)
 
-    def dispatch(self, issue, repo, instruction, *, resume=False):
+    def dispatch_busy(self, issue, repo):
+        if len(self.rows("SELECT 1 FROM tasks WHERE phase='working'")) >= WORKER_LIMIT:
+            return True
+        return bool(self.rows("""SELECT issue FROM tasks WHERE repo=? AND issue != ?
+                                 AND phase NOT IN ('approving','approved','done')""", (repo, issue)))
+
+    def check_reserved(self, issue, repo, previous):
+        row = self.task(issue)
+        if row["phase"] != "working" or row["attempts"] != previous["attempts"] + 1:
+            raise ValueError(f"{issue} dispatch was superseded.")
+        if self.setting("paused"):
+            self.change(issue, **previous)
+            raise ValueError(f"Dispatch is paused. {self.setting('paused')}")
+        if len(self.rows("SELECT 1 FROM tasks WHERE phase='working'")) > WORKER_LIMIT:
+            self.change(issue, **previous)
+            raise ValueError("The worker limit is reached. Try when a worker finishes.")
+        owner = self.rows("""SELECT issue FROM tasks WHERE repo=? AND issue != ?
+                             AND phase NOT IN ('approving','approved','done')""", (repo, issue))
+        if owner:
+            self.change(issue, **previous)
+            raise ValueError(f"{repo} is reserved by {owner[0]['issue']}.")
+
+    def report_dispatch_error(self, issue, detail):
+        row = self.task(issue)
+        if row["detail"] == detail:
+            return
+        self.change(issue, detail=detail, event=detail)
+
+    async def dispatch(self, issue, repo, instruction, *, resume=False):
         row = self.task(issue)
         if row["repo"] != repo:
             raise ValueError(f"{issue} is approved for {row['repo']}.")
@@ -188,10 +226,93 @@ class Runner:
                              AND phase NOT IN ('approving','approved','done')""", (repo, issue))
         if owner:
             raise ValueError(f"{repo} is reserved by {owner[0]['issue']}.")
+        previous = {key: row[key] for key in ("phase", "attempts", "check_exit", "tree", "audit", "detail")}
         self.change(issue, phase="working", check_exit=None, tree=None, audit=None, detail=None,
                     attempts=row["attempts"] + 1)
+        try:
+            try:
+                live = await self.linear.issue(issue)
+            except ValueError as error:
+                self.change(issue, **previous)
+                raise RuntimeError(f"Could not read {issue} from Linear: {error}") from None
+            problem = dispatch_problem(live, row, resume)
+            if problem:
+                self.change(issue, **previous)
+                raise ValueError(problem)
+            self.check_reserved(issue, repo, previous)
+            if not resume:
+                try:
+                    await self.linear.set_state(issue, "In Progress", "started")
+                except (OSError, RuntimeError, TimeoutError, ValueError) as error:
+                    try:
+                        confirmed = await self.linear.issue(issue)
+                    except (OSError, RuntimeError, TimeoutError, ValueError):
+                        confirmed = None
+                    if confirmed and not dispatch_problem(
+                            confirmed, row, True):
+                        try:
+                            self.check_reserved(issue, repo, previous)
+                        except ValueError as check_error:
+                            if self.task(issue)["phase"] == previous["phase"]:
+                                detail = f"{issue} is In Progress but dispatch could not start: {check_error}"
+                                self.change(issue, phase="blocked", detail=detail)
+                                raise RuntimeError(detail) from None
+                            raise
+                    elif confirmed:
+                        self.change(issue, **previous)
+                        raise RuntimeError(f"Could not move {issue} to In Progress: {error}") from None
+                    else:
+                        detail = f"{issue} dispatch status is uncertain after Linear error: {error}"
+                        self.change(issue, **previous)
+                        self.change(issue, detail=detail)
+                        raise RuntimeError(detail) from None
+        except (OSError, RuntimeError, TimeoutError, ValueError):
+            if self.task(issue)["phase"] == "working":
+                self.change(issue, **previous)
+            raise
         self.job(self.run_worker(issue, instruction))
         return {"issue": issue, "phase": "working"}
+
+    async def dispatch_approved(self):
+        if self.setting("paused"):
+            return []
+        ready = []
+        for row in self.rows("SELECT * FROM tasks WHERE phase='approved'"):
+            if row["attempts"] >= ATTEMPT_LIMIT:
+                continue
+            try:
+                live = await self.linear.issue(row["issue"])
+            except (OSError, RuntimeError, TimeoutError, ValueError) as error:
+                self.report_dispatch_error(
+                    row["issue"], f"Automatic dispatch could not read Linear: {error}")
+                continue
+            if self.dispatch_busy(row["issue"], row["repo"]):
+                continue
+            if row["detail"] and row["detail"].startswith(
+                    "Automatic dispatch could not read Linear:"):
+                self.change(row["issue"], detail=None)
+            if ((live["project"] or {}).get("id") == row["project"]
+                    and live["state"] == {"name": "In Progress", "type": "started"}):
+                detail = (f"{row['issue']} is In Progress without a reserved worker. "
+                          f"Verify Linear and use /retry {row['issue']}.")
+                self.change(row["issue"], phase="blocked", detail=detail, event=detail)
+                continue
+            if dispatch_problem(live, row, False):
+                continue
+            ready.append((live.get("priority") or 5, row["issue"], row))
+        ready.sort(key=lambda item: (item[0], item[1]))
+        dispatched = []
+        for _, _, row in ready:
+            try:
+                await self.dispatch(row["issue"], row["repo"], "")
+            except ValueError:
+                continue
+            except (OSError, RuntimeError, TimeoutError) as error:
+                self.report_dispatch_error(
+                    row["issue"], f"Automatic dispatch failed: {error}")
+                continue
+            dispatched.append(row["issue"])
+        return dispatched
 
     async def require_in_progress(self, row):
         live = await self.linear.issue(row["issue"])

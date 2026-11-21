@@ -489,6 +489,12 @@ try {
         self.assertTrue(jobs.empty())
 
 
+class LinearInstructionsTests(unittest.TestCase):
+    def test_new_issues_default_to_backlog_and_honor_explicit_status(self):
+        instructions = (ROOT / "hex/linear-agent.md").read_text()
+        self.assertRegex(instructions,
+                         r"File new issues in Backlog unless the speaker requests\s+another status\.")
+
 
 if __name__ == "__main__":
     unittest.main()

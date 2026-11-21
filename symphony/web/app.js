@@ -1,19 +1,21 @@
 const byId = (id) => document.getElementById(id);
 const repos = byId("repos");
-const issues = byId("issues");
-const sidebar = issues.closest("aside");
+const backlog = byId("backlog");
+const statusIssues = byId("status-issues");
+const backlogPane = backlog.closest("aside");
+const statusPane = statusIssues.closest("aside");
+const backlogScroll = new Map();
+const statusScroll = new Map();
 const messages = byId("messages");
 const chatLog = byId("chat-log");
 const composer = byId("composer");
 const messageField = byId("message");
 const commandList = byId("command-list");
 const interrupt = byId("interrupt");
-const issueScroll = new Map();
 const expandedPlans = new Set();
 const collapsedGroups = new Set();
 const priorityIcons = ["ellipsis", "octagon-alert", "signal", "signal-medium", "signal-low"];
 let issueCache = new Map();
-let projectCache = new Map();
 let issueRevision = "";
 let selected = "";
 let lastMessage = 0;
@@ -118,12 +120,11 @@ function renderIssue(issue, today) {
   if (issue.priority === 1) priority.dataset.tone = "danger";
   meta.append(priority);
   if (deadline) meta.append(deadline);
-  const project = projectCache.get(issue.projectId);
-  if (!selected && project) {
-    const chip = element("span", "", "issue-pill issue-project");
-    chip.title = project.name;
-    chip.append(projectLabel(project));
-    meta.append(chip);
+  if (!task && issue.state.name === "Todo") {
+    const awaiting = issuePill("Awaiting approval",
+      "Approval must be recorded in coordinator chat before this issue can start.", "octagon-alert");
+    awaiting.dataset.tone = "caution";
+    meta.append(awaiting);
   }
   if (issue.estimate != null) meta.append(issuePill(String(issue.estimate), "Estimate " + issue.estimate, "triangle"));
   for (const label of issue.labels) {
@@ -149,7 +150,9 @@ function renderIssue(issue, today) {
     plan.open = expandedPlans.has(issue.identifier);
     plan.append(summary, element("div", issue.plan, "plan"));
     if (!task) {
-      plan.append(element("p", "Tell the coordinator in chat when you approve this plan.", "muted"));
+      plan.append(element("p", issue.state.name === "Todo"
+        ? "This issue is awaiting plan approval in chat and will not run."
+        : "Tell the coordinator in chat when you approve this plan.", "muted"));
     }
     row.append(plan);
   }
@@ -185,93 +188,89 @@ function toggleIssueGroup(event) {
   };
 }
 
-function renderIssues() {
-  for (const plan of issues.querySelectorAll("details[data-issue]")) {
+function renderIssueGroup(name, rows, today) {
+  const group = element("details", "", "issue-group");
+  group.dataset.group = JSON.stringify([selected, name]);
+  group.open = !collapsedGroups.has(group.dataset.group);
+  const summary = element("summary");
+  summary.id = "status-summary-" + encodeURIComponent(name);
+  summary.addEventListener("click", toggleIssueGroup);
+  const heading = element("span", "", "issue-group-heading");
+  if (rows.length) heading.append(stateIcon(rows[0].state));
+  heading.append(element("span", name, "issue-group-name"),
+                 element("span", String(rows.length), "issue-count"));
+  summary.append(heading);
+  const list = element("div", "", "issue-group-list");
+  if (rows.length) list.append(...rows.map((issue) => renderIssue(issue, today)));
+  else list.append(element("p", "No " + name + " issues.", "muted"));
+  group.append(summary, list);
+  return group;
+}
+
+function renderPanes() {
+  for (const plan of document.querySelectorAll("details[data-issue]")) {
     if (plan.open) expandedPlans.add(plan.dataset.issue);
     else expandedPlans.delete(plan.dataset.issue);
   }
-  const scroll = sidebar.scrollTop;
-  const focused = issues.contains(document.activeElement) ? document.activeElement.id : "";
-  const fragment = document.createDocumentFragment();
+  const focused = [backlogPane, statusPane].some((pane) => pane.contains(document.activeElement))
+    ? document.activeElement.id : "";
   const rows = issueCache.get(selected) || [];
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const grouped = Object.groupBy(rows, (issue) => issue.state.name);
-  const groups = Object.values(grouped).sort((a, b) =>
-    a[0].state.position - b[0].state.position || a[0].state.name.localeCompare(b[0].state.name));
-  for (const groupRows of groups) {
-    groupRows.sort((a, b) => (a.priority || 5) - (b.priority || 5)
-      || a.identifier.localeCompare(b.identifier, undefined, {numeric: true}));
-    const state = groupRows[0].state;
-    const group = element("details", "", "issue-group");
-    group.dataset.group = JSON.stringify([selected, state.name]);
-    group.open = !collapsedGroups.has(group.dataset.group);
-    const summary = element("summary");
-    summary.id = "status-summary-" + encodeURIComponent(state.name);
-    summary.addEventListener("click", toggleIssueGroup);
-    const heading = element("span", "", "issue-group-heading");
-    heading.append(stateIcon(state),
-                   element("span", state.name, "issue-group-name"),
-                   element("span", String(groupRows.length), "issue-count"));
-    summary.append(heading);
-    const list = element("div", "", "issue-group-list");
-    list.append(...groupRows.map((issue) => renderIssue(issue, today)));
-    group.append(summary, list);
-    fragment.append(group);
-  }
-  if (!rows.length) {
-    fragment.append(element("p", selected ? "No open issues for this repository." : "No open issues.", "muted"));
-  }
-  issues.replaceChildren(fragment);
-  sidebar.scrollTop = scroll;
+  const {backlog: backlogRows, groups} = partitionIssues(rows);
+  backlog.replaceChildren(...(backlogRows.length
+    ? backlogRows.map((issue) => renderIssue(issue, today))
+    : [element("p", selected ? "No Backlog issues for this project." : "No Linear project selected.", "muted")]));
+  statusIssues.replaceChildren(...groups.map((group) => renderIssueGroup(group.name, group.issues, today)));
   if (focused) byId(focused)?.focus({preventScroll: true});
 }
 
 function updateProjects(projects, redraw) {
   const previous = issueCache.get(selected);
-  projectCache = new Map(projects.flatMap((row) => row.projects.map((project) => [project.id, project])));
-  issueCache = new Map(projects.map((project) => [project.repo, project.issues]));
+  issueCache = new Map(projects.map((project) => [project.id, project.issues]));
   issueCache.set("", projects.flatMap((project) => project.issues));
-  preloadIssueDetails([...(issueCache.get(selected) || []), ...issueCache.get("")]);
-  const key = JSON.stringify(projects.map((project) => [project.repo, project.projects]));
+  preloadIssueDetails(issueCache.get(""));
+  const key = JSON.stringify(projects.map((project) => [project.id, project.repo, project.name, project.icon]));
   if (key === projectsKey) {
-    if (redraw || JSON.stringify(previous) !== JSON.stringify(issueCache.get(selected))) renderIssues();
+    if (redraw || JSON.stringify(previous) !== JSON.stringify(issueCache.get(selected))) renderPanes();
     return;
   }
   projectsKey = key;
   const focused = repos.contains(document.activeElement);
-  const choices = [{label: "All repositories", repo: "", projects: []}, ...projects].map((row, index) => {
+  const choices = projects.map((project, index) => {
     const tab = element("button", "", "project-chip");
-    if (!row.repo) tab.append(icon("layers"), element("span", row.label, "project-name"));
-    for (const project of row.projects) {
-      tab.append(projectLabel(project));
-    }
-    tab.title = row.label;
-    tab.setAttribute("aria-label", row.label);
-    tab.id = "repo-tab-" + index;
+    tab.append(projectLabel(project));
+    tab.title = project.name;
+    tab.setAttribute("aria-label", project.name);
+    tab.id = "project-tab-" + index;
     tab.type = "button";
     tab.setAttribute("role", "tab");
-    tab.setAttribute("aria-controls", "issues");
-    tab.dataset.repo = row.repo;
-    tab.addEventListener("click", () => selectRepo(row.repo));
+    tab.setAttribute("aria-controls", "backlog status-issues");
+    tab.dataset.project = project.id;
+    tab.addEventListener("click", () => selectProject(project.id));
     return tab;
   });
   repos.replaceChildren(...choices);
-  selectRepo(issueCache.has(selected) ? selected : "");
-  if (focused) repos.querySelector('[aria-selected="true"]').focus({preventScroll: true});
+  selectProject(selectableProject(projects, selected));
+  if (focused) repos.querySelector('[aria-selected="true"]')?.focus({preventScroll: true});
 }
 
-function selectRepo(repo) {
-  issueScroll.set(selected, sidebar.scrollTop);
-  selected = repo;
+function selectProject(project) {
+  backlogScroll.set(selected, backlogPane.scrollTop);
+  statusScroll.set(selected, statusPane.scrollTop);
+  selected = project;
   for (const tab of repos.children) {
-    const active = tab.dataset.repo === repo;
+    const active = tab.dataset.project === project;
     tab.setAttribute("aria-selected", active);
     tab.tabIndex = active ? 0 : -1;
-    if (active) issues.setAttribute("aria-labelledby", tab.id);
+    if (active) {
+      backlog.setAttribute("aria-labelledby", tab.id);
+      statusIssues.setAttribute("aria-labelledby", tab.id);
+    }
   }
-  renderIssues();
-  sidebar.scrollTop = issueScroll.get(repo) || 0;
+  renderPanes();
+  backlogPane.scrollTop = backlogScroll.get(project) || 0;
+  statusPane.scrollTop = statusScroll.get(project) || 0;
 }
 
 function appendMessage(role, text, html) {
@@ -364,7 +363,7 @@ async function poll() {
       updateProjects(state.projects, redrawIssues);
       issueRevision = state.issueRevision;
     } else if (redrawIssues) {
-      renderIssues();
+      renderPanes();
     }
     const notice = byId("project-error");
     if (notice.textContent !== state.issueError) notice.textContent = state.issueError;
@@ -392,7 +391,7 @@ async function submit(text) {
     await api("/api/chat", {
       method: "POST",
       headers: {"Content-Type": "application/json", "X-Symphony": "1"},
-      body: JSON.stringify({text, repo: selected}),
+      body: JSON.stringify({text, project: selected}),
     });
     chatLog.scrollTop = chatLog.scrollHeight;
     return true;

@@ -135,27 +135,39 @@ class Linear:
                 return repos, problems
             cursor = page["endCursor"]
 
-    async def issues(self, project_ids):
+    async def issues(self, project_ids, done_since=None):
         ids = list(project_ids)
         if not ids:
             return []
         issues = []
         cursor = None
+        where = """project: { id: { in: $ids } }
+                    state: { type: { nin: $closed } }"""
+        declaration = ""
+        variables = {}
+        if done_since:
+            where = """project: { id: { in: $ids } }
+                    or: [
+                        { state: { type: { nin: $closed } } }
+                        { state: { type: { eq: "completed" } }, completedAt: { gte: $done } }
+                    ]"""
+            declaration = ", $done: DateTimeOrDuration!"
+            variables["done"] = done_since
         while True:
-            data = await self.query("""query($ids: [ID!]!, $after: String, $closed: [String!]!) {
+            data = await self.query("""query($ids: [ID!]!, $after: String, $closed: [String!]!""" + declaration + """) {
                 issues(first: 50, after: $after, filter: {
-                    project: { id: { in: $ids } }
-                    state: { type: { nin: $closed } }
+                    """ + where + """
                 }) {
                     nodes {
-                        identifier title url description priority priorityLabel estimate dueDate updatedAt
+                        identifier title url description priority priorityLabel estimate dueDate
+                        updatedAt completedAt
                         state { name type color position }
                         project { id name }
                         labels(first: 10) { nodes { name color } }
                     }
                     pageInfo { endCursor hasNextPage }
                 }
-            }""", ids=ids, after=cursor, closed=sorted(CLOSED_STATES))
+            }""", ids=ids, after=cursor, closed=sorted(CLOSED_STATES), **variables)
             batch = data["issues"]
             issues.extend(batch["nodes"])
             page = batch["pageInfo"]

@@ -6,6 +6,7 @@
   <title>Symphony</title>
   <link rel="icon" href="/favicon.ico" type="image/vnd.microsoft.icon" sizes="16x16 32x32 48x48 64x64">
   <link rel="stylesheet" href="/style.css">
+  <script src="/panes.js" defer></script>
   <script src="/app.js" defer></script>
   <script src="/issue.js" defer></script>
 </head>
@@ -83,19 +84,21 @@
       <path d="M13.73 4a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
     </symbol>
   </svg>
+  <header class="page-header">
+    <div id="repos" role="tablist" aria-label="Projects"></div>
+    <p id="project-error" class="detail" role="status" hidden></p>
+  </header>
   <main>
-    <aside aria-label="Linear issues">
-      <h2 class="sidebar-heading">Linear issues</h2>
-      <div id="repos" role="tablist" aria-label="Projects"></div>
-      <p id="project-error" class="detail" role="status" hidden></p>
-      <div id="issues" role="tabpanel" aria-label="Issues"></div>
+    <aside class="issues-pane backlog-pane" aria-label="Backlog issues">
+      <h2 class="sidebar-heading">Backlog</h2>
+      <div id="backlog" role="tabpanel" aria-label="Backlog issues"></div>
     </aside>
     <section class="chat" aria-label="Coordinator chat">
       <div id="connection-error" class="notice" role="status" hidden>Connection lost. Reconnecting…</div>
       <div id="paused" class="notice" hidden></div>
       <div id="login" class="notice" hidden></div>
       <div id="chat-log" class="chat-log" role="log" aria-live="polite">
-        <p id="welcome">Choose a repository or ask the coordinator to draft a plan.</p>
+        <p id="welcome">Choose a project or ask the coordinator to draft a plan.</p>
         <div id="messages"></div>
         <div id="stream" class="issue-markdown"></div>
       </div>
@@ -122,6 +125,9 @@
         <p id="request-error" role="alert"></p>
       </form>
     </section>
+    <aside class="issues-pane status-pane" aria-label="Todo, In Progress, and Done issues">
+      <div id="status-issues" role="tabpanel" aria-label="Todo, In Progress, and Done issues"></div>
+    </aside>
   </main>
   <dialog id="issue-dialog" aria-labelledby="issue-dialog-title">
     <header class="issue-dialog-header">

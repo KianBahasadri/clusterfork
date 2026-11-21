@@ -1,9 +1,11 @@
 """Exercise the MVP's approval and publication boundaries without provider calls."""
 
 import asyncio
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -24,14 +26,20 @@ REPO = "owner/project"
 class LinearFixture:
     def __init__(self):
         self.state = {"name": "Todo", "type": "unstarted"}
+        self.issues = {}
 
-    async def issue(self, _):
-        return {"project": {"id": "project"}, "state": self.state}
+    def configure(self, identifier, *, state=None, project="project", priority=0):
+        self.issues[identifier] = {"project": {"id": project},
+                                   "state": state or self.state, "priority": priority}
+
+    async def issue(self, identifier):
+        return self.issues.setdefault(identifier, {"project": {"id": "project"},
+                                                   "state": self.state, "priority": 0})
 
     async def set_state(self, issue, name, kind):
-        if issue != ISSUE:
-            raise AssertionError("Unexpected issue")
-        self.state = {"name": name, "type": kind}
+        entry = await self.issue(issue)
+        entry["state"] = {"name": name, "type": kind}
+        self.state = entry["state"]
 
 
 class SymphonyTests(unittest.IsolatedAsyncioTestCase):
@@ -129,7 +137,7 @@ Path("verified.txt").write_text("Tested\\n")
             await app.tool("approve_issue", {"issue_id": ISSUE})
             with self.assertRaisesRegex(ValueError, "already has a recorded approval"):
                 await app.tool("approve_issue", {"issue_id": ISSUE})
-        self.assertEqual(self.linear.state["name"], "In Progress")
+        self.assertEqual(self.linear.state["name"], "Todo")
         self.assertEqual(self.runner.task(ISSUE)["plan"], "Write one verification file.")
         self.assertEqual(self.runner.rows("SELECT * FROM events"), [])
 
@@ -223,8 +231,9 @@ Path("verified.txt").write_text("Tested\\n")
 
     def assert_dispatch_event(self):
         self.assertEqual(self.runner.task(ISSUE)["phase"], "approved")
+        self.assertEqual(self.linear.state["name"], "Todo")
         self.assertEqual(self.runner.rows("SELECT issue, detail, delivered FROM events"), [
-            {"issue": ISSUE, "detail": "Plan approved. Ready for dispatch.", "delivered": 0},
+            {"issue": ISSUE, "detail": "Plan approved. Queued in Todo.", "delivered": 0},
         ])
 
     async def test_codex_has_native_tools_and_uses_oauth(self):
@@ -338,12 +347,12 @@ Path("verified.txt").write_text("Tested\\n")
         app.turn_repo = REPO
         app.coordinator.thread = "main"
         app.coordinator.turn = "turn"
-        self.runner.save_setting("view", REPO)
+        self.runner.save_setting("view", "project")
         note = "Pick up where we left off."
         with patch.object(app.coordinator, "request", side_effect=BrokenPipeError("Fixture pipe closed")) as request:
-            await app.submit({"repo": REPO, "text": note})
+            await app.submit({"project": "project", "text": note})
             with self.assertRaisesRegex(RuntimeError, "Codex disconnected"):
-                await app.submit({"repo": REPO, "text": "/interrupt"})
+                await app.submit({"project": "project", "text": "/interrupt"})
         self.assertEqual([call.args[0] for call in request.await_args_list], ["turn/steer", "turn/interrupt"])
         self.assertEqual(list(app.messages), [(REPO, note, note)])
         self.assertTrue(self.runner.wake.is_set())
@@ -390,27 +399,34 @@ Path("verified.txt").write_text("Tested\\n")
                  "state": {**self.linear.state, "position": 1}, "description": "## Proposed Plan\n\nTest alpha.",
                  "project": {"id": "alpha", "name": "Alpha"}, "priority": 2, "priorityLabel": "High",
                  "estimate": 3, "dueDate": "2026-11-23", "updatedAt": "2026-11-20T12:00:00Z",
-                 "labels": {"nodes": [{"name": "Feature", "color": "#bb87fc"}]}}
+                 "completedAt": None, "labels": {"nodes": [{"name": "Feature", "color": "#bb87fc"}]}}
         beta = {**alpha, "identifier": "KIAN-102", "title": "Beta issue", "project": {"id": "beta", "name": "Beta"}}
         first = {"issues": {"nodes": [alpha], "pageInfo": {"hasNextPage": True, "endCursor": "more"}}}
         second = {"issues": {"nodes": [beta], "pageInfo": {"hasNextPage": False}}}
-        with patch.object(app, "refresh_projects", return_value=repos), patch.object(app.linear, "query") as query:
+        cutoff = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
+        with patch.object(app, "refresh_projects", return_value=repos), \
+             patch.object(app.linear, "query") as query, \
+             patch("symphony.__main__.done_cutoff", return_value=cutoff):
             self.assertNotIn("projects", await app.state(0))
             query.side_effect = [first, second]
             await app.refresh_issue_snapshot()
             state = await app.state(0)
             revision = state["issueRevision"]
+            expected = {"ids": ["alpha", "beta"], "after": None,
+                        "closed": ["canceled", "completed", "duplicate"],
+                        "done": "2026-11-20T12:00:00Z"}
             self.assertEqual([call.kwargs for call in query.await_args_list], [
-                {"ids": ["alpha", "beta"], "after": None, "closed": ["canceled", "completed", "duplicate"]},
-                {"ids": ["alpha", "beta"], "after": "more", "closed": ["canceled", "completed", "duplicate"]},
+                expected, {**expected, "after": "more"},
             ])
-            self.assertEqual([(project["repo"], project["issues"][0]["title"]) for project in state["projects"]], [
-                (REPO, "Alpha issue"), ("owner/second", "Beta issue"),
+            self.assertIn("completedAt: { gte: $done }", query.await_args_list[0].args[0])
+            self.assertEqual([(project["repo"], project["id"], project["issues"][0]["title"])
+                              for project in state["projects"]], [
+                (REPO, "alpha", "Alpha issue"), ("owner/second", "beta", "Beta issue"),
             ])
-            self.assertEqual(state["projects"][0]["projects"], repos[REPO])
             card = state["projects"][0]["issues"][0]
             self.assertEqual(card["projectId"], "alpha")
             self.assertEqual(card["updatedAt"], alpha["updatedAt"])
+            self.assertIsNone(card["completedAt"])
             self.assertEqual(card["state"]["position"], 1)
             self.assertEqual((card["project"], card["priorityLabel"], card["estimate"], card["dueDate"], card["labels"]),
                              ("Alpha", "High", 3, "2026-11-23", [{"name": "Feature", "color": "#bb87fc"}]))
@@ -448,16 +464,418 @@ Path("verified.txt").write_text("Tested\\n")
             self.assertNotEqual(updated["issueRevision"], latest["issueRevision"])
             self.assertEqual(updated["projects"][0]["issues"][0]["updatedAt"], alpha["updatedAt"])
 
+    async def test_issue_snapshots_scope_projects_sharing_a_repository(self):
+        app = self.app()
+        repos = {REPO: [{"id": "alpha", "name": "Alpha", "icon": "🌱"},
+                        {"id": "beta", "name": "Beta", "icon": "🍂"}]}
+        cutoff = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
+
+        def card(identifier, project):
+            return {"identifier": identifier, "title": project + " issue", "url": "https://linear.app/fixture/issue/" + identifier,
+                    "state": {**self.linear.state, "position": 1}, "description": "",
+                    "project": {"id": project, "name": project.title()}, "priority": 3,
+                    "priorityLabel": "Normal", "estimate": None, "dueDate": None,
+                    "updatedAt": "2026-11-20T12:00:00Z", "completedAt": None,
+                    "labels": {"nodes": []}}
+
+        nodes = [card("KIAN-101", "alpha"), card("KIAN-102", "beta")]
+        response = {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": False}}}
+        with patch.object(app, "refresh_projects", return_value=repos), \
+             patch.object(app.linear, "query", return_value=response), \
+             patch("symphony.__main__.done_cutoff", return_value=cutoff):
+            await app.refresh_issue_snapshot()
+        projects = (await app.state(0))["projects"]
+        self.assertEqual([(project["repo"], project["id"]) for project in projects],
+                         [(REPO, "alpha"), (REPO, "beta")])
+        self.assertEqual([[issue["identifier"] for issue in project["issues"]] for project in projects],
+                         [["KIAN-101"], ["KIAN-102"]])
+
+    async def test_recent_done_uses_completed_at_boundary_and_expires_without_edits(self):
+        app = self.app()
+        repos = {REPO: [{"id": "alpha", "name": "Alpha", "icon": ""}]}
+        cutoff = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
+
+        def card(identifier, state, completed=None):
+            return {"identifier": identifier, "title": identifier, "url": "https://linear.app/fixture/issue/" + identifier,
+                    "state": {**state, "position": 5}, "description": "", "project": {"id": "alpha", "name": "Alpha"},
+                    "priority": 3, "priorityLabel": "Normal", "estimate": None, "dueDate": None,
+                    "updatedAt": "2026-11-20T12:00:00Z", "completedAt": completed,
+                    "labels": {"nodes": []}}
+
+        nodes = [card("KIAN-101", {"name": "Backlog", "type": "backlog"}),
+                 card("KIAN-102", {"name": "Todo", "type": "unstarted"}),
+                 card("KIAN-103", {"name": "Done", "type": "completed"}, "2026-11-20T12:00:00Z"),
+                 card("KIAN-104", {"name": "Done", "type": "completed"}, "2026-11-20T11:59:59Z"),
+                 card("KIAN-105", {"name": "Canceled", "type": "canceled"}, "2026-11-20T12:00:00Z"),
+                 card("KIAN-106", {"name": "Duplicate", "type": "duplicate"}, "2026-11-20T12:00:00Z")]
+        response = {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": False}}}
+        with patch.object(app, "refresh_projects", return_value=repos), \
+             patch.object(app.linear, "query", return_value=response), \
+             patch("symphony.__main__.done_cutoff", return_value=cutoff):
+            await app.refresh_issue_snapshot()
+            first = await app.state(0)
+            self.assertEqual([issue["identifier"] for issue in first["projects"][0]["issues"]],
+                             ["KIAN-101", "KIAN-102", "KIAN-103"])
+
+            later = datetime(2026, 11, 20, 14, 0, tzinfo=timezone.utc)
+            with patch("symphony.__main__.done_cutoff", return_value=later):
+                await app.refresh_issue_snapshot()
+            aged = await app.state(0, first["issueRevision"])
+            self.assertNotEqual(aged["issueRevision"], first["issueRevision"])
+            self.assertEqual([issue["identifier"] for issue in aged["projects"][0]["issues"]],
+                             ["KIAN-101", "KIAN-102"])
+
     async def worker_done(self):
         await self.approve()
-        self.assertEqual(self.linear.state["name"], "In Progress")
-        result = self.runner.dispatch(ISSUE, REPO, "Never ship from the worker.")
+        self.assertEqual(self.linear.state["name"], "Todo")
+        result = await self.runner.dispatch(ISSUE, REPO, "Never ship from the worker.")
         self.assertEqual(result["phase"], "working")
+        self.assertEqual(self.linear.state["name"], "In Progress")
         with self.assertRaisesRegex(ValueError, "working"):
-            self.runner.dispatch(ISSUE, REPO, "Duplicate")
+            await self.runner.dispatch(ISSUE, REPO, "Duplicate")
         await self.phase("review")
         self.assertEqual(self.runner.task(ISSUE)["session"], "ses_fixture")
         self.assertEqual(self.runner.task(ISSUE)["check_exit"], 0)
+
+    async def test_approval_queues_todo_and_auto_dispatch_moves_to_in_progress(self):
+        await self.approve()
+        self.assertEqual(self.linear.state["name"], "Todo")
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "approved")
+        self.assertEqual(self.runner.task(ISSUE)["attempts"], 0)
+        pending = []
+        with patch.object(self.runner, "job", side_effect=pending.append):
+            self.assertEqual(await self.runner.dispatch_approved(), [ISSUE])
+        for coroutine in pending:
+            coroutine.close()
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "working")
+        self.assertEqual(self.runner.task(ISSUE)["attempts"], 1)
+        self.assertEqual(self.linear.state["name"], "In Progress")
+        self.assertEqual(await self.runner.dispatch_approved(), [])
+
+    async def test_pump_auto_dispatches_without_a_coordinator_turn(self):
+        app = self.app()
+        calls = []
+
+        async def dispatch():
+            calls.append(ISSUE)
+            return [ISSUE] if len(calls) == 1 else []
+
+        with patch.object(app.runner, "dispatch_approved", side_effect=dispatch), \
+             patch.object(app.coordinator, "respond") as respond:
+            self.runner.wake.set()
+            pump = asyncio.create_task(app.pump())
+            try:
+                async with asyncio.timeout(2):
+                    while len(calls) < 2:
+                        await asyncio.sleep(0.01)
+            finally:
+                pump.cancel()
+                await asyncio.gather(pump, return_exceptions=True)
+        self.assertEqual(calls, [ISSUE, ISSUE])
+        respond.assert_not_awaited()
+
+    async def test_manual_dispatch_requires_live_todo_in_approved_project(self):
+        await self.approve()
+        for state, project, message in [
+            ({"name": "Backlog", "type": "backlog"}, "project", "is Backlog"),
+            ({"name": "Todo", "type": "unstarted"}, "other", "approved Linear project"),
+            ({"name": "Canceled", "type": "canceled"}, "project", "is Canceled"),
+        ]:
+            with self.subTest(state=state):
+                self.linear.configure(ISSUE, state=state, project=project)
+                with self.assertRaisesRegex(ValueError, message):
+                    await self.runner.dispatch(ISSUE, REPO, "")
+                self.assertEqual(self.runner.task(ISSUE)["phase"], "approved")
+                self.assertEqual(self.runner.task(ISSUE)["attempts"], 0)
+
+        self.linear.configure(ISSUE, state={"name": "Todo", "type": "unstarted"})
+        pending = []
+        with patch.object(self.runner, "job", side_effect=pending.append):
+            await self.runner.dispatch(ISSUE, REPO, "")
+        for coroutine in pending:
+            coroutine.close()
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "working")
+        self.assertEqual(self.runner.task(ISSUE)["attempts"], 1)
+
+    async def test_resume_requires_live_in_progress_in_approved_project(self):
+        await self.approve()
+        with self.runner.db:
+            self.runner.db.execute("""UPDATE tasks SET phase='blocked', attempts=1, detail='Paused'
+                                      WHERE issue=?""", (ISSUE,))
+        for state, project in [
+            ({"name": "Backlog", "type": "backlog"}, "project"),
+            ({"name": "In Progress", "type": "started"}, "other"),
+            ({"name": "Duplicate", "type": "duplicate"}, "project"),
+        ]:
+            with self.subTest(state=state):
+                self.linear.configure(ISSUE, state=state, project=project)
+                with self.assertRaises(ValueError):
+                    await self.runner.dispatch(ISSUE, REPO, "", resume=True)
+                self.assertEqual(self.runner.task(ISSUE)["phase"], "blocked")
+                self.assertEqual(self.runner.task(ISSUE)["attempts"], 1)
+
+        self.linear.configure(ISSUE, state={"name": "In Progress", "type": "started"})
+        pending = []
+        with patch.object(self.runner, "job", side_effect=pending.append):
+            await self.runner.dispatch(ISSUE, REPO, "", resume=True)
+        for coroutine in pending:
+            coroutine.close()
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "working")
+        self.assertEqual(self.runner.task(ISSUE)["attempts"], 2)
+
+    async def test_manual_dispatch_restores_approval_after_linear_read_error(self):
+        await self.approve()
+        with patch.object(self.linear, "issue", side_effect=RuntimeError("Linear is down.")):
+            with self.assertRaisesRegex(RuntimeError, "Linear is down"):
+                await self.runner.dispatch(ISSUE, REPO, "")
+        task = self.runner.task(ISSUE)
+        self.assertEqual(task["phase"], "approved")
+        self.assertEqual(task["attempts"], 0)
+
+    async def test_concurrent_dispatch_reserves_one_worker(self):
+        await self.approve()
+        gate = asyncio.Event()
+        original = self.linear.issue
+
+        async def delayed(identifier):
+            await gate.wait()
+            return await original(identifier)
+
+        pending = []
+        with patch.object(self.linear, "issue", side_effect=delayed), \
+             patch.object(self.runner, "job", side_effect=pending.append):
+            first = asyncio.create_task(self.runner.dispatch(ISSUE, REPO, ""))
+            async with asyncio.timeout(2):
+                while self.runner.task(ISSUE)["phase"] != "working":
+                    await asyncio.sleep(0)
+            second = asyncio.create_task(self.runner.dispatch(ISSUE, REPO, ""))
+            with self.assertRaisesRegex(ValueError, "working"):
+                await second
+            gate.set()
+            await first
+        for coroutine in pending:
+            coroutine.close()
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "working")
+        self.assertEqual(self.runner.task(ISSUE)["attempts"], 1)
+        self.assertEqual(len(pending), 1)
+
+    async def test_concurrent_dispatch_respects_the_worker_limit(self):
+        await self.approve()
+        with self.runner.db:
+            self.runner.db.execute("""INSERT INTO tasks(issue,project,repo,title,plan,phase,updated)
+                                      VALUES ('KIAN-102','project','owner/second','Second','Plan','approved',0)""")
+        self.linear.configure("KIAN-102", state={"name": "Todo", "type": "unstarted"})
+        gate = asyncio.Event()
+        original = self.linear.issue
+
+        async def delayed(identifier):
+            await gate.wait()
+            return await original(identifier)
+
+        pending = []
+        with patch("symphony.runner.WORKER_LIMIT", 1), \
+             patch.object(self.linear, "issue", side_effect=delayed), \
+             patch.object(self.runner, "job", side_effect=pending.append):
+            first = asyncio.create_task(self.runner.dispatch(ISSUE, REPO, ""))
+            async with asyncio.timeout(2):
+                while self.runner.task(ISSUE)["phase"] != "working":
+                    await asyncio.sleep(0)
+            second = asyncio.create_task(self.runner.dispatch("KIAN-102", "owner/second", ""))
+            with self.assertRaisesRegex(ValueError, "worker limit"):
+                await second
+            gate.set()
+            await first
+        for coroutine in pending:
+            coroutine.close()
+        self.assertEqual(self.runner.task("KIAN-102")["phase"], "approved")
+        self.assertEqual(self.runner.task("KIAN-102")["attempts"], 0)
+        self.assertEqual(len(pending), 1)
+
+    async def test_dispatch_confirms_in_progress_after_status_error(self):
+        await self.approve()
+        original = self.linear.set_state
+
+        async def fail_after_update(identifier, name, kind):
+            await original(identifier, name, kind)
+            raise RuntimeError("Linear response was lost.")
+
+        pending = []
+        with patch.object(self.linear, "set_state", side_effect=fail_after_update), \
+             patch.object(self.runner, "job", side_effect=pending.append):
+            await self.runner.dispatch(ISSUE, REPO, "")
+        for coroutine in pending:
+            coroutine.close()
+        self.assertEqual(self.linear.state["name"], "In Progress")
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "working")
+        self.assertEqual(self.runner.task(ISSUE)["attempts"], 1)
+        self.assertEqual(len(pending), 1)
+
+    async def test_uncertain_status_after_error_parks_once_linear_confirms_in_progress(self):
+        await self.approve()
+        calls = 0
+        original = self.linear.issue
+
+        async def confirm(identifier):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return await original(identifier)
+            raise RuntimeError("Linear confirmation failed.")
+
+        with patch.object(self.linear, "issue", side_effect=confirm), \
+             patch.object(self.linear, "set_state", side_effect=RuntimeError("Status write failed.")):
+            with self.assertRaisesRegex(RuntimeError, "uncertain"):
+                await self.runner.dispatch(ISSUE, REPO, "")
+        task = self.runner.task(ISSUE)
+        self.assertEqual(task["phase"], "approved")
+        self.assertEqual(task["attempts"], 0)
+        self.assertIn("uncertain", task["detail"])
+
+        self.linear.configure(ISSUE, state={"name": "In Progress", "type": "started"})
+        self.assertEqual(await self.runner.dispatch_approved(), [])
+        task = self.runner.task(ISSUE)
+        self.assertEqual(task["phase"], "blocked")
+        self.assertEqual(task["attempts"], 0)
+        self.assertIn("without a reserved worker", task["detail"])
+        self.assertEqual(len(self.runner.rows("SELECT * FROM events")), 1)
+
+    async def test_auto_dispatch_reports_linear_errors_without_consuming_attempts(self):
+        await self.approve()
+        with patch.object(self.linear, "issue", side_effect=RuntimeError("Linear is down.")):
+            self.assertEqual(await self.runner.dispatch_approved(), [])
+            self.assertEqual(await self.runner.dispatch_approved(), [])
+        task = self.runner.task(ISSUE)
+        self.assertEqual(task["phase"], "approved")
+        self.assertEqual(task["attempts"], 0)
+        self.assertIn("Automatic dispatch could not read Linear", task["detail"])
+        events = self.runner.rows("SELECT issue, detail, delivered FROM events")
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["issue"], ISSUE)
+        self.assertIn("Linear is down", events[0]["detail"])
+
+    async def test_auto_dispatch_reports_status_update_errors(self):
+        await self.approve()
+        with patch.object(self.linear, "set_state", side_effect=RuntimeError("Status write failed.")):
+            self.assertEqual(await self.runner.dispatch_approved(), [])
+            self.assertEqual(await self.runner.dispatch_approved(), [])
+        task = self.runner.task(ISSUE)
+        self.assertEqual(task["phase"], "approved")
+        self.assertEqual(task["attempts"], 0)
+        self.assertIn("Automatic dispatch failed", task["detail"])
+        self.assertIn("Status write failed", task["detail"])
+        events = self.runner.rows("SELECT issue, detail, delivered FROM events")
+        self.assertEqual(len(events), 1)
+        self.assertIn("Status write failed", events[0]["detail"])
+
+        pending = []
+        with patch.object(self.runner, "job", side_effect=pending.append):
+            self.assertEqual(await self.runner.dispatch_approved(), [ISSUE])
+        for coroutine in pending:
+            coroutine.close()
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "working")
+        self.assertIsNone(self.runner.task(ISSUE)["detail"])
+
+    async def test_auto_dispatch_waits_for_repository_owner_before_parking_in_progress(self):
+        await self.approve()
+        with self.runner.db:
+            self.runner.db.execute("UPDATE tasks SET phase='ci' WHERE issue=?", (ISSUE,))
+            self.runner.db.execute("""INSERT INTO tasks(issue,project,repo,title,plan,phase,updated)
+                                      VALUES ('KIAN-102','project',?,'Second','Plan','approved',0)""",
+                                   (REPO,))
+        self.linear.configure("KIAN-102", state={"name": "In Progress", "type": "started"})
+        self.assertEqual(await self.runner.dispatch_approved(), [])
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "ci")
+        self.assertEqual(self.runner.task("KIAN-102")["phase"], "approved")
+        self.assertEqual(self.runner.task("KIAN-102")["attempts"], 0)
+
+    async def test_successful_refresh_wakes_queued_work_without_snapshot_changes(self):
+        await self.approve()
+        app = self.app()
+        repos = {REPO: [{"id": "project", "name": "Fixture", "icon": ""}]}
+        with patch.object(app, "refresh_projects", return_value=repos), \
+             patch.object(app.linear, "issues", new_callable=AsyncMock, return_value=[]):
+            await app.refresh_issue_snapshot()
+            self.runner.wake.clear()
+            await app.refresh_issue_snapshot()
+        self.assertTrue(self.runner.wake.is_set())
+
+    async def test_unapproved_todo_and_backlog_never_dispatch(self):
+        self.linear.configure("KIAN-201", state={"name": "Todo", "type": "unstarted"})
+        self.linear.configure("KIAN-202", state={"name": "Backlog", "type": "backlog"})
+        self.assertEqual(await self.runner.dispatch_approved(), [])
+        self.assertEqual(self.runner.rows("SELECT * FROM tasks"), [])
+        with self.assertRaisesRegex(ValueError, "No approved plan"):
+            await self.runner.dispatch("KIAN-201", REPO, "")
+
+        await self.runner.approve({**self.proposed_issue(), "identifier": "KIAN-201"}, REPO)
+        for state, project in [
+            ({"name": "Backlog", "type": "backlog"}, "project"),
+            ({"name": "Canceled", "type": "canceled"}, "project"),
+            ({"name": "Duplicate", "type": "duplicate"}, "project"),
+            ({"name": "Todo", "type": "unstarted"}, "other"),
+        ]:
+            with self.subTest(state=state):
+                self.linear.configure("KIAN-201", state=state, project=project)
+                self.assertEqual(await self.runner.dispatch_approved(), [])
+                self.assertEqual(self.runner.task("KIAN-201")["phase"], "approved")
+                self.assertEqual(self.runner.task("KIAN-201")["attempts"], 0)
+        self.assertIsNone(self.runner.task("KIAN-201")["detail"])
+        self.assertEqual(self.runner.rows("SELECT * FROM events"), [])
+
+    async def test_auto_dispatch_waits_for_provider_capacity_and_repository(self):
+        await self.approve()
+        self.runner.save_setting("paused", "OpenCode Go: quota")
+        self.assertEqual(await self.runner.dispatch_approved(), [])
+        self.assertEqual(self.runner.task(ISSUE)["attempts"], 0)
+        self.runner.save_setting("paused", "")
+
+        with self.runner.db:
+            self.runner.db.execute("""INSERT INTO tasks(issue,project,repo,title,plan,phase,updated)
+                                      VALUES ('KIAN-301','project',?,'Held','Plan','ci',0)""", (REPO,))
+        self.assertEqual(await self.runner.dispatch_approved(), [])
+        self.assertEqual(self.runner.task(ISSUE)["attempts"], 0)
+        with self.runner.db:
+            self.runner.db.execute("DELETE FROM tasks WHERE issue='KIAN-301'")
+
+        for index in range(3):
+            with self.runner.db:
+                self.runner.db.execute("""INSERT INTO tasks(issue,project,repo,title,plan,phase,updated)
+                                          VALUES (?,?,?,?,?,'working',0)""",
+                                       (f"KIAN-40{index}", "project", f"owner/worker{index}", "Held", "Plan"))
+        self.assertEqual(await self.runner.dispatch_approved(), [])
+        self.assertEqual(self.runner.task(ISSUE)["attempts"], 0)
+        self.assertEqual(self.runner.rows("SELECT * FROM events"), [])
+        with self.runner.db:
+            self.runner.db.execute("DELETE FROM tasks WHERE issue LIKE 'KIAN-40%'")
+            self.runner.db.execute("UPDATE tasks SET attempts=3 WHERE issue=?", (ISSUE,))
+        self.assertEqual(await self.runner.dispatch_approved(), [])
+        self.assertEqual(self.runner.task(ISSUE)["attempts"], 3)
+        with self.runner.db:
+            self.runner.db.execute("UPDATE tasks SET attempts=0 WHERE issue=?", (ISSUE,))
+
+        pending = []
+        with patch.object(self.runner, "job", side_effect=pending.append):
+            self.assertEqual(await self.runner.dispatch_approved(), [ISSUE])
+        for coroutine in pending:
+            coroutine.close()
+        self.assertEqual(self.linear.state["name"], "In Progress")
+        self.assertEqual(self.runner.task(ISSUE)["attempts"], 1)
+
+    async def test_restart_recovers_queued_approval_once(self):
+        await self.approve()
+        restarted = Runner(self.root, self.linear)
+        self.addCleanup(restarted.db.close)
+        restarted.recover()
+        self.assertEqual(restarted.task(ISSUE)["phase"], "approved")
+        pending = []
+        with patch.object(restarted, "job", side_effect=pending.append):
+            self.assertEqual(await restarted.dispatch_approved(), [ISSUE])
+            self.assertEqual(await restarted.dispatch_approved(), [])
+        for coroutine in pending:
+            coroutine.close()
+        self.assertEqual(restarted.task(ISSUE)["phase"], "working")
+        self.assertEqual(restarted.task(ISSUE)["attempts"], 1)
+        self.assertEqual(restarted.rows("SELECT issue FROM tasks WHERE phase='working'"), [{"issue": ISSUE}])
 
     async def test_opencode_error_reporting_and_dispatch_pause(self):
         await self.approve()
@@ -483,11 +901,11 @@ Path("verified.txt").write_text("Tested\\n")
                 self.assertEqual(self.runner.setting("paused"), f"OpenCode Go: {message}" if pauses else "")
                 if pauses:
                     with self.assertRaisesRegex(ValueError, "Dispatch is paused"):
-                        self.runner.dispatch(ISSUE, REPO, "")
+                        await self.runner.dispatch(ISSUE, REPO, "")
 
     async def test_approval_verification_notes_push_and_ci(self):
         with self.assertRaisesRegex(ValueError, "No approved plan"):
-            self.runner.dispatch(ISSUE, REPO, "")
+            await self.runner.dispatch(ISSUE, REPO, "")
         await self.worker_done()
         with self.assertRaisesRegex(ValueError, "Read the latest"):
             self.runner.ship(ISSUE)
@@ -509,7 +927,7 @@ Path("verified.txt").write_text("Tested\\n")
                 with self.runner.db:
                     self.runner.db.execute("""INSERT INTO tasks(issue,project,repo,title,plan,phase,updated)
                                               VALUES ('KIAN-102','project',?,'Next','Plan','approved',0)""", (REPO,))
-                self.runner.dispatch("KIAN-102", REPO, "")
+                await self.runner.dispatch("KIAN-102", REPO, "")
             observe.set()
             await self.phase("done")
         self.assertEqual(self.linear.state["name"], "Done")
@@ -542,6 +960,56 @@ Path("verified.txt").write_text("Tested\\n")
         self.assertIn("fixture branch protection", self.runner.task(ISSUE)["detail"])
         self.assertTrue(self.runner.worktree(ISSUE).is_dir())
         self.assertEqual(self.linear.state["name"], "In Progress")
+
+
+class PaneTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node is required for JavaScript checks.")
+    def test_backlog_and_status_panes_partition_and_order_issues(self):
+        rows = [
+            {"identifier": "KIAN-10", "state": {"name": "Backlog"}, "priority": 4},
+            {"identifier": "KIAN-2", "state": {"name": "Backlog"}, "priority": 1},
+            {"identifier": "KIAN-3", "state": {"name": "Todo"}, "priority": 3},
+            {"identifier": "KIAN-4", "state": {"name": "Todo"}, "priority": 2},
+            {"identifier": "KIAN-5", "state": {"name": "In Progress"}, "priority": 2},
+            {"identifier": "KIAN-6", "state": {"name": "Done"}, "priority": 0,
+             "completedAt": "2026-11-20T12:00:00Z"},
+            {"identifier": "KIAN-7", "state": {"name": "Done"}, "priority": 1,
+             "completedAt": "2026-11-20T13:00:00Z"},
+            {"identifier": "KIAN-8", "state": {"name": "Canceled"}, "priority": 1},
+        ]
+        script = """const fs = require("fs");
+const vm = require("vm");
+const context = vm.createContext({});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), context);
+const rows = JSON.parse(fs.readFileSync(0, "utf8"));
+const projects = [{id: "alpha"}, {id: "beta"}];
+const partition = vm.runInContext("partitionIssues", context);
+const select = vm.runInContext("selectableProject", context);
+process.stdout.write(JSON.stringify({
+  panes: partition(rows), empty: select(projects, ""), invalid: select(projects, "missing"),
+  valid: select(projects, "beta"), none: select([], ""),
+}));
+"""
+        panes = Path(__file__).resolve().parents[1] / "symphony/web/panes.js"
+        run = subprocess.run(["node", "-e", script, str(panes)], input=json.dumps(rows),
+                             text=True, capture_output=True, check=True)
+        result = json.loads(run.stdout)
+        self.assertEqual([issue["identifier"] for issue in result["panes"]["backlog"]], ["KIAN-2", "KIAN-10"])
+        self.assertEqual([group["name"] for group in result["panes"]["groups"]],
+                         ["Todo", "In Progress", "Done"])
+        self.assertEqual([[issue["identifier"] for issue in group["issues"]]
+                          for group in result["panes"]["groups"]],
+                         [["KIAN-4", "KIAN-3"], ["KIAN-5"], ["KIAN-7", "KIAN-6"]])
+        self.assertEqual((result["empty"], result["invalid"], result["valid"], result["none"]),
+                         ("alpha", "alpha", "beta", ""))
+
+        root = Path(__file__).resolve().parents[1] / "symphony/web"
+        html = (root / "index.html").read_text()
+        self.assertLess(html.index('id="backlog"'), html.index('class="chat"'))
+        self.assertLess(html.index('class="chat"'), html.index('id="status-issues"'))
+        app = (root / "app.js").read_text()
+        self.assertIn('"Awaiting approval"', app)
+        self.assertIn("will not run", app)
 
 
 class PlanTests(unittest.TestCase):

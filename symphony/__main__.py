@@ -4,6 +4,7 @@ import asyncio
 from collections import deque
 from contextlib import suppress
 from concurrent.futures import TimeoutError as RequestTimeout
+from datetime import datetime, timedelta, timezone
 import fcntl
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -20,7 +21,7 @@ from uuid import uuid4
 from .codex import Codex, TOOL_SPECS
 from .issue_details import issue_details, markdown, open_asset
 from .runner import Runner, read_small
-from .services import ISSUE_ID, Linear, proposed_plan, with_plan
+from .services import CLOSED_STATES, ISSUE_ID, Linear, proposed_plan, with_plan
 
 
 WEB = Path(__file__).parent / "web"
@@ -28,11 +29,13 @@ STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "application/javascript; charset=utf-8"),
     "/issue.js": ("issue.js", "application/javascript; charset=utf-8"),
+    "/panes.js": ("panes.js", "application/javascript; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
     "/favicon.ico": ("favicon.ico", "image/vnd.microsoft.icon"),
 }
 BODY_LIMIT = 32000
 ISSUE_REFRESH_SECONDS = 30
+RECENT_DONE = timedelta(hours=24)
 ACTIVE_PHASES = {"approving", "working", "publishing", "ci", "finishing"}
 
 
@@ -41,9 +44,32 @@ def project_list(repos):
             for repo, projects in sorted(repos.items())]
 
 
+def done_cutoff(now=None):
+    return (now or datetime.now(timezone.utc)) - RECENT_DONE
+
+
+def issue_timestamp(value):
+    if not value:
+        return None
+    try:
+        moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def current_issue(row, cutoff):
+    kind = row["state"]["type"]
+    if kind == "completed":
+        completed = issue_timestamp(row.get("completedAt"))
+        return completed is not None and completed >= cutoff
+    return kind not in CLOSED_STATES
+
+
 def issue_summary(row):
-    return {**{key: row[key] for key in ("identifier", "title", "url", "state", "priority",
-                                      "priorityLabel", "estimate", "dueDate", "updatedAt")},
+    return {**{key: row.get(key) for key in ("identifier", "title", "url", "state", "priority",
+                                            "priorityLabel", "estimate", "dueDate", "updatedAt",
+                                            "completedAt")},
             "project": (row["project"] or {}).get("name", ""),
             "projectId": (row["project"] or {}).get("id", ""),
             "labels": row["labels"]["nodes"],
@@ -77,15 +103,20 @@ class Symphony:
     async def refresh_issue_snapshot(self):
         repos = await self.refresh_projects()
         repo_by_project = {project["id"]: repo for repo, projects in repos.items() for project in projects}
-        rows_by_repo = {repo: [] for repo in repos}
-        for row in await self.linear.issues(repo_by_project):
-            repo = repo_by_project.get((row["project"] or {}).get("id"))
-            if repo:
-                rows_by_repo[repo].append(issue_summary(row))
-        snapshot = [{**project, "issues": rows_by_repo[project["repo"]]} for project in project_list(repos)]
+        cutoff = done_cutoff()
+        rows_by_project = {project_id: [] for project_id in repo_by_project}
+        done_since = cutoff.isoformat().replace("+00:00", "Z")
+        for row in await self.linear.issues(repo_by_project, done_since=done_since):
+            project = (row["project"] or {}).get("id")
+            if project in rows_by_project and current_issue(row, cutoff):
+                rows_by_project[project].append(issue_summary(row))
+        snapshot = [{**project, "repo": repo, "issues": rows_by_project[project["id"]]}
+                    for repo, projects in sorted(repos.items()) for project in projects]
         if snapshot != self.issue_snapshot:
             self.issue_snapshot = snapshot
             self.issue_revision = uuid4().hex
+        if self.runner.rows("SELECT 1 FROM tasks WHERE phase='approved' LIMIT 1"):
+            self.runner.wake.set()
 
     async def poll_issues(self):
         delay = ISSUE_REFRESH_SECONDS
@@ -106,13 +137,20 @@ class Symphony:
             raise ValueError(f"{repo} has no mapped Linear project.")
         return [issue_summary(row) for row in await self.linear.issues(project["id"] for project in projects)]
 
+    def mapped_project(self, project_id):
+        for repo, projects in self.repos.items():
+            for project in projects:
+                if project["id"] == project_id:
+                    return repo, project
+        return None
+
     async def live_issue(self, identifier):
         issue = await self.linear.issue(identifier)
         await self.refresh_projects()
         project = (issue["project"] or {}).get("id")
-        for repo, projects in self.repos.items():
-            if any(item["id"] == project for item in projects):
-                return issue, repo
+        found = self.mapped_project(project)
+        if found:
+            return issue, found[0]
         raise ValueError(self.link_problems.get(project, f"{identifier} is not in a mapped Linear project."))
 
     async def tool(self, name, args):
@@ -144,13 +182,14 @@ class Symphony:
         if name == "approve_issue":
             issue, repo = await self.live_issue(issue_id)
             await self.runner.approve(issue, repo)
-            return f"Approved {issue_id}. Its plan is locked and the issue is In Progress."
+            return f"Approved {issue_id}. Its plan is locked and the issue is queued in Todo."
         if name == "worker_status":
             return self.runner.status()
         if name == "spawn_worker":
-            return self.runner.dispatch(issue_id, args["repo"].lower(), args["task"])
+            return await self.runner.dispatch(issue_id, args["repo"].lower(), args["task"])
         if name == "resume_worker":
-            return self.runner.dispatch(issue_id, self.runner.task(issue_id)["repo"], args["message"], resume=True)
+            return await self.runner.dispatch(issue_id, self.runner.task(issue_id)["repo"],
+                                              args["message"], resume=True)
         if name == "read_notes":
             return self.runner.read_notes(issue_id)
         if name == "read_diff":
@@ -197,20 +236,23 @@ class Symphony:
 
     async def submit(self, body):
         text = body.get("text")
-        repo = body.get("repo") or ""
-        if not isinstance(text, str) or not text.strip() or not isinstance(repo, str):
+        project = body.get("project") or ""
+        if not isinstance(text, str) or not text.strip() or not isinstance(project, str):
             raise ValueError("Enter a message.")
         text = text.strip()
         if text == "/interrupt":
             await self.coordinator.interrupt()
             self.runner.chat("user", text)
             return
-        if repo and repo not in self.repos:
-            raise ValueError("The selected repository is unavailable. Refresh the repo list.")
+        found = self.mapped_project(project) if project else None
+        if project and not found:
+            raise ValueError("The selected project is unavailable. Refresh the project list.")
+        repo = found[0] if found else ""
         previous = self.runner.setting("view")
-        if repo != previous:
-            self.runner.save_setting("view", repo)
-        message = f"[Switched view: {repo or 'All repositories'}]\n{text}" if repo != previous else text
+        if project != previous:
+            self.runner.save_setting("view", project)
+        label = found[1]["name"] if found else "All projects"
+        message = f"[Switched view: {label}]\n{text}" if project != previous else text
         self.runner.chat("user", message)
         if self.coordinator.turn and self.turn_repo == repo and not text.startswith("/"):
             try:
@@ -269,6 +311,7 @@ class Symphony:
         elif command == "/continue":
             self.runner.save_setting("paused", "")
             self.runner.chat("system", "Automatic dispatch resumed.")
+            self.runner.wake.set()
         elif command == "/retry":
             row = self.runner.task(argument.upper())
             if row["phase"] == "approving":
@@ -305,7 +348,11 @@ class Symphony:
                     finally:
                         self.busy = False
                     continue
-                if not self.coordinator.account or self.runner.setting("paused"):
+                if self.runner.setting("paused"):
+                    break
+                if await self.runner.dispatch_approved():
+                    continue
+                if not self.coordinator.account:
                     break
                 events = self.runner.rows("SELECT * FROM events WHERE delivered=0 ORDER BY id LIMIT 1")
                 if not events:

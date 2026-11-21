@@ -42,7 +42,7 @@
 }
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
-body { margin: 0; display: grid; grid-template-rows: minmax(0, 1fr); height: 100dvh; }
+body { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100dvh; }
 button, textarea { font: inherit; color: inherit; }
 button {
   min-height: 34px;
@@ -74,10 +74,24 @@ h2 { font-size: .94rem; font-weight: 650; }
 @media (prefers-color-scheme: dark) {
   .status-icon { color: var(--status-color); }
 }
-main { display: grid; grid-template-columns: minmax(250px, 29vw) minmax(0, 1fr); min-height: 0; }
-aside { overflow: auto; padding: 16px; border-right: 1px solid var(--line); background: var(--surface); }
+.page-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+main {
+  display: grid;
+  grid-template-columns: minmax(240px, 24vw) minmax(0, 1fr) minmax(260px, 26vw);
+  min-height: 0;
+}
+.issues-pane { min-width: 0; overflow: auto; padding: 16px; background: var(--surface); }
+.backlog-pane { border-right: 1px solid var(--line); }
+.status-pane { border-left: 1px solid var(--line); }
 .sidebar-heading { padding-bottom: 8px; }
-#repos { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+#repos { display: flex; flex-wrap: wrap; gap: 8px; }
 #repos .project-chip {
   display: inline-flex;
   align-items: center;
@@ -100,7 +114,7 @@ aside { overflow: auto; padding: 16px; border-right: 1px solid var(--line); back
 .project-label { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
 .project-emoji { flex: none; font-size: 16px; line-height: 18px; }
 .project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#issues { display: grid; gap: 8px; }
+#backlog, #status-issues { display: grid; gap: 8px; }
 .issue-group > summary {
   margin: 0;
   padding: 8px 12px;
@@ -321,9 +335,17 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
 .issue-history { margin-top: 32px; }
 .issue-history ol { padding-left: 20px; }
 .issue-history li { padding: 8px 0; font-size: 13px; }
+@media (max-width: 900px) {
+  main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(140px, 22dvh) minmax(0, 1fr) minmax(140px, 22dvh);
+  }
+  .issues-pane { border: 0; }
+  .backlog-pane { border-bottom: 1px solid var(--line); }
+  .status-pane { border-top: 1px solid var(--line); }
+}
 @media (max-width: 680px) {
-  main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(120px, 30dvh) minmax(0, 1fr); }
-  aside { border-right: 0; border-bottom: 1px solid var(--line); }
+  main { grid-template-rows: minmax(120px, 20dvh) minmax(0, 1fr) minmax(120px, 20dvh); }
   #repos { flex-wrap: nowrap; overflow-x: auto; padding-block: 4px; }
   #repos .project-chip { flex-shrink: 0; }
   .chat-log { padding-top: 12px; }
