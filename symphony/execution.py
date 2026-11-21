@@ -14,6 +14,7 @@ FAILURE_CONCLUSIONS = {
 }
 SECRET_NAMES = {
     "GITHUB_TOKEN", "GH_TOKEN", "LINEAR_API_KEY", "OPENAI_API_KEY", "OPENCODE_GO_API_KEY",
+    "LINEAR_WEBHOOK_SECRET",
 }
 SECRET_PATTERN = re.compile(
     r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"

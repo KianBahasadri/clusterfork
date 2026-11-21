@@ -501,7 +501,7 @@ async function poll() {
     byId("paused").hidden = !state.paused;
     byId("paused").textContent = state.paused ? "Dispatch paused. " + state.paused : "";
     showLogin(state);
-    delay = state.messages.length === 200 ? 0 : state.busy ? 600 : 2000;
+    delay = pollDelay(state, document.hidden);
   } catch {
     byId("connection-error").hidden = false;
   } finally {

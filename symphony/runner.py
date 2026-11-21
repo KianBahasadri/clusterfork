@@ -247,6 +247,13 @@ class Runner:
         self.jobs = set()
         self.cloning = {}
         self.wake = asyncio.Event()
+        self.issue_refresh = asyncio.Event()
+        self.projects_changed = False
+
+    def request_issue_refresh(self, projects=False):
+        if projects:
+            self.projects_changed = True
+        self.issue_refresh.set()
 
     def setting(self, key, default=""):
         row = self.db.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
@@ -446,6 +453,7 @@ class Runner:
 
     async def activate(self, issue, *, notify=False):
         await self.linear.set_state(issue, "Todo", "unstarted")
+        self.request_issue_refresh()
         event = "Plan approved. Queued in Todo." if notify else None
         self.change(issue, phase="approved", event=event, supersede=bool(event))
 
@@ -512,6 +520,7 @@ class Runner:
             if not resume:
                 try:
                     await self.linear.set_state(issue, "In Progress", "started")
+                    self.request_issue_refresh()
                 except (OSError, RuntimeError, TimeoutError, ValueError) as error:
                     try:
                         confirmed = await self.linear.issue(issue)
@@ -519,6 +528,7 @@ class Runner:
                         confirmed = None
                     if confirmed and not dispatch_problem(
                             confirmed, row, True):
+                        self.request_issue_refresh()
                         try:
                             self.check_reserved(issue, repo, previous)
                         except ValueError as check_error:
@@ -617,7 +627,7 @@ class Runner:
             self.change(issue, base=base, revision=None, workflows=None)
             env = {key: value for key, value in os.environ.items()
                    if key not in {"GITHUB_TOKEN", "GH_TOKEN", "LINEAR_API_KEY", "OPENAI_API_KEY",
-                                  "CODEX_HOME", "OPENCODE_GO_API_KEY"}}
+                                  "CODEX_HOME", "OPENCODE_GO_API_KEY", "LINEAR_WEBHOOK_SECRET"}}
             env["XDG_DATA_HOME"] = str(self.directory / "worker-data")
             env["XDG_CONFIG_HOME"] = str(self.directory / "worker-config")
             env["XDG_STATE_HOME"] = str(self.directory / "worker-state")
@@ -1076,6 +1086,7 @@ class Runner:
     async def finish(self, issue):
         try:
             await self.linear.set_state(issue, "Done", "completed")
+            self.request_issue_refresh()
         except (RuntimeError, ValueError) as error:
             detail = f"Publication verified. Cannot mark Linear Done: {error}"
             self.close_open_execution(issue)

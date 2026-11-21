@@ -23,6 +23,16 @@ data:
       "AllowFunnel": {"${TS_CERT_DOMAIN}:443": false}
     }
 ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: symphony
+  namespace: symphony
+spec:
+  selector: {app: symphony}
+  ports:
+    - {name: webhook, port: 8082, targetPort: 8082, protocol: TCP}
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -47,6 +57,11 @@ spec:
             matchLabels: {app: symphony-updater}
       ports:
         - {port: 8081, protocol: TCP}
+    - from:
+        - podSelector:
+            matchLabels: {app: symphony-webhook}
+      ports:
+        - {port: 8082, protocol: TCP}
   egress:
     - to:
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
@@ -54,6 +69,42 @@ spec:
       ports:
         - {port: 53, protocol: UDP}
         - {port: 53, protocol: TCP}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 0.0.0.0/8
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 224.0.0.0/4
+      ports:
+        - {port: 443, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: symphony-webhook
+  namespace: symphony
+spec:
+  podSelector:
+    matchLabels: {app: symphony-webhook}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+    - to:
+        - podSelector:
+            matchLabels: {app: symphony}
+      ports:
+        - {port: 8082, protocol: TCP}
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0

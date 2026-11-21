@@ -4,6 +4,8 @@ import asyncio
 import base64
 from datetime import datetime, timezone
 from email.message import Message
+import hashlib
+import hmac
 from io import BytesIO
 import json
 import os
@@ -13,11 +15,15 @@ import sqlite3
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-from symphony.__main__ import BODY_LIMIT, Handler, Symphony
+from symphony.__main__ import (
+    BODY_LIMIT, ISSUE_REFRESH_SECONDS, REFRESH_COALESCE_SECONDS, WEBHOOK_BODY_LIMIT,
+    Handler, Symphony, WebhookHandler, serve,
+)
 from symphony.codex import Codex, TOOLS, TOOLS_HASH
 from symphony.runner import (
     REVIEW_LINES, Runner, bounded_review, validate_review,
@@ -105,6 +111,7 @@ if config.get("mcp") == {"servers": {}}:
         "github": "GITHUB_TOKEN" in os.environ,
         "linear": "LINEAR_API_KEY" in os.environ,
         "api_key": "OPENCODE_GO_API_KEY" in os.environ,
+        "webhook": "LINEAR_WEBHOOK_SECRET" in os.environ,
         "prompt": prompt,
     }))
     assert "independent read-only code reviewer" in prompt
@@ -166,6 +173,7 @@ with (workspace / "worker-envs.jsonl").open("a") as stream:
         "linear": "LINEAR_API_KEY" in os.environ,
         "openai": "OPENAI_API_KEY" in os.environ,
         "api_key": "OPENCODE_GO_API_KEY" in os.environ,
+        "webhook": "LINEAR_WEBHOOK_SECRET" in os.environ,
     }) + "\\n")
 if os.environ.get("FIXTURE_LARGE_DIFF"):
     Path("large.txt").write_text("x" * 60000 + "\\nEND-OF-LARGE-DIFF\\n")
@@ -177,7 +185,9 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
 """)
         worker.chmod(0o755)
         context = patch.dict(os.environ, {"PATH": f"{fake_bin}:{os.environ['PATH']}",
-                                         "GITHUB_TOKEN": "fixture", "FIXTURE_ROOT": str(self.root)})
+                                         "GITHUB_TOKEN": "fixture",
+                                         "LINEAR_WEBHOOK_SECRET": "fixture-webhook-secret",
+                                         "FIXTURE_ROOT": str(self.root)})
         context.start()
         self.addCleanup(context.stop)
 
@@ -196,6 +206,19 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         async with asyncio.timeout(5):
             while self.runner.task(ISSUE)["phase"] != expected:
                 await asyncio.sleep(0.01)
+
+    async def poll_once(self, app):
+        async def sleep(_):
+            return None
+
+        async def stop(awaitable, timeout):
+            awaitable.close()
+            raise asyncio.CancelledError
+
+        with patch("symphony.__main__.asyncio.sleep", side_effect=sleep), \
+             patch("symphony.__main__.asyncio.wait_for", side_effect=stop):
+            with self.assertRaises(asyncio.CancelledError):
+                await app.poll_issues()
 
     async def approve(self):
         await self.runner.approve(self.proposed_issue(), REPO)
@@ -731,10 +754,7 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
             self.assertNotIn("projects", await app.state(0, revision))
 
             query.side_effect = RuntimeError("Linear is unavailable")
-            with patch("symphony.__main__.asyncio.sleep", side_effect=asyncio.CancelledError) as sleep:
-                with self.assertRaises(asyncio.CancelledError):
-                    await app.poll_issues()
-                sleep.assert_awaited_once_with(60)
+            await self.poll_once(app)
             stale = await app.state(0)
             self.assertEqual(stale["issueError"], "Linear is unavailable")
             self.assertEqual(stale["projects"], state["projects"])
@@ -742,10 +762,7 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
 
             beta["title"] = "Updated issue"
             query.side_effect = [first, second]
-            with patch("symphony.__main__.asyncio.sleep", side_effect=asyncio.CancelledError) as sleep:
-                with self.assertRaises(asyncio.CancelledError):
-                    await app.poll_issues()
-                sleep.assert_awaited_once_with(30)
+            await self.poll_once(app)
             latest = await app.state(0, revision)
             self.assertEqual(latest["issueError"], "")
             self.assertNotEqual(latest["issueRevision"], revision)
@@ -817,6 +834,205 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
             self.assertNotEqual(aged["issueRevision"], first["issueRevision"])
             self.assertEqual([issue["identifier"] for issue in aged["projects"][0]["issues"]],
                              ["KIAN-101", "KIAN-102"])
+
+    async def test_refresh_loop_coalesces_bursts_and_keeps_requests_during_fetch(self):
+        app = self.app()
+        refreshes = []
+        sleeps = []
+        waits = []
+
+        async def refresh():
+            refreshes.append(ISSUE)
+            if len(refreshes) == 1:
+                app.runner.request_issue_refresh()
+
+        async def sleep(duration):
+            sleeps.append(duration)
+            if len(sleeps) == 3:
+                raise asyncio.CancelledError
+
+        async def wait(awaitable, timeout):
+            waits.append(timeout)
+            awaitable.close()
+            return False
+
+        app.runner.request_issue_refresh()
+        app.runner.request_issue_refresh()
+        with patch.object(app, "refresh_issue_snapshot", side_effect=refresh), \
+             patch("symphony.__main__.asyncio.sleep", side_effect=sleep), \
+             patch("symphony.__main__.asyncio.wait_for", side_effect=wait):
+            with self.assertRaises(asyncio.CancelledError):
+                await app.poll_issues()
+        self.assertEqual(refreshes, [ISSUE, ISSUE])
+        self.assertEqual(sleeps, [REFRESH_COALESCE_SECONDS] * 3)
+        self.assertEqual(waits, [ISSUE_REFRESH_SECONDS, ISSUE_REFRESH_SECONDS])
+
+    async def test_refresh_loop_retries_with_bounded_backoff_and_keeps_snapshot(self):
+        app = self.app()
+        app.issue_snapshot = [{"id": "last-good"}]
+        starts = []
+
+        async def refresh():
+            starts.append(time.monotonic())
+            raise RuntimeError("Linear is down")
+
+        with patch("symphony.__main__.ISSUE_RETRY_SECONDS", 0.05), \
+             patch("symphony.__main__.ISSUE_REFRESH_SECONDS", 0.2), \
+             patch("symphony.__main__.REFRESH_COALESCE_SECONDS", 0.005), \
+             patch.object(app, "refresh_issue_snapshot", side_effect=refresh):
+            task = asyncio.create_task(app.poll_issues())
+            try:
+                async with asyncio.timeout(3):
+                    while len(starts) < 6:
+                        await asyncio.sleep(0.002)
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        gaps = [later - earlier for earlier, later in zip(starts, starts[1:])]
+        for gap, delay in zip(gaps, (0.05, 0.1, 0.2, 0.2, 0.2)):
+            self.assertGreaterEqual(gap, delay)
+            self.assertLess(gap, delay + 0.15)
+        self.assertEqual(app.issue_snapshot, [{"id": "last-good"}])
+        self.assertEqual(app.issue_error, "Linear is down")
+
+    async def test_refresh_retry_deadline_holds_a_dirty_trigger(self):
+        app = self.app()
+        starts = []
+
+        async def refresh():
+            starts.append(time.monotonic())
+            if len(starts) == 1:
+                app.runner.request_issue_refresh()
+                raise RuntimeError("Linear unavailable")
+
+        with patch("symphony.__main__.ISSUE_RETRY_SECONDS", 0.2), \
+             patch("symphony.__main__.REFRESH_COALESCE_SECONDS", 0.01), \
+             patch.object(app, "refresh_issue_snapshot", side_effect=refresh):
+            task = asyncio.create_task(app.poll_issues())
+            try:
+                async with asyncio.timeout(2):
+                    while len(starts) < 2:
+                        await asyncio.sleep(0.005)
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        self.assertGreaterEqual(starts[1] - starts[0], 0.18)
+
+    async def test_refresh_success_keeps_event_refreshes_prompt(self):
+        app = self.app()
+        starts = []
+
+        async def refresh():
+            starts.append(time.monotonic())
+            if len(starts) == 1:
+                app.runner.request_issue_refresh()
+
+        with patch("symphony.__main__.REFRESH_COALESCE_SECONDS", 0.01), \
+             patch.object(app, "refresh_issue_snapshot", side_effect=refresh):
+            task = asyncio.create_task(app.poll_issues())
+            try:
+                async with asyncio.timeout(2):
+                    while len(starts) < 2:
+                        await asyncio.sleep(0.005)
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        self.assertLess(starts[1] - starts[0], 1.0)
+
+    async def test_project_events_invalidate_the_mapping_cache(self):
+        app = self.app()
+        app.fetched_projects = time.monotonic()
+        app.repos = {"owner/old": [{"id": "old", "name": "Old"}]}
+        repos = {"owner/new": [{"id": "new", "name": "New"}]}
+        with patch.object(app.linear, "projects", new_callable=AsyncMock,
+                          return_value=(repos, {})) as projects:
+            app.request_issue_refresh(projects=True)
+            self.assertEqual(await app.refresh_projects(), repos)
+            projects.assert_awaited_once()
+            self.assertFalse(self.runner.projects_changed)
+            await app.refresh_projects()
+            projects.assert_awaited_once()
+
+            app.fetched_projects = time.monotonic()
+            app.request_issue_refresh()
+            await app.refresh_projects()
+            projects.assert_awaited_once()
+
+    async def test_successful_linear_writes_request_an_issue_refresh(self):
+        app = self.app()
+        refresh = Mock(side_effect=self.runner.request_issue_refresh)
+        issue = {**self.proposed_issue(), "id": "issue-id"}
+        with patch.object(self.runner, "request_issue_refresh", refresh), \
+             patch.object(app, "live_issue", return_value=(issue, REPO)), \
+             patch.object(app.linear, "update", new_callable=AsyncMock) as update:
+            await app.tool("set_plan", {"issue_id": ISSUE, "plan": "Write one verification file."})
+            update.assert_awaited_once()
+            refresh.assert_called_once_with(projects=False)
+
+            refresh.reset_mock()
+            update.side_effect = RuntimeError("Linear rejected the update.")
+            with self.assertRaisesRegex(RuntimeError, "rejected"):
+                await app.tool("set_plan", {"issue_id": ISSUE, "plan": "Write one verification file."})
+            refresh.assert_not_called()
+
+        refresh.reset_mock()
+        with patch.object(self.runner, "request_issue_refresh", refresh):
+            await self.runner.approve(self.proposed_issue(), REPO)
+            refresh.assert_called_once_with()
+
+            refresh.reset_mock()
+            pending = []
+            with patch.object(self.runner, "job", side_effect=pending.append):
+                await self.runner.dispatch(ISSUE, REPO, "")
+            for coroutine in pending:
+                coroutine.close()
+            refresh.assert_called_once_with()
+
+            refresh.reset_mock()
+            with self.runner.db:
+                self.runner.db.execute("UPDATE tasks SET phase='finishing' WHERE issue=?", (ISSUE,))
+            await self.runner.finish(ISSUE)
+            refresh.assert_called_once_with()
+
+    async def test_approval_retry_requests_an_issue_refresh(self):
+        await self.fail_approval()
+        app = self.app()
+        refresh = Mock(side_effect=self.runner.request_issue_refresh)
+        with patch.object(self.runner, "request_issue_refresh", refresh):
+            text = f"/retry {ISSUE}"
+            await app.handle("", text, text)
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "approved")
+        refresh.assert_called_once_with()
+
+    async def test_issue_removal_and_project_move_refresh_the_snapshot(self):
+        app = self.app()
+        alpha = {REPO: [{"id": "alpha", "name": "Alpha", "icon": ""}]}
+        issue = {"identifier": ISSUE, "title": "Alpha issue",
+                 "url": "https://linear.app/fixture/issue/KIAN-101",
+                 "state": {**self.linear.state, "position": 1}, "description": "",
+                 "project": {"id": "alpha", "name": "Alpha"}, "priority": 3,
+                 "priorityLabel": "Normal", "estimate": None, "dueDate": None,
+                 "updatedAt": "2026-11-20T12:00:00Z", "completedAt": None,
+                 "labels": {"nodes": []}}
+        with patch.object(app, "refresh_projects", return_value=alpha), \
+             patch("symphony.__main__.done_cutoff", return_value=datetime(2026, 11, 20, 12, 0,
+                                                                         tzinfo=timezone.utc)):
+            with patch.object(app.linear, "query", return_value={
+                    "issues": {"nodes": [issue], "pageInfo": {"hasNextPage": False}}}):
+                await app.refresh_issue_snapshot()
+            self.assertEqual([item["identifier"] for item in (await app.state(0))["projects"][0]["issues"]],
+                             [ISSUE])
+
+            with patch.object(app.linear, "query", return_value={
+                    "issues": {"nodes": [], "pageInfo": {"hasNextPage": False}}}):
+                await app.refresh_issue_snapshot()
+            self.assertEqual((await app.state(0))["projects"][0]["issues"], [])
+
+            moved = {**issue, "project": {"id": "beta", "name": "Beta"}}
+            with patch.object(app.linear, "query", return_value={
+                    "issues": {"nodes": [moved], "pageInfo": {"hasNextPage": False}}}):
+                await app.refresh_issue_snapshot()
+            self.assertEqual((await app.state(0))["projects"][0]["issues"], [])
 
     async def worker_done(self, status=0):
         await self.approve()
@@ -1004,11 +1220,14 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
             raise RuntimeError("Linear response was lost.")
 
         pending = []
+        refresh = Mock()
         with patch.object(self.linear, "set_state", side_effect=fail_after_update), \
+             patch.object(self.runner, "request_issue_refresh", refresh), \
              patch.object(self.runner, "job", side_effect=pending.append):
             await self.runner.dispatch(ISSUE, REPO, "")
         for coroutine in pending:
             coroutine.close()
+        refresh.assert_called_once_with()
         self.assertEqual(self.linear.state["name"], "In Progress")
         self.assertEqual(self.runner.task(ISSUE)["phase"], "working")
         self.assertEqual(self.runner.task(ISSUE)["attempts"], 1)
@@ -1258,6 +1477,7 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         self.assertFalse(environment["github"])
         self.assertFalse(environment["linear"])
         self.assertFalse(environment["api_key"])
+        self.assertFalse(environment["webhook"])
         permissions = environment["config"]["permissions"]
         self.assertEqual(permissions[0], {"action": "*", "resource": "*", "effect": "deny"})
         for action in ("edit", "write", "shell", "subagent", "websearch"):
@@ -1301,6 +1521,7 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
             "LINEAR_API_KEY": "lin-secret",
             "OPENAI_API_KEY": "oa-secret",
             "OPENCODE_GO_API_KEY": "go-secret",
+            "LINEAR_WEBHOOK_SECRET": "webhook-secret",
         }):
             await self.worker_done()
             await self.runner.dispatch(ISSUE, REPO, "Never ship from the worker. Follow up.", resume=True)
@@ -1321,6 +1542,7 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
             self.assertFalse(record["linear"])
             self.assertFalse(record["openai"])
             self.assertFalse(record["api_key"])
+            self.assertFalse(record["webhook"])
             self.assertEqual(record["config"]["mcp"], {"servers": expected_servers})
             permissions = record["config"]["permissions"]
             self.assertIn({"action": "websearch", "resource": "*", "effect": "deny"}, permissions)
@@ -1952,6 +2174,187 @@ class ChatHttpTests(unittest.TestCase):
         handler.send_response.assert_called_once_with(400)
 
 
+class ServeStartupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_private_services_start_without_a_webhook_secret(self):
+        servers = []
+
+        class FakeServer:
+            def __init__(self, address, handler):
+                self.address = address
+                self.handler = handler
+                self.app = None
+                servers.append(self)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def serve_forever(self):
+                pass
+
+            def shutdown(self):
+                pass
+
+        class ImmediateEvent:
+            def set(self):
+                pass
+
+            async def wait(self):
+                return None
+
+        class FakeApp:
+            webhook_secret = ""
+
+            def __init__(self):
+                self.runner = SimpleNamespace(
+                    jobs=set(),
+                    db=SimpleNamespace(close=Mock()),
+                    job=lambda coroutine: coroutine.close(),
+                )
+                self.coordinator = SimpleNamespace(close=AsyncMock())
+
+            async def pump(self):
+                return None
+
+            async def start(self):
+                return None
+
+        app = FakeApp()
+        temp = TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        env = {key: value for key, value in os.environ.items()
+               if key != "LINEAR_WEBHOOK_SECRET"}
+        env.update({"SYMPHONY_DATA": temp.name, "HOME": str(Path(temp.name) / "home"),
+                    "LINEAR_API_KEY": "fixture"})
+        with patch.dict(os.environ, env, clear=True), \
+             patch("symphony.__main__.ThreadingHTTPServer", FakeServer), \
+             patch("symphony.__main__.Symphony", return_value=app), \
+             patch("symphony.__main__.asyncio.Event", return_value=ImmediateEvent()):
+            await serve()
+        self.assertEqual([server.address for server in servers], [
+            ("127.0.0.1", 8080), ("0.0.0.0", 8081), ("0.0.0.0", 8082),
+        ])
+        self.assertIs(servers[2].handler, WebhookHandler)
+        self.assertEqual(app.webhook_secret, "")
+
+
+class WebhookTests(unittest.TestCase):
+    secret = "fixture-webhook-secret"
+
+    def payload(self, **changes):
+        payload = {
+            "action": "update",
+            "type": "Issue",
+            "data": {"id": "2174add1-f7c8-44e3-bbf3-2d60b5ea8bc9", "identifier": ISSUE},
+            "webhookTimestamp": int(time.time() * 1000),
+        }
+        payload.update(changes)
+        return payload
+
+    def signature(self, raw):
+        return hmac.new(self.secret.encode(), raw, hashlib.sha256).hexdigest()
+
+    def send(self, raw, *, signature="missing", length=None, reader=None,
+             path="/webhooks/linear", method="POST", app=None):
+        app = app or SimpleNamespace(webhook_secret=self.secret, request_issue_refresh=Mock())
+        handler = object.__new__(WebhookHandler)
+        handler.path = path
+        handler.headers = Message()
+        handler.headers["Content-Length"] = str(len(raw) if length is None else length)
+        if signature != "missing":
+            handler.headers["Linear-Signature"] = signature
+        handler.rfile = reader or BytesIO(raw)
+        handler.wfile = BytesIO()
+        handler.send_response = Mock()
+        handler.send_header = Mock()
+        handler.end_headers = Mock()
+        loop = SimpleNamespace(
+            call_soon_threadsafe=Mock(side_effect=lambda callback, *args: callback(*args)))
+        handler.server = SimpleNamespace(app=app, loop=loop)
+        if method == "POST":
+            handler.do_POST()
+        else:
+            handler.do_GET()
+        return handler, handler.send_response.call_args.args[0], app
+
+    def test_valid_issue_and_project_webhooks_signal_refresh(self):
+        for kind, projects in (("Issue", False), ("Project", True)):
+            with self.subTest(kind=kind):
+                raw = json.dumps(self.payload(type=kind)).encode()
+                handler, status, app = self.send(raw, signature=self.signature(raw))
+                self.assertEqual(status, 200)
+                app.request_issue_refresh.assert_called_once_with(projects)
+                self.assertEqual(handler.wfile.getvalue(), b'{"status": "ok"}')
+
+    def test_rejected_webhooks_never_signal_refresh(self):
+        now = int(time.time() * 1000)
+        valid = json.dumps(self.payload()).encode()
+        cases = [
+            ("missing signature", valid, "missing", {}, 401),
+            ("invalid signature", valid, "0" * 64, {}, 401),
+            ("stale timestamp", json.dumps(self.payload(webhookTimestamp=now - 61_000)).encode(),
+             None, {}, 400),
+            ("future timestamp", json.dumps(self.payload(webhookTimestamp=now + 61_000)).encode(),
+             None, {}, 400),
+            ("invalid timestamp", json.dumps(self.payload(webhookTimestamp="now")).encode(),
+             None, {}, 400),
+            ("boolean timestamp", json.dumps(self.payload(webhookTimestamp=True)).encode(),
+             None, {}, 400),
+            ("huge timestamp", json.dumps(self.payload(webhookTimestamp=10 ** 400)).encode(),
+             None, {}, 400),
+            ("non-hex signature", valid, "not-hex", {}, 401),
+            ("malformed json", b"{", None, {}, 400),
+            ("unsupported type", json.dumps(self.payload(type="Comment")).encode(), None, {}, 400),
+            ("list type", json.dumps(self.payload(type=[])).encode(), None, {}, 400),
+            ("numeric type", json.dumps(self.payload(type=7)).encode(), None, {}, 400),
+            ("unsupported action", json.dumps(self.payload(action="archive")).encode(), None, {}, 400),
+            ("object action", json.dumps(self.payload(action={})).encode(), None, {}, 400),
+            ("null action", json.dumps(self.payload(action=None)).encode(), None, {}, 400),
+            ("missing data id", json.dumps(self.payload(data={})).encode(), None, {}, 400),
+            ("unsupported data", json.dumps(self.payload(data=[])).encode(), None, {}, 400),
+            ("oversized body", b"{}", "missing", {"length": WEBHOOK_BODY_LIMIT + 1}, 413),
+        ]
+        for name, raw, signature, options, expected in cases:
+            with self.subTest(name=name):
+                if signature is None:
+                    signature = self.signature(raw)
+                _, status, app = self.send(raw, signature=signature, **options)
+                self.assertEqual(status, expected)
+                app.request_issue_refresh.assert_not_called()
+
+        class TimedOut:
+            def read(self, _):
+                raise TimeoutError
+
+        _, status, app = self.send(valid, signature=self.signature(valid), reader=TimedOut())
+        self.assertEqual(status, 408)
+        app.request_issue_refresh.assert_not_called()
+
+        _, status, app = self.send(valid, signature=self.signature(valid),
+                                   reader=BytesIO(valid[:-1]))
+        self.assertEqual(status, 400)
+        app.request_issue_refresh.assert_not_called()
+
+    def test_wrong_route_method_and_missing_secret_are_rejected(self):
+        raw = json.dumps(self.payload()).encode()
+        for method, path, status in (
+            ("POST", "/other", 404),
+            ("GET", "/webhooks/linear", 405),
+        ):
+            with self.subTest(method=method, path=path):
+                _, observed, app = self.send(
+                    raw, signature=self.signature(raw), path=path, method=method)
+                self.assertEqual(observed, status)
+                app.request_issue_refresh.assert_not_called()
+
+        app = SimpleNamespace(webhook_secret="", request_issue_refresh=Mock())
+        _, status, app = self.send(raw, app=app)
+        self.assertEqual(status, 503)
+        app.request_issue_refresh.assert_not_called()
+
+
 class PaneTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node is required for JavaScript checks.")
     def test_backlog_and_status_panes_partition_and_order_issues(self):
@@ -1975,9 +2378,16 @@ const rows = JSON.parse(fs.readFileSync(0, "utf8"));
 const projects = [{id: "alpha"}, {id: "beta"}];
 const partition = vm.runInContext("partitionIssues", context);
 const select = vm.runInContext("selectableProject", context);
+const delay = vm.runInContext("pollDelay", context);
 process.stdout.write(JSON.stringify({
   panes: partition(rows), empty: select(projects, ""), invalid: select(projects, "missing"),
   valid: select(projects, "beta"), none: select([], ""),
+  delays: [
+    delay({messages: [], busy: false}, false),
+    delay({messages: [], busy: false}, true),
+    delay({messages: [], busy: true}, false),
+    delay({messages: new Array(200), busy: false}, false),
+  ],
 }));
 """
         panes = Path(__file__).resolve().parents[1] / "symphony/web/panes.js"
@@ -1992,12 +2402,14 @@ process.stdout.write(JSON.stringify({
                          [["KIAN-4", "KIAN-3"], ["KIAN-5"], ["KIAN-7", "KIAN-6"]])
         self.assertEqual((result["empty"], result["invalid"], result["valid"], result["none"]),
                          ("alpha", "alpha", "beta", ""))
+        self.assertEqual(result["delays"], [1000, 2000, 600, 0])
 
         root = Path(__file__).resolve().parents[1] / "symphony/web"
         html = (root / "index.html").read_text()
         self.assertLess(html.index('id="backlog"'), html.index('class="chat"'))
         self.assertLess(html.index('class="chat"'), html.index('id="status-issues"'))
         app = (root / "app.js").read_text()
+        self.assertIn("pollDelay(state, document.hidden)", app)
         self.assertIn('"Awaiting approval"', app)
         self.assertIn("will not run", app)
 

@@ -274,9 +274,61 @@ class KubernetesManifestTests(unittest.TestCase):
         self.assertIn("default-deny", netpols)
         sym = netpols["symphony"]
         self.assertEqual(sym["spec"]["podSelector"], {"matchLabels": {"app": "symphony"}})
-        self.assertEqual(len(sym["spec"]["ingress"]), 1)
-        self.assertEqual(sym["spec"]["ingress"][0]["from"], [{"podSelector": {"matchLabels": {"app": "symphony-updater"}}}])
-        self.assertEqual(sym["spec"]["ingress"][0]["ports"], [{"port": 8081, "protocol": "TCP"}])
+        self.assertEqual(sym["spec"]["ingress"], [
+            {"from": [{"podSelector": {"matchLabels": {"app": "symphony-updater"}}}],
+             "ports": [{"port": 8081, "protocol": "TCP"}]},
+            {"from": [{"podSelector": {"matchLabels": {"app": "symphony-webhook"}}}],
+             "ports": [{"port": 8082, "protocol": "TCP"}]},
+        ])
+        webhook = netpols["symphony-webhook"]
+        self.assertEqual(webhook["spec"]["podSelector"], {"matchLabels": {"app": "symphony-webhook"}})
+        self.assertEqual(webhook["spec"]["policyTypes"], ["Egress"])
+        self.assertIn({"to": [{"podSelector": {"matchLabels": {"app": "symphony"}}}],
+                       "ports": [{"port": 8082, "protocol": "TCP"}]}, webhook["spec"]["egress"])
+
+        service = next(d for d in load_manifests("storage-and-network.yaml") if d["kind"] == "Service")
+        self.assertEqual(service["metadata"]["name"], "symphony")
+        self.assertEqual(service["spec"]["selector"], {"app": "symphony"})
+        self.assertEqual(service["spec"]["ports"],
+                         [{"name": "webhook", "port": 8082, "targetPort": 8082, "protocol": "TCP"}])
+
+    def test_webhook_gateway_is_separate_and_exposes_only_the_linear_route(self):
+        docs = load_manifests("webhook-gateway.yaml")
+        by_kind = {doc["kind"]: doc for doc in docs}
+
+        config = json.loads(by_kind["ConfigMap"]["data"]["serve.json"])
+        self.assertTrue(config["AllowFunnel"]["${TS_CERT_DOMAIN}:443"])
+        self.assertEqual(config["Web"]["${TS_CERT_DOMAIN}:443"]["Handlers"], {
+            "/webhooks/linear": {"Proxy": "http://symphony.symphony.svc.cluster.local:8082"},
+        })
+
+        deploy = by_kind["Deployment"]
+        self.assertEqual(deploy["metadata"]["name"], "symphony-webhook")
+        self.assertEqual(deploy["spec"]["template"]["metadata"]["labels"], {"app": "symphony-webhook"})
+        pod = deploy["spec"]["template"]["spec"]
+        self.assertIs(pod["automountServiceAccountToken"], False)
+        self.assertEqual(pod["securityContext"]["runAsNonRoot"], True)
+        self.assertEqual(pod["securityContext"]["seccompProfile"], {"type": "RuntimeDefault"})
+        container = pod["containers"][0]
+        self.assertIn("@sha256:", container["image"])
+        self.assertEqual(container["securityContext"]["allowPrivilegeEscalation"], False)
+        self.assertEqual(container["securityContext"]["readOnlyRootFilesystem"], True)
+        self.assertEqual(container["securityContext"]["capabilities"], {"drop": ["ALL"]})
+        env = {item["name"]: item for item in container["env"]}
+        self.assertEqual(env["TS_USERSPACE"]["value"], "true")
+        self.assertEqual(env["TS_AUTHKEY"]["valueFrom"]["secretKeyRef"],
+                         {"name": "symphony-webhook-tailnet", "key": "authkey"})
+
+        private = load_manifests("storage-and-network.yaml")
+        private_serve = json.loads(next(d for d in private if d["kind"] == "ConfigMap")["data"]["serve.json"])
+        self.assertFalse(private_serve["AllowFunnel"]["${TS_CERT_DOMAIN}:443"])
+        self.assertEqual(private_serve["Web"]["${TS_CERT_DOMAIN}:443"]["Handlers"]["/"]["Proxy"],
+                         "http://127.0.0.1:8080")
+
+        symphony = load_manifests("deployment.yaml")[0]
+        ports = {port["name"]: port["containerPort"]
+                 for port in symphony["spec"]["template"]["spec"]["containers"][0]["ports"]}
+        self.assertEqual(ports["webhook"], 8082)
 
     def test_updater_rbac_and_pod_security_restricted(self):
         docs = load_manifests("updater.yaml")

@@ -1,5 +1,11 @@
 const STATUS_GROUPS = ["Todo", "In Progress", "Done"];
 
+function pollDelay(state, hidden) {
+  if (state.messages.length === 200) return 0;
+  if (state.busy) return 600;
+  return hidden ? 2000 : 1000;
+}
+
 function issueOrder(a, b) {
   return (a.priority || 5) - (b.priority || 5)
     || a.identifier.localeCompare(b.identifier, undefined, {numeric: true});

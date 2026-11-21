@@ -1,0 +1,85 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: symphony-webhook
+  namespace: symphony
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: openebs-hostpath
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: symphony-webhook-serve
+  namespace: symphony
+data:
+  serve.json: |
+    {
+      "TCP": {"443": {"HTTPS": true}},
+      "Web": {"${TS_CERT_DOMAIN}:443": {"Handlers": {"/webhooks/linear": {"Proxy": "http://symphony.symphony.svc.cluster.local:8082"}}}},
+      "AllowFunnel": {"${TS_CERT_DOMAIN}:443": true}
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: symphony-webhook
+  namespace: symphony
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: symphony-webhook}
+  template:
+    metadata:
+      labels: {app: symphony-webhook}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 65534
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: tailscale
+          image: tailscale/tailscale:v1.104.7@sha256:72c1e19e0aedca96b8533bbb0b4368564410ff20b17e53b804eb6c1f04a31be4
+          securityContext:
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          env:
+            - {name: TS_HOSTNAME, value: symphony-webhook}
+            - {name: TS_AUTH_ONCE, value: "true"}
+            - {name: TS_USERSPACE, value: "true"}
+            - {name: TS_ACCEPT_DNS, value: "false"}
+            - {name: TS_KUBE_SECRET, value: ""}
+            - {name: TS_EXTRA_ARGS, value: "--accept-routes=false --ssh=false"}
+            - {name: TS_STATE_DIR, value: /data/tailscale}
+            - {name: TS_SOCKET, value: /tmp/tailscaled.sock}
+            - {name: TS_SERVE_CONFIG, value: /etc/tailscale/serve.json}
+            - {name: TS_ENABLE_HEALTH_CHECK, value: "true"}
+            - {name: TS_LOCAL_ADDR_PORT, value: "0.0.0.0:9002"}
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef: {name: symphony-webhook-tailnet, key: authkey}
+          resources:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 9002}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tailscale-tmp, mountPath: /tmp}
+            - {name: serve, mountPath: /etc/tailscale, readOnly: true}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: symphony-webhook}
+        - name: serve
+          configMap: {name: symphony-webhook-serve}
+        - name: tailscale-tmp
+          emptyDir: {sizeLimit: 16Mi}

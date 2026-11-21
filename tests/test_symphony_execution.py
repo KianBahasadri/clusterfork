@@ -604,11 +604,12 @@ class ExecutionPayloadTests(unittest.IsolatedAsyncioTestCase):
         artifacts = self.runner.artifacts(ISSUE)
         artifacts.mkdir(parents=True)
         secret = "fixture-linear-secret"
-        (artifacts / "worker.log").write_text("x" * 30000 + "\n" + secret + "\n")
+        webhook = "fixture-webhook-secret"
+        (artifacts / "worker.log").write_text("x" * 30000 + "\n" + secret + "\n" + webhook + "\n")
         (artifacts / "checks.sh").write_text("echo " + secret + "\n")
         self.runner.record_execution(ISSUE, "verification", started=1000, ended=1010,
                                      detail=secret, data={"command": secret})
-        with patch.dict(os.environ, {"LINEAR_API_KEY": secret}):
+        with patch.dict(os.environ, {"LINEAR_API_KEY": secret, "LINEAR_WEBHOOK_SECRET": webhook}):
             payload = execution_payload(ISSUE, issue_row("Done"), {
                 "entries": [], "complete": False, "error": "Unavailable",
             }, self.runner, now=NOW)
@@ -617,7 +618,9 @@ class ExecutionPayloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(log["truncated"])
         self.assertIn("[redacted]", log["text"])
         self.assertNotIn(secret, log["text"])
+        self.assertNotIn(webhook, log["text"])
         self.assertNotIn(secret, json.dumps(payload))
+        self.assertNotIn(webhook, json.dumps(payload))
         self.assertNotIn("private unrelated conversation", json.dumps(payload))
         self.assertEqual(payload["execution"]["diagnostics"]["checks"]["command"], "echo [redacted]")
         self.assertEqual(redact("token ghp_" + "a" * 30), "token [redacted]")

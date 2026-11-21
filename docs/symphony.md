@@ -24,29 +24,37 @@ Issues returned to Backlog, canceled, or moved out of the approved project do
 not start. Completed, Canceled, and Duplicate are terminal states across issue
 lists, approvals, and state transitions.
 
-Symphony refreshes a shared cache of every mapped project's issues every 30
-seconds using a batched, paginated Linear query. The cache includes open issues
-and Done issues completed within the last rolling 24 hours, using `completedAt`
-rather than `updatedAt`. Older Done, Canceled, and Duplicate issues stay out of
-both panes, and expired Done entries disappear on a normal refresh without an
-issue edit. The browser receives the lists through its regular status requests
-when they change. Switching projects uses the cache and restores each pane's
-scroll position and expanded plans. Backlog stays on the left. Todo, In
-Progress, and Done are collapsible groups on the right, labeled with those
-status names. Todo and In Progress sort from Urgent to Low priority with
-unprioritized issues last; recent Done sorts newest completed first. Groups
-start expanded, remember their collapsed state per project, and show an empty
-state when they have no issues.
+Symphony keeps a shared cache of every mapped project's issues using a batched,
+paginated Linear query. It reconciles every 300 seconds, promptly after a
+successful local Linear write, and after a verified Issue or Project webhook.
+Local writes for plan changes, approval, In Progress dispatch, and Done
+completion, plus overlapping webhook deliveries, coalesce for about 250 ms into
+one serialized refresh. A request received while a fetch is running triggers
+another refresh after it completes. Project webhooks also invalidate the
+60-second project mapping cache, so renamed projects and changed repository
+links appear promptly. The cache includes open issues and Done issues completed
+within the last rolling 24 hours, using `completedAt` rather than `updatedAt`.
+Older Done, Canceled, and Duplicate issues stay out of both panes, and expired
+Done entries disappear on a normal refresh without an issue edit. The browser
+receives the lists through its regular status requests when they change.
+Visible idle tabs poll `/api/state` every second, hidden idle tabs every two
+seconds, and active turns keep the existing 600 ms cadence. Switching projects
+uses the cache and restores each pane's scroll position and expanded plans.
+Backlog stays on the left. Todo, In Progress, and Done are collapsible groups on
+the right, labeled with those status names. Todo and In Progress sort from
+Urgent to Low priority with unprioritized issues last; recent Done sorts newest
+completed first. Groups start expanded, remember their collapsed state per
+project, and show an empty state when they have no issues.
 Status groups open and close with a visible spring using the standard Web
 Animations API. Rapid clicks reverse from the current height; reduced motion
 disables the animation.
-Refresh failures keep the last successful lists and slow retries. Project
-chips use their Linear names and emoji. Issue cards show the identifier,
-workflow icon and title, with compact pills for priority, due date, estimate,
-and colored labels. Workflow icons match Linear's dotted, empty, half-filled,
-and filled status shapes, using the configured colors with stronger contrast
-in light mode. Worker phases, proposed plans, and an awaiting-approval badge
-appear on their issues. Expandable proposed plans render Markdown with the same
+Refresh failures keep the last successful lists and retry with bounded
+backoff. Project chips use their Linear names and emoji. Issue cards show the
+identifier, workflow icon and title, with compact pills for priority, due date,
+estimate, and colored labels. Workflow icons match Linear's dotted, empty,
+half-filled, and filled status shapes, using the configured colors with stronger
+contrast in light mode. Worker phases, proposed plans, and an awaiting-approval
+badge appear on their issues. Expandable proposed plans render Markdown with the same
 formatting and safety rules as issue details, while the saved plan text remains
 the source for approval.
 
@@ -117,9 +125,10 @@ worker receives default remote MCP servers for Context7
 (`https://mcp.context7.com/mcp`) and Exa web search (`https://mcp.exa.ai/mcp`)
 through `OPENCODE_CONFIG_CONTENT`, while OpenCode's interactive built-in
 `websearch` tool, direct pushes, PR creation, and subagents are denied. Worker
-environments strip GitHub, Linear, OpenAI, Codex, and OpenCode Go API key
-variables. The container image includes standard CLI utilities (`jq`, `rg`,
-`sqlite3`, `tmux`, `gawk`, `patch`, `file`, `zip`) and headless system
+and reviewer environments strip GitHub, Linear, OpenAI, Codex, OpenCode Go API
+key, and Linear webhook signing-secret variables. The container image includes
+standard CLI utilities (`jq`, `rg`, `sqlite3`, `tmux`, `gawk`, `patch`, `file`,
+`zip`) and headless system
 `chromium` (`/usr/bin/chromium`, invoked with `--headless --no-sandbox
 --disable-dev-shm-usage --disable-gpu` under restricted PodSecurity); Docker,
 QEMU, Go, and privileged networking tools remain out of scope for the Symphony
@@ -194,28 +203,42 @@ records the change in the chat history.
 ## Deploy on Guaranine
 
 The `test` workflow publishes the image to GHCR from `main` after tests pass.
-Deploy the full commit tag (or image digest) from the successful run. The
-deployment uses a single restricted pod and an OpenEBS local PVC. Tailscale
-Serve proxies the app's loopback listener over private HTTPS.
+Deploy the full commit tag (or image digest) from the successful run. The main
+deployment uses a single restricted pod and an OpenEBS local PVC. A private
+Tailscale Serve sidecar proxies the app's loopback listener over tailnet HTTPS.
+A separate restricted userspace Tailscale gateway exposes only the Funnel route
+`/webhooks/linear` to the Symphony Service on port 8082.
+
+Guaranine's Tailscale policy must add `tag:guaranine-webhook-gateway` to
+`tagOwners` and grant it the `funnel` node attribute in
+`klever-lab/guaranine/tailscale/policy.json`. Follow Guaranine's documented
+policy application and tests before registering the webhook. The private UI
+gateway retains `tag:guaranine-app-gateway` and `AllowFunnel` false.
 
 Create the namespace and provide these Kubernetes secrets:
 
 | Secret | Required values |
 | --- | --- |
-| `symphony-api` | `LINEAR_API_KEY`, `GITHUB_TOKEN` with repository content and workflow write and Actions read access, and `OPENCODE_GO_API_KEY` |
+| `symphony-api` | `LINEAR_API_KEY`, `GITHUB_TOKEN` with repository content and workflow write and Actions read access, `OPENCODE_GO_API_KEY`, and `LINEAR_WEBHOOK_SECRET` matching the Linear webhook signing secret |
 | `symphony-tailnet` | Single-use, preauthorized auth key in `authkey` for `tag:guaranine-app-gateway` |
+| `symphony-webhook-tailnet` | Single-use, preauthorized auth key in `authkey` for `tag:guaranine-webhook-gateway` |
 
 Store the input files outside this checkout with mode 0600. The Codex login and
-the Tailscale node identity live on the PVC and persist across pod replacements.
+the Tailscale node identities live on their PVCs and persist across pod
+replacements.
 
 ```bash
 kubectl apply -f symphony/kubernetes/namespace.yaml
 kubectl apply -f symphony/kubernetes/storage-and-network.yaml
 kubectl set image --local -f symphony/kubernetes/deployment.yaml \
   symphony=ghcr.io/kianbahasadri/symphony:FULL_COMMIT_SHA -o yaml | kubectl apply -f -
+kubectl apply -f symphony/kubernetes/webhook-gateway.yaml
 kubectl apply -f symphony/kubernetes/updater.yaml
 kubectl -n symphony rollout status deployment/symphony
+kubectl -n symphony rollout status deployment/symphony-webhook
 kubectl -n symphony exec deployment/symphony -c tailscale -- \
+  tailscale --socket=/tmp/tailscaled.sock serve status
+kubectl -n symphony exec deployment/symphony-webhook -c tailscale -- \
   tailscale --socket=/tmp/tailscaled.sock serve status
 ```
 
@@ -232,9 +255,28 @@ the updater rolls forward even when `/idle` is unreachable so a broken rollout
 can recover on the next push to `main`. The Symphony pod itself keeps
 `automountServiceAccountToken: false` and has no Kubernetes API egress.
 
-Open the HTTPS address reported by Tailscale and verify the project chips and panes load.
-Kubernetes NetworkPolicy enforces default-deny in the namespace, allowing the
-Symphony pod only DNS, public TCP 443 egress, and port 8081 ingress from the
-updater. The gateway tag and Serve configuration control access to the UI.
-[Deferred work](symphony-follow-ups.md) tracks ntfy, additional composer
-commands, and hostname-level egress.
+Open the private HTTPS address reported by the UI gateway and verify the project
+chips and panes load. Register one Linear webhook for Issue and Project events
+against the HTTPS address reported by the webhook gateway, ending in
+`/webhooks/linear`, and install its signing secret as `LINEAR_WEBHOOK_SECRET` in
+`symphony-api`. Registering a webhook requires workspace admin access. If the
+secret is absent, the private UI and local-write refreshes still start, while
+`POST /webhooks/linear` fails closed with 503 and no refresh. The listener
+verifies `Linear-Signature` over the exact raw body with HMAC-SHA256,
+requires a numeric `webhookTimestamp` in milliseconds within 60 seconds of server
+time, accepts only Issue and Project create, update, or remove payloads, and
+returns 200 after signaling the refresh loop. Invalid signatures, stale or
+malformed payloads, oversized or incomplete bodies, timeouts, and wrong routes
+or methods are rejected without waking the refresh loop. The signing secret is
+stripped from worker and reviewer subprocesses, git environments, and recorded
+execution diagnostics.
+
+The public gateway reaches only the webhook listener; the private UI remains
+reachable only through its own tailnet gateway. Kubernetes NetworkPolicy
+enforces default-deny in the namespace, allowing the Symphony pod only DNS,
+public TCP 443 egress, port 8081 ingress from the updater, and port 8082 ingress
+from `app: symphony-webhook`. The webhook gateway may use DNS, public TCP 443,
+and Symphony port 8082. Linear retries failed deliveries three times with longer
+backoff and may disable an unresponsive webhook, so the 300-second reconciliation
+remains the fallback. [Deferred work](symphony-follow-ups.md) tracks ntfy,
+additional composer commands, and hostname-level egress.

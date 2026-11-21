@@ -8,8 +8,11 @@ from contextlib import suppress
 from concurrent.futures import TimeoutError as RequestTimeout
 from datetime import datetime, timedelta, timezone
 import fcntl
+import hashlib
+import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -48,7 +51,15 @@ CONTENT_SECURITY_POLICY = (
     "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
     "img-src 'self' https: data: blob:; base-uri 'none'; frame-ancestors 'none'"
 )
-ISSUE_REFRESH_SECONDS = 30
+ISSUE_REFRESH_SECONDS = 300
+ISSUE_RETRY_SECONDS = 30
+REFRESH_COALESCE_SECONDS = 0.25
+PROJECT_REFRESH_SECONDS = 60
+WEBHOOK_BODY_LIMIT = 256 * 1024
+WEBHOOK_READ_SECONDS = 10
+WEBHOOK_CLOCK_SKEW_MS = 60_000
+WEBHOOK_TYPES = {"Issue", "Project"}
+WEBHOOK_ACTIONS = {"create", "update", "remove"}
 HISTORY_CONCURRENCY = 3
 RECENT_DONE = timedelta(hours=24)
 ACTIVE_PHASES = {"approving", "working", "publishing", "ci", "finishing"}
@@ -119,6 +130,27 @@ def current_issue(row, cutoff):
     return kind not in CLOSED_STATES
 
 
+def valid_webhook(payload, now_ms=None):
+    if not isinstance(payload, dict):
+        return False
+    kind = payload.get("type")
+    action = payload.get("action")
+    if not isinstance(kind, str) or not isinstance(action, str):
+        return False
+    if kind not in WEBHOOK_TYPES or action not in WEBHOOK_ACTIONS:
+        return False
+    data = payload.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get("id"), str) or not data["id"].strip():
+        return False
+    timestamp = payload.get("webhookTimestamp")
+    if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)):
+        return False
+    if isinstance(timestamp, float) and not math.isfinite(timestamp):
+        return False
+    now = time.time() * 1000 if now_ms is None else now_ms
+    return now - WEBHOOK_CLOCK_SKEW_MS <= timestamp <= now + WEBHOOK_CLOCK_SKEW_MS
+
+
 def issue_summary(row, stage=None):
     plan = proposed_plan(row["description"])
     summary = {**{key: row.get(key) for key in ("identifier", "title", "url", "state", "priority",
@@ -150,10 +182,14 @@ class Symphony:
         self.issue_revision = ""
         self.issue_error = ""
         self.history_cache = {}
+        self.webhook_secret = os.environ.get("LINEAR_WEBHOOK_SECRET", "")
 
     async def refresh_projects(self):
         async with self.projects_lock:
-            if time.monotonic() - self.fetched_projects >= 60 or not self.fetched_projects:
+            if self.runner.projects_changed:
+                self.runner.projects_changed = False
+                self.fetched_projects = 0
+            if time.monotonic() - self.fetched_projects >= PROJECT_REFRESH_SECONDS or not self.fetched_projects:
                 self.repos, self.link_problems = await self.linear.projects()
                 self.fetched_projects = time.monotonic()
         return self.repos
@@ -222,17 +258,45 @@ class Symphony:
             self.runner.wake.set()
 
     async def poll_issues(self):
-        delay = ISSUE_REFRESH_SECONDS
+        loop = asyncio.get_running_loop()
+        delay = 0
+        retry = ISSUE_RETRY_SECONDS
+        not_before = 0.0
         while True:
+            if not_before:
+                remaining = not_before - loop.time()
+                if remaining > 0:
+                    try:
+                        await asyncio.wait_for(self.runner.issue_refresh.wait(), timeout=remaining)
+                    except TimeoutError:
+                        pass
+                    remaining = not_before - loop.time()
+                    if remaining > 0:
+                        await asyncio.sleep(remaining)
+            elif delay:
+                try:
+                    await asyncio.wait_for(self.runner.issue_refresh.wait(), timeout=delay)
+                except TimeoutError:
+                    pass
+            else:
+                self.runner.issue_refresh.set()
             try:
+                await asyncio.sleep(REFRESH_COALESCE_SECONDS)
+                self.runner.issue_refresh.clear()
                 await self.refresh_issue_snapshot()
             except (OSError, RuntimeError, ValueError) as error:
                 self.issue_error = str(error) or "Linear issue refresh timed out."
-                delay = min(delay * 2, 300)
+                delay = retry
+                retry = min(retry * 2, ISSUE_REFRESH_SECONDS)
+                not_before = loop.time() + delay
             else:
                 self.issue_error = ""
                 delay = ISSUE_REFRESH_SECONDS
-            await asyncio.sleep(delay)
+                retry = ISSUE_RETRY_SECONDS
+                not_before = 0.0
+
+    def request_issue_refresh(self, projects=False):
+        self.runner.request_issue_refresh(projects=projects)
 
     async def issues(self, repo):
         projects = (await self.refresh_projects()).get(repo)
@@ -314,6 +378,7 @@ class Symphony:
             if proposed_plan(description) != plan:
                 raise ValueError("Use level-three headings within the Proposed Plan.")
             await self.linear.update(issue["id"], description=description)
+            self.request_issue_refresh()
             return f"Saved the Proposed Plan section for {issue_id}."
         if name == "approve_issue":
             issue, repo = await self.live_issue(issue_id)
@@ -688,6 +753,78 @@ class IdleHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
+class WebhookHandler(BaseHTTPRequestHandler):
+    timeout = WEBHOOK_READ_SECONDS
+
+    def log_message(self, *_):
+        pass
+
+    def reply(self, status, message):
+        body = json.dumps({("status" if status < 400 else "error"): message}).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        with suppress(BrokenPipeError, ConnectionResetError):
+            self.end_headers()
+            self.wfile.write(body)
+
+    def unsupported(self):
+        self.reply(405, "Method not allowed.")
+
+    do_GET = do_HEAD = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = unsupported
+    do_TRACE = do_CONNECT = unsupported
+
+    def do_POST(self):
+        if urlsplit(self.path).path != "/webhooks/linear":
+            self.reply(404, "Not found.")
+            return
+        app = self.server.app
+        if not app.webhook_secret:
+            self.reply(503, "Webhook signing is not configured.")
+            return
+        try:
+            length = int(self.headers["Content-Length"])
+        except (KeyError, TypeError, ValueError):
+            self.reply(411, "Content-Length is required.")
+            return
+        if length <= 0:
+            self.reply(400, "A webhook body is required.")
+            return
+        if length > WEBHOOK_BODY_LIMIT:
+            self.reply(413, "Webhook body is too large.")
+            return
+        try:
+            body = self.rfile.read(length)
+        except (TimeoutError, OSError):
+            self.reply(408, "Webhook body timed out.")
+            return
+        if len(body) != length:
+            self.reply(400, "Webhook body is incomplete.")
+            return
+        signature = (self.headers.get("Linear-Signature") or "").strip()
+        expected = hmac.new(app.webhook_secret.encode(), body, hashlib.sha256).digest()
+        try:
+            provided = bytes.fromhex(signature)
+        except ValueError:
+            provided = b""
+        if not provided or not hmac.compare_digest(provided, expected):
+            self.reply(401, "Invalid webhook signature.")
+            return
+        try:
+            payload = json.loads(body)
+        except (UnicodeDecodeError, ValueError):
+            self.reply(400, "Invalid webhook payload.")
+            return
+        if not valid_webhook(payload):
+            self.reply(400, "Unsupported webhook payload.")
+            return
+        self.server.loop.call_soon_threadsafe(
+            app.request_issue_refresh, payload["type"] == "Project")
+        self.reply(200, "ok")
+
+
 async def serve():
     os.umask(0o077)
     root = Path(os.environ.get("SYMPHONY_DATA", "/data")).resolve()
@@ -705,12 +842,14 @@ async def serve():
         loop.add_signal_handler(sig, exit_event.set)
     with ((root / ".symphony.lock").open("w") as lock,
           ThreadingHTTPServer(("127.0.0.1", 8080), Handler) as http,
-          ThreadingHTTPServer(("0.0.0.0", 8081), IdleHandler) as idle_http):
+          ThreadingHTTPServer(("0.0.0.0", 8081), IdleHandler) as idle_http,
+          ThreadingHTTPServer(("0.0.0.0", 8082), WebhookHandler) as webhook_http):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        http.loop = idle_http.loop = loop
-        http.app = idle_http.app = Symphony(root)
+        http.loop = idle_http.loop = webhook_http.loop = loop
+        http.app = idle_http.app = webhook_http.app = Symphony(root)
         Thread(target=http.serve_forever, daemon=True).start()
         Thread(target=idle_http.serve_forever, daemon=True).start()
+        Thread(target=webhook_http.serve_forever, daemon=True).start()
         pump = asyncio.create_task(http.app.pump())
         http.app.runner.job(http.app.start())
         try:
@@ -718,6 +857,7 @@ async def serve():
         finally:
             await asyncio.to_thread(http.shutdown)
             await asyncio.to_thread(idle_http.shutdown)
+            await asyncio.to_thread(webhook_http.shutdown)
             pump.cancel()
             with suppress(asyncio.CancelledError):
                 await pump
