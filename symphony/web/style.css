@@ -42,7 +42,7 @@
 }
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
-body { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100dvh; }
+body { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100dvh; overflow: hidden; }
 button, textarea { font: inherit; color: inherit; }
 button {
   min-height: 34px;
@@ -85,6 +85,7 @@ h2 { font-size: .94rem; font-weight: 650; }
 main {
   display: grid;
   grid-template-columns: minmax(240px, 24vw) minmax(0, 1fr) minmax(260px, 26vw);
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
 }
 .issues-pane { min-width: 0; overflow: auto; padding: 16px; background: var(--surface); }
@@ -432,14 +433,14 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
 @media (max-width: 900px) {
   main {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(140px, 22dvh) minmax(0, 1fr) minmax(140px, 22dvh);
+    grid-template-rows: minmax(0, 22dvh) minmax(0, 1fr) minmax(0, 22dvh);
   }
   .issues-pane { border: 0; }
   .backlog-pane { border-bottom: 1px solid var(--line); }
   .status-pane { border-top: 1px solid var(--line); }
 }
 @media (max-width: 680px) {
-  main { grid-template-rows: minmax(120px, 20dvh) minmax(0, 1fr) minmax(120px, 20dvh); }
+  main { grid-template-rows: minmax(0, 20dvh) minmax(0, 1fr) minmax(0, 20dvh); }
   #repos { flex-wrap: nowrap; overflow-x: auto; padding-block: 4px; }
   #repos .project-chip { flex-shrink: 0; }
   .chat-log { padding-top: 12px; }

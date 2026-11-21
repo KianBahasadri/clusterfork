@@ -75,8 +75,9 @@ than growing through unobserved time. Diagnostic worker-log and verification
 excerpts are bounded, redacted server-side, and rendered as text; CI entries link
 to their exact GitHub runs and job logs. Live refreshes preserve expanded
 diagnostics, focus, selection, and scroll position. Closing the tab stops its
-refresh. The app fills the viewport below the project header. Connection failures
-appear as a temporary notice while Symphony reconnects.
+refresh. The app fills the viewport below the project header, keeping the page
+itself fixed while the chat and issue panes scroll independently. Connection
+failures appear as a temporary notice while Symphony reconnects.
 
 Type `/` to see commands. Use the arrow keys to choose one, Tab to complete it,
 or Enter to run it. Enter sends a message, Shift+Enter inserts a newline, and
