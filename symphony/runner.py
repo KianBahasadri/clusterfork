@@ -22,7 +22,7 @@ NOTES_LINES = 120
 REVIEW_SECONDS = 600
 REVIEW_LINES = 200
 REVIEW_BYTES = 20000
-REVIEW_MODEL = "opencode-go/muse-spark-1.3-contributor"
+REVIEW_MODEL = "opencode-go/kimi-k3.1-pro#low"
 WORKER_CONFIG = {
     "permissions": [
         {"action": "shell", "resource": "git push *", "effect": "deny"},

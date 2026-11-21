@@ -1577,7 +1577,7 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         environment = self.review_environment()
         self.assertEqual((artifacts / "review-runs").read_text(), "review\n")
         self.assertEqual(environment["args"][environment["args"].index("--model") + 1],
-                         "opencode-go/muse-spark-1.3-contributor")
+                         "opencode-go/kimi-k3.1-pro#low")
         for flag in ("run", "--standalone", "--auto", "--format"):
             self.assertIn(flag, environment["args"])
         self.assertNotIn("--session", environment["args"])

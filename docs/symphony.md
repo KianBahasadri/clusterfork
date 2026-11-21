@@ -137,7 +137,7 @@ that Symphony runs a second time, in the worktree, to get its own exit status.
 The worker's notes and log live in `runs/<issue-id>/` on the PVC. The worktree
 stays reserved through audit, rework, and CI. After verification exits 0 and
 before the coordinator audit, Symphony runs one stateless read-only OpenCode
-reviewer in a fresh session. It uses `opencode-go/muse-spark-1.3-contributor`
+reviewer in a fresh session. It uses `opencode-go/kimi-k3.1-pro#low`
 unless `SYMPHONY_REVIEW_MODEL` overrides the model. The reviewer receives the
 approved plan, notes, and full diff against the recorded base, with repository
 edits, writes, shell, subagents, and MCP tools denied. Symphony writes a bounded
