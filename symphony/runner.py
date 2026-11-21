@@ -228,7 +228,7 @@ class Runner:
                 {"action": "subagent", "resource": "*", "effect": "deny"},
             ]})
             args = ["opencode", "run", "--standalone", "--auto", "--format", "json",
-                    "--model", os.environ.get("SYMPHONY_WORKER_MODEL", "opencode-go/gpt-6-luna")]
+                    "--model", os.environ.get("SYMPHONY_WORKER_MODEL", "opencode-go/deepseek-v4.1-flash#max")]
             if row["session"]:
                 args += ["--session", row["session"]]
             with (artifacts / "worker.log").open("ab") as log:

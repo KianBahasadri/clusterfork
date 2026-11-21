@@ -73,6 +73,7 @@ import sys
 workspace = Path(os.environ["FIXTURE_ROOT"]) / "runs/KIAN-101"
 assert "Write one verification file." in sys.argv[-1]
 assert "Never ship from the worker." in sys.argv[-1]
+assert sys.argv[sys.argv.index("--model") + 1] == "opencode-go/deepseek-v4.1-flash#max"
 assert "GITHUB_TOKEN" not in os.environ
 print(json.dumps({"type":"text","sessionID":"ses_fixture"}))
 Path("verified.txt").write_text("Tested\\n")
