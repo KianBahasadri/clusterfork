@@ -961,6 +961,52 @@ Path("verified.txt").write_text("Tested\\n")
         self.assertTrue(self.runner.worktree(ISSUE).is_dir())
         self.assertEqual(self.linear.state["name"], "In Progress")
 
+    async def test_pump_batches_queued_worker_events_in_one_turn(self):
+        app = self.app()
+        app.coordinator.account = "chatgpt"
+        await self.approve()
+        self.runner.change(ISSUE, phase="ci", event="Pushed to main. Waiting for GitHub Actions.")
+        self.runner.change(ISSUE, phase="done", event="Done.")
+
+        received = []
+        done = asyncio.Event()
+
+        async def fake_respond(text, cwd):
+            received.append((text, cwd))
+            if len(received) == 1:
+                # An event arriving mid-turn must stay undelivered for the next batch.
+                self.runner.change(ISSUE, event="Follow-up notice.")
+            else:
+                done.set()
+            return "completed"
+
+        app.coordinator.respond = AsyncMock(side_effect=fake_respond)
+        pump = asyncio.create_task(app.pump())
+        self.addAsyncCleanup(lambda: self._cancel_task(pump))
+        app.runner.wake.set()
+        async with asyncio.timeout(5):
+            await done.wait()
+
+        self.assertEqual(len(received), 2)
+        first_text, first_cwd = received[0]
+        self.assertEqual(first_cwd, self.repo)
+        self.assertIn("Worker events (2):", first_text)
+        self.assertIn(f"- {ISSUE}: Pushed to main. Waiting for GitHub Actions.", first_text)
+        self.assertIn(f"- {ISSUE}: Done.", first_text)
+        self.assertEqual(first_text.count(f"Approved plan for {ISSUE}:"), 1)
+
+        second_text, _ = received[1]
+        self.assertIn(f"Worker event for {ISSUE}: Follow-up notice.", second_text)
+        self.assertEqual(self.runner.rows("SELECT 1 FROM events WHERE delivered=0"), [])
+
+    @staticmethod
+    async def _cancel_task(task):
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
 
 class PaneTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node is required for JavaScript checks.")

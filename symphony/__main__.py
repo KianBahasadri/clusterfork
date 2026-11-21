@@ -263,13 +263,13 @@ class Symphony:
         self.messages.append((repo, text, message))
         self.runner.wake.set()
 
-    async def context(self, repo, issue=None):
+    async def context(self, repo, issues=()):
         cwd = await self.runner.checkout(repo, refresh=repo != self.turn_repo) if repo else self.runner.directory
         context = []
         rules = (cwd / "AGENTS.md").resolve()
         if rules.is_relative_to(cwd) and rules.is_file():
             context.append("Active repository AGENTS.md:\n" + read_small(rules, 32000))
-        if issue:
+        for issue in dict.fromkeys(issues):
             row = self.runner.task(issue)
             context.append(f"Approved plan for {issue}:\n{row['plan']}")
         tasks = self.runner.status()
@@ -278,8 +278,8 @@ class Symphony:
         self.turn_repo = repo
         return cwd, "\n\n".join(context)
 
-    async def respond(self, repo, message, issue=None):
-        cwd, context = await self.context(repo, issue)
+    async def respond(self, repo, message, issues=()):
+        cwd, context = await self.context(repo, issues)
         text = f"{message}\n\n--- Current Symphony context ---\n{context}" if context else message
         return await self.coordinator.respond(text, cwd)
 
@@ -322,7 +322,7 @@ class Symphony:
             elif row["phase"] == "blocked":
                 self.runner.change(row["issue"], attempts=0)
                 await self.respond(row["repo"], f"The operator requested another attempt at {row['issue']}.",
-                                   row["issue"])
+                                   (row["issue"],))
             else:
                 raise ValueError(f"{row['issue']} is {row['phase']}.")
         elif command.startswith("/"):
@@ -330,9 +330,9 @@ class Symphony:
         else:
             await self.respond(repo, message)
 
-    def event_delivered(self, event_id):
+    def events_delivered(self, event_ids):
         with self.runner.db:
-            self.runner.db.execute("UPDATE events SET delivered=1 WHERE id=?", (event_id,))
+            self.runner.db.executemany("UPDATE events SET delivered=1 WHERE id=?", [(eid,) for eid in event_ids])
 
     async def pump(self):
         while True:
@@ -354,16 +354,21 @@ class Symphony:
                     continue
                 if not self.coordinator.account:
                     break
-                events = self.runner.rows("SELECT * FROM events WHERE delivered=0 ORDER BY id LIMIT 1")
+                events = self.runner.rows("SELECT * FROM events WHERE delivered=0 ORDER BY id")
                 if not events:
                     break
-                event = events[0]
-                row = self.runner.task(event["issue"])
+                rows = {issue: self.runner.task(issue) for issue in dict.fromkeys(event["issue"] for event in events)}
+                repos = list(dict.fromkeys(row["repo"] for row in rows.values()))
+                repo = repos[0] if len(repos) == 1 else ""
+                if len(events) == 1:
+                    prompt = f"Worker event for {events[0]['issue']}: {events[0]['detail']}"
+                else:
+                    lines = "\n".join(f"- {event['issue']}: {event['detail']}" for event in events)
+                    prompt = f"Worker events ({len(events)}):\n{lines}"
                 self.busy = True
                 try:
-                    status = await self.respond(row["repo"], f"Worker event for {row['issue']}: {event['detail']}",
-                                                row["issue"])
-                    self.event_delivered(event["id"])
+                    status = await self.respond(repo, prompt, tuple(rows))
+                    self.events_delivered([event["id"] for event in events])
                     if status == "interrupted":
                         break
                 except (ValueError, RuntimeError, OSError, TimeoutError) as error:
