@@ -10,8 +10,14 @@ const messages = byId("messages");
 const chatLog = byId("chat-log");
 const composer = byId("composer");
 const messageField = byId("message");
+const attachmentList = byId("attachments");
 const commandList = byId("command-list");
 const interrupt = byId("interrupt");
+const pendingImages = [];
+const imageTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+const imageCount = 4;
+const imageBytes = 5 * 1024 * 1024;
+const imagesBytes = 10 * 1024 * 1024;
 const expandedPlans = new Set();
 const collapsedGroups = new Set();
 const priorityIcons = ["ellipsis", "octagon-alert", "signal", "signal-medium", "signal-low"];
@@ -290,7 +296,28 @@ function selectProject(project) {
   statusPane.scrollTop = statusScroll.get(project) || 0;
 }
 
-function appendMessage(role, text, html) {
+function imageUrl(name) {
+  return "/api/chat-image?name=" + encodeURIComponent(name);
+}
+
+function imageGallery(images, className) {
+  const gallery = element("div", "", className);
+  images.forEach((image, index) => {
+    const link = element("a", "", "message-image");
+    link.href = imageUrl(image.name);
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    const preview = element("img");
+    preview.src = imageUrl(image.name);
+    preview.alt = "Attached image " + (index + 1);
+    preview.loading = "lazy";
+    link.append(preview);
+    gallery.append(link);
+  });
+  return gallery;
+}
+
+function appendMessage(role, text, html, images = []) {
   const label = {user: "You", assistant: "Coordinator", system: "Symphony", worker: "Worker"};
   const entry = element("article", "", "message " + role);
   const content = element("div", role === "assistant" ? "" : text, "message-text");
@@ -299,7 +326,88 @@ function appendMessage(role, text, html) {
     content.innerHTML = html;
   }
   entry.append(element("h2", label[role] || "Symphony"), content);
+  if (images.length) entry.append(imageGallery(images, "message-images"));
   messages.append(entry);
+}
+
+function setComposerError(message) {
+  byId("request-error").textContent = message;
+}
+
+function renderAttachments() {
+  attachmentList.hidden = !pendingImages.length;
+  attachmentList.replaceChildren(...pendingImages.map((image, index) => {
+    const item = element("div", "", "composer-attachment");
+    item.setAttribute("role", "listitem");
+    const preview = element("img");
+    preview.src = image.url;
+    preview.alt = "Pasted image " + (index + 1);
+    const remove = element("button", "", "attachment-remove");
+    remove.type = "button";
+    remove.title = "Remove attached image";
+    remove.setAttribute("aria-label", "Remove attached image " + (index + 1));
+    remove.append(icon("x"));
+    remove.addEventListener("click", () => removeAttachment(image));
+    item.append(preview, remove);
+    return item;
+  }));
+}
+
+function attachImage(file) {
+  if (!file || !imageTypes.has(file.type)) {
+    setComposerError("Attach PNG, JPEG, or WebP images.");
+    return;
+  }
+  if (pendingImages.length >= imageCount) {
+    setComposerError("Attach at most four images.");
+    return;
+  }
+  if (file.size > imageBytes) {
+    setComposerError("Each image must be at most 5 MiB.");
+    return;
+  }
+  const total = pendingImages.reduce((sum, image) => sum + image.file.size, 0);
+  if (total + file.size > imagesBytes) {
+    setComposerError("Attached images must total at most 10 MiB.");
+    return;
+  }
+  pendingImages.push({file, url: URL.createObjectURL(file)});
+  setComposerError("");
+  renderAttachments();
+}
+
+function removeAttachment(image) {
+  const index = pendingImages.indexOf(image);
+  if (index < 0) return;
+  pendingImages.splice(index, 1);
+  URL.revokeObjectURL(image.url);
+  renderAttachments();
+}
+
+function clearAttachments(images) {
+  for (const image of images) {
+    const index = pendingImages.indexOf(image);
+    if (index >= 0) pendingImages.splice(index, 1);
+    URL.revokeObjectURL(image.url);
+  }
+  renderAttachments();
+}
+
+function imagePayload(image) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read an attached image."));
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      const comma = result.indexOf(",");
+      if (comma < 0) {
+        reject(new Error("Could not read an attached image."));
+        return;
+      }
+      resolve({type: image.file.type, data: result.slice(comma + 1)});
+    };
+    reader.readAsDataURL(image.file);
+  });
 }
 
 function showLogin(state) {
@@ -359,7 +467,7 @@ async function poll() {
     const state = await api("/api/state?after=" + lastMessage + "&issues=" + issueRevision);
     const pinned = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 80;
     for (const item of state.messages) {
-      appendMessage(item.role, item.text, item.html);
+      appendMessage(item.role, item.text, item.html, item.images || []);
       lastMessage = item.id;
     }
     byId("welcome").hidden = Boolean(lastMessage);
@@ -401,14 +509,14 @@ async function poll() {
   }
 }
 
-async function submit(text) {
+async function submit(text, images = [], project = selected) {
   const errorField = byId("request-error");
   errorField.textContent = "";
   try {
     await api("/api/chat", {
       method: "POST",
       headers: {"Content-Type": "application/json", "X-Symphony": "1"},
-      body: JSON.stringify({text, project: selected}),
+      body: JSON.stringify({text, project, images}),
     });
     chatLog.scrollTop = chatLog.scrollHeight;
     return true;
@@ -543,17 +651,45 @@ function recallHistory(direction) {
 composer.addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = messageField.value;
-  if (sending || !text.trim()) return;
+  const project = selected;
+  if (sending || (!text.trim() && !pendingImages.length)) return;
+  if (pendingImages.length && text.trim().startsWith("/")) {
+    setComposerError("Images cannot be sent with slash commands.");
+    return;
+  }
   sending = true;
-  writeDraft("");
-  if (await submit(text)) {
-    history.push(text);
-    if (history.length > 100) history.shift();
-    historyIndex = history.length;
+  const accepted = [...pendingImages];
+  let images = [];
+  try {
+    images = await Promise.all(accepted.map(imagePayload));
+  } catch (error) {
+    setComposerError(error.message);
+    sending = false;
+    return;
+  }
+  if (messageField.value === text) writeDraft("");
+  if (await submit(text, images, project)) {
+    if (text.trim()) {
+      history.push(text);
+      if (history.length > 100) history.shift();
+      historyIndex = history.length;
+    }
+    clearAttachments(accepted);
   } else if (!messageField.value) {
     writeDraft(text);
   }
   sending = false;
+});
+
+messageField.addEventListener("paste", (event) => {
+  const items = [...(event.clipboardData?.items || [])];
+  const files = items
+    .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+    .map((item) => item.getAsFile())
+    .filter(Boolean);
+  if (!files.length) return;
+  event.preventDefault();
+  for (const file of files) attachImage(file);
 });
 
 messageField.addEventListener("input", () => {

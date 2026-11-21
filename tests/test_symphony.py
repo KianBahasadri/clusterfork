@@ -1,7 +1,10 @@
 """Exercise the MVP's approval and publication boundaries without provider calls."""
 
 import asyncio
+import base64
 from datetime import datetime, timezone
+from email.message import Message
+from io import BytesIO
 import json
 import os
 from pathlib import Path
@@ -12,9 +15,9 @@ import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
-from symphony.__main__ import Symphony
+from symphony.__main__ import BODY_LIMIT, Handler, Symphony
 from symphony.codex import Codex, TOOLS, TOOLS_HASH
 from symphony.runner import (
     REVIEW_LINES, Runner, bounded_review, validate_review,
@@ -24,6 +27,13 @@ from symphony.services import Linear, matches_filter, proposed_plan, with_plan
 
 ISSUE = "KIAN-101"
 REPO = "owner/project"
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 16
+WEBP = b"RIFF" + (16).to_bytes(4, "little") + b"WEBP" + b"\x00" * 8
+
+
+def image_payload(data=PNG, mime="image/png"):
+    return {"type": mime, "data": base64.b64encode(data).decode()}
 
 
 class LinearFixture:
@@ -275,6 +285,178 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         self.assertEqual(assistant_messages[0]["html"], stream_html)
         self.assertEqual(self.runner.rows("SELECT role, text FROM chat")[-1]["text"], reply)
 
+    async def test_chat_images_store_attach_to_history_and_serve(self):
+        app = self.app()
+        payloads = [image_payload(PNG), image_payload(JPEG, "image/jpeg"),
+                    image_payload(WEBP, "image/webp")]
+        await app.submit({"text": "Screenshot", "images": payloads})
+
+        repo, text, message, images = app.messages.popleft()
+        self.assertEqual((repo, text, message), ("", "Screenshot", "Screenshot"))
+        self.assertEqual([image["type"] for image in images],
+                         ["image/png", "image/jpeg", "image/webp"])
+        self.assertEqual(len({image["name"] for image in images}), 3)
+        for image, expected in zip(images, (PNG, JPEG, WEBP)):
+            self.assertRegex(image["name"], r"^[0-9a-f]{32}\.(?:png|jpg|webp)$")
+            path = app.runner.chat_image_path(image["name"])
+            self.assertEqual(path.parent, app.runner.chat_image_dir())
+            self.assertEqual(path.read_bytes(), expected)
+            self.assertEqual(app.chat_image(image["name"]), (expected, image["type"]))
+
+        state = await app.state(0)
+        self.assertEqual(state["messages"][-1]["text"], "Screenshot")
+        self.assertEqual(state["messages"][-1]["images"], images)
+        self.assertEqual(json.loads(self.runner.rows("SELECT attachments FROM chat")[-1]["attachments"]),
+                         images)
+
+        handler = object.__new__(Handler)
+        handler.path = "/api/chat-image?name=" + images[0]["name"]
+        handler.server = SimpleNamespace(app=app)
+        handler.wfile = BytesIO()
+        handler.send_response = Mock()
+        handler.send_header = Mock()
+        handler.end_headers = Mock()
+        handler.do_GET()
+        headers = dict(call.args for call in handler.send_header.call_args_list)
+        self.assertEqual(headers["Content-Type"], "image/png")
+        self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+        self.assertEqual(handler.wfile.getvalue(), PNG)
+        handler.send_response.assert_called_once_with(200)
+
+    async def test_chat_images_reject_invalid_uploads_and_slash_commands(self):
+        app = self.app()
+        cases = [
+            ({"text": "x", "images": [image_payload()] * 5}, "at most four"),
+            ({"text": "x", "images": [{"type": "image/gif", "data": "R0lGODlh"}]},
+             "PNG, JPEG, or WebP"),
+            ({"text": "x", "images": [{"type": "image/png", "data": "!!!"}]},
+             "Invalid image encoding"),
+            ({"text": "x", "images": [image_payload(JPEG)]}, "does not match its type"),
+            ({"text": "/status", "images": [image_payload()]}, "slash commands"),
+            ({"text": "x" * 23001}, "23,000"),
+        ]
+        for body, message in cases:
+            with self.subTest(body=body, message=message):
+                before = len(self.runner.rows("SELECT * FROM chat"))
+                with self.assertRaisesRegex(ValueError, message):
+                    await app.submit(body)
+                self.assertEqual(len(self.runner.rows("SELECT * FROM chat")), before)
+        self.assertFalse(app.runner.chat_image_dir().exists())
+
+        with patch("symphony.__main__.IMAGE_BYTES", len(PNG) - 1):
+            with self.assertRaisesRegex(ValueError, "5 MiB"):
+                await app.submit({"text": "x", "images": [image_payload()]})
+        with patch("symphony.__main__.IMAGES_BYTES", len(PNG) + len(JPEG) - 1):
+            with self.assertRaisesRegex(ValueError, "10 MiB"):
+                await app.submit({"text": "x", "images": [image_payload(PNG),
+                                                            image_payload(JPEG, "image/jpeg")]})
+        self.assertFalse(app.runner.chat_image_dir().exists())
+
+    async def test_chat_images_are_removed_when_saving_the_chat_entry_fails(self):
+        app = self.app()
+        with patch.object(app.runner, "chat", side_effect=RuntimeError("Database unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "Database unavailable"):
+                await app.submit({"text": "Screenshot", "images": [image_payload()]})
+        self.assertEqual(list(app.runner.chat_image_dir().iterdir()), [])
+
+    async def test_chat_images_follow_a_failed_steer_into_the_queue(self):
+        app = self.app()
+        app.repos[REPO] = [{"id": "project", "name": "Fixture"}]
+        app.turn_repo = REPO
+        app.coordinator.thread = "main"
+        app.coordinator.turn = "turn"
+        self.runner.save_setting("view", "project")
+        note = "Continue with this screenshot."
+        with patch.object(app.coordinator, "steer", new_callable=AsyncMock,
+                          side_effect=RuntimeError("Steer failed")) as steer:
+            await app.submit({"project": "project", "text": note,
+                              "images": [image_payload()]})
+        steer.assert_awaited_once()
+        first = app.messages.popleft()
+        self.assertEqual(first[:3], (REPO, note, note))
+        self.assertEqual([image["type"] for image in first[3]], ["image/png"])
+
+        with patch.object(app.coordinator, "respond", new_callable=AsyncMock,
+                          return_value="completed") as respond:
+            await app.handle(*first)
+        text, cwd, attachments = respond.await_args.args
+        self.assertEqual((text, cwd), (note, self.repo))
+        self.assertEqual(attachments, first[3])
+
+    async def test_chat_images_cross_a_project_switch_in_the_queue(self):
+        app = self.app()
+        app.repos[REPO] = [{"id": "project", "name": "Fixture"}]
+        app.repos["owner/second"] = [{"id": "beta", "name": "Beta"}]
+        self.runner.save_setting("view", "project")
+        await app.submit({"project": "beta", "text": "Use this mockup.",
+                          "images": [image_payload(WEBP, "image/webp")]})
+
+        repo, text, message, images = app.messages.popleft()
+        self.assertEqual((repo, text), ("owner/second", "Use this mockup."))
+        self.assertEqual(message, "[Switched view: Beta]\nUse this mockup.")
+        self.assertEqual(images[0]["type"], "image/webp")
+        self.assertEqual(json.loads(self.runner.rows(
+            "SELECT attachments FROM chat ORDER BY id DESC LIMIT 1")[0]["attachments"]), images)
+        self.assertEqual(app.runner.setting("view"), "beta")
+
+    async def test_codex_receives_native_image_inputs_for_start_and_steer(self):
+        app = self.app()
+        name = self.runner.save_chat_image("png", PNG)
+        images = [{"name": name, "type": "image/png"}]
+        path = str(self.runner.chat_image_path(name))
+        codex = Codex(self.runner, None)
+        codex.thread = "thread"
+        codex.turn = "turn"
+        with patch.object(codex, "ensure_thread"), \
+             patch.object(codex, "turn_request", new_callable=AsyncMock,
+                          return_value="completed") as turn:
+            await codex.respond("Look at this", self.root, images)
+            method, params = turn.await_args.args
+            self.assertEqual(method, "turn/start")
+            self.assertEqual(params["input"], [
+                {"type": "text", "text": "Look at this", "text_elements": []},
+                {"type": "localImage", "path": path},
+            ])
+            await codex.respond("Text only", self.root)
+            _, params = turn.await_args.args
+            self.assertEqual(params["input"], [
+                {"type": "text", "text": "Text only", "text_elements": []},
+            ])
+
+        with patch.object(codex, "request", new_callable=AsyncMock,
+                          return_value={}) as request:
+            await codex.steer("Also this", images)
+        method, params = request.await_args.args
+        self.assertEqual(method, "turn/steer")
+        self.assertEqual(params["input"], [
+            {"type": "text", "text": "Also this", "text_elements": []},
+            {"type": "localImage", "path": path},
+        ])
+
+    async def test_chat_image_paths_are_contained_and_traversal_is_rejected(self):
+        app = self.app()
+        directory = app.runner.chat_image_dir()
+        directory.mkdir(parents=True)
+        outside = self.root / "outside.png"
+        outside.write_bytes(PNG)
+        link = directory / ("a" * 32 + ".png")
+        link.symlink_to(outside)
+        for name in ("../outside.png", str(outside), "A" * 32 + ".png", link.name):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "Image not found"):
+                app.runner.chat_image_path(name)
+        with self.assertRaisesRegex(ValueError, "Image not found"):
+            app.chat_image(link.name)
+
+        handler = object.__new__(Handler)
+        handler.path = "/api/chat-image?name=..%2Foutside.png"
+        handler.server = SimpleNamespace(app=app)
+        handler.wfile = BytesIO()
+        handler.send_response = Mock()
+        handler.send_header = Mock()
+        handler.end_headers = Mock()
+        handler.do_GET()
+        handler.send_response.assert_called_once_with(404)
+
     async def test_approval_retry_wakes_the_coordinator(self):
         await self.fail_approval()
         app = self.app()
@@ -442,7 +624,7 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
             with self.assertRaisesRegex(RuntimeError, "Codex disconnected"):
                 await app.submit({"project": "project", "text": "/interrupt"})
         self.assertEqual([call.args[0] for call in request.await_args_list], ["turn/steer", "turn/interrupt"])
-        self.assertEqual(list(app.messages), [(REPO, note, note)])
+        self.assertEqual(list(app.messages), [(REPO, note, note, [])])
         self.assertTrue(self.runner.wake.is_set())
         self.assertEqual(self.runner.rows("SELECT role, text FROM chat"), [{"role": "user", "text": note}])
 
@@ -1732,6 +1914,42 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
             await task
         except asyncio.CancelledError:
             pass
+
+
+class ChatHttpTests(unittest.TestCase):
+    def test_chat_http_policy_allows_blob_previews_without_weakening_sources(self):
+        handler = object.__new__(Handler)
+        handler.wfile = BytesIO()
+        handler.send_response = Mock()
+        handler.send_header = Mock()
+        handler.end_headers = Mock()
+        handler.respond(b"ok", "text/plain")
+        headers = dict(call.args for call in handler.send_header.call_args_list)
+        policy = headers["Content-Security-Policy"]
+        self.assertIn("img-src 'self' https: data: blob:", policy)
+        for rule in ("default-src 'none'", "script-src 'self'", "style-src 'self'",
+                     "connect-src 'self'", "base-uri 'none'", "frame-ancestors 'none'"):
+            self.assertIn(rule, policy)
+        self.assertNotIn("img-src *", policy)
+        self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+
+    def test_chat_http_rejects_bodies_above_the_bound_before_reading(self):
+        headers = Message()
+        headers["Content-Length"] = str(BODY_LIMIT + 1)
+        headers["X-Symphony"] = "1"
+        headers["Content-Type"] = "application/json"
+        headers["Sec-Fetch-Site"] = "same-origin"
+        handler = object.__new__(Handler)
+        handler.path = "/api/chat"
+        handler.headers = headers
+        handler.server = SimpleNamespace(app=SimpleNamespace(submit=Mock()))
+        handler.wfile = BytesIO()
+        handler.send_response = Mock()
+        handler.send_header = Mock()
+        handler.end_headers = Mock()
+        handler.do_POST()
+        handler.server.app.submit.assert_not_called()
+        handler.send_response.assert_called_once_with(400)
 
 
 class PaneTests(unittest.TestCase):

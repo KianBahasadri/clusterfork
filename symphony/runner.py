@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import sqlite3
 import time
+from uuid import uuid4
 
 from .services import (
     CLOSED_STATES, ci_jobs, ci_runs, ci_workflows, command, git, proposed_plan, stop_process,
@@ -46,6 +47,7 @@ WORKER_CONFIG = {
 }
 CI_DISCOVERY_SECONDS = 480
 SESSION_ID = re.compile(r"ses_[A-Za-z0-9]+\Z")
+CHAT_IMAGE_NAME = re.compile(r"[0-9a-f]{32}\.(?:png|jpg|webp)\Z")
 REVIEW_VERDICT = re.compile(r"\s*VERDICT:\s*(NO ISSUES|ISSUES)\s*", re.I)
 REVIEW_CLEAN = re.compile(r"\s*No issues found\.?\s*", re.I)
 REVIEW_FINDING = re.compile(r"\S+:\d+(?::\d+)?\b")
@@ -66,7 +68,8 @@ CREATE TABLE IF NOT EXISTS events (
     delivered INTEGER NOT NULL DEFAULT 0, phase TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS chat (
-    id INTEGER PRIMARY KEY, role TEXT NOT NULL, text TEXT NOT NULL
+    id INTEGER PRIMARY KEY, role TEXT NOT NULL, text TEXT NOT NULL,
+    attachments TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS execution (
@@ -238,6 +241,8 @@ class Runner:
         with self.db:
             if "phase" not in {row["name"] for row in self.db.execute("PRAGMA table_info(events)")}:
                 self.db.execute("ALTER TABLE events ADD COLUMN phase TEXT NOT NULL DEFAULT ''")
+            if "attachments" not in {row["name"] for row in self.db.execute("PRAGMA table_info(chat)")}:
+                self.db.execute("ALTER TABLE chat ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'")
         self.migrate_unphased_events()
         self.jobs = set()
         self.cloning = {}
@@ -254,9 +259,36 @@ class Runner:
         with self.db:
             self.db.executemany("INSERT OR REPLACE INTO settings VALUES (?, ?)", values.items())
 
-    def chat(self, role, text):
+    def chat(self, role, text, attachments=()):
         with self.db:
-            self.db.execute("INSERT INTO chat(role,text) VALUES (?,?)", (role, text))
+            self.db.execute("INSERT INTO chat(role,text,attachments) VALUES (?,?,?)",
+                            (role, text, json.dumps(list(attachments), ensure_ascii=False)))
+
+    def chat_image_dir(self):
+        return self.directory / "chat-images"
+
+    def chat_image_path(self, name):
+        if not isinstance(name, str) or not CHAT_IMAGE_NAME.fullmatch(name):
+            raise ValueError("Image not found.")
+        directory = self.chat_image_dir()
+        path = (directory / name).resolve()
+        if path.parent != directory.resolve():
+            raise ValueError("Image not found.")
+        return path
+
+    def save_chat_image(self, extension, data):
+        directory = self.chat_image_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        name = f"{uuid4().hex}.{extension}"
+        path = directory / name
+        try:
+            with path.open("xb") as stream:
+                stream.write(data)
+            path.chmod(0o600)
+        except OSError:
+            path.unlink(missing_ok=True)
+            raise
+        return name
 
     def rows(self, query, parameters=()):
         return [dict(row) for row in self.db.execute(query, parameters)]

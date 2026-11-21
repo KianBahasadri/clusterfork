@@ -75,6 +75,13 @@ def text_input(text):
     return [{"type": "text", "text": text, "text_elements": []}]
 
 
+def turn_input(runner, text, attachments=()):
+    items = text_input(text) if text else []
+    items.extend({"type": "localImage", "path": str(runner.chat_image_path(image["name"]))}
+                 for image in attachments)
+    return items
+
+
 def context_used(usage):
     window = usage.get("modelContextWindow")
     if not window:
@@ -335,9 +342,10 @@ class Codex:
         finally:
             self.finished = None
 
-    async def respond(self, text, cwd):
+    async def respond(self, text, cwd, attachments=()):
         await self.ensure_thread(cwd)
-        params = {"threadId": self.thread, "input": text_input(text), "cwd": str(cwd)}
+        params = {"threadId": self.thread, "input": turn_input(self.runner, text, attachments),
+                  "cwd": str(cwd)}
         for name in ("model", "effort"):
             if self.runner.setting(name):
                 params[name] = self.runner.setting(name)
@@ -347,12 +355,12 @@ class Codex:
         await self.ensure_thread(cwd)
         return await self.turn_request("thread/compact/start", {"threadId": self.thread})
 
-    async def steer(self, text):
+    async def steer(self, text, attachments=()):
         if not self.turn:
             raise ValueError("No active turn to steer.")
         return await self.request("turn/steer", {"threadId": self.thread,
                                                    "expectedTurnId": self.turn,
-                                                   "input": text_input(text)})
+                                                   "input": turn_input(self.runner, text, attachments)})
 
     async def interrupt(self):
         if not self.turn:

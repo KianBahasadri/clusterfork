@@ -85,7 +85,13 @@ Type `/` to see commands. Use the arrow keys to choose one, Tab to complete it,
 or Enter to run it. Enter sends a message, Shift+Enter inserts a newline, and
 the up arrow at the start of the prompt recalls previous inputs. Escape closes
 command suggestions first. Clicking or tapping the composer leaves its border
-neutral; keyboard navigation shows its focus ring.
+neutral; keyboard navigation shows its focus ring. Paste PNG, JPEG, or WebP
+images into the composer to attach up to four images per message, 5 MiB each
+and 10 MiB total. Pending thumbnails have accessible remove controls, may
+accompany text or be sent alone, and remain available for retry after a failed
+submission. Accepted images are stored on the Symphony data volume, passed to
+Codex as native image inputs, and shown with their user message after reloads.
+Slash commands do not accept images.
 Coordinator replies render Markdown links, emphasis, paragraphs, lists, and code;
 external and relative link destinations are preserved. Raw HTML is escaped and
 unsafe URL schemes are blocked. User messages and operational notices remain

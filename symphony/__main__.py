@@ -1,6 +1,8 @@
 """Serve Symphony on loopback behind the tailnet HTTPS proxy."""
 
 import asyncio
+import base64
+import binascii
 from collections import deque
 from contextlib import suppress
 from concurrent.futures import TimeoutError as RequestTimeout
@@ -34,11 +36,60 @@ STATIC = {
     "/style.css": ("style.css", "text/css; charset=utf-8"),
     "/favicon.ico": ("favicon.ico", "image/vnd.microsoft.icon"),
 }
-BODY_LIMIT = 32000
+BODY_LIMIT = 14 * 1024 * 1024
+TEXT_LIMIT = 23000
+IMAGE_COUNT = 4
+IMAGE_BYTES = 5 * 1024 * 1024
+IMAGES_BYTES = 10 * 1024 * 1024
+IMAGE_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
+IMAGE_MAGIC = {"image/png": b"\x89PNG\r\n\x1a\n", "image/jpeg": b"\xff\xd8\xff"}
+IMAGE_CONTENT_TYPES = {extension: mime for mime, extension in IMAGE_TYPES.items()}
+CONTENT_SECURITY_POLICY = (
+    "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
+    "img-src 'self' https: data: blob:; base-uri 'none'; frame-ancestors 'none'"
+)
 ISSUE_REFRESH_SECONDS = 30
 HISTORY_CONCURRENCY = 3
 RECENT_DONE = timedelta(hours=24)
 ACTIVE_PHASES = {"approving", "working", "publishing", "ci", "finishing"}
+
+
+def image_matches(mime, data):
+    if mime == "image/webp":
+        return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    return data.startswith(IMAGE_MAGIC[mime])
+
+
+def decode_chat_images(images):
+    if images is None:
+        return []
+    if not isinstance(images, list):
+        raise ValueError("Invalid image attachments.")
+    if len(images) > IMAGE_COUNT:
+        raise ValueError("Attach at most four images.")
+    decoded = []
+    total = 0
+    for image in images:
+        if not isinstance(image, dict) or set(image) != {"type", "data"}:
+            raise ValueError("Invalid image attachment.")
+        mime, data = image["type"], image["data"]
+        if not isinstance(mime, str) or mime not in IMAGE_TYPES:
+            raise ValueError("Attach PNG, JPEG, or WebP images.")
+        if not isinstance(data, str):
+            raise ValueError("Invalid image encoding.")
+        try:
+            raw = base64.b64decode(data, validate=True)
+        except (ValueError, binascii.Error):
+            raise ValueError("Invalid image encoding.") from None
+        if len(raw) > IMAGE_BYTES:
+            raise ValueError("Each image must be at most 5 MiB.")
+        total += len(raw)
+        if total > IMAGES_BYTES:
+            raise ValueError("Attached images must total at most 10 MiB.")
+        if not raw or not image_matches(mime, raw):
+            raise ValueError("Image data does not match its type.")
+        decoded.append((mime, IMAGE_TYPES[mime], raw))
+    return decoded
 
 
 def project_list(repos):
@@ -215,6 +266,29 @@ class Symphony:
             return issue, found[0]
         raise ValueError(self.link_problems.get(project, f"{identifier} is not in a mapped Linear project."))
 
+    def save_chat_images(self, images):
+        saved = []
+        try:
+            for mime, extension, data in images:
+                name = self.runner.save_chat_image(extension, data)
+                saved.append({"name": name, "type": mime})
+        except (OSError, ValueError):
+            self.remove_chat_images(saved)
+            raise
+        return saved
+
+    def remove_chat_images(self, images):
+        for image in images:
+            with suppress(OSError, ValueError):
+                self.runner.chat_image_path(image["name"]).unlink(missing_ok=True)
+
+    def chat_image(self, name):
+        path = self.runner.chat_image_path(name)
+        content_type = IMAGE_CONTENT_TYPES.get(path.suffix.lstrip("."))
+        if not content_type or not path.is_file():
+            raise ValueError("Image not found.")
+        return path.read_bytes(), content_type
+
     async def tool(self, name, args):
         keys = TOOL_SPECS[name][1]
         if not isinstance(args, dict) or set(args) != set(keys) or any(not isinstance(args[key], str) for key in keys):
@@ -272,6 +346,11 @@ class Symphony:
         login = self.login if not self.coordinator.account and self.login and time.monotonic() < self.login["expires"] else None
         messages = self.runner.rows("SELECT * FROM chat WHERE id > ? ORDER BY id LIMIT 200", (after,))
         for message in messages:
+            try:
+                images = json.loads(message.pop("attachments") or "[]")
+            except (TypeError, ValueError):
+                images = []
+            message["images"] = images if isinstance(images, list) else []
             if message["role"] == "assistant":
                 message["html"] = markdown(message["text"])
         state = {"messages": messages,
@@ -299,9 +378,16 @@ class Symphony:
     async def submit(self, body):
         text = body.get("text")
         project = body.get("project") or ""
-        if not isinstance(text, str) or not text.strip() or not isinstance(project, str):
+        if not isinstance(text, str) or not isinstance(project, str):
             raise ValueError("Enter a message.")
         text = text.strip()
+        if len(text) > TEXT_LIMIT:
+            raise ValueError(f"Messages must be at most {TEXT_LIMIT:,} characters.")
+        images = decode_chat_images(body.get("images"))
+        if not text and not images:
+            raise ValueError("Enter a message.")
+        if images and text.startswith("/"):
+            raise ValueError("Images cannot be sent with slash commands.")
         if text == "/interrupt":
             await self.coordinator.interrupt()
             self.runner.chat("user", text)
@@ -315,14 +401,19 @@ class Symphony:
             self.runner.save_setting("view", project)
         label = found[1]["name"] if found else "All projects"
         message = f"[Switched view: {label}]\n{text}" if project != previous else text
-        self.runner.chat("user", message)
+        attachments = self.save_chat_images(images)
+        try:
+            self.runner.chat("user", message, attachments)
+        except Exception:
+            self.remove_chat_images(attachments)
+            raise
         if self.coordinator.turn and self.turn_repo == repo and not text.startswith("/"):
             try:
-                await self.coordinator.steer(message)
+                await self.coordinator.steer(message, attachments)
                 return
             except (OSError, RuntimeError, ValueError):
                 pass  # The turn or the server can exit before the steer is accepted.
-        self.messages.append((repo, text, message))
+        self.messages.append((repo, text, message, attachments))
         self.runner.wake.set()
 
     async def context(self, repo, issues=()):
@@ -340,7 +431,7 @@ class Symphony:
         self.turn_repo = repo
         return cwd, "\n\n".join(context)
 
-    async def respond(self, repo, message, issues=()):
+    async def respond(self, repo, message, issues=(), attachments=()):
         cwd, context = await self.context(repo, issues)
         text = f"{message}\n\n--- Current Symphony context ---\n{context}" if context else message
         attributed = list(dict.fromkeys(issues))
@@ -351,6 +442,8 @@ class Symphony:
         )) for issue in attributed]
         detail = "Coordinator handled worker events."
         try:
+            if attachments:
+                return await self.coordinator.respond(text, cwd, attachments)
             return await self.coordinator.respond(text, cwd)
         except (OSError, RuntimeError, TimeoutError, ValueError) as error:
             detail = f"Coordinator turn failed: {error}"
@@ -360,8 +453,10 @@ class Symphony:
             for _, execution_id in open_turns:
                 self.runner.close_execution(execution_id, ended=ended, detail=detail)
 
-    async def handle(self, repo, text, message):
+    async def handle(self, repo, text, message, attachments=()):
         command, _, argument = text.partition(" ")
+        if attachments and command.startswith("/"):
+            raise ValueError("Images cannot be sent with slash commands.")
         if command == "/login":
             result = await self.coordinator.login()
             self.login = {"url": result["verificationUrl"], "code": result["userCode"],
@@ -404,6 +499,8 @@ class Symphony:
                 raise ValueError(f"{row['issue']} is {row['phase']}.")
         elif command.startswith("/"):
             raise ValueError("Available commands: /login, /compact, /status, /model, /effort, /interrupt, /continue, /retry.")
+        elif attachments:
+            await self.respond(repo, message, (), attachments)
         else:
             await self.respond(repo, message)
 
@@ -481,8 +578,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", cache_control)
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; "
-                         "connect-src 'self'; img-src 'self' https: data:; base-uri 'none'; frame-ancestors 'none'")
+        self.send_header("Content-Security-Policy", CONTENT_SECURITY_POLICY)
         with suppress(BrokenPipeError, ConnectionResetError):
             self.end_headers()
             self.wfile.write(data)
@@ -534,6 +630,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.json_response(self.run_async(app.execution(params.get("id", [""])[0])))
             elif url.path == "/api/linear-asset":
                 self.linear_asset(params.get("url", [""])[0])
+            elif url.path == "/api/chat-image":
+                try:
+                    data, content_type = app.chat_image(params.get("name", [""])[0])
+                except (ValueError, OSError):
+                    self.json_response({"error": "Image not found."}, 404)
+                    return
+                self.respond(data, content_type, cache_control="private, max-age=31536000, immutable")
             else:
                 self.json_response({"error": "Page not found."}, 404)
         except (ValueError, RuntimeError, OSError) as error:
