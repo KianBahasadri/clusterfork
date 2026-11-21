@@ -22,6 +22,28 @@ REVIEW_SECONDS = 600
 REVIEW_LINES = 200
 REVIEW_BYTES = 20000
 REVIEW_MODEL = "opencode-go/muse-spark-1.3-contributor"
+WORKER_CONFIG = {
+    "permissions": [
+        {"action": "shell", "resource": "git push *", "effect": "deny"},
+        {"action": "shell", "resource": "gh pr create *", "effect": "deny"},
+        {"action": "subagent", "resource": "*", "effect": "deny"},
+        {"action": "websearch", "resource": "*", "effect": "deny"},
+    ],
+    "mcp": {
+        "servers": {
+            "context7": {
+                "type": "remote",
+                "url": "https://mcp.context7.com/mcp",
+                "disabled": False,
+            },
+            "exa": {
+                "type": "remote",
+                "url": "https://mcp.exa.ai/mcp",
+                "disabled": False,
+            },
+        },
+    },
+}
 CI_DISCOVERY_SECONDS = 480
 SESSION_ID = re.compile(r"ses_[A-Za-z0-9]+\Z")
 REVIEW_VERDICT = re.compile(r"\s*VERDICT:\s*(NO ISSUES|ISSUES)\s*", re.I)
@@ -88,6 +110,9 @@ If blocked by missing dependencies, build environments, tools, credentials, or
 anything outside the repository code, stop immediately, write the concrete blocker
 to {artifacts / 'blocked.txt'}, and report back to the coordinator—never try to
 install missing system tooling or work around environment blockers on your own.
+Use the configured Context7 and Exa MCP tools for library docs and web search.
+For browser checks, use the preinstalled `/usr/bin/chromium` with
+`--headless --no-sandbox --disable-dev-shm-usage --disable-gpu` rather than downloading browsers.
 
 Approved plan:
 {row['plan']}
@@ -495,11 +520,7 @@ class Runner:
             env["XDG_DATA_HOME"] = str(self.directory / "worker-data")
             env["XDG_CONFIG_HOME"] = str(self.directory / "worker-config")
             env["XDG_STATE_HOME"] = str(self.directory / "worker-state")
-            env["OPENCODE_CONFIG_CONTENT"] = json.dumps({"permissions": [
-                {"action": "shell", "resource": "git push *", "effect": "deny"},
-                {"action": "shell", "resource": "gh pr create *", "effect": "deny"},
-                {"action": "subagent", "resource": "*", "effect": "deny"},
-            ]})
+            env["OPENCODE_CONFIG_CONTENT"] = json.dumps(WORKER_CONFIG)
             args = ["opencode", "run", "--standalone", "--auto", "--format", "json",
                     "--model", os.environ.get("SYMPHONY_WORKER_MODEL", "opencode-go/deepseek-v4.1-flash#max")]
             if row["session"]:
@@ -629,6 +650,7 @@ class Runner:
                     {"action": "shell", "resource": "git push *", "effect": "deny"},
                     {"action": "shell", "resource": "gh pr create *", "effect": "deny"},
                     {"action": "subagent", "resource": "*", "effect": "deny"},
+                    {"action": "websearch", "resource": "*", "effect": "deny"},
                     {"action": "read", "resource": "*", "effect": "allow"},
                     {"action": "glob", "resource": "*", "effect": "allow"},
                     {"action": "grep", "resource": "*", "effect": "allow"},

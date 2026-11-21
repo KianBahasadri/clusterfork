@@ -84,7 +84,7 @@ import sys
 import time
 workspace = Path(os.environ["FIXTURE_ROOT"]) / "runs/KIAN-101"
 config = json.loads(os.environ.get("OPENCODE_CONFIG_CONTENT", "{}"))
-if "mcp" in config:
+if config.get("mcp") == {"servers": {}}:
     prompt = sys.stdin.read()
     with (workspace / "review-runs").open("a") as stream:
         stream.write("review\\n")
@@ -146,6 +146,16 @@ assert "Write one verification file." in sys.argv[-1]
 assert "Never ship from the worker." in sys.argv[-1]
 assert sys.argv[sys.argv.index("--model") + 1] == "opencode-go/deepseek-v4.1-flash#max"
 assert "GITHUB_TOKEN" not in os.environ
+with (workspace / "worker-envs.jsonl").open("a") as stream:
+    stream.write(json.dumps({
+        "args": sys.argv,
+        "config": config,
+        "github": "GITHUB_TOKEN" in os.environ,
+        "gh": "GH_TOKEN" in os.environ,
+        "linear": "LINEAR_API_KEY" in os.environ,
+        "openai": "OPENAI_API_KEY" in os.environ,
+        "api_key": "OPENCODE_GO_API_KEY" in os.environ,
+    }) + "\\n")
 if os.environ.get("FIXTURE_LARGE_DIFF"):
     Path("large.txt").write_text("x" * 60000 + "\\nEND-OF-LARGE-DIFF\\n")
 print(json.dumps({"type":"text","sessionID":"ses_fixture"}))
@@ -1033,7 +1043,7 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         self.assertFalse(environment["api_key"])
         permissions = environment["config"]["permissions"]
         self.assertEqual(permissions[0], {"action": "*", "resource": "*", "effect": "deny"})
-        for action in ("edit", "write", "shell", "subagent"):
+        for action in ("edit", "write", "shell", "subagent", "websearch"):
             self.assertIn({"action": action, "resource": "*", "effect": "deny"}, permissions)
         self.assertIn({"action": "shell", "resource": "git push *", "effect": "deny"},
                       permissions)
@@ -1066,6 +1076,41 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         self.assertEqual(len(review), 1)
         self.assertIsNotNone(review[0]["ended"])
         self.assertEqual(review[0]["detail"], "Review completed: NO ISSUES.")
+
+    async def test_fresh_and_resumed_workers_receive_default_mcp_and_deny_websearch(self):
+        with patch.dict(os.environ, {
+            "GITHUB_TOKEN": "gh-secret",
+            "GH_TOKEN": "gh-cli-secret",
+            "LINEAR_API_KEY": "lin-secret",
+            "OPENAI_API_KEY": "oa-secret",
+            "OPENCODE_GO_API_KEY": "go-secret",
+        }):
+            await self.worker_done()
+            await self.runner.dispatch(ISSUE, REPO, "Never ship from the worker. Follow up.", resume=True)
+            await self.phase("review")
+        records = [json.loads(line) for line in
+                   (self.runner.artifacts(ISSUE) / "worker-envs.jsonl").read_text().splitlines()]
+        self.assertEqual(len(records), 2)
+        self.assertNotIn("--session", records[0]["args"])
+        self.assertIn("--session", records[1]["args"])
+        self.assertEqual(records[1]["args"][records[1]["args"].index("--session") + 1], "ses_fixture")
+        expected_servers = {
+            "context7": {"type": "remote", "url": "https://mcp.context7.com/mcp", "disabled": False},
+            "exa": {"type": "remote", "url": "https://mcp.exa.ai/mcp", "disabled": False},
+        }
+        for record in records:
+            self.assertFalse(record["github"])
+            self.assertFalse(record["gh"])
+            self.assertFalse(record["linear"])
+            self.assertFalse(record["openai"])
+            self.assertFalse(record["api_key"])
+            self.assertEqual(record["config"]["mcp"], {"servers": expected_servers})
+            permissions = record["config"]["permissions"]
+            self.assertIn({"action": "websearch", "resource": "*", "effect": "deny"}, permissions)
+            self.assertIn({"action": "shell", "resource": "git push *", "effect": "deny"}, permissions)
+            self.assertIn({"action": "shell", "resource": "gh pr create *", "effect": "deny"}, permissions)
+            self.assertIn({"action": "subagent", "resource": "*", "effect": "deny"}, permissions)
+        self.assertEqual(self.review_environment()["config"]["mcp"], {"servers": {}})
 
     async def test_review_model_can_be_overridden(self):
         with patch.dict(os.environ, {"SYMPHONY_REVIEW_MODEL": "opencode-go/review-fixture"}):

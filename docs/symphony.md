@@ -104,7 +104,18 @@ inside the restricted pod. It can inspect checkouts and worker logs and use
 `gh` to diagnose CI. OpenCode workers handle implementation by default.
 
 OpenCode uses the Go subscription and caps concurrent workers at three. Each
-attempt has a one-hour safety timeout. The checklist is a shell command file
+attempt has a one-hour safety timeout. Every new and resumed implementation
+worker receives default remote MCP servers for Context7
+(`https://mcp.context7.com/mcp`) and Exa web search (`https://mcp.exa.ai/mcp`)
+through `OPENCODE_CONFIG_CONTENT`, while OpenCode's interactive built-in
+`websearch` tool, direct pushes, PR creation, and subagents are denied. Worker
+environments strip GitHub, Linear, OpenAI, Codex, and OpenCode Go API key
+variables. The container image includes standard CLI utilities (`jq`, `rg`,
+`sqlite3`, `tmux`, `gawk`, `patch`, `file`, `zip`) and headless system
+`chromium` (`/usr/bin/chromium`, invoked with `--headless --no-sandbox
+--disable-dev-shm-usage --disable-gpu` under restricted PodSecurity); Docker,
+QEMU, Go, and privileged networking tools remain out of scope for the Symphony
+image. The checklist is a shell command file
 that Symphony runs a second time, in the worktree, to get its own exit status.
 The worker's notes and log live in `runs/<issue-id>/` on the PVC. The worktree
 stays reserved through audit, rework, and CI. After verification exits 0 and

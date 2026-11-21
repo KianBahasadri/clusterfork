@@ -6,8 +6,9 @@ ARG TERRAFORM_VERSION=1.15.9
 LABEL org.opencontainers.image.source="https://github.com/KianBahasadri/clusterfork"
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl git gh \
-         lua5.4 python3 python3-venv shellcheck tini unzip \
+    && apt-get install -y --no-install-recommends ca-certificates chromium curl \
+         file fonts-dejavu-core gawk git gh jq lua5.4 patch python3 python3-venv \
+         ripgrep shellcheck sqlite3 tini tmux unzip zip \
     && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
@@ -35,6 +36,8 @@ COPY symphony /app/symphony
 
 ENV PATH="/opt/symphony/bin:$PATH" \
     HOME="/data/symphony/home" \
+    CHROME_PATH="/usr/bin/chromium" \
+    PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH="/usr/bin/chromium" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 USER 10001:10001

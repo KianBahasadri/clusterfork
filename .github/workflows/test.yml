@@ -57,9 +57,12 @@ jobs:
         run: |
           docker run --rm --entrypoint sh "$IMAGE:$GITHUB_SHA" -ec '
             test "$(id -u)" = 10001
-            for name in git gh python uv node pnpm lua shellcheck terraform opencode codex; do
+            for name in git gh python uv node pnpm lua shellcheck terraform opencode codex jq rg sqlite3 tmux gawk patch file zip chromium; do
               command -v "$name"
             done
+            HOME=/tmp XDG_CONFIG_HOME=/tmp XDG_CACHE_HOME=/tmp \
+              chromium --headless --no-sandbox --disable-dev-shm-usage --disable-gpu \
+                --user-data-dir=/tmp/chromium-check --dump-dom about:blank | grep -q "<html>"
             python -c "import symphony.__main__"
           '
       - name: Log in to GHCR
