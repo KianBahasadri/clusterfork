@@ -11,9 +11,14 @@ a repository remain distinct.
 Open Symphony on the tailnet and sign in to Codex with the device flow if
 prompted. Choose a project chip in the page header. The desktop layout puts that
 project's Backlog on the left, coordinator chat in the middle, and Todo, In
-Progress, and Done on the right. Narrow screens stack the same panes.
-Backlog is the unapproved idea list. Expand an issue's proposed plan and refine
-it with the coordinator. Approve the plans you want in chat, including plans
+Progress, and Done in the right-hand Queue panel. Each side panel has an
+independent header control that collapses it to a compact rail on desktop or a
+header row on narrow screens, giving the reclaimed space to chat; either panel,
+both, or neither can be collapsed. The choice lasts for the page lifetime,
+including project switches, refreshes, and viewport changes, and resets on
+reload. Narrow screens stack the same panes. Backlog is the unapproved idea
+list. Expand an issue's proposed plan and refine it with the coordinator.
+Approve the plans you want in chat, including plans
 across projects. The coordinator records
 each approval, locks the current Linear plan, and moves the issue to Todo. A
 Todo issue without that recorded approval is visibly awaiting approval and
@@ -59,11 +64,13 @@ Visible idle tabs poll `/api/state` every second, hidden idle tabs every two
 seconds, and active coordinator turns use the faster chat cadence below.
 Switching projects uses the cache and restores each pane's scroll position and
 expanded plans.
-Backlog stays on the left. Todo, In Progress, and Done are collapsible groups on
-the right, labeled with those status names. Todo and In Progress sort from
-Urgent to Low priority with unprioritized issues last; recent Done sorts newest
-completed first. Groups start expanded, remember their collapsed state per
-project, and show an empty state when they have no issues.
+Backlog stays on the left. Todo, In Progress, and Done are collapsible groups in
+the right-hand Queue panel, labeled with those status names. The whole Queue
+panel collapses independently from those status groups and preserves their open
+state. Todo and In Progress sort from Urgent to Low priority with unprioritized
+issues last; recent Done sorts newest completed first. Groups start expanded,
+remember their collapsed state per project, and show an empty state when they
+have no issues.
 Status groups open and close with a visible spring using the standard Web
 Animations API. Rapid clicks reverse from the current height; reduced motion
 disables the animation.

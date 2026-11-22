@@ -968,6 +968,534 @@ class ChatBrowserTests(unittest.TestCase):
         finally:
             coarse.close()
 
+    def test_panel_collapse_controls_are_independent_and_accessible(self):
+        self.render_cards([["project-a", [
+            self.issue("KIAN-1"), self.issue("KIAN-2"),
+            self.issue("KIAN-3", state="Todo"),
+            self.issue("KIAN-4", state="In Progress"),
+        ]]], [{"issue": "KIAN-4", "phase": "working", "detail": "Worker running."}])
+        self.page.evaluate("""() => {
+          window.__requests = [];
+          window.fetch = (...args) => {
+            window.__requests.push(args[0]);
+            return Promise.reject(new Error("Unexpected request"));
+          };
+          window.__tasksBefore = JSON.stringify(tasks);
+        }""")
+        initial = self.page.evaluate("""() => {
+          const toggle = (id) => {
+            const node = document.getElementById(id);
+            return {
+              type: node.type,
+              expanded: node.getAttribute("aria-expanded"),
+              controls: node.getAttribute("aria-controls"),
+              label: node.getAttribute("aria-label"),
+              title: node.title,
+              icon: node.querySelector("use").getAttribute("href"),
+            };
+          };
+          return {
+            collapsed: [backlogCollapsed, queueCollapsed],
+            hidden: [backlog.hidden, statusIssues.hidden],
+            headings: [document.getElementById("backlog-heading").textContent,
+                       document.getElementById("queue-heading").textContent],
+            toggles: [toggle("backlog-toggle"), toggle("queue-toggle")],
+            selected,
+            messages: document.querySelectorAll("#messages .message").length,
+          };
+        }""")
+        self.assertEqual(initial, {
+            "collapsed": [False, False],
+            "hidden": [False, False],
+            "headings": ["Backlog", "Queue"],
+            "toggles": [
+                {"type": "button", "expanded": "true", "controls": "backlog",
+                 "label": "Collapse Backlog panel", "title": "Collapse Backlog panel",
+                 "icon": "#lucide-chevron-left"},
+                {"type": "button", "expanded": "true", "controls": "status-issues",
+                 "label": "Collapse Queue panel", "title": "Collapse Queue panel",
+                 "icon": "#lucide-chevron-left"},
+            ],
+            "selected": "project-a", "messages": 0,
+        })
+
+        def state():
+            return self.page.evaluate("""() => ({
+              collapsed: [backlogCollapsed, queueCollapsed],
+              hidden: [backlog.hidden, statusIssues.hidden],
+              expanded: [backlogToggle.getAttribute("aria-expanded"),
+                         queueToggle.getAttribute("aria-expanded")],
+              labels: [backlogToggle.getAttribute("aria-label"),
+                       queueToggle.getAttribute("aria-label")],
+              focus: document.activeElement.id,
+            })""")
+
+        self.page.locator("#backlog-toggle").click()
+        self.assertEqual(state(), {
+            "collapsed": [True, False], "hidden": [True, False],
+            "expanded": ["false", "true"],
+            "labels": ["Expand Backlog panel", "Collapse Queue panel"],
+            "focus": "backlog-toggle",
+        })
+        self.page.locator("#backlog-toggle").press("Enter")
+        self.assertEqual(state(), {
+            "collapsed": [False, False], "hidden": [False, False],
+            "expanded": ["true", "true"],
+            "labels": ["Collapse Backlog panel", "Collapse Queue panel"],
+            "focus": "backlog-toggle",
+        })
+        self.page.locator("#backlog-toggle").press("Space")
+        self.page.locator("#queue-toggle").press("Enter")
+        self.assertEqual(state(), {
+            "collapsed": [True, True], "hidden": [True, True],
+            "expanded": ["false", "false"],
+            "labels": ["Expand Backlog panel", "Expand Queue panel"],
+            "focus": "queue-toggle",
+        })
+        self.page.locator("#queue-toggle").press("Space")
+        self.assertEqual(state(), {
+            "collapsed": [True, False], "hidden": [True, False],
+            "expanded": ["false", "true"],
+            "labels": ["Expand Backlog panel", "Collapse Queue panel"],
+            "focus": "queue-toggle",
+        })
+        self.page.locator("#backlog-toggle").click()
+        self.page.locator("#queue-toggle").click()
+        self.assertEqual(state()["collapsed"], [False, True])
+        self.page.locator("#backlog-toggle").click()
+        self.assertEqual(state()["collapsed"], [True, True])
+
+        excluded = self.page.evaluate("""() => {
+          const card = document.getElementById("issue-open-KIAN-1");
+          card.focus();
+          return {
+            focusedInBacklog: Boolean(document.activeElement.closest("#backlog")),
+            contentVisible: backlog.checkVisibility(),
+            cardVisible: card.checkVisibility(),
+          };
+        }""")
+        self.assertEqual(excluded, {
+            "focusedInBacklog": False, "contentVisible": False, "cardVisible": False,
+        })
+        self.assertFalse(self.page.locator("#issue-open-KIAN-1").is_visible())
+        self.assertEqual(self.page.get_by_role(
+            "button", name="Propose a plan for KIAN-1", exact=True).count(), 0)
+        self.assertEqual(self.page.evaluate("""() => ({
+          requests: window.__requests,
+          tasksUnchanged: JSON.stringify(tasks) === window.__tasksBefore,
+          selected,
+          messages: document.querySelectorAll("#messages .message").length,
+          draft: messageField.value,
+        })"""), {
+            "requests": [], "tasksUnchanged": True, "selected": "project-a",
+            "messages": 0, "draft": "",
+        })
+
+        for scheme in ("light", "dark"):
+            self.page.emulate_media(color_scheme=scheme)
+            self.page.locator("#backlog-toggle").focus()
+            self.page.keyboard.press("Tab")
+            self.page.keyboard.press("Shift+Tab")
+            focus = self.page.evaluate("""() => ({
+              id: document.activeElement.id,
+              outline: getComputedStyle(document.activeElement).outlineWidth,
+            })""")
+            self.assertEqual(focus["id"], "backlog-toggle")
+            self.assertNotEqual(focus["outline"], "0px")
+
+        reloaded = self.browser.new_page(viewport={"width": 1200, "height": 800})
+        try:
+            self.load_app(reloaded)
+            fresh = reloaded.evaluate("""() => ({
+              collapsed: [backlogCollapsed, queueCollapsed],
+              hidden: [backlog.hidden, statusIssues.hidden],
+              expanded: [backlogToggle.getAttribute("aria-expanded"),
+                         queueToggle.getAttribute("aria-expanded")],
+              labels: [backlogToggle.getAttribute("aria-label"),
+                       queueToggle.getAttribute("aria-label")],
+            })""")
+        finally:
+            reloaded.close()
+        self.assertEqual(fresh, {
+            "collapsed": [False, False], "hidden": [False, False],
+            "expanded": ["true", "true"],
+            "labels": ["Collapse Backlog panel", "Collapse Queue panel"],
+        })
+
+    def test_panel_collapse_preserves_scroll_disclosures_and_pending_plan(self):
+        self.page.set_viewport_size({"width": 1200, "height": 480})
+        self.page.emulate_media(reduced_motion="reduce")
+        rows = [self.issue("KIAN-A1", plan="Plan A1.", planHtml="<p>Plan A1.</p>")]
+        rows += [self.issue("KIAN-A" + str(index)) for index in range(2, 31)]
+        rows += [self.issue("KIAN-T" + str(index), state="Todo") for index in range(1, 21)]
+        rows += [self.issue("KIAN-P" + str(index), state="In Progress") for index in range(1, 11)]
+        rows_b = [self.issue("KIAN-B" + str(index), project="project-b")
+                  for index in range(1, 31)]
+        rows_b += [self.issue("KIAN-BT" + str(index), state="Todo", project="project-b")
+                   for index in range(1, 16)]
+        self.render_cards([["project-a", rows], ["project-b", rows_b]])
+
+        self.page.locator("#plan-summary-KIAN-A1").click()
+        self.assertTrue(self.page.locator(
+            "details[data-issue='KIAN-A1']").evaluate("node => node.open"))
+        self.page.evaluate(
+            "document.getElementById('status-summary-In%20Progress').click()")
+        self.assertFalse(self.page.evaluate("""() => {
+          return [...document.querySelectorAll("#status-issues .issue-group")]
+            .find((node) => node.dataset.group === JSON.stringify(["project-a", "In Progress"]))
+            .open;
+        }"""))
+
+        self.hold_chat_requests()
+        self.page.locator("#issue-propose-KIAN-A1").click()
+        self.page.wait_for_function("window.__requests.length === 1")
+
+        offsets = self.page.evaluate("""() => {
+          backlog.scrollTop = 140;
+          statusIssues.scrollTop = 70;
+          return [backlog.scrollTop, statusIssues.scrollTop,
+                  backlog.scrollHeight > backlog.clientHeight,
+                  statusIssues.scrollHeight > statusIssues.clientHeight];
+        }""")
+        self.assertEqual(offsets, [140, 70, True, True])
+        self.page.evaluate('selectProject("project-b")')
+        self.page.evaluate("""() => {
+          backlog.scrollTop = 45;
+          statusIssues.scrollTop = 25;
+        }""")
+        self.page.evaluate('selectProject("project-a")')
+        self.assertEqual(self.page.evaluate(
+            "[backlog.scrollTop, statusIssues.scrollTop]"), [140, 70])
+
+        self.page.locator("#backlog-toggle").click()
+        self.page.locator("#queue-toggle").click()
+        saved = self.page.evaluate("""() => ({
+          collapsed: [backlogCollapsed, queueCollapsed],
+          scrolls: [backlogScroll.get("project-a"), statusScroll.get("project-a"),
+                    backlogScroll.get("project-b"), statusScroll.get("project-b")],
+        })""")
+        self.assertEqual(saved, {
+            "collapsed": [True, True], "scrolls": [140, 70, 45, 25],
+        })
+
+        self.page.evaluate('selectProject("project-b")')
+        self.page.evaluate('selectProject("project-a")')
+        self.assertEqual(self.page.evaluate(
+            "[backlogScroll.get('project-a'), statusScroll.get('project-a')]"), [140, 70])
+
+        self.page.evaluate("""({issue}) => {
+          const rows = issueCache.get("project-a").slice();
+          rows.push(issue);
+          issueCache.set("project-a", rows);
+          issueCache.set("", [...issueCache.get(""), issue]);
+          renderPanes();
+        }""", {"issue": self.issue("KIAN-NEW")})
+        refreshed = self.page.evaluate("""() => {
+          const group = [...document.querySelectorAll("#status-issues .issue-group")]
+            .find((node) => node.dataset.group === JSON.stringify(["project-a", "In Progress"]));
+          return {
+            collapsed: [backlogCollapsed, queueCollapsed],
+            hidden: [backlog.hidden, statusIssues.hidden],
+            newIssue: Boolean(document.getElementById("issue-open-KIAN-NEW")),
+            planOpen: document.querySelector("details[data-issue='KIAN-A1']").open,
+            groupOpen: group.open,
+            scrolls: [backlogScroll.get("project-a"), statusScroll.get("project-a")],
+            pending: pendingPlans.has("KIAN-A1"),
+            disabled: document.getElementById("issue-propose-KIAN-A1").disabled,
+            requests: window.__requests.length,
+          };
+        }""")
+        self.assertEqual(refreshed, {
+            "collapsed": [True, True], "hidden": [True, True], "newIssue": True,
+            "planOpen": True, "groupOpen": False, "scrolls": [140, 70],
+            "pending": True, "disabled": True, "requests": 1,
+        })
+
+        self.page.evaluate("__respond(0, 301)")
+        self.page.wait_for_function("pendingPlans.has('KIAN-A1') === false")
+        self.page.wait_for_function(
+            "document.querySelectorAll('#messages .message').length === 1")
+        self.page.locator("#backlog-toggle").click()
+        self.page.locator("#queue-toggle").click()
+        restored = self.page.evaluate("""() => ({
+          collapsed: [backlogCollapsed, queueCollapsed],
+          hidden: [backlog.hidden, statusIssues.hidden],
+          scrolls: [backlog.scrollTop, statusIssues.scrollTop],
+          newIssue: Boolean(document.getElementById("issue-open-KIAN-NEW")),
+          planOpen: document.querySelector("details[data-issue='KIAN-A1']").open,
+          groupOpen: [...document.querySelectorAll("#status-issues .issue-group")]
+            .find((node) => node.dataset.group === JSON.stringify(["project-a", "In Progress"]))
+            .open,
+          disabled: document.getElementById("issue-propose-KIAN-A1").disabled,
+          message: document.querySelector("#messages .message .message-text").textContent,
+          requests: window.__requests.length,
+        })""")
+        self.assertEqual(restored, {
+            "collapsed": [False, False], "hidden": [False, False], "scrolls": [140, 70],
+            "newIssue": True, "planOpen": True, "groupOpen": False, "disabled": False,
+            "message": "Propose a plan for KIAN-A1.", "requests": 1,
+        })
+
+        self.page.evaluate(
+            'issueCache.set("project-empty", []); selectProject("project-empty")')
+        self.page.locator("#backlog-toggle").click()
+        self.page.locator("#queue-toggle").click()
+        self.page.locator("#backlog-toggle").click()
+        self.page.locator("#queue-toggle").click()
+        self.assertEqual(self.page.evaluate("""() => ({
+          backlog: document.getElementById("backlog").textContent,
+          groups: [...document.querySelectorAll("#status-issues .issue-group-list")]
+            .map((node) => node.textContent),
+          collapsed: [backlogCollapsed, queueCollapsed],
+        })"""), {
+            "backlog": "No Backlog issues for this project.",
+            "groups": ["No Todo issues.", "No In Progress issues.", "No Done issues."],
+            "collapsed": [False, False],
+        })
+
+    def test_panel_collapse_reclaims_space_across_breakpoints(self):
+        self.render_cards([["project-a", [
+            self.issue("KIAN-" + str(index)) for index in range(1, 16)
+        ]]])
+
+        def metrics():
+            return self.page.evaluate("""() => {
+              const box = (selector) => {
+                const rect = document.querySelector(selector).getBoundingClientRect();
+                return {width: rect.width, height: rect.height,
+                        top: rect.top, bottom: rect.bottom};
+              };
+              return {
+                chat: box(".chat"),
+                backlog: box(".backlog-pane"),
+                queue: box(".status-pane"),
+                composer: box("#composer"),
+                toggles: ["backlog-toggle", "queue-toggle"].map((id) => {
+                  const node = document.getElementById(id);
+                  const rect = node.getBoundingClientRect();
+                  return {visible: node.checkVisibility(), width: rect.width,
+                          height: rect.height, bottom: rect.bottom};
+                }),
+                hidden: [backlog.hidden, statusIssues.hidden],
+                collapsed: [backlogCollapsed, queueCollapsed],
+                overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+              };
+            }""")
+
+        self.page.set_viewport_size({"width": 1200, "height": 800})
+        expanded = metrics()
+        self.page.locator("#backlog-toggle").click()
+        left_rail = metrics()
+        self.page.locator("#queue-toggle").click()
+        both_rails = metrics()
+        self.page.locator("#backlog-toggle").click()
+        right_rail = metrics()
+        self.assertGreater(left_rail["chat"]["width"], expanded["chat"]["width"] + 150)
+        self.assertGreater(both_rails["chat"]["width"], left_rail["chat"]["width"] + 150)
+        self.assertGreater(right_rail["chat"]["width"], expanded["chat"]["width"] + 150)
+        self.assertLessEqual(left_rail["backlog"]["width"], 57)
+        self.assertLessEqual(both_rails["backlog"]["width"], 57)
+        self.assertLessEqual(both_rails["queue"]["width"], 57)
+        self.assertLessEqual(right_rail["queue"]["width"], 57)
+
+        self.page.evaluate('setPaneCollapsed("backlog", false)')
+        self.page.evaluate('setPaneCollapsed("queue", false)')
+        self.page.set_viewport_size({"width": 900, "height": 800})
+        stacked = metrics()
+        self.page.locator("#backlog-toggle").click()
+        stacked_left = metrics()
+        self.page.locator("#queue-toggle").click()
+        stacked_both = metrics()
+        self.page.locator("#backlog-toggle").click()
+        stacked_right = metrics()
+        self.assertGreater(stacked_left["chat"]["height"], stacked["chat"]["height"] + 40)
+        self.assertGreater(stacked_both["chat"]["height"], stacked_left["chat"]["height"] + 40)
+        self.assertGreater(stacked_right["chat"]["height"], stacked["chat"]["height"] + 40)
+        self.assertLessEqual(stacked_left["backlog"]["height"], 70)
+        self.assertLessEqual(stacked_both["queue"]["height"], 70)
+        self.assertLessEqual(stacked_right["queue"]["height"], 70)
+        self.page.locator("#backlog-toggle").click()
+
+        for width in (681, 680, 390, 901, 1200):
+            with self.subTest(width=width):
+                self.page.set_viewport_size({"width": width, "height": 844})
+                current = metrics()
+                self.assertEqual(current["collapsed"], [True, True])
+                self.assertEqual(current["hidden"], [True, True])
+                self.assertTrue(all(toggle["visible"] for toggle in current["toggles"]))
+                self.assertLessEqual(current["composer"]["bottom"], 845)
+                self.assertFalse(current["overflow"])
+                if width > 900:
+                    self.assertLessEqual(current["backlog"]["width"], 57)
+                    self.assertLessEqual(current["queue"]["width"], 57)
+                    self.assertGreater(current["chat"]["width"], width - 120)
+                else:
+                    self.assertLessEqual(current["backlog"]["height"], 70)
+                    self.assertLessEqual(current["queue"]["height"], 70)
+                    self.assertGreater(current["chat"]["height"], 600)
+
+    def test_sparse_panes_keep_cards_and_groups_at_natural_height(self):
+        self.render_cards([["project-a", [
+            self.issue("KIAN-1", title="One short issue"),
+        ]]])
+        sparse = self.page.evaluate("""() => {
+          const pane = document.getElementById("backlog");
+          const queue = document.getElementById("status-issues");
+          const card = pane.querySelector(".issue");
+          const row = card.querySelector(".issue-card-row");
+          const meta = card.querySelector(".issue-meta");
+          const cardRect = card.getBoundingClientRect();
+          return {
+            paneHeight: pane.clientHeight,
+            cardHeight: cardRect.height,
+            rowHeight: row.getBoundingClientRect().height,
+            trailing: cardRect.bottom - meta.getBoundingClientRect().bottom,
+            alignContent: getComputedStyle(pane).alignContent,
+            queueAlignContent: getComputedStyle(queue).alignContent,
+            emptyGroups: [...queue.querySelectorAll(".issue-group")]
+              .map((group) => group.getBoundingClientRect().height),
+            queueScroll: queue.scrollHeight,
+            queueClient: queue.clientHeight,
+          };
+        }""")
+        self.assertEqual(sparse["alignContent"], "start")
+        self.assertEqual(sparse["queueAlignContent"], "start")
+        self.assertGreater(sparse["paneHeight"], 600)
+        self.assertLess(sparse["cardHeight"], 160)
+        self.assertLess(sparse["rowHeight"], 130)
+        self.assertLess(sparse["trailing"], 40)
+        self.assertTrue(all(height < 120 for height in sparse["emptyGroups"]))
+        self.assertLessEqual(sparse["queueScroll"], sparse["queueClient"] + 1)
+
+        self.render_cards([["project-a", [
+            self.issue("KIAN-1", title="One short issue"),
+            self.issue("KIAN-2"), self.issue("KIAN-3"),
+        ]]])
+        short_cards = self.page.evaluate("""() => {
+          const pane = document.getElementById("backlog");
+          return {
+            heights: [...pane.querySelectorAll(".issue")]
+              .map((card) => card.getBoundingClientRect().height),
+            scroll: pane.scrollHeight,
+            client: pane.clientHeight,
+          };
+        }""")
+        self.assertTrue(all(height < 160 for height in short_cards["heights"]))
+        self.assertLessEqual(short_cards["scroll"], short_cards["client"] + 1)
+
+        self.render_cards([["project-a", [
+            self.issue("KIAN-1", title="One short issue"),
+            self.issue("KIAN-T1", state="Todo"),
+            self.issue("KIAN-T2", state="Todo"),
+        ]]])
+        queue = self.page.evaluate("""() => {
+          const pane = document.getElementById("status-issues");
+          const groups = [...pane.querySelectorAll(".issue-group")];
+          return {
+            heights: groups.map((group) => group.getBoundingClientRect().height),
+            cards: [...pane.querySelectorAll(".issue")]
+              .map((card) => card.getBoundingClientRect().height),
+            scroll: pane.scrollHeight,
+            client: pane.clientHeight,
+          };
+        }""")
+        self.assertLess(queue["heights"][0], 420)
+        self.assertTrue(all(height < 120 for height in queue["heights"][1:]))
+        self.assertTrue(all(height < 160 for height in queue["cards"]))
+        self.assertLessEqual(queue["scroll"], queue["client"] + 1)
+
+        self.render_cards([["project-a", [
+            self.issue("KIAN-" + str(index)) for index in range(1, 41)
+        ]]])
+        overflow = self.page.evaluate("""() => {
+          const pane = document.getElementById("backlog");
+          const before = {scroll: pane.scrollHeight, client: pane.clientHeight};
+          pane.scrollTop = 200;
+          return {
+            before,
+            after: pane.scrollTop,
+            cardHeight: pane.querySelector(".issue").getBoundingClientRect().height,
+          };
+        }""")
+        self.assertGreater(overflow["before"]["scroll"], overflow["before"]["client"])
+        self.assertEqual(overflow["after"], 200)
+        self.assertLess(overflow["cardHeight"], 160)
+
+        long_title = "Long issue title " + ("that keeps wrapping " * 60)
+        self.render_cards([["project-a", [
+            self.issue("KIAN-LONG", title=long_title),
+        ]]])
+        wrapped = self.page.evaluate("""() => {
+          const pane = document.getElementById("backlog");
+          const card = pane.querySelector(".issue");
+          pane.scrollTop = 100;
+          return {
+            cardHeight: card.getBoundingClientRect().height,
+            titleHeight: card.querySelector(".issue-title").getBoundingClientRect().height,
+            horizontalOverflow: pane.scrollWidth > pane.clientWidth + 1,
+            scroll: pane.scrollHeight,
+            client: pane.clientHeight,
+            scrollTop: pane.scrollTop,
+          };
+        }""")
+        self.assertGreater(wrapped["cardHeight"], 300)
+        self.assertGreater(wrapped["titleHeight"], 100)
+        self.assertFalse(wrapped["horizontalOverflow"])
+        self.assertGreater(wrapped["scroll"], wrapped["client"])
+        self.assertGreater(wrapped["scrollTop"], 0)
+
+    def test_panel_collapse_controls_fit_coarse_narrow_layout(self):
+        coarse = self.browser.new_page(
+            viewport={"width": 390, "height": 844}, has_touch=True)
+        try:
+            self.load_app(coarse)
+            coarse.evaluate("""({rows}) => {
+              tasks = [];
+              selected = "project-a";
+              issueCache = new Map([["project-a", rows], ["", rows]]);
+              renderPanes();
+            }""", {"rows": [
+                self.issue("KIAN-1"), self.issue("KIAN-2"),
+                self.issue("KIAN-3", state="Todo"),
+            ]})
+            before = coarse.evaluate("""() => ({
+              chat: document.querySelector(".chat").getBoundingClientRect().height,
+              row: document.querySelector(".backlog-pane").getBoundingClientRect().height,
+            })""")
+            coarse.locator("#backlog-toggle").tap()
+            coarse.locator("#queue-toggle").tap()
+            narrow = coarse.evaluate("""() => {
+              const toggle = (id) => {
+                const node = document.getElementById(id);
+                const rect = node.getBoundingClientRect();
+                return {visible: node.checkVisibility(), width: rect.width,
+                        height: rect.height, label: node.getAttribute("aria-label")};
+              };
+              return {
+                chat: document.querySelector(".chat").getBoundingClientRect().height,
+                rows: [document.querySelector(".backlog-pane").getBoundingClientRect().height,
+                       document.querySelector(".status-pane").getBoundingClientRect().height],
+                hidden: [backlog.hidden, statusIssues.hidden],
+                toggles: [toggle("backlog-toggle"), toggle("queue-toggle")],
+                composer: document.querySelector("#composer")
+                  .getBoundingClientRect().bottom,
+                overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+              };
+            }""")
+            self.assertTrue(all(
+                toggle["visible"] and toggle["width"] >= 44 and toggle["height"] >= 44
+                for toggle in narrow["toggles"]))
+            self.assertEqual(narrow["hidden"], [True, True])
+            self.assertLessEqual(max(narrow["rows"]), 70)
+            self.assertGreater(narrow["chat"], before["chat"] + 150)
+            self.assertLess(before["row"], 180)
+            self.assertLessEqual(narrow["composer"], 845)
+            self.assertFalse(narrow["overflow"])
+            self.assertEqual([toggle["label"] for toggle in narrow["toggles"]],
+                             ["Expand Backlog panel", "Expand Queue panel"])
+        finally:
+            coarse.close()
+
     def test_composer_remains_reachable_at_narrow_and_desktop_widths(self):
         for width, height in ((390, 844), (1200, 800)):
             with self.subTest(width=width):

@@ -32,6 +32,9 @@
       <path d="M5 12h14" />
       <path d="m12 5 7 7-7 7" />
     </symbol>
+    <symbol id="lucide-chevron-left" viewBox="0 0 24 24">
+      <path d="m15 18-6-6 6-6" />
+    </symbol>
     <symbol id="workflow-backlog" viewBox="0 0 24 24">
       <circle cx="12" cy="12" r="9.5" stroke-width="2.5" stroke-dasharray=".2 4.774" />
     </symbol>
@@ -102,8 +105,18 @@
   </header>
   <main>
     <aside class="issues-pane backlog-pane" aria-label="Backlog issues">
-      <h2 class="sidebar-heading">Backlog</h2>
-      <div id="backlog" role="tabpanel" aria-label="Backlog issues"></div>
+      <div class="pane-header">
+        <h2 class="sidebar-heading" id="backlog-heading">Backlog</h2>
+        <button id="backlog-toggle" class="pane-toggle pane-toggle-start" type="button"
+          aria-expanded="true" aria-controls="backlog"
+          aria-label="Collapse Backlog panel" title="Collapse Backlog panel">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <use href="#lucide-chevron-left"></use>
+          </svg>
+        </button>
+      </div>
+      <div id="backlog" class="pane-content" role="tabpanel"
+        aria-label="Backlog issues"></div>
     </aside>
     <section class="chat" aria-label="Coordinator chat">
       <div id="connection-error" class="notice" role="status" hidden>Connection lost. Reconnecting…</div>
@@ -146,7 +159,18 @@
       </form>
     </section>
     <aside class="issues-pane status-pane" aria-label="Todo, In Progress, and Done issues">
-      <div id="status-issues" role="tabpanel" aria-label="Todo, In Progress, and Done issues"></div>
+      <div class="pane-header">
+        <h2 class="sidebar-heading" id="queue-heading">Queue</h2>
+        <button id="queue-toggle" class="pane-toggle pane-toggle-end" type="button"
+          aria-expanded="true" aria-controls="status-issues"
+          aria-label="Collapse Queue panel" title="Collapse Queue panel">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <use href="#lucide-chevron-left"></use>
+          </svg>
+        </button>
+      </div>
+      <div id="status-issues" class="pane-content" role="tabpanel"
+        aria-label="Todo, In Progress, and Done issues"></div>
     </aside>
   </main>
   <dialog id="issue-dialog" aria-labelledby="issue-dialog-title">

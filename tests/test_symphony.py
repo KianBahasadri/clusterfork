@@ -3298,10 +3298,18 @@ process.stdout.write(JSON.stringify({
         html = (root / "index.html").read_text()
         self.assertLess(html.index('id="backlog"'), html.index('class="chat"'))
         self.assertLess(html.index('class="chat"'), html.index('id="status-issues"'))
+        self.assertIn('id="backlog-toggle"', html)
+        self.assertIn('aria-controls="backlog"', html)
+        self.assertIn('id="queue-toggle"', html)
+        self.assertIn('aria-controls="status-issues"', html)
+        self.assertIn(">Queue</h2>", html)
         app = (root / "app.js").read_text()
         self.assertIn("pollDelay(state, document.hidden)", app)
         self.assertIn('"Awaiting approval"', app)
         self.assertIn("will not run", app)
+        self.assertIn("let backlogCollapsed = false;", app)
+        self.assertIn("let queueCollapsed = false;", app)
+        self.assertIn("function setPaneCollapsed", app)
 
 
 class PlanTests(unittest.TestCase):

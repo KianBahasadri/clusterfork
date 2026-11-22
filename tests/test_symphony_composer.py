@@ -40,6 +40,7 @@ class FakeNode {
   setAttribute(name, value) { this[name] = String(value); }
   removeAttribute(name) { delete this[name]; }
   getAttribute(name) { return this[name]; }
+  toggleAttribute(name, force) { if (force) this[name] = ""; else delete this[name]; }
   closest() { return new FakeNode("aside"); }
   focus() {}
   setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; }
@@ -55,7 +56,11 @@ const document = {
   },
   createElement(tag) { return new FakeNode(tag); },
   createElementNS(_namespace, tag) { return new FakeNode(tag); },
-  querySelector() { return null; },
+  querySelector(selector) {
+    if (selector !== "main") return null;
+    if (!nodes.has("main")) nodes.set("main", new FakeNode("main", "main"));
+    return nodes.get("main");
+  },
   querySelectorAll() { return []; },
   addEventListener() {},
 };

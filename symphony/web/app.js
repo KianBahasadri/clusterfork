@@ -4,8 +4,13 @@ const backlog = byId("backlog");
 const statusIssues = byId("status-issues");
 const backlogPane = backlog.closest("aside");
 const statusPane = statusIssues.closest("aside");
+const main = document.querySelector("main");
+const backlogToggle = byId("backlog-toggle");
+const queueToggle = byId("queue-toggle");
 const backlogScroll = new Map();
 const statusScroll = new Map();
+let backlogCollapsed = false;
+let queueCollapsed = false;
 const messages = byId("messages");
 const chatLog = byId("chat-log");
 const composer = byId("composer");
@@ -273,6 +278,45 @@ function renderIssueGroup(name, rows, today) {
   return group;
 }
 
+function capturePaneScroll(project = selected) {
+  if (!backlogCollapsed) backlogScroll.set(project, backlog.scrollTop);
+  if (!queueCollapsed) statusScroll.set(project, statusIssues.scrollTop);
+}
+
+function restorePaneScroll(project = selected) {
+  if (!backlogCollapsed) backlog.scrollTop = backlogScroll.get(project) || 0;
+  if (!queueCollapsed) statusIssues.scrollTop = statusScroll.get(project) || 0;
+}
+
+function applyPaneState() {
+  main.toggleAttribute("data-backlog-collapsed", backlogCollapsed);
+  main.toggleAttribute("data-queue-collapsed", queueCollapsed);
+  backlog.hidden = backlogCollapsed;
+  statusIssues.hidden = queueCollapsed;
+  for (const [button, collapsed, label] of [
+    [backlogToggle, backlogCollapsed, "Backlog"],
+    [queueToggle, queueCollapsed, "Queue"],
+  ]) {
+    button.setAttribute("aria-expanded", String(!collapsed));
+    button.title = (collapsed ? "Expand " : "Collapse ") + label + " panel";
+    button.setAttribute("aria-label", button.title);
+  }
+}
+
+function setPaneCollapsed(kind, collapsed) {
+  if (kind === "backlog") {
+    if (collapsed && !backlogCollapsed) backlogScroll.set(selected, backlog.scrollTop);
+    backlogCollapsed = collapsed;
+    applyPaneState();
+    if (!collapsed) backlog.scrollTop = backlogScroll.get(selected) || 0;
+    return;
+  }
+  if (collapsed && !queueCollapsed) statusScroll.set(selected, statusIssues.scrollTop);
+  queueCollapsed = collapsed;
+  applyPaneState();
+  if (!collapsed) statusIssues.scrollTop = statusScroll.get(selected) || 0;
+}
+
 function renderPanes() {
   for (const plan of document.querySelectorAll("details[data-issue]")) {
     if (plan.open) expandedPlans.add(plan.dataset.issue);
@@ -322,8 +366,7 @@ function updateProjects(projects, redraw) {
 }
 
 function selectProject(project) {
-  backlogScroll.set(selected, backlogPane.scrollTop);
-  statusScroll.set(selected, statusPane.scrollTop);
+  capturePaneScroll();
   selected = project;
   for (const tab of repos.children) {
     const active = tab.dataset.project === project;
@@ -335,8 +378,7 @@ function selectProject(project) {
     }
   }
   renderPanes();
-  backlogPane.scrollTop = backlogScroll.get(project) || 0;
-  statusPane.scrollTop = statusScroll.get(project) || 0;
+  restorePaneScroll(project);
 }
 
 function imageUrl(name) {
@@ -1001,6 +1043,9 @@ messageField.addEventListener("keydown", (event) => {
 });
 interrupt.addEventListener("click", interruptTurn);
 byId("update-action").addEventListener("click", toggleDrain);
+backlogToggle.addEventListener("click", () => setPaneCollapsed("backlog", !backlogCollapsed));
+queueToggle.addEventListener("click", () => setPaneCollapsed("queue", !queueCollapsed));
+applyPaneState();
 document.addEventListener("keydown", (event) => {
   if (document.querySelector("dialog[open]")) return;
   if (event.key !== "Escape" || event.defaultPrevented || event.repeat || event.isComposing

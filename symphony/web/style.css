@@ -83,15 +83,58 @@ h2 { font-size: .94rem; font-weight: 650; }
   background: var(--surface);
 }
 main {
+  --backlog-track: minmax(240px, 24vw);
+  --queue-track: minmax(260px, 26vw);
   display: grid;
-  grid-template-columns: minmax(240px, 24vw) minmax(0, 1fr) minmax(260px, 26vw);
+  grid-template-columns: var(--backlog-track) minmax(0, 1fr) var(--queue-track);
   grid-template-rows: minmax(0, 1fr);
   min-height: 0;
 }
-.issues-pane { min-width: 0; overflow: auto; padding: 16px; background: var(--surface); }
+main[data-backlog-collapsed] { --backlog-track: 56px; }
+main[data-queue-collapsed] { --queue-track: 56px; }
+.issues-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
 .backlog-pane { border-right: 1px solid var(--line); }
 .status-pane { border-left: 1px solid var(--line); }
-.sidebar-heading { padding-bottom: 8px; }
+.pane-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px 6px;
+}
+.sidebar-heading { min-width: 0; padding-bottom: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-content { flex: 1 1 auto; align-content: start; min-height: 0; overflow: auto; padding: 0 16px 16px; }
+.pane-toggle {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+  color: var(--muted);
+}
+.pane-toggle:hover { color: var(--ink-strong); }
+.pane-toggle .icon { width: 18px; height: 18px; }
+.pane-toggle-end .icon { transform: rotate(180deg); }
+main[data-backlog-collapsed] .backlog-pane .pane-header,
+main[data-queue-collapsed] .status-pane .pane-header {
+  align-items: flex-start;
+  justify-content: center;
+  padding: 16px 4px;
+}
+main[data-backlog-collapsed] .backlog-pane .sidebar-heading,
+main[data-queue-collapsed] .status-pane .sidebar-heading { display: none; }
+main[data-backlog-collapsed] #backlog-toggle .icon { transform: rotate(180deg); }
+main[data-queue-collapsed] #queue-toggle .icon { transform: rotate(0); }
 #repos { display: flex; flex-wrap: wrap; gap: 8px; }
 #repos .project-chip {
   display: inline-flex;
@@ -510,15 +553,30 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
 .execution-transitions li { padding: 4px 0; font-size: 13px; }
 @media (max-width: 900px) {
   main {
+    --backlog-row: minmax(0, 22dvh);
+    --queue-row: minmax(0, 22dvh);
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 22dvh) minmax(0, 1fr) minmax(0, 22dvh);
+    grid-template-rows: var(--backlog-row) minmax(0, 1fr) var(--queue-row);
   }
+  main[data-backlog-collapsed] { --backlog-row: auto; }
+  main[data-queue-collapsed] { --queue-row: auto; }
   .issues-pane { border: 0; }
   .backlog-pane { border-bottom: 1px solid var(--line); }
   .status-pane { border-top: 1px solid var(--line); }
+  main[data-backlog-collapsed] .backlog-pane .pane-header,
+  main[data-queue-collapsed] .status-pane .pane-header {
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+  }
+  main[data-backlog-collapsed] .backlog-pane .sidebar-heading,
+  main[data-queue-collapsed] .status-pane .sidebar-heading { display: block; }
 }
 @media (max-width: 680px) {
-  main { grid-template-rows: minmax(0, 20dvh) minmax(0, 1fr) minmax(0, 20dvh); }
+  main {
+    --backlog-row: minmax(0, 20dvh);
+    --queue-row: minmax(0, 20dvh);
+  }
   #repos { flex-wrap: nowrap; overflow-x: auto; padding-block: 4px; }
   #repos .project-chip { flex-shrink: 0; }
   .chat-log { padding-top: 12px; }
@@ -535,6 +593,7 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
 }
 @media (pointer: coarse) {
   button, #repos .project-chip, #interrupt, #command-list [role="option"] { min-height: 44px; }
+  .pane-toggle { width: 44px; height: 44px; min-height: 44px; }
   .issue-plan-action { width: 44px; height: 44px; min-height: 44px; }
   .attachment-remove { width: 36px; height: 36px; min-height: 36px; top: -10px; right: -10px; }
   .issue-group > summary { padding-block: 12px; }
