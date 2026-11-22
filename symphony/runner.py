@@ -307,8 +307,9 @@ class Runner:
 
     def chat(self, role, text, attachments=()):
         with self.db:
-            self.db.execute("INSERT INTO chat(role,text,attachments) VALUES (?,?,?)",
-                            (role, text, json.dumps(list(attachments), ensure_ascii=False)))
+            cursor = self.db.execute("INSERT INTO chat(role,text,attachments) VALUES (?,?,?)",
+                                     (role, text, json.dumps(list(attachments), ensure_ascii=False)))
+        return cursor.lastrowid
 
     def chat_image_dir(self):
         return self.directory / "chat-images"

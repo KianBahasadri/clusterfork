@@ -2,8 +2,9 @@ const STATUS_GROUPS = ["Todo", "In Progress", "Done"];
 
 function pollDelay(state, hidden) {
   if (state.messages.length === 200) return 0;
-  if (state.busy) return 600;
-  return hidden ? 2000 : 1000;
+  if (hidden) return 2000;
+  if (state.busy || state.canInterrupt || state.stream) return 200;
+  return 1000;
 }
 
 function issueOrder(a, b) {

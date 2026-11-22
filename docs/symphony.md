@@ -38,8 +38,9 @@ Older Done, Canceled, and Duplicate issues stay out of both panes, and expired
 Done entries disappear on a normal refresh without an issue edit. The browser
 receives the lists through its regular status requests when they change.
 Visible idle tabs poll `/api/state` every second, hidden idle tabs every two
-seconds, and active turns keep the existing 600 ms cadence. Switching projects
-uses the cache and restores each pane's scroll position and expanded plans.
+seconds, and active coordinator turns use the faster chat cadence below.
+Switching projects uses the cache and restores each pane's scroll position and
+expanded plans.
 Backlog stays on the left. Todo, In Progress, and Done are collapsible groups on
 the right, labeled with those status names. Todo and In Progress sort from
 Urgent to Low priority with unprioritized issues last; recent Done sorts newest
@@ -105,10 +106,23 @@ accompany text or be sent alone, and remain available for retry after a failed
 submission. Accepted images are stored on the Symphony data volume, passed to
 Codex as native image inputs, and shown with their user message after reloads.
 Slash commands do not accept images.
-Coordinator replies render Markdown links, emphasis, paragraphs, lists, and code;
-external and relative link destinations are preserved. Raw HTML is escaped and
-unsafe URL schemes are blocked. User messages and operational notices remain
-plain text.
+Submitting a message shows an accessible Sending status immediately, including
+while pasted images encode, and prevents duplicate sends until the request
+finishes. The server accepts the saved message and the composer displays that
+canonical row without waiting for the next status poll; its user-visible text,
+attachments, and the coordinator's separate working state stay distinct. A
+rejected submission keeps the draft and images available and shows the error.
+Coordinator replies render Markdown links, emphasis, paragraphs, lists, and
+code; external and relative link destinations are preserved. Raw HTML is escaped
+and unsafe URL schemes are blocked. User messages and operational notices remain
+plain text. Live replies update in place as their Markdown develops, keeping
+unchanged blocks and text nodes instead of replacing the whole response. A
+visible active turn polls every 200 ms; visible idle polls return to one second,
+and hidden tabs stay at two-second polls. A full 200-message backlog drains
+without waiting. The chat follows the bottom only while it is already near the
+bottom, so scrolling up pauses following during stream updates, accepted messages,
+and delayed image layout. Interrupting a turn clears any pending live presentation,
+and reduced-motion preferences do not add animated typing.
 Press Escape anywhere on the page or use Interrupt
 to stop an active turn. If Codex exits during a turn, Symphony clears the
 partial response and reconnects to the conversation on the next message.

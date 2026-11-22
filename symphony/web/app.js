@@ -29,6 +29,17 @@ let tasks = [];
 let projectsKey = "";
 let issueDay = new Date().toDateString();
 let stream = "";
+let renderedStream = "";
+let pendingStream = null;
+let pendingMessages = [];
+let pendingMessageIds = new Set();
+let shownMessageIds = new Set();
+let chatFrame = null;
+let pollTimer = null;
+let polling = false;
+let pollAgain = false;
+let pollStarted = false;
+let following = true;
 let codex = {};
 let canInterrupt = false;
 let updateState = {updateAvailable: false, draining: false};
@@ -314,27 +325,183 @@ function imageGallery(images, className) {
     preview.src = imageUrl(image.name);
     preview.alt = "Attached image " + (index + 1);
     preview.loading = "lazy";
+    preview.addEventListener("load", keepBottom);
+    preview.addEventListener("error", keepBottom);
     link.append(preview);
     gallery.append(link);
   });
   return gallery;
 }
 
-function appendMessage(role, text, html, images = []) {
+function keepBottom() {
+  if (following) chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+function createMessage(item) {
+  const role = item.role;
   const label = {user: "You", assistant: "Coordinator", system: "Symphony", worker: "Worker"};
   const entry = element("article", "", "message " + role);
-  const content = element("div", role === "assistant" ? "" : text, "message-text");
+  if (Number.isFinite(Number(item.id))) entry.dataset.messageId = String(item.id);
+  const content = element("div", role === "assistant" ? "" : item.text || "", "message-text");
   if (role === "assistant") {
     content.classList.add("issue-markdown");
-    content.innerHTML = html;
+    content.innerHTML = item.html || "";
   }
   entry.append(element("h2", label[role] || "Symphony"), content);
-  if (images.length) entry.append(imageGallery(images, "message-images"));
-  messages.append(entry);
+  if (item.images?.length) entry.append(imageGallery(item.images, "message-images"));
+  return entry;
 }
+
+function insertMessage(item) {
+  const id = Number(item.id);
+  if (shownMessageIds.has(id)) return;
+  const entry = createMessage(item);
+  const next = [...(messages.children || [])].find((node) => {
+    const other = Number(node.dataset?.messageId);
+    return Number.isFinite(other) && other > id;
+  });
+  if (next && typeof messages.insertBefore === "function") messages.insertBefore(entry, next);
+  else messages.append(entry);
+  shownMessageIds.add(id);
+}
+
+function patchAttributes(current, next) {
+  for (const attribute of [...next.attributes]) {
+    if (current.getAttribute(attribute.name) !== attribute.value) {
+      current.setAttribute(attribute.name, attribute.value);
+    }
+  }
+  for (const attribute of [...current.attributes]) {
+    if (!next.hasAttribute(attribute.name)) current.removeAttribute(attribute.name);
+  }
+}
+
+function patchChildren(current, next) {
+  const existing = [...(current.childNodes || [])];
+  const incoming = [...(next.childNodes || [])];
+  const length = Math.max(existing.length, incoming.length);
+  for (let index = 0; index < length; index += 1) {
+    const oldChild = existing[index];
+    const newChild = incoming[index];
+    if (!oldChild) {
+      current.append(newChild);
+    } else if (!newChild) {
+      current.removeChild(oldChild);
+    } else {
+      const kept = patchNode(oldChild, newChild);
+      if (kept !== oldChild) current.replaceChild(kept, oldChild);
+    }
+  }
+}
+
+function patchNode(current, next) {
+  if (!current || !next) return next || current;
+  if (current.nodeType !== next.nodeType) return next;
+  if (current.nodeType === 3) {
+    if (current.nodeValue !== next.nodeValue) current.nodeValue = next.nodeValue;
+    return current;
+  }
+  if (current.nodeType !== 1) {
+    if (current.nodeValue !== next.nodeValue) current.nodeValue = next.nodeValue;
+    return current;
+  }
+  if (current.tagName !== next.tagName) return next;
+  patchAttributes(current, next);
+  patchChildren(current, next);
+  return current;
+}
+
+function captureSelection(target) {
+  if (typeof target.contains !== "function") return null;
+  const selection = globalThis.getSelection?.();
+  if (!selection || !selection.rangeCount
+      || !target.contains(selection.anchorNode) || !target.contains(selection.focusNode)) return null;
+  return {
+    anchor: selection.anchorNode, anchorOffset: selection.anchorOffset,
+    focus: selection.focusNode, focusOffset: selection.focusOffset,
+  };
+}
+
+function restoreSelection(saved) {
+  if (!saved || saved.anchor.isConnected === false || saved.focus.isConnected === false) return;
+  const selection = globalThis.getSelection?.();
+  if (!selection) return;
+  const limit = (node) => node.nodeType === 3 ? node.nodeValue.length : node.childNodes.length;
+  const anchor = Math.min(saved.anchorOffset, limit(saved.anchor));
+  const focus = Math.min(saved.focusOffset, limit(saved.focus));
+  try {
+    selection.setBaseAndExtent(saved.anchor, anchor, saved.focus, focus);
+  } catch {
+    // A replaced node no longer supports the old selection offsets.
+  }
+}
+
+function updateStream(text, html) {
+  if (text === renderedStream) return;
+  const target = byId("stream");
+  if (!text) {
+    target.replaceChildren();
+    renderedStream = "";
+    return;
+  }
+  const saved = captureSelection(target);
+  const source = document.createElement("div");
+  source.innerHTML = html || "";
+  patchChildren(target, source);
+  restoreSelection(saved);
+  renderedStream = text;
+}
+
+function queueMessage(item) {
+  const id = Number(item?.id);
+  if (item?.id == null || !Number.isFinite(id)
+      || shownMessageIds.has(id) || pendingMessageIds.has(id)) return;
+  pendingMessageIds.add(id);
+  pendingMessages.push(item);
+  scheduleChatFrame();
+}
+
+function queueStream(text, html) {
+  if (pendingStream?.text === text && pendingStream?.html === html) return;
+  pendingStream = {text, html};
+  scheduleChatFrame();
+}
+
+function flushChat() {
+  chatFrame = null;
+  if (pendingMessages.length) {
+    const batch = pendingMessages.toSorted((a, b) => Number(a.id) - Number(b.id));
+    pendingMessages = [];
+    for (const item of batch) {
+      pendingMessageIds.delete(Number(item.id));
+      insertMessage(item);
+    }
+  }
+  if (pendingStream) {
+    const next = pendingStream;
+    pendingStream = null;
+    updateStream(next.text, next.html);
+  }
+  byId("welcome").hidden = shownMessageIds.size > 0;
+  keepBottom();
+}
+
+function scheduleChatFrame() {
+  if (chatFrame !== null) return;
+  chatFrame = typeof requestAnimationFrame === "function"
+    ? requestAnimationFrame(flushChat) : setTimeout(flushChat, 0);
+}
+
+chatLog.addEventListener("scroll", () => {
+  following = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 80;
+});
 
 function setComposerError(message) {
   byId("request-error").textContent = message;
+}
+
+function setSendStatus(message) {
+  byId("send-status").textContent = message;
 }
 
 function renderAttachments() {
@@ -506,21 +673,40 @@ function clockTime(seconds) {
   return new Date(seconds * 1000).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
 }
 
+function schedulePoll(delay) {
+  if (pollTimer !== null) clearTimeout(pollTimer);
+  pollTimer = setTimeout(poll, delay);
+}
+
+function wakePoll() {
+  if (!pollStarted) return;
+  if (polling) {
+    pollAgain = true;
+    return;
+  }
+  schedulePoll(0);
+}
+
 async function poll() {
+  pollTimer = null;
+  pollStarted = true;
+  if (polling) {
+    pollAgain = true;
+    return;
+  }
+  polling = true;
   let delay = 3000;
   try {
     const state = await api("/api/state?after=" + lastMessage + "&issues=" + issueRevision);
-    const pinned = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 80;
-    for (const item of state.messages) {
-      appendMessage(item.role, item.text, item.html, item.images || []);
-      lastMessage = item.id;
+    for (const item of state.messages) queueMessage(item);
+    if (state.messages.length) {
+      const latest = Number(state.messages[state.messages.length - 1].id);
+      if (Number.isFinite(latest) && latest > lastMessage) lastMessage = latest;
     }
-    byId("welcome").hidden = Boolean(lastMessage);
     if (stream !== state.stream) {
       stream = state.stream;
-      byId("stream").innerHTML = state.streamHtml;
+      queueStream(stream, state.streamHtml);
     }
-    if (pinned) chatLog.scrollTop = chatLog.scrollHeight;
     const tasksChanged = JSON.stringify(tasks) !== JSON.stringify(state.tasks);
     const choicesChanged = JSON.stringify([codex.models, codex.efforts])
       !== JSON.stringify([state.codex.models, state.codex.efforts]);
@@ -552,7 +738,12 @@ async function poll() {
   } catch {
     byId("connection-error").hidden = false;
   } finally {
-    setTimeout(poll, delay);
+    polling = false;
+    if (pollAgain) {
+      pollAgain = false;
+      delay = 0;
+    }
+    schedulePoll(delay);
   }
 }
 
@@ -560,16 +751,17 @@ async function submit(text, images = [], project = selected) {
   const errorField = byId("request-error");
   errorField.textContent = "";
   try {
-    await api("/api/chat", {
+    const result = await api("/api/chat", {
       method: "POST",
       headers: {"Content-Type": "application/json", "X-Symphony": "1"},
       body: JSON.stringify({text, project, images}),
     });
-    chatLog.scrollTop = chatLog.scrollHeight;
-    return true;
+    if (result.message) queueMessage(result.message);
+    wakePoll();
+    return {ok: true, message: result.message || null};
   } catch (error) {
     errorField.textContent = error.message;
-    return false;
+    return {ok: false, message: null};
   }
 }
 
@@ -704,18 +896,22 @@ composer.addEventListener("submit", async (event) => {
     setComposerError("Images cannot be sent with slash commands.");
     return;
   }
+  setComposerError("");
   sending = true;
+  setSendStatus("Sending…");
   const accepted = [...pendingImages];
   let images = [];
   try {
     images = await Promise.all(accepted.map(imagePayload));
   } catch (error) {
     setComposerError(error.message);
+    setSendStatus("");
     sending = false;
     return;
   }
   if (messageField.value === text) writeDraft("");
-  if (await submit(text, images, project)) {
+  const result = await submit(text, images, project);
+  if (result.ok) {
     if (text.trim()) {
       history.push(text);
       if (history.length > 100) history.shift();
@@ -725,6 +921,7 @@ composer.addEventListener("submit", async (event) => {
   } else if (!messageField.value) {
     writeDraft(text);
   }
+  setSendStatus("");
   sending = false;
 });
 

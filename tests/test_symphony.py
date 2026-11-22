@@ -318,11 +318,64 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         self.assertEqual(assistant_messages[0]["html"], stream_html)
         self.assertEqual(self.runner.rows("SELECT role, text FROM chat")[-1]["text"], reply)
 
+    async def test_chat_submit_acknowledges_the_saved_row_in_server_order(self):
+        app = self.app()
+        app.repos["owner/second"] = [{"id": "beta", "name": "Beta"}]
+        self.runner.save_setting("view", "project")
+        self.runner.chat("system", "Earlier notice")
+        image = image_payload(WEBP, "image/webp")
+        result = await app.submit({"project": "beta", "text": "Use this mockup.",
+                                   "images": [image]})
+        saved = result["message"]
+        rows = self.runner.rows("SELECT * FROM chat ORDER BY id")
+        self.assertEqual(saved["id"], rows[-1]["id"])
+        self.assertEqual(saved["role"], "user")
+        self.assertEqual(saved["text"], "[Switched view: Beta]\nUse this mockup.")
+        self.assertEqual([item["type"] for item in saved["images"]], ["image/webp"])
+        self.assertEqual(json.loads(rows[-1]["attachments"]), saved["images"])
+
+        first = await app.submit({"project": "beta", "text": "Repeat"})
+        second = await app.submit({"project": "beta", "text": "Repeat"})
+        self.assertNotEqual(first["message"]["id"], second["message"]["id"])
+        state = await app.state(0)
+        self.assertEqual([message["id"] for message in state["messages"]],
+                         [row["id"] for row in rows] + [first["message"]["id"],
+                                                        second["message"]["id"]])
+        self.assertEqual([message["text"] for message in state["messages"]][-2:],
+                         ["Repeat", "Repeat"])
+        self.assertEqual(state["messages"][1], saved)
+
+        image_only = await app.submit({"project": "beta", "images": [image_payload(PNG)]})
+        self.assertEqual(image_only["message"]["text"], "")
+        self.assertEqual([item["type"] for item in image_only["message"]["images"]],
+                         ["image/png"])
+        self.assertEqual(self.runner.rows("SELECT text FROM chat ORDER BY id DESC LIMIT 1"),
+                         [{"text": ""}])
+
+    async def test_chat_live_markdown_renders_only_when_the_stream_changes(self):
+        app = self.app()
+        with patch("symphony.__main__.markdown", return_value="<p>cached</p>") as render:
+            app.coordinator.stream = "Draft one"
+            first = await app.state(0)
+            second = await app.state(0)
+            self.assertEqual(render.call_count, 1)
+            self.assertEqual(first["streamHtml"], "<p>cached</p>")
+            self.assertEqual(second["streamHtml"], "<p>cached</p>")
+
+            app.coordinator.stream = "Draft one and two"
+            await app.state(0)
+            self.assertEqual(render.call_count, 2)
+
+            app.coordinator.stream = ""
+            cleared = await app.state(0)
+            self.assertEqual(render.call_count, 2)
+            self.assertEqual((cleared["stream"], cleared["streamHtml"]), ("", ""))
+
     async def test_chat_images_store_attach_to_history_and_serve(self):
         app = self.app()
         payloads = [image_payload(PNG), image_payload(JPEG, "image/jpeg"),
                     image_payload(WEBP, "image/webp")]
-        await app.submit({"text": "Screenshot", "images": payloads})
+        accepted = await app.submit({"text": "Screenshot", "images": payloads})
 
         repo, text, message, images = app.messages.popleft()
         self.assertEqual((repo, text, message), ("", "Screenshot", "Screenshot"))
@@ -336,11 +389,14 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
             self.assertEqual(path.read_bytes(), expected)
             self.assertEqual(app.chat_image(image["name"]), (expected, image["type"]))
 
+        saved = accepted["message"]
+        row = self.runner.rows("SELECT * FROM chat")[-1]
+        self.assertEqual(saved, {
+            "id": row["id"], "role": "user", "text": "Screenshot", "images": images,
+        })
         state = await app.state(0)
-        self.assertEqual(state["messages"][-1]["text"], "Screenshot")
-        self.assertEqual(state["messages"][-1]["images"], images)
-        self.assertEqual(json.loads(self.runner.rows("SELECT attachments FROM chat")[-1]["attachments"]),
-                         images)
+        self.assertEqual(state["messages"][-1], saved)
+        self.assertEqual(json.loads(row["attachments"]), images)
 
         handler = object.__new__(Handler)
         handler.path = "/api/chat-image?name=" + images[0]["name"]
@@ -2515,6 +2571,28 @@ class ChatHttpTests(unittest.TestCase):
         self.assertNotIn("img-src *", policy)
         self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
 
+    def test_chat_http_returns_the_accepted_message(self):
+        headers = Message()
+        payload = {"message": {"id": 7, "role": "user", "text": "Saved text", "images": []}}
+        raw = json.dumps({"text": "Saved text", "project": ""}).encode()
+        headers["Content-Length"] = str(len(raw))
+        headers["X-Symphony"] = "1"
+        headers["Content-Type"] = "application/json"
+        headers["Sec-Fetch-Site"] = "same-origin"
+        handler = object.__new__(Handler)
+        handler.path = "/api/chat"
+        handler.headers = headers
+        handler.rfile = BytesIO(raw)
+        handler.server = SimpleNamespace(app=SimpleNamespace(submit=Mock()))
+        handler.wfile = BytesIO()
+        handler.send_response = Mock()
+        handler.send_header = Mock()
+        handler.end_headers = Mock()
+        with patch.object(Handler, "run_async", return_value=payload):
+            handler.do_POST()
+        handler.send_response.assert_called_once_with(202)
+        self.assertEqual(json.loads(handler.wfile.getvalue()), payload)
+
     def test_chat_http_rejects_bodies_above_the_bound_before_reading(self):
         headers = Message()
         headers["Content-Length"] = str(BODY_LIMIT + 1)
@@ -2746,7 +2824,13 @@ process.stdout.write(JSON.stringify({
     delay({messages: [], busy: false}, false),
     delay({messages: [], busy: false}, true),
     delay({messages: [], busy: true}, false),
+    delay({messages: [], busy: false, canInterrupt: true}, false),
+    delay({messages: [], busy: false, stream: "live"}, false),
+    delay({messages: [], busy: true}, true),
+    delay({messages: [], busy: false, canInterrupt: true}, true),
+    delay({messages: [], busy: false, stream: "live"}, true),
     delay({messages: new Array(200), busy: false}, false),
+    delay({messages: new Array(200), busy: true}, true),
   ],
 }));
 """
@@ -2762,7 +2846,7 @@ process.stdout.write(JSON.stringify({
                          [["KIAN-4", "KIAN-3"], ["KIAN-5"], ["KIAN-7", "KIAN-6"]])
         self.assertEqual((result["empty"], result["invalid"], result["valid"], result["none"]),
                          ("alpha", "alpha", "beta", ""))
-        self.assertEqual(result["delays"], [1000, 2000, 600, 0])
+        self.assertEqual(result["delays"], [1000, 2000, 200, 200, 200, 2000, 2000, 2000, 0, 0])
 
         root = Path(__file__).resolve().parents[1] / "symphony/web"
         html = (root / "index.html").read_text()

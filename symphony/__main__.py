@@ -154,6 +154,18 @@ def valid_webhook(payload, now_ms=None):
     return now - WEBHOOK_CLOCK_SKEW_MS <= timestamp <= now + WEBHOOK_CLOCK_SKEW_MS
 
 
+def chat_message(row):
+    message = dict(row)
+    try:
+        images = json.loads(message.pop("attachments") or "[]")
+    except (TypeError, ValueError):
+        images = []
+    message["images"] = images if isinstance(images, list) else []
+    if message["role"] == "assistant":
+        message["html"] = markdown(message["text"])
+    return message
+
+
 def issue_summary(row, stage=None):
     plan = proposed_plan(row["description"])
     summary = {**{key: row.get(key) for key in ("identifier", "title", "url", "state", "priority",
@@ -185,6 +197,7 @@ class Symphony:
         self.issue_revision = ""
         self.issue_error = ""
         self.history_cache = {}
+        self.stream_cache = ("", "")
         self.webhook_secret = os.environ.get("LINEAR_WEBHOOK_SECRET", "")
         self.updates = UpdateChecker()
 
@@ -427,19 +440,15 @@ class Symphony:
 
     async def state(self, after, issue_revision=""):
         login = self.login if not self.coordinator.account and self.login and time.monotonic() < self.login["expires"] else None
-        messages = self.runner.rows("SELECT * FROM chat WHERE id > ? ORDER BY id LIMIT 200", (after,))
-        for message in messages:
-            try:
-                images = json.loads(message.pop("attachments") or "[]")
-            except (TypeError, ValueError):
-                images = []
-            message["images"] = images if isinstance(images, list) else []
-            if message["role"] == "assistant":
-                message["html"] = markdown(message["text"])
+        rows = self.runner.rows("SELECT * FROM chat WHERE id > ? ORDER BY id LIMIT 200", (after,))
+        messages = [chat_message(row) for row in rows]
+        text = self.coordinator.stream
+        if self.stream_cache[0] != text:
+            self.stream_cache = (text, markdown(text) if text else "")
         state = {"messages": messages,
                  "busy": self.busy, "canInterrupt": bool(self.coordinator.turn),
-                 "stream": self.coordinator.stream,
-                 "streamHtml": markdown(self.coordinator.stream) if self.coordinator.stream else "",
+                 "stream": text,
+                 "streamHtml": self.stream_cache[1],
                  "tasks": self.runner.status(),
                  "signedIn": bool(self.coordinator.account), "login": login,
                  "paused": self.runner.setting("paused"), "view": self.runner.setting("view"),
@@ -463,8 +472,12 @@ class Symphony:
                 return False
         return True
 
+    def saved_message(self, message_id):
+        row = self.runner.rows("SELECT * FROM chat WHERE id=?", (message_id,))[0]
+        return chat_message(row)
+
     async def submit(self, body):
-        text = body.get("text")
+        text = body.get("text", "")
         project = body.get("project") or ""
         if not isinstance(text, str) or not isinstance(project, str):
             raise ValueError("Enter a message.")
@@ -478,8 +491,8 @@ class Symphony:
             raise ValueError("Images cannot be sent with slash commands.")
         if text == "/interrupt":
             await self.coordinator.interrupt()
-            self.runner.chat("user", text)
-            return
+            message_id = self.runner.chat("user", text)
+            return {"message": self.saved_message(message_id)}
         found = self.mapped_project(project) if project else None
         if project and not found:
             raise ValueError("The selected project is unavailable. Refresh the project list.")
@@ -491,18 +504,19 @@ class Symphony:
         message = f"[Switched view: {label}]\n{text}" if project != previous else text
         attachments = self.save_chat_images(images)
         try:
-            self.runner.chat("user", message, attachments)
+            message_id = self.runner.chat("user", message, attachments)
         except Exception:
             self.remove_chat_images(attachments)
             raise
         if self.coordinator.turn and self.turn_repo == repo and not text.startswith("/"):
             try:
                 await self.coordinator.steer(message, attachments)
-                return
+                return {"message": self.saved_message(message_id)}
             except (OSError, RuntimeError, ValueError):
                 pass  # The turn or the server can exit before the steer is accepted.
         self.messages.append((repo, text, message, attachments))
         self.runner.wake.set()
+        return {"message": self.saved_message(message_id)}
 
     async def context(self, repo, issues=()):
         cwd = await self.runner.checkout(repo, refresh=repo != self.turn_repo) if repo else self.runner.directory

@@ -113,7 +113,7 @@
       <div id="chat-log" class="chat-log" role="log" aria-live="polite">
         <p id="welcome">Choose a project or ask the coordinator to draft a plan.</p>
         <div id="messages"></div>
-        <div id="stream" class="issue-markdown"></div>
+        <div id="stream" class="issue-markdown" aria-live="off"></div>
       </div>
       <form id="composer">
         <p id="turn-timing" hidden></p>
@@ -137,7 +137,10 @@
             Interrupt <kbd aria-hidden="true">Esc</kbd>
           </button>
         </div>
-        <p id="request-error" role="alert"></p>
+        <div class="composer-feedback">
+          <p id="send-status" role="status" aria-live="polite"></p>
+          <p id="request-error" role="alert"></p>
+        </div>
       </form>
     </section>
     <aside class="issues-pane status-pane" aria-label="Todo, In Progress, and Done issues">

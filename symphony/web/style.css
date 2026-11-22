@@ -324,8 +324,9 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
 #interrupt kbd { margin-inline-start: 4px; color: var(--muted); font: 11px/1 var(--mono); }
 #interrupt:disabled { opacity: 0.45; cursor: not-allowed; }
 #turn-timing { margin-bottom: 8px; color: var(--muted); font: 12px/1.5 var(--mono); }
-#request-error { margin-top: 8px; font-size: .85rem; overflow-wrap: anywhere; }
-#request-error:empty { display: none; }
+.composer-feedback { margin-top: 8px; min-height: 1.5em; font-size: .85rem; }
+#request-error { margin: 0; overflow-wrap: anywhere; }
+#send-status { margin: 0; color: var(--muted); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 #issue-dialog {
   width: min(1200px, calc(100vw - 32px));
