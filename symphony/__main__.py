@@ -30,7 +30,7 @@ from .runner import BusyError, Runner, read_small, rules_state, shared_agents
 from .services import (
     CLOSED_STATES, ISSUE_ID, CreatedIssueError, Linear, estimate_scale, proposed_plan, with_plan,
 )
-from .updates import CHECK_SECONDS as UPDATE_CHECK_SECONDS, UpdateChecker
+from .updates import CHECK_SECONDS as UPDATE_CHECK_SECONDS, UpdateChecker, commit_tag
 
 
 WEB = Path(__file__).parent / "web"
@@ -194,6 +194,20 @@ def issue_summary(row, stage=None):
     return summary
 
 
+def web_version():
+    tag = commit_tag()
+    if tag:
+        return tag
+    hasher = hashlib.sha256()
+    for name in sorted({*(name for name, _ in STATIC.values()), "mermaid.min.js"}):
+        path = WEB / name
+        if path.is_file():
+            hasher.update(name.encode())
+            hasher.update(b"\0")
+            hasher.update(path.read_bytes())
+    return "web-" + hasher.hexdigest()[:16]
+
+
 class Symphony:
     def __init__(self, root):
         self.linear = Linear(os.environ["LINEAR_API_KEY"])
@@ -217,6 +231,7 @@ class Symphony:
         self.stream_cache = ("", "", "")
         self.webhook_secret = os.environ.get("LINEAR_WEBHOOK_SECRET", "")
         self.updates = UpdateChecker()
+        self.version = web_version()
 
     async def refresh_projects(self):
         async with self.projects_lock:
@@ -772,6 +787,7 @@ class Symphony:
                  "updateAvailable": self.updates.available,
                  "update": self.updates.details(),
                  "draining": self.runner.draining,
+                 "version": self.version,
                  "usageAlert": self.coordinator.usage_alert()}
         if self.issue_snapshot is not None and issue_revision != self.issue_revision:
             state.update(projects=self.issue_snapshot, issueRevision=self.issue_revision)

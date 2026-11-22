@@ -3950,6 +3950,26 @@ else:
         self.assertTrue(worker_state["usageAlert"]["active"])
         self.assertIn("429 rate limit exceeded", worker_state["usageAlert"]["detail"])
 
+    async def test_state_exposes_commit_or_static_asset_hash_version(self):
+        sha = "a" * 40
+        with patch.dict(os.environ, {"SYMPHONY_COMMIT": sha.upper()}):
+            app = self.app()
+        state = await app.state(0)
+        self.assertEqual(state["version"], sha)
+
+        with TemporaryDirectory() as temp, patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SYMPHONY_COMMIT", None)
+            web = Path(temp)
+            for name in ("index.html", "app.js", "issue.js", "panes.js", "style.css", "favicon.ico"):
+                (web / name).write_text(f"v1-{name}")
+            with patch("symphony.__main__.WEB", web):
+                app_v1 = self.app()
+                (web / "app.js").write_text("v2-app.js")
+                app_v2 = self.app()
+        self.assertTrue(app_v1.version.startswith("web-"))
+        self.assertEqual(len(app_v1.version), 20)
+        self.assertNotEqual(app_v1.version, app_v2.version)
+
     @staticmethod
     async def _cancel_task(task):
         task.cancel()
@@ -4163,6 +4183,15 @@ class ChatHttpTests(unittest.TestCase):
                 handler2.do_GET()
             handler2.send_response.assert_called_once_with(200)
             self.assertEqual(handler2.wfile.getvalue(), b"globalThis.mermaid = {};")
+
+    def test_static_ui_assets_never_cache(self):
+        for route in ("/", "/app.js", "/issue.js", "/panes.js", "/style.css"):
+            with self.subTest(route=route):
+                handler = self.get_handler(route)
+                handler.do_GET()
+                handler.send_response.assert_called_once_with(200)
+                headers = dict(call.args for call in handler.send_header.call_args_list)
+                self.assertEqual(headers["Cache-Control"], "no-store")
 
 
 class ServeStartupTests(unittest.IsolatedAsyncioTestCase):

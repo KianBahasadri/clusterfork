@@ -985,6 +985,152 @@ console.log(JSON.stringify({unsafeHidden, single, multi, clearedHidden: details.
         self.assertEqual(res["multi"]["listItems"], ["C4", "C3", "(+2 more)"])
         self.assertTrue(res["clearedHidden"])
 
+    @unittest.skipUnless(shutil.which("node"), "Node is required for JavaScript checks.")
+    def test_auto_reload_triggers_when_idle_and_defers_for_draft_image_dialog_or_send(self):
+        app = Path(__file__).resolve().parents[1] / "symphony/web/app.js"
+        probe = r"""
+const fs = require("fs");
+const vm = require("vm");
+
+function boot(opts = {}) {
+  const nodes = new Map();
+  const makeNode = (tag = "div", id = "") => ({
+    tag, id, textContent: "", innerHTML: "", value: "", hidden: true, disabled: false, open: false,
+    dataset: {}, style: {setProperty() {}}, listeners: {}, children: [],
+    classList: {add() {}, remove() {}},
+    addEventListener(t, h) { (this.listeners[t] ||= []).push(h); },
+    setAttribute(n, v) { this[n] = String(v); }, removeAttribute(n) { delete this[n]; },
+    toggleAttribute() {}, focus() {}, setSelectionRange() {}, contains() { return false; },
+    closest() { return makeNode("aside"); },
+    append(...items) { this.children.push(...items); },
+    prepend(...items) { this.children.unshift(...items); },
+    replaceChildren(...items) { this.children = items; },
+    querySelector() { return null; }, querySelectorAll() { return []; },
+  });
+  let reloads = 0;
+  let releaseFetch = null;
+  const doc = {
+    activeElement: null,
+    getElementById(id) {
+      if (!nodes.has(id)) nodes.set(id, makeNode(id.endsWith("dialog") ? "dialog" : "div", id));
+      return nodes.get(id);
+    },
+    createElement(tag) { return makeNode(tag); },
+    createElementNS(_ns, tag) { return makeNode(tag); },
+    querySelector(sel) {
+      if (sel === "dialog[open]") {
+        const cfg = this.getElementById("config-dialog");
+        if (cfg.open) return cfg;
+        const issue = this.getElementById("issue-dialog");
+        if (issue.open) return issue;
+        return null;
+      }
+      return this.getElementById("main");
+    },
+    querySelectorAll() { return []; },
+    addEventListener() {},
+  };
+  const fetchFn = opts.holdSubmit
+    ? async () => {
+        await new Promise((r) => { releaseFetch = r; });
+        return {ok: true, json: async () => ({message: {id: 1, role: "user", text: "hi", images: []}})};
+      }
+    : async () => ({ok: true, json: async () => ({})});
+  const ctx = vm.createContext({
+    document: doc,
+    location: {reload() { reloads += 1; }},
+    URL: {createObjectURL: () => "blob:1", revokeObjectURL() {}},
+    fetch: fetchFn,
+    setInterval: () => 0, setTimeout, clearTimeout,
+  });
+  vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+  return {ctx, doc, getReloads: () => reloads, releaseFetch: () => releaseFetch?.()};
+}
+
+(async () => {
+  // 1. Missing/unchanged version never reloads; mismatch reloads once when idle.
+  const b1 = boot();
+  b1.ctx.checkServerVersion("");
+  b1.ctx.checkServerVersion(null);
+  b1.ctx.checkServerVersion("v1");
+  b1.ctx.checkServerVersion("v1");
+  const unchanged = b1.getReloads();
+  b1.ctx.checkServerVersion("v2");
+  b1.ctx.checkServerVersion("v2");
+  b1.ctx.checkServerVersion("v3");
+  const idleOnce = b1.getReloads();
+
+  // 2. Draft text defers reload and shows notice; clearing text auto-reloads.
+  const b2 = boot();
+  b2.ctx.checkServerVersion("v1");
+  b2.doc.getElementById("message").value = "unsent";
+  b2.ctx.checkServerVersion("v2");
+  const draftDeferred = {reloads: b2.getReloads(), noticeHidden: b2.doc.getElementById("reload-notice").hidden};
+  b2.doc.getElementById("message").value = "   ";
+  b2.doc.getElementById("message").listeners.input[0]();
+  const afterDraftClear = b2.getReloads();
+
+  // 3. Open dialog defers reload; closing dialog auto-reloads.
+  const b3 = boot();
+  b3.ctx.checkServerVersion("v1");
+  b3.doc.getElementById("issue-dialog").open = true;
+  b3.ctx.checkServerVersion("v2");
+  const dialogDeferred = {reloads: b3.getReloads(), noticeHidden: b3.doc.getElementById("reload-notice").hidden};
+  b3.doc.getElementById("issue-dialog").open = false;
+  b3.doc.getElementById("issue-dialog").listeners.close[0]();
+  const afterDialogClose = b3.getReloads();
+
+  // 4. Pending image defers reload; removing image auto-reloads.
+  const b4 = boot();
+  b4.ctx.checkServerVersion("v1");
+  b4.ctx.attachImage({type: "image/png", size: 10, name: "a.png"});
+  b4.ctx.checkServerVersion("v2");
+  const imgDeferred = b4.getReloads();
+  vm.runInContext("removeAttachment(pendingImages[0]);", b4.ctx);
+  const afterImgClear = b4.getReloads();
+
+  // 5. In-flight submit defers reload (even after draft cleared) until submit finishes.
+  const b5 = boot({holdSubmit: true});
+  b5.ctx.checkServerVersion("v1");
+  b5.doc.getElementById("message").value = "send me";
+  const sub = b5.doc.getElementById("composer").listeners.submit[0]({preventDefault() {}});
+  await new Promise((r) => setImmediate(r));
+  b5.ctx.checkServerVersion("v2");
+  const sendingDeferred = b5.getReloads();
+  b5.releaseFetch();
+  await sub;
+  const afterSubmit = b5.getReloads();
+
+  // 6. Manual Reload now works even while draft is non-empty.
+  const b6 = boot();
+  b6.ctx.checkServerVersion("v1");
+  b6.doc.getElementById("message").value = "keep";
+  b6.ctx.checkServerVersion("v2");
+  b6.doc.getElementById("reload-action").listeners.click[0]();
+  const manualReload = b6.getReloads();
+
+  console.log(JSON.stringify({
+    unchanged, idleOnce, draftDeferred, afterDraftClear,
+    dialogDeferred, afterDialogClose, imgDeferred, afterImgClear,
+    sendingDeferred, afterSubmit, manualReload,
+  }));
+})();
+"""
+        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        res = json.loads(run.stdout)
+        self.assertEqual(res["unchanged"], 0)
+        self.assertEqual(res["idleOnce"], 1)
+        self.assertEqual(res["draftDeferred"], {"reloads": 0, "noticeHidden": False})
+        self.assertEqual(res["afterDraftClear"], 1)
+        self.assertEqual(res["dialogDeferred"], {"reloads": 0, "noticeHidden": False})
+        self.assertEqual(res["afterDialogClose"], 1)
+        self.assertEqual(res["imgDeferred"], 0)
+        self.assertEqual(res["afterImgClear"], 1)
+        self.assertEqual(res["sendingDeferred"], 0)
+        self.assertEqual(res["afterSubmit"], 1)
+        self.assertEqual(res["manualReload"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -397,9 +397,12 @@ not blocked. The notice then offers **Cancel**, which restores automatic
 dispatch immediately. Draining is process-local and never persisted, so a
 restart begins with normal automatic dispatch. While draining, `/idle` also
 waits for work in review, blocked rework, or failed completion, while queued
-approved Todo issues alone do not hold it. The two-minute updater schedule
-means a confirmed update is not rolled out immediately, and the browser does
-not reload by itself.
+approved Todo issues alone do not hold it.
+Status responses also expose a stable server `version` (`SYMPHONY_COMMIT` or a
+hash of static UI assets served with `Cache-Control: no-store`); when a running
+browser tab sees a newer server version, it automatically reloads once the
+composer has no unsent text or images, no submit is in flight, and no modal
+dialog is open (showing a reload notice and waiting until idle otherwise).
 
 Open the private HTTPS address reported by the UI gateway and verify the project
 chips and panes load. Register one Linear webhook for Issue and Project events

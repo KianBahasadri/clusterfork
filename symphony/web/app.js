@@ -94,6 +94,9 @@ let updateState = {updateAvailable: false, draining: false, update: null};
 let updatePending = false;
 let updateError = "";
 const SAFE_COMPARE_URL = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/compare\/[0-9a-f]{40}\.\.\.[0-9a-f]{40}$/;
+let loadedVersion = "";
+let pendingReloadVersion = "";
+let reloading = false;
 const BASE_TITLE = document.title || "Symphony";
 let usageAlertActive = false;
 let usageNotifiedKey = "";
@@ -1128,6 +1131,7 @@ function removeAttachment(image) {
   pendingImages.splice(index, 1);
   URL.revokeObjectURL(image.url);
   renderAttachments();
+  maybeAutoReload();
 }
 
 function clearAttachments(images) {
@@ -1137,6 +1141,7 @@ function clearAttachments(images) {
     URL.revokeObjectURL(image.url);
   }
   renderAttachments();
+  maybeAutoReload();
 }
 
 function imagePayload(image) {
@@ -1370,6 +1375,47 @@ function renderUsageAlert(alert) {
   }
 }
 
+function canAutoReload() {
+  const openDialog = document.querySelector?.("dialog[open]");
+  const hasOpenDialog = Boolean(
+    byId("config-dialog")?.open
+    || byId("issue-dialog")?.open
+    || (openDialog && openDialog.id !== "main" && openDialog.tag !== "main")
+  );
+  return !sending
+    && !messageField.value.trim()
+    && !pendingImages.length
+    && !hasOpenDialog;
+}
+
+function triggerReload() {
+  if (reloading) return;
+  reloading = true;
+  globalThis.location?.reload?.();
+}
+
+function maybeAutoReload() {
+  if (!pendingReloadVersion || reloading) return;
+  if (canAutoReload()) {
+    triggerReload();
+    return;
+  }
+  const notice = byId("reload-notice");
+  if (notice) notice.hidden = false;
+}
+
+function checkServerVersion(version) {
+  if (typeof version !== "string" || !version) return;
+  if (!loadedVersion) {
+    loadedVersion = version;
+    return;
+  }
+  if (version !== loadedVersion) {
+    pendingReloadVersion = version;
+    maybeAutoReload();
+  }
+}
+
 function schedulePoll(delay) {
   if (pollTimer !== null) clearTimeout(pollTimer);
   pollTimer = setTimeout(poll, delay);
@@ -1449,6 +1495,7 @@ async function poll() {
     showCodexStatus();
     renderUpdateNotice();
     renderUsageAlert(state.usageAlert || null);
+    checkServerVersion(state.version);
     byId("connection-error").hidden = true;
     byId("paused").hidden = !state.paused;
     byId("paused").textContent = state.paused ? "Dispatch paused. " + state.paused : "";
@@ -1661,6 +1708,7 @@ composer.addEventListener("submit", async (event) => {
   }
   setSendStatus("");
   sending = false;
+  maybeAutoReload();
 });
 
 messageField.addEventListener("paste", (event) => {
@@ -1678,6 +1726,7 @@ messageField.addEventListener("input", () => {
   historyIndex = history.length;
   dismissedDraft = null;
   renderCommands();
+  maybeAutoReload();
 });
 messageField.addEventListener("focus", renderCommands);
 messageField.addEventListener("pointerdown", () => messageField.classList.add("pointer-focus"));
@@ -1714,6 +1763,7 @@ byId("diagram-close").addEventListener("click", () => {
   clearDiagramPanel(true);
 });
 byId("update-action").addEventListener("click", toggleDrain);
+byId("reload-action").addEventListener("click", triggerReload);
 byId("usage-notify-enable").addEventListener("click", async () => {
   const notifier = globalThis.Notification;
   if (typeof notifier !== "function" || typeof notifier.requestPermission !== "function") return;
@@ -1768,7 +1818,9 @@ configDialog.addEventListener("close", () => {
   configOpenCodeKey.value = "";
   configButton.setAttribute("aria-expanded", "false");
   configButton.focus({preventScroll: true});
+  maybeAutoReload();
 });
+byId("issue-dialog")?.addEventListener("close", maybeAutoReload);
 backlogToggle.addEventListener("click", () => setPaneCollapsed("backlog", !backlogCollapsed));
 queueToggle.addEventListener("click", () => setPaneCollapsed("queue", !queueCollapsed));
 applyPaneState();

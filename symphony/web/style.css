@@ -320,6 +320,10 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
   display: grid;
   gap: 2px;
 }
+#reload-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+#reload-text { min-width: 0; flex: 1 1 220px; }
+#reload-action { flex: none; background: var(--action-primary); border-color: transparent; }
+#reload-action:hover { background: var(--action-primary-hover); }
 .diagram-panel {
   flex: none;
   padding: 12px max(16px, calc((100% - 760px)/2));
