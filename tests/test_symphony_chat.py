@@ -2111,6 +2111,60 @@ class ChatBrowserTests(unittest.TestCase):
                          "/interrupt", "/login", "/continue", "/retry "],
         })
 
+    def test_plan_proposal_accept_button_in_chat_and_card_details(self):
+        hash1 = "1" * 64
+        hash2 = "2" * 64
+        self.page.evaluate("""({hash1, hash2}) => {
+          window.__approveCalls = [];
+          window.__failApproveOnce = true;
+          const projects = [{
+            id: "proj-a", name: "Repo A", icon: "", repo: "owner/a",
+            issues: [{
+              identifier: "KIAN-50", title: "Accept card", url: "https://example.test/50",
+              state: {name: "Backlog", type: "backlog", color: "#999"},
+              priority: 2, priorityLabel: "High", estimate: 2, dueDate: null,
+              labels: [], plan: "### Plan v2", planHtml: "<p>Plan v2</p>", planHash: hash2,
+            }],
+          }];
+          window.fetch = async (path, options = {}) => {
+            if (path === "/api/approve") {
+              const body = JSON.parse(options.body);
+              window.__approveCalls.push(body);
+              if (window.__failApproveOnce) {
+                window.__failApproveOnce = false;
+                return {ok: false, json: async () => ({error: "Plan hash changed."})};
+              }
+              return {ok: true, json: async () => ({approved: body.issue, repo: "owner/a"})};
+            }
+            return {ok: true, json: async () => ({
+              messages: [
+                {id: 1, role: "system", text: "Proposed plan v1", images: [], repo: "owner/a",
+                 meta: {kind: "plan_proposal", issue: "KIAN-50", title: "Accept card", planHash: hash1}},
+                {id: 2, role: "system", text: "Proposed plan v2", images: [], repo: "owner/a",
+                 meta: {kind: "plan_proposal", issue: "KIAN-50", title: "Accept card", planHash: hash2}},
+              ],
+              busy: false, canInterrupt: false, stream: "", streamHtml: "", tasks: [],
+              signedIn: true, login: null, paused: "", view: "proj-a", repo: "owner/a",
+              repoActivity: {"owner/a": 2}, codex: {}, issueError: "",
+              updateAvailable: false, draining: false, projects, issueRevision: "rev-approve",
+            })};
+          };
+        }""", {"hash1": hash1, "hash2": hash2})
+        self.page.evaluate("async () => { await poll(); flushChat(); }")
+        self.page.locator("#backlog summary + *").wait_for(state="attached")
+        # Inline error retains active Accept button; clicking again succeeds and marks Approved.
+        latest_btn = self.page.locator("#messages .plan-accept-button").nth(1)
+        latest_btn.click()
+        self.page.wait_for_function(
+            "document.querySelectorAll('#messages .plan-accept-error')[1].textContent.includes('Plan hash changed.')")
+        self.assertFalse(latest_btn.is_disabled())
+        latest_btn.click()
+        self.page.wait_for_function(
+            "document.querySelectorAll('#messages .plan-accept-button')[1].textContent === 'Approved'")
+        self.assertEqual(self.page.locator("#messages .plan-accept-button").nth(0).text_content(), "Approved")
+        self.assertEqual(self.page.locator("#backlog .plan-accept-button").text_content(), "Approved")
+        self.assertTrue(self.page.locator("#backlog .plan-accept-button").is_disabled())
+
 
 if __name__ == "__main__":
     unittest.main()

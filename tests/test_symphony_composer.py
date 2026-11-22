@@ -481,6 +481,103 @@ vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
         self.assertEqual(result["afterClose"], "")
         self.assertEqual(result["afterClear"], {"status": "Not configured.", "draft": "Keep my draft"})
 
+    @unittest.skipUnless(shutil.which("node"), "Node is required for JavaScript checks.")
+    def test_plan_proposal_accept_buttons_render_superseded_and_approved_states(self):
+        app = Path(__file__).resolve().parents[1] / "symphony/web/app.js"
+        probe = r"""
+const fs = require("fs");
+const vm = require("vm");
+const nodes = new Map();
+const makeNode = (tag = "div", id = "") => {
+  const node = {
+    tag, id, textContent: "", innerHTML: "", value: "", hidden: false, disabled: false, open: false,
+    dataset: {}, style: {setProperty() {}}, listeners: {}, children: [],
+    classList: {add() {}, remove() {}},
+    addEventListener(t, h) { (this.listeners[t] ||= []).push(h); },
+    setAttribute() {}, removeAttribute() {}, toggleAttribute() {}, focus() {},
+    contains() { return false; },
+    closest() { return makeNode("aside"); },
+    append(...items) { this.children.push(...items); node._relink(); },
+    prepend(...items) { this.children.unshift(...items); node._relink(); },
+    replaceChildren(...items) { this.children = items; node._relink(); },
+    _relink() { for (const c of this.children) if (c && typeof c === "object") c.parentNode = this; },
+    querySelector(sel) {
+      const cls = sel.startsWith(".") ? sel.slice(1) : null;
+      for (const c of this.children) {
+        if (!c || typeof c !== "object") continue;
+        if (cls && String(c.className || "").split(/\s+/).includes(cls)) return c;
+        const nested = c.querySelector?.(sel);
+        if (nested) return nested;
+      }
+      return null;
+    },
+    querySelectorAll(sel) {
+      const cls = sel.startsWith(".") ? sel.slice(1) : null;
+      const out = [];
+      for (const c of this.children) {
+        if (!c || typeof c !== "object") continue;
+        if (cls && String(c.className || "").split(/\s+/).includes(cls)) out.push(c);
+        if (c.querySelectorAll) out.push(...c.querySelectorAll(sel));
+      }
+      return out;
+    },
+  };
+  return node;
+};
+const doc = {
+  getElementById(id) {
+    if (!nodes.has(id)) nodes.set(id, makeNode("div", id));
+    return nodes.get(id);
+  },
+  createElement(tag) { return makeNode(tag); },
+  createElementNS(_ns, tag) { return makeNode(tag); },
+  querySelector() { return this.getElementById("main"); },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+};
+const approved = [];
+const fetch = async (path, options = {}) => {
+  if (path === "/api/approve") {
+    approved.push(JSON.parse(options.body));
+    return {ok: true, json: async () => ({approved: "KIAN-1", repo: "owner/repo"})};
+  }
+  return {ok: true, json: async () => ({})};
+};
+const ctx = vm.createContext({document: doc, fetch, setInterval: () => 0, setTimeout, clearTimeout, console});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), ctx);
+(async () => {
+  const hash1 = "1".repeat(64);
+  const hash2 = "2".repeat(64);
+  vm.runInContext(`
+    tasks = [];
+    insertMessage({id: 1, role: "system", text: "Proposed v1", meta: {kind: "plan_proposal", issue: "KIAN-1", title: "One", planHash: "${hash1}"}});
+    insertMessage({id: 2, role: "system", text: "Proposed v2", meta: {kind: "plan_proposal", issue: "KIAN-1", title: "One", planHash: "${hash2}"}});
+    syncApproveButtons();
+  `, ctx);
+  const msgs = doc.getElementById("messages");
+  const btns = msgs.querySelectorAll(".plan-accept-button");
+  const before = btns.map((b) => ({text: b.textContent, disabled: b.disabled, state: b.dataset.state}));
+  await btns[1].listeners.click[0]();
+  await new Promise((r) => setTimeout(r, 10));
+  const after = btns.map((b) => ({text: b.textContent, disabled: b.disabled, state: b.dataset.state}));
+  console.log(JSON.stringify({before, after, approved}));
+})();
+"""
+        panes = Path(__file__).resolve().parents[1] / "symphony/web/panes.js"
+        run = subprocess.run(["node", "-e", probe, str(panes), str(app)], text=True, capture_output=True, check=False)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        res = json.loads(run.stdout)
+        self.assertEqual(res["before"], [
+            {"text": "Superseded", "disabled": True, "state": "superseded"},
+            {"text": "Accept", "disabled": False, "state": "active"},
+        ])
+        self.assertEqual(res["after"], [
+            {"text": "Approved", "disabled": True, "state": "approved"},
+            {"text": "Approved", "disabled": True, "state": "approved"},
+        ])
+        self.assertEqual(res["approved"], [{"issue": "KIAN-1", "planHash": "2" * 64}])
+
 
 if __name__ == "__main__":
     unittest.main()

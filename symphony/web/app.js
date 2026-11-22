@@ -48,6 +48,9 @@ const imagesBytes = 10 * 1024 * 1024;
 const expandedPlans = new Set();
 const collapsedGroups = new Set();
 const pendingPlans = new Set();
+const approvingPlans = new Set();
+const approvedPlans = new Set();
+const proposalErrors = new Map();
 const priorityIcons = ["ellipsis", "octagon-alert", "signal", "signal-medium", "signal-low"];
 let issueCache = new Map();
 let projectRepos = new Map();
@@ -374,6 +377,23 @@ function renderIssue(issue, today) {
     body.innerHTML = issue.planHtml;
     plan.append(summary, body);
     if (!task) {
+      if (issue.planHash) {
+        const actions = element("div", "", "plan-proposal-actions");
+        const accept = element("button", "", "plan-accept-button");
+        accept.type = "button";
+        const key = "card:" + issue.identifier + ":" + issue.planHash;
+        const alreadyApproved = approvedPlans.has(issue.identifier);
+        const busy = approvingPlans.has(key);
+        accept.textContent = alreadyApproved ? "Approved" : busy ? "Approving…" : "Accept";
+        accept.disabled = alreadyApproved || busy;
+        accept.dataset.state = alreadyApproved ? "approved" : busy ? "pending" : "active";
+        accept.addEventListener("click", () => acceptPlan(issue.identifier, issue.planHash, key));
+        const err = element("p", proposalErrors.get(key) || "", "plan-accept-error");
+        err.setAttribute("role", "status");
+        err.hidden = !proposalErrors.has(key);
+        actions.append(accept, err);
+        plan.append(actions);
+      }
       plan.append(element("p", issue.state.name === "Todo"
         ? "This issue is awaiting plan approval in chat and will not run."
         : "Tell the coordinator in chat when you approve this plan.", "muted"));
@@ -381,6 +401,63 @@ function renderIssue(issue, today) {
     row.append(plan);
   }
   return row;
+}
+
+async function acceptPlan(issueId, planHash, errorKey) {
+  if (!issueId || !planHash || approvingPlans.has(errorKey) || approvedPlans.has(issueId)) return;
+  approvingPlans.add(errorKey);
+  proposalErrors.delete(errorKey);
+  syncApproveButtons();
+  renderPanes();
+  try {
+    await api("/api/approve", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "X-Symphony": "1"},
+      body: JSON.stringify({issue: issueId, planHash}),
+    });
+    approvedPlans.add(issueId);
+    wakePoll();
+  } catch (error) {
+    proposalErrors.set(errorKey, error.message);
+  } finally {
+    approvingPlans.delete(errorKey);
+    syncApproveButtons();
+    renderPanes();
+  }
+}
+
+function syncApproveButtons() {
+  const containers = [...(messages.querySelectorAll?.(".plan-proposal-actions") || [])];
+  if (!containers.length) return;
+  const latestByIssue = new Map();
+  for (const box of containers) {
+    const issue = box.dataset.issue || "";
+    const msgId = Number(box.dataset.messageId) || 0;
+    if (issue && msgId >= (latestByIssue.get(issue) || 0)) latestByIssue.set(issue, msgId);
+  }
+  for (const box of containers) {
+    const issue = box.dataset.issue || "";
+    const planHash = box.dataset.planHash || "";
+    const msgId = Number(box.dataset.messageId) || 0;
+    const key = "chat:" + msgId;
+    const button = box.querySelector(".plan-accept-button");
+    const err = box.querySelector(".plan-accept-error");
+    if (!button || !err) continue;
+    const recorded = approvedPlans.has(issue) || tasks.some((item) => item.issue === issue);
+    const superseded = !recorded && msgId !== latestByIssue.get(issue);
+    const busy = approvingPlans.has(key);
+    button.textContent = recorded ? "Approved" : superseded ? "Superseded" : busy ? "Approving…" : "Accept";
+    button.disabled = recorded || superseded || busy;
+    button.dataset.state = recorded ? "approved" : superseded ? "superseded" : busy ? "pending" : "active";
+    if (recorded || superseded) proposalErrors.delete(key);
+    const errText = proposalErrors.get(key) || "";
+    err.textContent = errText;
+    err.hidden = !errText;
+    if (planHash && !recorded && !superseded && button.dataset.bound !== "1") {
+      button.dataset.bound = "1";
+      button.addEventListener("click", () => acceptPlan(issue, planHash, key));
+    }
+  }
 }
 
 async function proposePlan(issue, button) {
@@ -655,6 +732,19 @@ function createMessage(item) {
     content.innerHTML = item.html || "";
   }
   entry.append(element("h2", label[role] || "Symphony"), content);
+  if (item.meta?.kind === "plan_proposal" && item.meta.issue && item.meta.planHash) {
+    const actions = element("div", "", "plan-proposal-actions");
+    actions.dataset.issue = item.meta.issue;
+    actions.dataset.planHash = item.meta.planHash;
+    actions.dataset.messageId = String(item.id || 0);
+    const accept = element("button", "Accept", "plan-accept-button");
+    accept.type = "button";
+    const err = element("p", "", "plan-accept-error");
+    err.setAttribute("role", "status");
+    err.hidden = true;
+    actions.append(accept, err);
+    entry.append(actions);
+  }
   if (item.images?.length) entry.append(imageGallery(item.images, "message-images"));
   return entry;
 }
@@ -783,6 +873,7 @@ function flushChat() {
       pendingMessageIds.delete(Number(item.id));
       insertMessage(item);
     }
+    syncApproveButtons();
   }
   if (pendingStream) {
     const next = pendingStream;
@@ -1057,6 +1148,7 @@ async function poll() {
     const redrawIssues = tasksChanged || today !== issueDay;
     issueDay = today;
     tasks = state.tasks;
+    syncApproveButtons();
     if (state.projects) {
       if (!issueRevision) selected = state.view;
       updateProjects(state.projects, redrawIssues);

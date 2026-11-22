@@ -80,7 +80,8 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE TABLE IF NOT EXISTS chat (
     id INTEGER PRIMARY KEY, role TEXT NOT NULL, text TEXT NOT NULL,
     attachments TEXT NOT NULL DEFAULT '[]',
-    repo TEXT NOT NULL DEFAULT ''
+    repo TEXT NOT NULL DEFAULT '',
+    meta TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS threads (
     repo TEXT PRIMARY KEY, thread_id TEXT NOT NULL,
@@ -345,6 +346,8 @@ class Runner:
                 self.db.execute("ALTER TABLE chat ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'")
             if "repo" not in chat_columns:
                 self.db.execute("ALTER TABLE chat ADD COLUMN repo TEXT NOT NULL DEFAULT ''")
+            if "meta" not in chat_columns:
+                self.db.execute("ALTER TABLE chat ADD COLUMN meta TEXT NOT NULL DEFAULT '{}'")
         self.migrate_unphased_events()
         self.jobs = set()
         self.cloning = {}
@@ -543,11 +546,12 @@ class Runner:
                 await self._run_opencode_auth(["logout", "--standalone", "opencode-go", old_id])
             self._chmod_opencode_db()
 
-    def chat(self, role, text, attachments=(), *, repo=""):
+    def chat(self, role, text, attachments=(), *, repo="", meta=None):
         with self.db:
             cursor = self.db.execute(
-                "INSERT INTO chat(role,text,attachments,repo) VALUES (?,?,?,?)",
-                (role, text, json.dumps(list(attachments), ensure_ascii=False), repo),
+                "INSERT INTO chat(role,text,attachments,repo,meta) VALUES (?,?,?,?,?)",
+                (role, text, json.dumps(list(attachments), ensure_ascii=False), repo,
+                 json.dumps(meta or {}, ensure_ascii=False)),
             )
         return cursor.lastrowid
 

@@ -90,7 +90,12 @@ badge appear on their issues. A round arrow on an unstarted Backlog card asks
 the coordinator for a proposed plan in chat while preserving the composer draft;
 it neither approves nor queues work. Expandable proposed plans render Markdown
 with the same formatting and safety rules as issue details, while the saved plan
-text remains the source for approval.
+text remains the source for approval. When `set_plan` saves a proposal, Symphony
+also posts a proposal entry in chat with a one-click **Accept** button (and shows
+**Accept** inside unapproved issue cards' `Proposed plan` dropdown), backed by
+same-origin `POST /api/approve` with live `planHash` verification so operators can
+lock and queue unmodified plans without spending a Codex turn (while
+natural-language approval via `approve_issue` still works).
 
 Click an issue card to open its details in a modal. The description, attachments,
 documents, comments, and activity appear beside its properties and related issues.

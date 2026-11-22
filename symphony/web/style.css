@@ -258,6 +258,11 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
 .message-text:not(.issue-markdown) { white-space: pre-wrap; overflow-wrap: anywhere; }
 .plan { margin-top: 8px; padding: 12px; background: var(--canvas); font-size: .85rem; }
 .plan th, .plan td { overflow-wrap: normal; }
+.plan-proposal-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; }
+.plan-accept-button { background: var(--action-primary); border-color: transparent; font-weight: 500; }
+.plan-accept-button:hover:not(:disabled) { background: var(--action-primary-hover); }
+.plan-accept-button:disabled { opacity: .65; cursor: default; }
+.plan-accept-error { color: var(--danger); font-size: .85rem; }
 .chat { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .chat-log { flex: 1; overflow: auto; padding: 20px max(16px, calc((100% - 760px)/2)); }
 #welcome { color: var(--muted); margin-top: 12px; }

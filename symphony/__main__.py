@@ -45,6 +45,7 @@ STATIC = {
 BODY_LIMIT = 14 * 1024 * 1024
 DRAIN_BODY_LIMIT = 1024
 CONFIG_BODY_LIMIT = 8192
+APPROVE_BODY_LIMIT = 1024
 TEXT_LIMIT = 23000
 ISSUE_TITLE_LIMIT = 255
 ISSUE_DESCRIPTION_LIMIT = 24000
@@ -167,6 +168,12 @@ def chat_message(row):
     except (TypeError, ValueError):
         images = []
     message["images"] = images if isinstance(images, list) else []
+    try:
+        meta = json.loads(message.pop("meta") or "{}")
+    except (TypeError, ValueError):
+        meta = {}
+    if isinstance(meta, dict) and meta:
+        message["meta"] = meta
     if message["role"] == "assistant":
         message["html"] = markdown(message["text"])
     return message
@@ -180,7 +187,8 @@ def issue_summary(row, stage=None):
                "project": (row["project"] or {}).get("name", ""),
                "projectId": (row["project"] or {}).get("id", ""),
                "labels": row["labels"]["nodes"],
-               "plan": plan, "planHtml": markdown(plan)}
+               "plan": plan, "planHash": hashlib.sha256(plan.encode()).hexdigest() if plan else "",
+               "planHtml": markdown(plan)}
     if stage is not None:
         summary["stage"] = stage
     return summary
@@ -535,7 +543,7 @@ class Symphony:
             issue, repo = await self.live_issue(issue_id)
             return {**issue, "repo": repo}
         if name == "set_plan":
-            issue, _ = await self.live_issue(issue_id)
+            issue, repo = await self.live_issue(issue_id)
             if self.runner.rows("SELECT 1 FROM tasks WHERE issue=?", (issue_id,)):
                 raise ValueError("The proposed plan is locked by approval.")
             plan = args["plan"].strip()
@@ -546,6 +554,15 @@ class Symphony:
                 raise ValueError("Use level-three headings within the Proposed Plan.")
             await self.linear.update(issue["id"], description=description)
             self.request_issue_refresh()
+            title = issue.get("title") or ""
+            plan_hash = hashlib.sha256(plan.encode()).hexdigest()
+            label = f": {title}" if title else ""
+            self.runner.chat(
+                "system",
+                f"Proposed plan for {issue_id}{label}",
+                repo=repo,
+                meta={"kind": "plan_proposal", "issue": issue_id, "title": title, "planHash": plan_hash},
+            )
             return f"Saved the Proposed Plan section for {issue_id}."
         if name == "approve_issue":
             issue, repo = await self.live_issue(issue_id)
@@ -587,6 +604,28 @@ class Symphony:
         if not draining:
             self.runner.wake.set()
         return {"draining": self.runner.draining}
+
+    async def approve_plan(self, body):
+        if (not isinstance(body, dict) or set(body) != {"issue", "planHash"}
+                or not isinstance(body["issue"], str) or not ISSUE_ID.fullmatch(body["issue"])
+                or not isinstance(body["planHash"], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", body["planHash"])):
+            raise ValueError("Expected an issue identifier and planHash.")
+        issue_id = body["issue"]
+        if self.runner.rows("SELECT 1 FROM tasks WHERE issue=?", (issue_id,)):
+            raise BusyError(f"{issue_id} already has a recorded approval.")
+        issue, repo = await self.live_issue(issue_id)
+        plan = proposed_plan(issue.get("description") or "")
+        if not plan:
+            raise BusyError(f"{issue_id} no longer has a proposed plan.")
+        live_hash = hashlib.sha256(plan.encode()).hexdigest()
+        if not hmac.compare_digest(live_hash, body["planHash"]):
+            raise BusyError(f"The proposed plan for {issue_id} changed since it was proposed.")
+        if self.runner.rows("SELECT 1 FROM tasks WHERE issue=?", (issue_id,)):
+            raise BusyError(f"{issue_id} already has a recorded approval.")
+        await self.runner.approve(issue, repo)
+        self.runner.chat("system", f"Approved {issue_id} and queued in Todo.", repo=repo)
+        return {"approved": issue_id, "repo": repo}
 
     def resolve_repo(self, project="", repo=""):
         if repo and repo in self.repos:
@@ -1057,7 +1096,7 @@ class Handler(BaseHTTPRequestHandler):
         return parsed.scheme in {"http", "https"} and bool(host) and parsed.netloc == host and parsed.path in {"", "/"}
 
     def do_POST(self):
-        if self.path not in {"/api/chat", "/api/drain", "/api/config"}:
+        if self.path not in {"/api/chat", "/api/drain", "/api/config", "/api/approve"}:
             self.json_response({"error": "Page not found."}, 404)
             return
         if (self.headers.get("X-Symphony") != "1" or self.headers.get_content_type() != "application/json"
@@ -1067,7 +1106,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers["Content-Length"])
-            limit = (CONFIG_BODY_LIMIT if self.path == "/api/config"
+            limit = (APPROVE_BODY_LIMIT if self.path == "/api/approve"
+                     else CONFIG_BODY_LIMIT if self.path == "/api/config"
                      else DRAIN_BODY_LIMIT if self.path == "/api/drain" else BODY_LIMIT)
             if not 0 < length <= limit:
                 raise ValueError("Request is too large." if self.path != "/api/chat"
@@ -1087,6 +1127,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/config":
                 self.json_response(self.run_async(self.server.app.update_config(body)))
+                return
+            if self.path == "/api/approve":
+                self.json_response(self.run_async(self.server.app.approve_plan(body)))
                 return
             if not isinstance(body, dict):
                 raise ValueError("Expected a chat message.")

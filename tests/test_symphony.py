@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, Mock, call, patch
 
 from symphony.__main__ import (
     BODY_LIMIT, CONFIG_BODY_LIMIT, ISSUE_REFRESH_SECONDS, REFRESH_COALESCE_SECONDS, WEBHOOK_BODY_LIMIT,
-    Handler, Symphony, WebhookHandler, serve,
+    Handler, Symphony, WebhookHandler, issue_summary, serve,
 )
 from symphony.codex import CREATE_ISSUE_SCHEMA, Codex, TOOLS, TOOLS_HASH
 from symphony.execution import execution_payload
@@ -3727,6 +3727,63 @@ else:
         self.assertEqual(logged_out["codex"]["account"], {})
         self.assertEqual(self.runner.thread(REPO)["thread_id"], "thread-keep")
 
+    async def test_set_plan_emits_proposal_and_api_approve_locks_without_codex_turn(self):
+        app = self.app()
+        live_issue = {
+            "id": "lin-101", "identifier": ISSUE, "title": "Proposal card",
+            "state": {"name": "Backlog", "type": "backlog"},
+            "project": {"id": "project"}, "description": "Original body",
+        }
+        updated_descriptions = []
+
+        async def fake_update(_id, *, description):
+            updated_descriptions.append(description)
+            live_issue["description"] = description
+
+        app.repos[REPO] = [{"id": "project", "name": "Fixture"}]
+        with patch.object(app, "refresh_projects", new_callable=AsyncMock, return_value=app.repos), \
+             patch.object(app.linear, "issue", new_callable=AsyncMock, return_value=live_issue), \
+             patch.object(app.linear, "update", side_effect=fake_update):
+            await app.tool("set_plan", {"issue_id": ISSUE, "plan": "### Steps\n\n1. Ship it."})
+
+        expected_hash = hashlib.sha256(b"### Steps\n\n1. Ship it.").hexdigest()
+        msgs = (await app.state(0, project="project"))["messages"]
+        self.assertEqual(msgs[-1]["role"], "system")
+        self.assertEqual(msgs[-1]["meta"], {
+            "kind": "plan_proposal", "issue": ISSUE,
+            "title": "Proposal card", "planHash": expected_hash,
+        })
+
+        # issue_summary carries planHash cleanly.
+        live_issue["labels"] = {"nodes": []}
+        self.assertEqual(
+            (await app.issues(REPO)) if False else issue_summary(live_issue)["planHash"],
+            expected_hash,
+        )
+
+        # Stale hash fails with BusyError (409).
+        with patch.object(app, "refresh_projects", new_callable=AsyncMock, return_value=app.repos), \
+             patch.object(app.linear, "issue", new_callable=AsyncMock, return_value=live_issue):
+            with self.assertRaisesRegex(BusyError, "changed"):
+                await app.approve_plan({"issue": ISSUE, "planHash": "0" * 64})
+
+        # Matching hash locks the plan, posts confirmation, and queues in Todo with zero Codex turns.
+        with patch.object(app, "refresh_projects", new_callable=AsyncMock, return_value=app.repos), \
+             patch.object(app.linear, "issue", new_callable=AsyncMock, return_value=live_issue), \
+             patch.object(self.linear, "set_state", new_callable=AsyncMock) as set_state, \
+             patch.object(app.coordinator, "respond", new_callable=AsyncMock) as coord_respond:
+            result = await app.approve_plan({"issue": ISSUE, "planHash": expected_hash})
+        self.assertEqual(result, {"approved": ISSUE, "repo": REPO})
+        set_state.assert_awaited_once_with(ISSUE, "Todo", "unstarted")
+        coord_respond.assert_not_awaited()
+        self.assertEqual(self.runner.task(ISSUE)["phase"], "approved")
+        self.assertEqual((await app.state(0, project="project"))["messages"][-1]["text"],
+                         f"Approved {ISSUE} and queued in Todo.")
+
+        # Duplicate approve is rejected cleanly with BusyError.
+        with self.assertRaisesRegex(BusyError, "already has a recorded approval"):
+            await app.approve_plan({"issue": ISSUE, "planHash": expected_hash})
+
     @staticmethod
     async def _cancel_task(task):
         task.cancel()
@@ -3873,7 +3930,7 @@ class ChatHttpTests(unittest.TestCase):
             if origin is not None:
                 h.headers["Origin"] = origin
             h.rfile = BytesIO(raw)
-            h.server = SimpleNamespace(app=app or SimpleNamespace())
+            h.server = SimpleNamespace(app=app or SimpleNamespace(approve_plan=Mock()))
             h.do_POST()
             return h.send_response.call_args.args[0], h.wfile.getvalue().decode()
 
@@ -3894,6 +3951,32 @@ class ChatHttpTests(unittest.TestCase):
             status, body = post(raw_ok, origin="https://symphony.tail:443", app=busy_app)
         self.assertEqual(status, 409)
         self.assertEqual(json.loads(body), {"error": "Worker running."})
+
+    def test_approve_http_enforces_csrf_and_handles_conflicts(self):
+        def call(raw, *, origin=None, host="symphony.tail:443", sym="1", app=None):
+            h = self.get_handler("/api/approve")
+            h.headers["Content-Length"] = str(len(raw))
+            h.headers["Content-Type"] = "application/json"
+            h.headers["Sec-Fetch-Site"] = "same-origin"
+            h.headers["Host"] = host
+            if sym is not None:
+                h.headers["X-Symphony"] = sym
+            if origin is not None:
+                h.headers["Origin"] = origin
+            h.rfile = BytesIO(raw)
+            h.server = SimpleNamespace(app=app or SimpleNamespace(approve_plan=Mock()))
+            h.do_POST()
+            return h.send_response.call_args.args[0], json.loads(h.wfile.getvalue())
+
+        raw = json.dumps({"issue": ISSUE, "planHash": "a" * 64}).encode()
+        self.assertEqual(call(raw, sym=None)[0], 403)
+        self.assertEqual(call(raw, origin="https://evil.example")[0], 403)
+        with patch.object(Handler, "run_async", return_value={"approved": ISSUE, "repo": REPO}):
+            status, body = call(raw, origin="https://symphony.tail:443")
+        self.assertEqual((status, body), (200, {"approved": ISSUE, "repo": REPO}))
+        with patch.object(Handler, "run_async", side_effect=BusyError("Already approved.")):
+            status, body = call(raw)
+        self.assertEqual((status, body), (409, {"error": "Already approved."}))
 
 
 class ServeStartupTests(unittest.IsolatedAsyncioTestCase):
