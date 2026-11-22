@@ -3784,6 +3784,44 @@ else:
         with self.assertRaisesRegex(BusyError, "already has a recorded approval"):
             await app.approve_plan({"issue": ISSUE, "planHash": expected_hash})
 
+    async def test_mcp_command_lists_all_dynamic_and_paginated_mcp_tools(self):
+        app = self.app()
+        pages = [
+            {"data": [{"name": "linear", "authStatus": "oAuth", "tools": {
+                "get_issue": {"description": "Fetch an issue.\nDetails ignored."},
+                "save_issue": {"description": "Create or update an issue."},
+            }}], "nextCursor": "page-2"},
+            {"data": [{"name": "context7", "authStatus": "unsupported", "tools": [
+                {"name": "query-docs", "description": "Query library documentation."},
+            ]}], "nextCursor": None},
+        ]
+        seen_params = []
+
+        async def fake_request(method, params):
+            self.assertEqual(method, "mcpServerStatus/list")
+            seen_params.append(params)
+            return pages.pop(0)
+
+        with patch.object(app.coordinator, "connect", new_callable=AsyncMock), \
+             patch.object(app.coordinator, "request", side_effect=fake_request):
+            await app.handle(REPO, "/mcp", "/mcp")
+
+        self.assertEqual(seen_params, [{"detail": "Full"}, {"detail": "Full", "cursor": "page-2"}])
+        output = self.runner.rows("SELECT text, repo FROM chat ORDER BY id DESC LIMIT 1")[0]
+        self.assertEqual(output["repo"], REPO)
+        for name in ("list_repos", "set_plan", "approve_issue", "read_notes", "ship_worker", "create_issue"):
+            self.assertIn(name, output["text"])
+        self.assertIn("linear [oAuth]", output["text"])
+        self.assertIn("get_issue — Fetch an issue.", output["text"])
+        self.assertIn("context7 [unsupported]", output["text"])
+        self.assertIn("query-docs — Query library documentation.", output["text"])
+
+        with patch.object(app.coordinator, "mcp_servers", side_effect=RuntimeError("Codex signed out")):
+            await app.handle(REPO, "/mcp", "/mcp")
+        degraded = self.runner.rows("SELECT text FROM chat ORDER BY id DESC LIMIT 1")[0]["text"]
+        self.assertIn("Symphony dynamic tools:", degraded)
+        self.assertIn("MCP servers unavailable: Codex signed out", degraded)
+
     @staticmethod
     async def _cancel_task(task):
         task.cancel()

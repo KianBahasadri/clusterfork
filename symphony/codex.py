@@ -288,6 +288,44 @@ class Codex:
         self.active_login_id = ""
         self.login_pending = False
 
+    async def mcp_servers(self):
+        await self.connect()
+        servers = []
+        seen_cursors = set()
+        cursor = None
+        while True:
+            params = {"detail": "Full"}
+            if cursor:
+                params["cursor"] = cursor
+            result = await self.request("mcpServerStatus/list", params)
+            for entry in result.get("data") or ():
+                if not isinstance(entry, dict):
+                    continue
+                raw_tools = entry.get("tools")
+                tools = []
+                if isinstance(raw_tools, dict):
+                    for name, info in sorted(raw_tools.items()):
+                        desc = info.get("description", "") if isinstance(info, dict) else ""
+                        tools.append({"name": name, "description": desc})
+                elif isinstance(raw_tools, list):
+                    for info in raw_tools:
+                        if isinstance(info, dict) and info.get("name"):
+                            tools.append({"name": info["name"], "description": info.get("description", "")})
+                        elif isinstance(info, str):
+                            tools.append({"name": info, "description": ""})
+                    tools.sort(key=lambda item: item["name"])
+                servers.append({
+                    "name": entry.get("name") or "",
+                    "authStatus": entry.get("authStatus") or "",
+                    "tools": tools,
+                })
+            next_cursor = result.get("nextCursor") or ""
+            if not next_cursor or next_cursor in seen_cursors:
+                break
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        return servers
+
     def status(self, repo=""):
         name = self.runner.setting("model") or self.model
         if not name:

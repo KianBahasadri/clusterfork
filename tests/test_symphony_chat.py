@@ -2107,7 +2107,7 @@ class ChatBrowserTests(unittest.TestCase):
           commands: (messageField.value = "/", matchingCommands().map(c => c[0])),
         })"""), {
             "unreadA": False, "scrollTop": 120,
-            "commands": ["/model ", "/effort ", "/new", "/compact", "/status",
+            "commands": ["/model ", "/effort ", "/new", "/compact", "/status", "/mcp",
                          "/interrupt", "/login", "/continue", "/retry "],
         })
 

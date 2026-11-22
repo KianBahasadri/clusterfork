@@ -908,6 +908,29 @@ class Symphony:
             self.runner.chat("system", "\n".join(filter(None, [
                 " · ".join(filter(None, usage)), "\n".join(summary) or "No approved work in progress.",
             ])), repo=repo)
+        elif command == "/mcp":
+            sections = ["Symphony dynamic tools:"]
+            for tool_name, (description, params) in TOOL_SPECS.items():
+                sections.append(f"- {tool_name}({', '.join(params)}) — {description}")
+            try:
+                servers = await self.coordinator.mcp_servers()
+            except (OSError, RuntimeError, TimeoutError, ValueError) as error:
+                sections.append(f"\nMCP servers unavailable: {error}")
+            else:
+                if not servers:
+                    sections.append("\nMCP servers: none connected.")
+                else:
+                    sections.append("\nMCP servers:")
+                    for server in servers:
+                        auth = f" [{server['authStatus']}]" if server["authStatus"] else ""
+                        sections.append(f"- {server['name']}{auth}")
+                        if not server["tools"]:
+                            sections.append("  (no tools reported)")
+                        for tool in server["tools"]:
+                            desc = tool.get("description", "").strip()
+                            suffix = f" — {desc.splitlines()[0]}" if desc else ""
+                            sections.append(f"  - {tool['name']}{suffix}")
+            self.runner.chat("system", "\n".join(sections), repo=repo)
         elif command in {"/model", "/effort"}:
             if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", argument):
                 raise ValueError(f"Enter a value after {command}.")
@@ -931,7 +954,7 @@ class Symphony:
             else:
                 raise ValueError(f"{row['issue']} is {row['phase']}.")
         elif command.startswith("/"):
-            raise ValueError("Available commands: /login, /new, /compact, /status, /model, /effort, /interrupt, /continue, /retry.")
+            raise ValueError("Available commands: /login, /new, /compact, /status, /mcp, /model, /effort, /interrupt, /continue, /retry.")
         elif attachments:
             await self.respond(repo, message, (), attachments)
         else:

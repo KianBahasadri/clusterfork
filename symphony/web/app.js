@@ -1236,6 +1236,7 @@ const commands = [
   ["/new", "Start a fresh session for this repository"],
   ["/compact", "Compact the conversation context"],
   ["/status", "Show Codex usage and approved work"],
+  ["/mcp", "Show all coordinator and MCP tools"],
   ["/interrupt", "Stop the current Codex turn"],
   ["/login", "Sign in to Codex"],
   ["/continue", "Resume worker dispatch"],

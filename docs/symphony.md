@@ -165,7 +165,8 @@ Use the Interrupt button to stop an active turn. If Codex exits during a turn,
 Symphony clears the partial response and reconnects to the conversation on the
 next message. The composer shows the current model and reasoning effort,
 context used, 5-hour and weekly quota when available, and turn timing. `/status`
-also lists approved work. Symphony uses the design guide palette and follows the
+also lists approved work, and `/mcp` lists all Symphony dynamic tools and
+connected MCP server tools. Symphony uses the design guide palette and follows the
 browser's light or dark preference. The favicon is a multi-size ICO.
 
 Use `/new` in chat to start a fresh Codex thread for the active repository, or `/compact` to compact the current thread (showing a queued notice when sent during an active turn and compaction progress in the timing line until complete). A message sent during a turn in the same repository steers the active turn. A message for a different repository queues for the next turn. The app uses the
