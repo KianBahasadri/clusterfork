@@ -3822,6 +3822,40 @@ else:
         self.assertIn("Symphony dynamic tools:", degraded)
         self.assertIn("MCP servers unavailable: Codex signed out", degraded)
 
+    async def test_repo_buttons_persist_validate_and_scope_per_repo_state(self):
+        app = self.app()
+        second = "owner/second"
+        app.repos = {REPO: [{"id": "alpha", "name": "Alpha"}], second: [{"id": "beta", "name": "Beta"}]}
+        with patch.object(app, "refresh_projects", new_callable=AsyncMock, return_value=app.repos):
+            with self.assertRaisesRegex(ValueError, "Unknown repository"):
+                await app.tool("set_repo_button", {"repo": "owner/missing", "label": "X", "prompt": "Y", "mode": "attach"})
+            with self.assertRaisesRegex(ValueError, "attach' or 'send"):
+                await app.tool("set_repo_button", {"repo": REPO, "label": "X", "prompt": "Y", "mode": "invalid"})
+            saved = await app.tool("set_repo_button", {
+                "repo": REPO.upper(), "label": "Idle reload",
+                "prompt": "Keep workers idle for auto-deploy.", "mode": "attach",
+            })
+            self.assertEqual(saved["repo"], REPO)
+            await app.tool("set_repo_button", {
+                "repo": second, "label": "Quick check",
+                "prompt": "Run checks", "mode": "send",
+            })
+            listed = await app.tool("list_repo_buttons", {"repo": REPO})
+            self.assertEqual([b["label"] for b in listed], ["Idle reload"])
+            self.assertEqual(
+                [b["label"] for b in (await app.state(0, project="alpha"))["buttons"]],
+                ["Idle reload"],
+            )
+            self.assertEqual(
+                [b["label"] for b in (await app.state(0, project="beta"))["buttons"]],
+                ["Quick check"],
+            )
+            reopened = Runner(self.root, self.linear)
+            self.addCleanup(reopened.db.close)
+            self.assertEqual(reopened.repo_buttons(REPO)[0]["prompt"], "Keep workers idle for auto-deploy.")
+            await app.tool("delete_repo_button", {"repo": REPO, "label": "Idle reload"})
+            self.assertEqual((await app.state(0, project="alpha"))["buttons"], [])
+
     @staticmethod
     async def _cancel_task(task):
         task.cancel()

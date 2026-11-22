@@ -578,6 +578,89 @@ vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), ctx);
         ])
         self.assertEqual(res["approved"], [{"issue": "KIAN-1", "planHash": "2" * 64}])
 
+    @unittest.skipUnless(shutil.which("node"), "Node is required for JavaScript checks.")
+    def test_repo_prompt_buttons_attach_toggle_prepend_and_send(self):
+        app = Path(__file__).resolve().parents[1] / "symphony/web/app.js"
+        probe = r"""
+const fs = require("fs");
+const vm = require("vm");
+const nodes = new Map();
+const makeNode = (tag = "div", id = "") => {
+  const node = {
+    tag, id, textContent: "", innerHTML: "", value: "", hidden: false, disabled: false, open: false,
+    dataset: {}, style: {setProperty() {}}, listeners: {}, children: [],
+    classList: {add() {}, remove() {}},
+    addEventListener(t, h) { (this.listeners[t] ||= []).push(h); },
+    setAttribute(n, v) { this[n] = String(v); }, removeAttribute(n) { delete this[n]; },
+    toggleAttribute() {}, focus() {}, setSelectionRange() {}, contains() { return false; },
+    closest() { return makeNode("aside"); },
+    append(...items) { this.children.push(...items); },
+    prepend(...items) { this.children.unshift(...items); },
+    replaceChildren(...items) { this.children = items; },
+    querySelector() { return null; }, querySelectorAll() { return []; },
+  };
+  return node;
+};
+const doc = {
+  getElementById(id) {
+    if (!nodes.has(id)) nodes.set(id, makeNode("div", id));
+    return nodes.get(id);
+  },
+  createElement(tag) { return makeNode(tag); },
+  createElementNS(_ns, tag) { return makeNode(tag); },
+  querySelector() { return this.getElementById("main"); },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+};
+const sent = [];
+const fetch = async (path, options = {}) => {
+  if (path === "/api/chat") {
+    const body = JSON.parse(options.body);
+    sent.push(body);
+    return {ok: true, json: async () => ({message: {id: sent.length, role: "user", text: body.text, images: []}})};
+  }
+  return {ok: true, json: async () => ({})};
+};
+const ctx = vm.createContext({document: doc, fetch, setInterval: () => 0, setTimeout, clearTimeout, console});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+(async () => {
+  vm.runInContext(`
+    projectRepos = new Map([["alpha", "owner/a"], ["beta", "owner/b"]]);
+    selected = "alpha"; selectedRepo = "owner/a";
+    renderRepoButtons([
+      {repo: "owner/a", label: "Idle note", prompt: "[Note: keep idle]", mode: "attach"},
+      {repo: "owner/a", label: "Ship now", prompt: "Ship all ready", mode: "send"},
+      {repo: "owner/b", label: "Other repo", prompt: "Other", mode: "attach"},
+    ], "owner/a");
+  `, ctx);
+  const bar = doc.getElementById("repo-buttons");
+  const visibleLabels = bar.children.map((b) => b.textContent);
+  // Arm attach button, submit message, verify prompt prepended and disarmed afterward.
+  bar.children[0].listeners.click[0]();
+  const armedAttr = bar.children[0]["aria-pressed"];
+  doc.getElementById("message").value = "Continue please.";
+  await doc.getElementById("composer").listeners.submit[0]({preventDefault() {}});
+  const disarmedAttr = bar.children[0]["aria-pressed"];
+  // Toggle attach on then off, then click send button.
+  bar.children[0].listeners.click[0]();
+  bar.children[0].listeners.click[0]();
+  const toggledOffAttr = bar.children[0]["aria-pressed"];
+  await bar.children[1].listeners.click[0]();
+  console.log(JSON.stringify({visibleLabels, armedAttr, disarmedAttr, toggledOffAttr, sent}));
+})();
+"""
+        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        res = json.loads(run.stdout)
+        self.assertEqual(res["visibleLabels"], ["Idle note", "Ship now"])
+        self.assertEqual(res["armedAttr"], "true")
+        self.assertEqual(res["disarmedAttr"], "false")
+        self.assertEqual(res["toggledOffAttr"], "false")
+        self.assertEqual([s["text"] for s in res["sent"]], [
+            "[Note: keep idle]\n\nContinue please.",
+            "Ship all ready",
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()

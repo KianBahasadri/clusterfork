@@ -589,6 +589,15 @@ class Symphony:
         if name == "cleanup_worker":
             await self.runner.cleanup(issue_id)
             return "Worktree cleaned up."
+        if name in {"list_repo_buttons", "set_repo_button", "delete_repo_button"}:
+            target_repo = args["repo"].strip().lower()
+            if target_repo not in await self.refresh_projects():
+                raise ValueError(f"Unknown repository {target_repo}.")
+            if name == "list_repo_buttons":
+                return self.runner.repo_buttons(target_repo)
+            if name == "set_repo_button":
+                return self.runner.set_repo_button(target_repo, args["label"], args["prompt"], args["mode"])
+            return self.runner.delete_repo_button(target_repo, args["label"])
         raise ValueError("Unknown tool.")
 
     async def check_updates(self):
@@ -738,6 +747,7 @@ class Symphony:
         text = self.coordinator.stream_for(active_repo)
         if self.stream_cache[:2] != (active_repo, text):
             self.stream_cache = (active_repo, text, markdown(text) if text else "")
+        raw_buttons = self.runner.repo_buttons(active_repo) if active_repo else []
         state = {"messages": messages,
                  "busy": self.busy, "canInterrupt": bool(self.coordinator.turn_for(active_repo)),
                  "stream": text,
@@ -747,6 +757,7 @@ class Symphony:
                  "paused": self.runner.setting("paused"), "view": self.runner.setting("view"),
                  "repo": active_repo,
                  "repoActivity": self.runner.repo_chat_latest(),
+                 "buttons": raw_buttons if isinstance(raw_buttons, list) else [],
                  "codex": self.coordinator.status(active_repo), "issueError": self.issue_error,
                  "compacting": (
                      "running" if self.compacting_repo == active_repo else

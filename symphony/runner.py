@@ -88,6 +88,14 @@ CREATE TABLE IF NOT EXISTS threads (
     tools_hash TEXT NOT NULL, context_used INTEGER
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS repo_buttons (
+    repo TEXT NOT NULL,
+    label TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    updated REAL NOT NULL,
+    PRIMARY KEY (repo, label)
+);
 CREATE TABLE IF NOT EXISTS execution (
     id INTEGER PRIMARY KEY, issue TEXT NOT NULL, kind TEXT NOT NULL,
     started REAL NOT NULL, ended REAL, detail TEXT NOT NULL DEFAULT '',
@@ -372,6 +380,47 @@ class Runner:
     def save_settings(self, values):
         with self.db:
             self.db.executemany("INSERT OR REPLACE INTO settings VALUES (?, ?)", values.items())
+
+    def repo_buttons(self, repo):
+        return self.rows(
+            "SELECT repo, label, prompt, mode FROM repo_buttons WHERE repo=? ORDER BY rowid",
+            (repo,),
+        )
+
+    def set_repo_button(self, repo, label, prompt, mode="attach"):
+        clean_repo = (repo or "").strip().lower()
+        clean_label = (label or "").strip()
+        clean_prompt = (prompt or "").strip()
+        clean_mode = (mode or "attach").strip().lower()
+        if not clean_repo:
+            raise ValueError("Repository is required.")
+        if not clean_label or len(clean_label) > 40:
+            raise ValueError("Button label must contain between 1 and 40 characters.")
+        if not clean_prompt or len(clean_prompt) > 4000:
+            raise ValueError("Button prompt must contain between 1 and 4,000 characters.")
+        if clean_mode not in {"attach", "send"}:
+            raise ValueError("Button mode must be 'attach' or 'send'.")
+        with self.db:
+            self.db.execute(
+                """INSERT INTO repo_buttons(repo, label, prompt, mode, updated)
+                   VALUES (?,?,?,?,?)
+                   ON CONFLICT(repo, label) DO UPDATE SET
+                       prompt=excluded.prompt, mode=excluded.mode, updated=excluded.updated""",
+                (clean_repo, clean_label, clean_prompt, clean_mode, time.time()),
+            )
+        return {"repo": clean_repo, "label": clean_label, "prompt": clean_prompt, "mode": clean_mode}
+
+    def delete_repo_button(self, repo, label):
+        clean_repo = (repo or "").strip().lower()
+        clean_label = (label or "").strip()
+        with self.db:
+            cursor = self.db.execute(
+                "DELETE FROM repo_buttons WHERE repo=? AND label=?",
+                (clean_repo, clean_label),
+            )
+        if not cursor.rowcount:
+            raise ValueError(f"No button named {clean_label} for {clean_repo}.")
+        return {"deleted": True, "repo": clean_repo, "label": clean_label}
 
     def opencode_db_path(self):
         return self.directory / "worker-data" / "opencode" / "opencode.db"

@@ -408,6 +408,21 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
 #interrupt { min-height: 28px; padding: 2px 8px; }
 #interrupt:disabled { opacity: 0.45; cursor: not-allowed; }
 #turn-timing { margin-bottom: 8px; color: var(--muted); font: 12px/1.5 var(--mono); }
+.repo-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.repo-prompt-button {
+  min-height: 28px;
+  padding: 2px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9999px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.repo-prompt-button[aria-pressed="true"] {
+  background: var(--action-primary);
+  border-color: var(--focus);
+  color: var(--ink-strong);
+  font-weight: 500;
+}
 .composer-feedback { margin-top: 8px; min-height: 1.5em; font-size: .85rem; }
 #request-error { margin: 0; overflow-wrap: anywhere; }
 #send-status { margin: 0; color: var(--muted); }

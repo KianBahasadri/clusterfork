@@ -2165,6 +2165,53 @@ class ChatBrowserTests(unittest.TestCase):
         self.assertEqual(self.page.locator("#backlog .plan-accept-button").text_content(), "Approved")
         self.assertTrue(self.page.locator("#backlog .plan-accept-button").is_disabled())
 
+    def test_repo_prompt_buttons_render_per_repo_and_prepend_on_submit(self):
+        self.page.evaluate("""() => {
+          window.__postedTexts = [];
+          const projects = [
+            {id: "proj-a", name: "Repo A", icon: "", repo: "owner/a", issues: []},
+            {id: "proj-b", name: "Repo B", icon: "", repo: "owner/b", issues: []},
+          ];
+          const buttonsByRepo = {
+            "owner/a": [
+              {repo: "owner/a", label: "Idle note", prompt: "[Keep idle]", mode: "attach"},
+              {repo: "owner/a", label: "Quick ping", prompt: "Ping", mode: "send"},
+            ],
+            "owner/b": [{repo: "owner/b", label: "Only B", prompt: "B prompt", mode: "attach"}],
+          };
+          window.fetch = async (path, options = {}) => {
+            if (path === "/api/chat") {
+              const body = JSON.parse(options.body);
+              window.__postedTexts.push(body.text);
+              return {ok: true, json: async () => ({message: {id: window.__postedTexts.length, role: "user", text: body.text, images: []}})};
+            }
+            const url = new URL(path, "https://example.test");
+            const proj = url.searchParams.get("project") || "proj-a";
+            const repo = proj === "proj-a" ? "owner/a" : "owner/b";
+            return {ok: true, json: async () => ({
+              messages: [], busy: false, canInterrupt: false, stream: "", streamHtml: "",
+              tasks: [], signedIn: true, login: null, paused: "", view: "proj-a",
+              repo, repoActivity: {}, buttons: buttonsByRepo[repo] || [],
+              codex: {}, issueError: "", updateAvailable: false, draining: false,
+              projects, issueRevision: "rev-btn",
+            })};
+          };
+        }""")
+        self.page.evaluate("async () => { await poll(); }")
+        self.page.locator(".repo-prompt-button").first.wait_for(state="visible")
+        self.assertEqual(
+            [btn.text_content() for btn in self.page.locator(".repo-prompt-button").all()],
+            ["Idle note", "Quick ping"],
+        )
+        attach_btn = self.page.locator(".repo-prompt-button").first
+        attach_btn.click()
+        self.assertEqual(attach_btn.get_attribute("aria-pressed"), "true")
+        self.page.fill("#message", "Go ahead")
+        self.page.locator("#message").press("Enter")
+        self.page.wait_for_function("window.__postedTexts.length === 1")
+        self.assertEqual(self.page.evaluate("() => window.__postedTexts"), ["[Keep idle]\n\nGo ahead"])
+        self.assertEqual(attach_btn.get_attribute("aria-pressed"), "false")
+
 
 if __name__ == "__main__":
     unittest.main()

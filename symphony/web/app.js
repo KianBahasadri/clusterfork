@@ -54,6 +54,8 @@ const proposalErrors = new Map();
 const priorityIcons = ["ellipsis", "octagon-alert", "signal", "signal-medium", "signal-low"];
 let issueCache = new Map();
 let projectRepos = new Map();
+let repoButtons = [];
+const armedButtons = new Map();
 let issueRevision = "";
 let selected = "";
 let selectedRepo = null;
@@ -588,6 +590,70 @@ function renderUnreadChips() {
   }
 }
 
+function repoForProject(project = selected) {
+  return projectRepos.has(project) ? (projectRepos.get(project) || "") : (selectedRepo || "");
+}
+
+function armedSetFor(repo) {
+  let set = armedButtons.get(repo);
+  if (!set) {
+    set = new Set();
+    armedButtons.set(repo, set);
+  }
+  return set;
+}
+
+function armedButtonsFor(repo) {
+  const set = armedButtons.get(repo);
+  if (!set?.size) return [];
+  return repoButtons.filter((btn) => btn.repo === repo && btn.mode === "attach" && set.has(btn.label));
+}
+
+function renderRepoButtons(buttons = repoButtons, activeRepo = selectedRepo || "") {
+  repoButtons = Array.isArray(buttons) ? buttons : [];
+  const bar = byId("repo-buttons");
+  if (!bar) return;
+  const visible = repoButtons.filter((btn) => btn.repo === activeRepo);
+  bar.hidden = !visible.length;
+  if (!visible.length) {
+    bar.replaceChildren();
+    return;
+  }
+  const armed = armedButtons.get(activeRepo);
+  bar.replaceChildren(...visible.map((btn) => {
+    const button = element("button", btn.label, "repo-prompt-button");
+    button.type = "button";
+    button.dataset.mode = btn.mode;
+    button.title = (btn.mode === "attach" ? "Attach to next message: " : "Send: ") + btn.prompt;
+    if (btn.mode === "attach") {
+      button.setAttribute("aria-pressed", String(Boolean(armed?.has(btn.label))));
+    }
+    button.addEventListener("click", () => handleRepoButtonClick(btn, activeRepo));
+    return button;
+  }));
+}
+
+async function handleRepoButtonClick(btn, activeRepo) {
+  if (btn.mode === "attach") {
+    const set = armedSetFor(activeRepo);
+    if (set.has(btn.label)) set.delete(btn.label);
+    else set.add(btn.label);
+    renderRepoButtons(repoButtons, activeRepo);
+    messageField.focus();
+    return;
+  }
+  if (sending) return;
+  sending = true;
+  setComposerError("");
+  setSendStatus("Sending…");
+  try {
+    await submit(btn.prompt, [], selected);
+  } finally {
+    setSendStatus("");
+    sending = false;
+  }
+}
+
 function updateRepoActivity(activity, activeRepo) {
   if (!activity || typeof activity !== "object") return;
   if (!repoActivityInitialized) {
@@ -689,6 +755,7 @@ function selectProject(project) {
     }
   }
   renderUnreadChips();
+  renderRepoButtons(repoButtons, selectedRepo || "");
   renderPanes();
   restorePaneScroll(project);
   if (switchedRepo) wakePoll();
@@ -1157,6 +1224,7 @@ async function poll() {
       renderPanes();
     }
     updateRepoActivity(state.repoActivity, selectedRepo ?? activeRepo);
+    renderRepoButtons(state.buttons || [], selectedRepo ?? activeRepo);
     const notice = byId("project-error");
     if (notice.textContent !== state.issueError) notice.textContent = state.issueError;
     notice.hidden = !state.issueError;
@@ -1337,11 +1405,16 @@ composer.addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = messageField.value;
   const project = selected;
-  if (sending || (!text.trim() && !pendingImages.length)) return;
+  const repo = repoForProject(project);
+  const attachedPrompts = !text.trim().startsWith("/") ? armedButtonsFor(repo) : [];
+  if (sending || (!text.trim() && !pendingImages.length && !attachedPrompts.length)) return;
   if (pendingImages.length && text.trim().startsWith("/")) {
     setComposerError("Images cannot be sent with slash commands.");
     return;
   }
+  const outgoing = attachedPrompts.length
+    ? attachedPrompts.map((btn) => btn.prompt).concat(text.trim() ? [text] : []).join("\n\n")
+    : text;
   setComposerError("");
   sending = true;
   setSendStatus("Sending…");
@@ -1356,12 +1429,17 @@ composer.addEventListener("submit", async (event) => {
     return;
   }
   if (messageField.value === text) writeDraft("");
-  const result = await submit(text, images, project);
+  const result = await submit(outgoing, images, project);
   if (result.ok) {
     if (text.trim()) {
       history.push(text);
       if (history.length > 100) history.shift();
       historyIndex = history.length;
+    }
+    if (attachedPrompts.length) {
+      const set = armedButtons.get(repo);
+      for (const btn of attachedPrompts) set?.delete(btn.label);
+      renderRepoButtons(repoButtons, selectedRepo ?? repo);
     }
     clearAttachments(accepted);
   } else if (!messageField.value) {
