@@ -6,6 +6,7 @@ from hashlib import sha256
 import json
 import os
 
+from .runner import rules_state
 from .services import stop_process
 
 
@@ -42,7 +43,8 @@ resume_worker, end your turn immediately and wait for Symphony's worker event.
 Never sleep, poll worker.log, or inspect or audit a worktree while a worker is
 still working; only inspect logs or worktrees if the user asks or after the
 worker finishes or blocks. When verification finishes, call read_notes to audit
-the notes and review report, check check_exit, then decide whether to ship,
+the locked approved plan, worker notes, and review report, check check_exit (via
+worker_status), then decide whether to ship,
 rework in the existing worker session, or investigate. A review finding is
 advice, not approval and never an automatic retry or ship decision; use
 read_diff and the shell for spot-checks and unclear findings. If review is
@@ -51,7 +53,7 @@ Park an issue when blocked or after the rework limit. Report the concrete error.
 If a push or CI fails, keep the repository reserved and resolve the failure or
 report it. Never bypass a failed check or switch publication to a pull request.
 After CI succeeds, the runner updates Linear and cleans up the worktree.
-On a worker event, check approved work for this repository.
+On a worker event, call worker_status to check approved work for this repository.
 """
 
 CREATE_ISSUE_SCHEMA = {
@@ -80,7 +82,7 @@ TOOL_SPECS = {
     "worker_status": ("List recorded work, worker outcomes, and CI state.", ()),
     "spawn_worker": ("Start a queued approved plan in a worktree and return immediately.", ("issue_id", "repo", "task")),
     "resume_worker": ("Resume a worker in the same worktree and OpenCode session.", ("issue_id", "message")),
-    "read_notes": ("Read and register the worker notes and review report for audit.", ("issue_id",)),
+    "read_notes": ("Read and register the locked approved plan, worker notes, and review report for audit.", ("issue_id",)),
     "read_diff": ("Read the worktree diff against the tested base.", ("issue_id",)),
     "ship_worker": ("Push verified and audited work to main. CI follows asynchronously.", ("issue_id",)),
     "park_worker": ("Preserve a stalled task and report the reason.", ("issue_id", "reason")),
@@ -146,6 +148,9 @@ class Codex:
         self.context_usages = {}
         self.rate_limits = {}
         self.turn_timings = {}
+        self.injected_rules = {}
+        self.native_rules = {}
+        self.compacted_repos = set()
         self.status_wake = asyncio.Event()
 
     def set_thread(self, repo, thread_id):
@@ -308,6 +313,9 @@ class Codex:
                 self.turn_timings[active] = {}
             self.turns.clear()
             self.streams.clear()
+            self.injected_rules.clear()
+            self.native_rules.clear()
+            self.compacted_repos.clear()
             error = RuntimeError("Codex app-server exited. See codex/app-server.log.")
             for future in list(self.pending.values()) + [self.finished]:
                 if future and not future.done():
@@ -348,6 +356,8 @@ class Codex:
                 if item["text"].strip():
                     self.runner.chat("assistant", item["text"], repo=repo)
             elif item["type"] == "contextCompaction":
+                self.compacted_repos.add(repo)
+                self.injected_rules.pop(repo, None)
                 self.runner.chat("system", "Coordinator context compacted.", repo=repo)
         elif method == "account/login/completed":
             if params["success"]:
@@ -396,6 +406,12 @@ class Codex:
             result = await self.request("thread/start", {**params, "dynamicTools": TOOLS})
             saved_context = None
             self.turn_timings.pop(repo, None)
+            self.injected_rules.pop(repo, None)
+            self.compacted_repos.discard(repo)
+            try:
+                self.native_rules[repo] = rules_state(cwd)[2]
+            except RuntimeError:
+                self.native_rules.pop(repo, None)
         thread_id = result["thread"]["id"]
         self.set_thread(repo, thread_id)
         self.context_usages[repo] = saved_context

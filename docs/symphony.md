@@ -165,8 +165,14 @@ browser's light or dark preference. The favicon is a multi-size ICO.
 
 Use `/new` in chat to start a fresh Codex thread for the active repository, or `/compact` to compact the current thread. A message sent during a turn in the same repository steers the active turn. A message for a different repository queues for the next turn. The app uses the
 selected project's repository working directory and includes the shared
-`agents/AGENTS.md` defaults before its AGENTS.md and current work when starting
-a turn. The Config button in the page header opens a read-only dialog showing
+`agents/AGENTS.md` defaults before its repository `AGENTS.md` when starting a
+session or when either instruction file changes, keeping subsequent user turns
+lean (reading live approved work from `worker_status` and each issue's locked
+approved plan, worker notes, and review report from `read_notes`). After a
+`contextCompaction`, the next coordinator turn includes a one-shot reminder to
+use `worker_status` and `read_notes` (and re-injects instruction rules only if
+they differ from the thread's native rules or were edited). The Config button
+in the page header opens a read-only dialog showing
 that exact file from a fixed same-origin endpoint; it starts no coordinator turn.
 Explicit user or task directions and applicable repository or nested
 instructions override the shared defaults, while Symphony's approval,
@@ -188,9 +194,9 @@ reads the current file for new sessions and the reviewer starts fresh, but a
 resumed OpenCode session keeps its original instruction block in the system
 prompt. When the file changes or disappears, OpenCode adds a system-update
 message carrying the new text or removal notice; the old block is not rewritten.
-Symphony's coordinator context also prepends the current canonical file on every
-turn, so later coordinator turns use the current defaults independently of the
-native thread.
+Symphony's coordinator context injects the current canonical instruction files on
+first turn, after changes, or when needed after compaction without pasting
+repeated copies into every turn.
 
 Isolated-home probes of the pinned Codex and OpenCode builds exercised completed
 manual and automatic compaction followed by ordinary model requests, plus

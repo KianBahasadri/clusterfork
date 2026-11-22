@@ -3217,7 +3217,8 @@ else:
         self.assertIn("Worker events (2):", first_text)
         self.assertIn(f"- {ISSUE}: Worker finished. Verification exited 0. Audit notes.md and review.md.", first_text)
         self.assertIn(f"- {ISSUE}: Review completed cleanly.", first_text)
-        self.assertEqual(first_text.count(f"Approved plan for {ISSUE}:"), 1)
+        self.assertNotIn(f"Approved plan for {ISSUE}:", first_text)
+        self.assertNotIn("Current approved work:", first_text)
 
         second_repo, second_text, _ = received[1]
         self.assertEqual(second_repo, REPO)
@@ -3300,11 +3301,78 @@ else:
         self.assertEqual(turns[0][0], REPO)
         self.assertEqual(turns[0][2], self.repo)
         self.assertIn("ONLY-FIRST-RULE", turns[0][1])
-        self.assertNotIn("KIAN-102", turns[0][1].split("Current approved work:")[0])
+        self.assertNotIn("KIAN-102", turns[0][1])
+        self.assertNotIn("Current approved work:", turns[0][1])
+        self.assertNotIn("Approved plan for", turns[0][1])
         self.assertEqual(turns[1][0], second)
         self.assertEqual(turns[1][2], second_path)
         self.assertIn("ONLY-SECOND-RULE", turns[1][1])
-        self.assertNotIn("KIAN-101", turns[1][1].split("Current approved work:")[0])
+        self.assertNotIn("KIAN-101", turns[1][1])
+        self.assertNotIn("Current approved work:", turns[1][1])
+        self.assertNotIn("Approved plan for", turns[1][1])
+
+    async def test_lean_turns_omit_unchanged_rules_and_include_plan_in_read_notes(self):
+        (self.repo / "AGENTS.md").write_text("# Repo rules\n\n- INITIAL-REPO-RULE\n")
+        self.git(self.repo, "add", "AGENTS.md")
+        self.git(self.repo, "commit", "-m", "Add initial rules")
+        self.git(self.repo, "push", "origin", "main")
+        shared = self.root / "shared-lean-AGENTS.md"
+        shared.write_text("# Global\n\n- LEAN-GLOBAL-RULE\n")
+        await self.runner.approve({
+            **self.proposed_issue(),
+            "description": "## Proposed Plan\n\nLock step 1\nLock step 2",
+        }, REPO)
+        self.runner.change(ISSUE, phase="review", check_exit=0)
+        artifacts = self.runner.artifacts(ISSUE)
+        artifacts.mkdir(parents=True, exist_ok=True)
+        (artifacts / "notes.md").write_text("Implemented cleanly.\n")
+        (artifacts / "review.md").write_text("VERDICT: NO ISSUES\n")
+
+        audit = self.runner.read_notes(ISSUE)
+        self.assertIn("--- Approved plan ---\nLock step 1\nLock step 2", audit)
+        self.assertIn("Implemented cleanly.", audit)
+        self.assertIn("VERDICT: NO ISSUES", audit)
+        with self.runner.db:
+            self.runner.db.execute("UPDATE tasks SET plan=? WHERE issue=?", ("Changed plan", ISSUE))
+        with self.assertRaisesRegex(ValueError, "Read the latest notes.md and review.md"):
+            self.runner.ship(ISSUE)
+
+        app = self.app()
+        turns = []
+        async def capture(repo, text, cwd):
+            turns.append(text)
+            return "completed"
+
+        with patch("symphony.runner.SHARED_AGENTS", shared), \
+             patch.object(app.coordinator, "respond", new_callable=AsyncMock, side_effect=capture):
+            await app.respond(REPO, "First turn", (ISSUE,))
+            await app.respond(REPO, "Second turn", (ISSUE,))
+            (self.repo / "AGENTS.md").write_text("# Repo rules\n\n- UPDATED-REPO-RULE\n")
+            self.git(self.repo, "add", "AGENTS.md")
+            self.git(self.repo, "commit", "-m", "Update rules")
+            self.git(self.repo, "push", "origin", "main")
+            await app.respond(REPO, "Third turn")
+            await app.respond(REPO, "Fourth turn")
+
+            # Simulate compaction with matching native rules: emits reminder only.
+            app.coordinator.set_thread(REPO, "thread-lean")
+            app.coordinator.native_rules[REPO] = app.coordinator.injected_rules[REPO]
+            app.coordinator.notification("item/completed", {
+                "threadId": "thread-lean",
+                "item": {"id": "c1", "type": "contextCompaction"},
+            })
+            await app.respond(REPO, "Post-compaction turn")
+            await app.respond(REPO, "After recovery turn")
+
+        self.assertIn("INITIAL-REPO-RULE", turns[0])
+        self.assertNotIn("Approved plan for", turns[0])
+        self.assertNotIn("Current approved work:", turns[0])
+        self.assertEqual(turns[1], "Second turn")
+        self.assertIn("UPDATED-REPO-RULE", turns[2])
+        self.assertEqual(turns[3], "Fourth turn")
+        self.assertIn("Context was compacted. Call worker_status", turns[4])
+        self.assertNotIn("UPDATED-REPO-RULE", turns[4])
+        self.assertEqual(turns[5], "After recovery turn")
 
     @staticmethod
     async def _cancel_task(task):

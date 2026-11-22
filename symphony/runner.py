@@ -164,6 +164,17 @@ def shared_agents():
         raise RuntimeError(f"Global AGENTS.md could not be read: {error}") from None
 
 
+def rules_state(cwd):
+    defaults = shared_agents()
+    repo_rules = ""
+    if cwd:
+        rules = (cwd / "AGENTS.md").resolve()
+        if rules.is_relative_to(cwd) and rules.is_file():
+            repo_rules = read_small(rules, 32000)
+    hashes = (sha256(defaults.encode()).hexdigest(), sha256(repo_rules.encode()).hexdigest())
+    return defaults, repo_rules, hashes
+
+
 def install_agent_instructions(directory):
     source = SHARED_AGENTS.resolve()
     shared_agents()
@@ -1181,7 +1192,10 @@ class Runner:
         return text.strip()
 
     def audit_text(self, issue):
-        return (self.notes(issue).rstrip() + "\n\n--- review.md ---\n"
+        row = self.task(issue)
+        plan = (row["plan"] or "").strip()
+        return (f"--- Approved plan ---\n{plan}\n\n"
+                + self.notes(issue).rstrip() + "\n\n--- review.md ---\n"
                 + self.review(issue).strip() + "\n")
 
     def read_notes(self, issue):

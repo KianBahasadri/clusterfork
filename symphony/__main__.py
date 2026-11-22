@@ -26,7 +26,7 @@ from uuid import uuid4
 from .codex import Codex, TOOL_SPECS
 from .execution import card_stage, execution_payload, history_summary
 from .issue_details import issue_details, markdown, open_asset
-from .runner import Runner, read_small, shared_agents
+from .runner import Runner, read_small, rules_state, shared_agents
 from .services import (
     CLOSED_STATES, ISSUE_ID, CreatedIssueError, Linear, estimate_scale, proposed_plan, with_plan,
 )
@@ -193,6 +193,7 @@ class Symphony:
         self.messages = deque()
         self.busy = False
         self.turn_repo = ""
+        self.pending_rules = {}
         self.login = None
         self.repos = {}
         self.link_problems = {}
@@ -681,26 +682,37 @@ class Symphony:
         self.runner.wake.set()
         return {"message": self.saved_message(message_id)}
 
-    async def context(self, repo, issues=()):
+    async def checkout_cwd(self, repo):
         cwd = await self.runner.checkout(repo, refresh=repo != self.turn_repo) if repo else self.runner.directory
-        context = []
-        defaults = shared_agents()
-        if defaults.strip():
-            context.append("Global AGENTS.md defaults:\n" + defaults)
-        rules = (cwd / "AGENTS.md").resolve()
-        if rules.is_relative_to(cwd) and rules.is_file():
-            context.append("Active repository AGENTS.md:\n" + read_small(rules, 32000))
-        for issue in dict.fromkeys(issues):
-            row = self.runner.task(issue)
-            context.append(f"Approved plan for {issue}:\n{row['plan']}")
-        tasks = self.runner.status()
-        if tasks:
-            context.append("Current approved work:\n" + json.dumps(tasks, ensure_ascii=False))
         self.turn_repo = repo
+        return cwd
+
+    async def context(self, repo):
+        cwd = await self.checkout_cwd(repo)
+        defaults, repo_rules, rules_hash = rules_state(cwd)
+        context = []
+        compacted = repo in self.coordinator.compacted_repos
+        needs_rules = (
+            self.coordinator.injected_rules.get(repo) != rules_hash
+            and not (compacted and self.coordinator.native_rules.get(repo) == rules_hash)
+        )
+        if needs_rules:
+            if defaults.strip():
+                context.append("Global AGENTS.md defaults:\n" + defaults)
+            if repo_rules:
+                context.append("Active repository AGENTS.md:\n" + repo_rules)
+        if compacted:
+            context.append(
+                "Context was compacted. Call worker_status for live task state "
+                "and read_notes for an issue's locked plan, notes, and review."
+            )
+        self.pending_rules[repo] = rules_hash
         return cwd, "\n\n".join(context)
 
     async def respond(self, repo, message, issues=(), attachments=()):
-        cwd, context = await self.context(repo, issues)
+        self.pending_rules.pop(repo, None)
+        cwd, context = await self.context(repo)
+        rules_hash = self.pending_rules.pop(repo, None)
         text = f"{message}\n\n--- Current Symphony context ---\n{context}" if context else message
         attributed = list(dict.fromkeys(issues))
         started = time.time()
@@ -711,11 +723,17 @@ class Symphony:
         detail = "Coordinator handled worker events."
         try:
             if attachments:
-                return await self.coordinator.respond(repo, text, cwd, attachments)
-            return await self.coordinator.respond(repo, text, cwd)
+                outcome = await self.coordinator.respond(repo, text, cwd, attachments)
+            else:
+                outcome = await self.coordinator.respond(repo, text, cwd)
         except (OSError, RuntimeError, TimeoutError, ValueError) as error:
             detail = f"Coordinator turn failed: {error}"
             raise
+        else:
+            if rules_hash is not None:
+                self.coordinator.injected_rules[repo] = rules_hash
+            self.coordinator.compacted_repos.discard(repo)
+            return outcome
         finally:
             ended = time.time()
             for _, execution_id in open_turns:
@@ -730,11 +748,11 @@ class Symphony:
             self.login = {"url": result["verificationUrl"], "code": result["userCode"],
                           "expires": time.monotonic() + 900}
         elif command == "/new":
-            cwd, _ = await self.context(repo)
+            cwd = await self.checkout_cwd(repo)
             await self.coordinator.new_session(repo, cwd)
             self.runner.chat("system", "Started a new coordinator session.", repo=repo)
         elif command == "/compact":
-            cwd, _ = await self.context(repo)
+            cwd = await self.checkout_cwd(repo)
             await self.coordinator.compact(repo, cwd)
         elif command == "/status":
             status = self.coordinator.status(repo)
