@@ -976,14 +976,9 @@ document.addEventListener("keydown", (event) => {
   if (document.querySelector("dialog[open]")) return;
   if (event.key !== "Escape" || event.defaultPrevented || event.repeat || event.isComposing
       || event.keyCode === 229 || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
-  if (!commandList.hidden) {
-    dismissedDraft = messageField.value;
-    hideCommands();
-  } else if (canInterrupt) {
-    interruptTurn();
-  } else {
-    return;
-  }
+  if (commandList.hidden) return;
+  dismissedDraft = messageField.value;
+  hideCommands();
   event.preventDefault();
 });
 

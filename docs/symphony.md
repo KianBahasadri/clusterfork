@@ -98,7 +98,7 @@ failures appear as a temporary notice while Symphony reconnects.
 Type `/` to see commands. Use the arrow keys to choose one, Tab to complete it,
 or Enter to run it. Enter sends a message, Shift+Enter inserts a newline, and
 the up arrow at the start of the prompt recalls previous inputs. Escape closes
-command suggestions first. Clicking or tapping the composer leaves its border
+command suggestions. Clicking or tapping the composer leaves its border
 neutral; keyboard navigation shows its focus ring. Paste PNG, JPEG, or WebP
 images into the composer to attach up to four images per message, 5 MiB each
 and 10 MiB total. Pending thumbnails have accessible remove controls, may
@@ -123,12 +123,11 @@ without waiting. The chat follows the bottom only while it is already near the
 bottom, so scrolling up pauses following during stream updates, accepted messages,
 and delayed image layout. Interrupting a turn clears any pending live presentation,
 and reduced-motion preferences do not add animated typing.
-Press Escape anywhere on the page or use Interrupt
-to stop an active turn. If Codex exits during a turn, Symphony clears the
-partial response and reconnects to the conversation on the next message.
-The composer shows the current model and reasoning effort, context used,
-5-hour and weekly quota when available, and turn timing. `/status` also lists
-approved work. Symphony uses the design guide palette and follows the
+Use the Interrupt button to stop an active turn. If Codex exits during a turn,
+Symphony clears the partial response and reconnects to the conversation on the
+next message. The composer shows the current model and reasoning effort,
+context used, 5-hour and weekly quota when available, and turn timing. `/status`
+also lists approved work. Symphony uses the design guide palette and follows the
 browser's light or dark preference. The favicon is a multi-size ICO.
 
 A message sent during a turn in the same repo steers the active

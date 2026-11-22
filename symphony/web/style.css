@@ -321,7 +321,6 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
 #codex-status [data-level="caution"] { color: var(--caution); }
 #codex-status [data-level="danger"], #request-error { color: var(--danger); }
 #interrupt { min-height: 28px; padding: 2px 8px; }
-#interrupt kbd { margin-inline-start: 4px; color: var(--muted); font: 11px/1 var(--mono); }
 #interrupt:disabled { opacity: 0.45; cursor: not-allowed; }
 #turn-timing { margin-bottom: 8px; color: var(--muted); font: 12px/1.5 var(--mono); }
 .composer-feedback { margin-top: 8px; min-height: 1.5em; font-size: .85rem; }
@@ -521,7 +520,6 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
 @media (pointer: coarse) {
   button, #repos .project-chip, #interrupt, #command-list [role="option"] { min-height: 44px; }
   .attachment-remove { width: 36px; height: 36px; min-height: 36px; top: -10px; right: -10px; }
-  #interrupt kbd { display: none; }
   .issue-group > summary { padding-block: 12px; }
   #command-list [role="option"] { padding-block: 10px; }
 }
