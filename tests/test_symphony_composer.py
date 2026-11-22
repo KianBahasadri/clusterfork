@@ -1131,6 +1131,143 @@ function boot(opts = {}) {
         self.assertEqual(res["afterSubmit"], 1)
         self.assertEqual(res["manualReload"], 1)
 
+    @unittest.skipUnless(shutil.which("node"), "Node is required for JavaScript checks.")
+    def test_working_turn_timer_picks_stable_css_animation_and_clears_when_idle(self):
+        app = Path(__file__).resolve().parents[1] / "symphony/web/app.js"
+        probe = r"""
+const fs = require("fs");
+const vm = require("vm");
+const nodes = new Map();
+const makeNode = (id) => ({
+  id, textContent: "", value: "", hidden: true, disabled: false, open: false,
+  dataset: {}, style: {setProperty() {}}, listeners: {}, children: [],
+  addEventListener(t, h) { (this.listeners[t] ||= []).push(h); },
+  classList: {add() {}, remove() {}}, querySelector() { return null; },
+  querySelectorAll() { return []; }, setAttribute() {}, removeAttribute() {},
+  toggleAttribute() {}, focus() {}, closest() { return makeNode("aside"); },
+  append(...n) { this.children.push(...n); }, prepend(...n) { this.children.unshift(...n); },
+  replaceChildren(...n) { this.children = n; },
+});
+const doc = {
+  getElementById(id) {
+    if (!nodes.has(id)) nodes.set(id, makeNode(id));
+    return nodes.get(id);
+  },
+  createElement() { return makeNode("tmp"); },
+  createElementNS() { return makeNode("svg"); },
+  querySelector() { return this.getElementById("main"); },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+};
+let nowMs = 100000;
+const RealDate = Date;
+const FakeDate = class extends RealDate {
+  static now() { return nowMs; }
+};
+const rolls = [0.05, 0.30, 0.60, 0.90, 0.35, 0.85];
+let rollIdx = 0;
+const fakeMath = Object.create(Math);
+fakeMath.random = () => rolls[rollIdx++] ?? 0;
+
+let writes = 0;
+const rawTiming = makeNode("turn-timing");
+let animValue;
+Object.defineProperty(rawTiming.dataset, "animation", {
+  configurable: true,
+  enumerable: true,
+  get() { return animValue; },
+  set(v) { writes += 1; animValue = v; },
+});
+nodes.set("turn-timing", rawTiming);
+
+const ctx = vm.createContext({
+  document: doc,
+  Date: FakeDate,
+  Math: fakeMath,
+  setInterval: () => 0,
+  setTimeout,
+  clearTimeout,
+  console,
+});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+
+const snap = () => ({hidden: rawTiming.hidden, text: rawTiming.textContent, anim: rawTiming.dataset.animation || "", writes});
+
+// Turn 1 (startedAt=95): picks index 0 ("rainbow"), stays stable across polls, elapsed seconds, and project switches.
+vm.runInContext('codex = {rateLimits: {}, turnTiming: {startedAt: 95}}; canInterrupt = true; compacting = ""; showCodexStatus();', ctx);
+const t1Start = snap();
+nowMs = 104000;
+vm.runInContext('showCodexStatus();', ctx);
+const t1Poll = snap();
+vm.runInContext('resetChatView("other"); showCodexStatus();', ctx);
+const t1Switch = snap();
+
+// Completed ("Worked for"): clears animation.
+vm.runInContext('codex = {rateLimits: {}, turnTiming: {startedAt: 95, completedAt: 105, durationMs: 10000}}; canInterrupt = false; showCodexStatus();', ctx);
+const afterComplete = snap();
+
+// Same startedAt after idle poll picks a fresh random animation -> index 1 ("spinner").
+vm.runInContext('codex = {rateLimits: {}, turnTiming: {startedAt: 95}}; canInterrupt = true; showCodexStatus();', ctx);
+const sameStartAfterIdle = snap();
+
+// Interrupted / canInterrupt=false without durationMs clears animation.
+vm.runInContext('canInterrupt = false; showCodexStatus();', ctx);
+const afterInterrupt = snap();
+
+// New active turn -> index 2 ("pulse"), then direct jump to startedAt=120 with no idle poll -> index 3 ("shimmer").
+vm.runInContext('codex = {rateLimits: {}, turnTiming: {startedAt: 110}}; canInterrupt = true; showCodexStatus();', ctx);
+const turnPulse = snap();
+vm.runInContext('codex = {rateLimits: {}, turnTiming: {startedAt: 120}}; canInterrupt = true; showCodexStatus();', ctx);
+const turnShimmer = snap();
+
+// Missing turnTiming clears animation.
+vm.runInContext('codex = {rateLimits: {}}; canInterrupt = true; showCodexStatus();', ctx);
+const missingTiming = snap();
+
+// Compaction running clears animation even if canInterrupt/startedAt happen to be set; queued still animates.
+vm.runInContext('codex = {rateLimits: {}, turnTiming: {startedAt: 130}}; canInterrupt = true; compacting = "queued"; showCodexStatus();', ctx);
+const queuedAnim = snap();
+vm.runInContext('compacting = "running"; showCodexStatus();', ctx);
+const compactingClears = snap();
+vm.runInContext('compacting = ""; showCodexStatus();', ctx);
+const afterCompactingIdleStillStarted = snap();
+
+console.log(JSON.stringify({
+  t1Start, t1Poll, t1Switch, afterComplete, sameStartAfterIdle,
+  afterInterrupt, turnPulse, turnShimmer, missingTiming,
+  queuedAnim, compactingClears, afterCompactingIdleStillStarted,
+}));
+"""
+        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        res = json.loads(run.stdout)
+        self.assertEqual(res["t1Start"]["anim"], "rainbow")
+        self.assertEqual(res["t1Start"]["writes"], 1)
+        self.assertEqual(res["t1Poll"]["text"], "Working for 9s")
+        self.assertEqual(res["t1Poll"]["anim"], "rainbow")
+        self.assertEqual(res["t1Poll"]["writes"], 1)
+        self.assertEqual(res["t1Switch"]["anim"], "rainbow")
+        self.assertEqual(res["t1Switch"]["writes"], 1)
+        self.assertEqual(res["afterComplete"]["anim"], "")
+        self.assertTrue(res["afterComplete"]["text"].startswith("Worked for 10s"))
+        self.assertEqual(res["sameStartAfterIdle"]["anim"], "spinner")
+        self.assertEqual(res["afterInterrupt"]["anim"], "")
+        self.assertEqual(res["turnPulse"]["anim"], "pulse")
+        self.assertEqual(res["turnShimmer"]["anim"], "shimmer")
+        self.assertEqual(res["missingTiming"]["anim"], "")
+        self.assertEqual(res["queuedAnim"]["anim"], "spinner")
+        self.assertEqual(res["queuedAnim"]["text"], "Working for 0s · Compaction queued")
+        self.assertEqual(res["compactingClears"]["anim"], "")
+        self.assertEqual(res["afterCompactingIdleStillStarted"]["anim"], "shimmer")
+
+    def test_turn_timing_css_defines_tabular_nums_all_animations_and_reduced_motion(self):
+        css = (Path(__file__).resolve().parents[1] / "symphony/web/style.css").read_text(encoding="utf-8")
+        self.assertIn("font-variant-numeric: tabular-nums;", css)
+        for variant in ("rainbow", "spinner", "pulse", "shimmer"):
+            self.assertIn(f'#turn-timing[data-animation="{variant}"]', css)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", css)
+        self.assertIn("-webkit-background-clip: border-box;", css)
+
 
 if __name__ == "__main__":
     unittest.main()

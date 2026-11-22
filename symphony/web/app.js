@@ -101,6 +101,9 @@ const BASE_TITLE = document.title || "Symphony";
 let usageAlertActive = false;
 let usageNotifiedKey = "";
 let lastUsageAlert = null;
+const TURN_ANIMATIONS = ["rainbow", "spinner", "pulse", "shimmer"];
+let activeTurnKey = "";
+let activeTurnAnimation = "";
 
 function element(tag, text, className) {
   const node = document.createElement(tag);
@@ -1309,6 +1312,19 @@ function showCodexStatus() {
       timing.textContent = (working ? "Working for " : "Worked for ") + duration
         + (!working && completedAt ? " · " + clockTime(completedAt) : "");
     }
+  }
+  const animateWorking = working && compacting !== "running";
+  if (animateWorking) {
+    const turnKey = String(startedAt);
+    if (turnKey !== activeTurnKey) {
+      activeTurnKey = turnKey;
+      activeTurnAnimation = TURN_ANIMATIONS[Math.floor(Math.random() * TURN_ANIMATIONS.length)] || TURN_ANIMATIONS[0];
+    }
+    if (timing.dataset.animation !== activeTurnAnimation) timing.dataset.animation = activeTurnAnimation;
+  } else {
+    activeTurnKey = "";
+    activeTurnAnimation = "";
+    if (timing.dataset.animation) timing.dataset.animation = "";
   }
   interrupt.hidden = !canInterrupt;
 }

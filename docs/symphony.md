@@ -168,7 +168,7 @@ and reduced-motion preferences do not add animated typing.
 Use the Interrupt button to stop an active turn. If Codex exits during a turn,
 Symphony clears the partial response and reconnects to the conversation on the
 next message. The composer shows the current model and reasoning effort,
-context used, 5-hour and weekly quota when available, and turn timing. When the
+context used, 5-hour and weekly quota when available, and turn timing (picking one of four pure-CSS animations—rainbow, spinner, pulse, or shimmer—once per active `Working for` turn unless reduced motion is preferred). When the
 Codex coordinator runs out of usage (`5h` or `weekly` reaches `0%`, or a Codex
 user or worker-event turn fails with a usage/rate-limit error), Symphony displays
 a prominent alert banner above chat with the exhausted window and inline reset

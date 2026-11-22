@@ -472,7 +472,88 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
 #codex-status [data-level="danger"], #request-error { color: var(--danger); }
 #interrupt { min-height: 28px; padding: 2px 8px; }
 #interrupt:disabled { opacity: 0.45; cursor: not-allowed; }
-#turn-timing { margin-bottom: 8px; color: var(--muted); font: 12px/1.5 var(--mono); }
+#turn-timing {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font: 12px/1.5 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+#turn-timing[data-animation="rainbow"] {
+  background-image: linear-gradient(90deg, #b42318, #b54708, #15803d, #0284c7, #6d28d9, #b42318);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: symphony-turn-rainbow 4s linear infinite;
+}
+#turn-timing[data-animation="spinner"] { color: var(--ink-strong); }
+#turn-timing[data-animation="spinner"]::before {
+  content: "";
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--focus) 28%, transparent);
+  border-top-color: var(--focus);
+  animation: symphony-turn-spin 0.9s linear infinite;
+}
+#turn-timing[data-animation="pulse"] {
+  color: var(--focus);
+  animation: symphony-turn-pulse 2.1s ease-in-out infinite;
+}
+#turn-timing[data-animation="shimmer"] {
+  background-image: linear-gradient(
+    110deg,
+    var(--muted) 0%,
+    var(--muted) 36%,
+    var(--focus) 50%,
+    var(--muted) 64%,
+    var(--muted) 100%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: symphony-turn-shimmer 2.2s ease-in-out infinite alternate;
+}
+@media (prefers-color-scheme: dark) {
+  #turn-timing[data-animation="rainbow"] {
+    background-image: linear-gradient(90deg, #ff7b72, #f2cc60, #56d364, #79c0ff, #d2a8ff, #ff7b72);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  #turn-timing[data-animation="rainbow"],
+  #turn-timing[data-animation="spinner"],
+  #turn-timing[data-animation="pulse"],
+  #turn-timing[data-animation="shimmer"] {
+    animation: none;
+    background: none;
+    -webkit-background-clip: border-box;
+    background-clip: border-box;
+    color: var(--ink-strong);
+    opacity: 1;
+  }
+  #turn-timing[data-animation="spinner"]::before { display: none; }
+}
+@keyframes symphony-turn-rainbow {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+@keyframes symphony-turn-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes symphony-turn-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.58; }
+}
+@keyframes symphony-turn-shimmer {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 100% 50%; }
+}
 .repo-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .repo-prompt-button {
   min-height: 28px;
