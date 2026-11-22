@@ -5,6 +5,7 @@ from contextlib import suppress
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+import math
 import os
 import re
 import time
@@ -184,6 +185,7 @@ class Codex:
         self.compacted_repos = set()
         self.usage_error = None
         self._notified_usage_key = ""
+        self.turn_token_usage = {}
         self.status_wake = asyncio.Event()
 
     def set_thread(self, repo, thread_id):
@@ -357,10 +359,17 @@ class Codex:
             cursor = next_cursor
         return servers
 
-    def status(self, repo=""):
+    def current_model(self):
         name = self.runner.setting("model") or self.model
         if not name:
-            name = next((name for name, model in self.models.items() if model["isDefault"]), "")
+            name = next((key for key, model in self.models.items() if model.get("isDefault")), "")
+        return name
+
+    def consume_turn_tokens(self, repo):
+        return self.turn_token_usage.pop(repo, None)
+
+    def status(self, repo=""):
+        name = self.current_model()
         model = self.models.get(name, {})
         context_pct = self.context_usages.get(repo)
         if context_pct is None:
@@ -494,6 +503,7 @@ class Codex:
             for active in list(self.turns):
                 self.turn_timings[active] = {}
             self.turns.clear()
+            self.turn_token_usage.clear()
             self.streams.clear()
             self.injected_rules.clear()
             self.native_rules.clear()
@@ -514,15 +524,31 @@ class Codex:
             self.turn_timings[repo] = {key: turn.get(key) for key in ("startedAt", "completedAt", "durationMs")}
             if method == "turn/started":
                 self.turns[repo] = turn["id"]
+                self.turn_token_usage.pop(repo, None)
                 return
             self.streams.pop(repo, None)
             self.turns.pop(repo, None)
             if self.finished and not self.finished.done():
                 self.finished.set_result(turn)
         elif method == "thread/tokenUsage/updated":
-            used = context_used(params["tokenUsage"])
+            usage = params["tokenUsage"]
+            used = context_used(usage)
             self.context_usages[repo] = used
             self.runner.save_thread_context(repo, used)
+            last = usage.get("last") if isinstance(usage, dict) else None
+            if isinstance(last, dict):
+                extracted = {}
+                for dst, src in (
+                    ("input_tokens", "inputTokens"),
+                    ("output_tokens", "outputTokens"),
+                    ("total_tokens", "totalTokens"),
+                ):
+                    value = last.get(src)
+                    if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                            and math.isfinite(value) and value >= 0):
+                        extracted[dst] = int(value)
+                if extracted:
+                    self.turn_token_usage[repo] = extracted
         elif method == "account/rateLimits/updated":
             if self.account == "chatgpt":
                 self.update_rate_limits(params["rateLimits"])

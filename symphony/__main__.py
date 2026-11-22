@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import sqlite3
 from threading import Thread
 import time
 from urllib.parse import parse_qs, urlsplit
@@ -26,6 +27,7 @@ from uuid import uuid4
 from .codex import Codex, TOOL_SPECS, is_usage_error
 from .execution import card_stage, execution_payload, history_summary
 from .issue_details import issue_details, markdown, open_asset
+from .metrics import render_metrics
 from .runner import BusyError, Runner, read_small, rules_state, shared_agents
 from .services import (
     CLOSED_STATES, ISSUE_ID, CreatedIssueError, Linear, estimate_scale, proposed_plan, with_plan,
@@ -809,6 +811,9 @@ class Symphony:
                 return False
         return True
 
+    async def metrics(self):
+        return render_metrics(self)
+
     def saved_message(self, message_id):
         row = self.runner.rows("SELECT * FROM chat WHERE id=?", (message_id,))[0]
         return chat_message(row)
@@ -899,13 +904,19 @@ class Symphony:
             data={"issues": attributed},
         )) for issue in attributed]
         detail = "Coordinator handled worker events."
+        status = "failed"
         try:
             if attachments:
                 outcome = await self.coordinator.respond(repo, text, cwd, attachments)
             else:
                 outcome = await self.coordinator.respond(repo, text, cwd)
+            status = outcome if isinstance(outcome, str) and outcome else "completed"
         except (OSError, RuntimeError, TimeoutError, ValueError) as error:
             detail = f"Coordinator turn failed: {error}"
+            raise
+        except asyncio.CancelledError:
+            status = "cancelled"
+            detail = "Coordinator turn cancelled."
             raise
         else:
             if rules_hash is not None:
@@ -914,6 +925,21 @@ class Symphony:
             return outcome
         finally:
             ended = time.time()
+            model = self.coordinator.current_model() if hasattr(self.coordinator, "current_model") else ""
+            if not model:
+                model = getattr(self.coordinator, "model", "") or self.runner.setting("model") or "unknown"
+            self.runner.record_coordinator_turn(repo, model, started=started, ended=ended, status=status)
+            tokens = (self.coordinator.consume_turn_tokens(repo)
+                      if hasattr(self.coordinator, "consume_turn_tokens") else None)
+            if tokens:
+                self.runner.record_token_usage(
+                    "coordinator", repo, model,
+                    input_tokens=tokens.get("input_tokens"),
+                    output_tokens=tokens.get("output_tokens"),
+                    total_tokens=tokens.get("total_tokens"),
+                    cost_usd=None,
+                    recorded=ended,
+                )
             for _, execution_id in open_turns:
                 self.runner.close_execution(execution_id, ended=ended, detail=detail)
 
@@ -1222,9 +1248,9 @@ class IdleHandler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        if urlsplit(self.path).path != "/idle":
-            body, status = b'{"error":"Not found."}', 404
-        else:
+        path = urlsplit(self.path).path
+        content_type = "application/json; charset=utf-8"
+        if path == "/idle":
             future = asyncio.run_coroutine_threadsafe(self.server.app.idle(), self.server.loop)
             try:
                 idle = future.result(timeout=5)
@@ -1234,10 +1260,23 @@ class IdleHandler(BaseHTTPRequestHandler):
                 body, status = b'{"error":"Unavailable."}', 503
             except (RuntimeError, OSError):
                 body, status = b'{"error":"Unavailable."}', 503
+        elif path == "/metrics":
+            future = asyncio.run_coroutine_threadsafe(self.server.app.metrics(), self.server.loop)
+            try:
+                text = future.result(timeout=5)
+                body, content_type, status = text.encode("utf-8"), "text/plain; version=0.0.4; charset=utf-8", 200
+            except RequestTimeout:
+                future.cancel()
+                body, status = b'{"error":"Unavailable."}', 503
+            except (RuntimeError, OSError, sqlite3.Error, ValueError, TypeError):
+                body, status = b'{"error":"Unavailable."}', 503
+        else:
+            body, status = b'{"error":"Not found."}', 404
         self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         with suppress(BrokenPipeError, ConnectionResetError):
             self.end_headers()
             self.wfile.write(body)

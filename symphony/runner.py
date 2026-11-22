@@ -4,6 +4,7 @@ import asyncio
 from contextlib import suppress
 from hashlib import sha256
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -27,6 +28,7 @@ REVIEW_SECONDS = 600
 REVIEW_LINES = 200
 REVIEW_BYTES = 20000
 REVIEW_MODEL = "opencode-go/kimi-k3.1-pro#low"
+WORKER_MODEL = "opencode-go/deepseek-v4.1-flash#max"
 WORKER_CONFIG = {
     "permissions": [
         {"action": "shell", "resource": "git push *", "effect": "deny"},
@@ -125,7 +127,60 @@ CREATE TABLE IF NOT EXISTS ci_jobs (
     diagnostic TEXT NOT NULL DEFAULT '', observed REAL NOT NULL,
     PRIMARY KEY (run_id, attempt, job_id)
 );
+CREATE TABLE IF NOT EXISTS coordinator_turns (
+    id INTEGER PRIMARY KEY,
+    repo TEXT NOT NULL,
+    model TEXT NOT NULL,
+    started REAL NOT NULL,
+    ended REAL NOT NULL,
+    duration REAL NOT NULL,
+    status TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS coordinator_turns_repo_model ON coordinator_turns(repo, model, status);
+CREATE TABLE IF NOT EXISTS token_usage (
+    id INTEGER PRIMARY KEY,
+    source TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    model TEXT NOT NULL,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    total_tokens INTEGER,
+    cost_usd REAL,
+    recorded REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS token_usage_breakdown ON token_usage(source, repo, model);
 """
+
+
+def _finite_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _optional_int(value):
+    return int(value) if _finite_number(value) and value >= 0 else None
+
+
+def _optional_float(value):
+    return float(value) if _finite_number(value) and value >= 0 else None
+
+
+def _opencode_step_usage(part):
+    if not isinstance(part, dict):
+        return None, None, None, None
+    tokens = part.get("tokens")
+    tokens = tokens if isinstance(tokens, dict) else {}
+    input_tokens = _optional_int(tokens.get("input", tokens.get("inputTokens")))
+    output_tokens = _optional_int(tokens.get("output", tokens.get("outputTokens")))
+    total_tokens = _optional_int(tokens.get("total", tokens.get("totalTokens")))
+    cost_usd = _optional_float(part.get("cost"))
+    return input_tokens, output_tokens, total_tokens, cost_usd
+
+
+def _cli_model(args, default=""):
+    for index, item in enumerate(args):
+        if item == "--model" and index + 1 < len(args):
+            return str(args[index + 1])
+    return default
 
 
 def worker_prompt(row, artifacts, instruction):
@@ -760,6 +815,39 @@ class Runner:
         with self.db:
             self.db.execute(f"UPDATE execution SET {', '.join(fields)} WHERE id=?", values)
 
+    def _issue_repo(self, issue):
+        rows = self.rows("SELECT repo FROM tasks WHERE issue=?", (issue,))
+        return rows[0]["repo"] if rows else ""
+
+    def record_coordinator_turn(self, repo, model, *, started, ended, status):
+        """Record one coordinator turn duration and outcome for metrics."""
+        duration = max(0.0, float(ended) - float(started))
+        with self.db:
+            self.db.execute(
+                """INSERT INTO coordinator_turns(repo, model, started, ended, duration, status)
+                   VALUES (?,?,?,?,?,?)""",
+                (repo or "", model or "unknown", float(started), float(ended), duration, status or "unknown"),
+            )
+
+    def record_token_usage(self, source, repo, model, *, input_tokens=None, output_tokens=None,
+                           total_tokens=None, cost_usd=None, recorded=None):
+        """Record observed token counts and/or USD cost when non-null numeric telemetry exists."""
+        inp = _optional_int(input_tokens)
+        out = _optional_int(output_tokens)
+        total = _optional_int(total_tokens)
+        cost = _optional_float(cost_usd)
+        if inp is None and out is None and total is None and cost is None:
+            return False
+        with self.db:
+            self.db.execute(
+                """INSERT INTO token_usage(source, repo, model, input_tokens, output_tokens,
+                                           total_tokens, cost_usd, recorded)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (source, repo or "", model or "unknown", inp, out, total, cost,
+                 time.time() if recorded is None else float(recorded)),
+            )
+        return True
+
     def notes_snapshot(self, issue):
         path = self.artifacts(issue) / "notes.md"
         try:
@@ -1160,7 +1248,7 @@ class Runner:
             env = self.opencode_auth_env()
             env["OPENCODE_CONFIG_CONTENT"] = json.dumps(WORKER_CONFIG)
             args = ["opencode", "run", "--standalone", "--auto", "--format", "json",
-                    "--model", os.environ.get("SYMPHONY_WORKER_MODEL", "opencode-go/deepseek-v4.1-flash#max")]
+                    "--model", os.environ.get("SYMPHONY_WORKER_MODEL", WORKER_MODEL)]
             if row["session"]:
                 args += ["--session", row["session"]]
             self.close_execution_kind(issue, "startup", detail="Worker started.")
@@ -1239,6 +1327,8 @@ class Runner:
             self.block(issue, str(error))
 
     async def run_opencode(self, issue, args, cwd, env, log):
+        repo = self._issue_repo(issue)
+        model = _cli_model(args, os.environ.get("SYMPHONY_WORKER_MODEL", WORKER_MODEL))
         process = await asyncio.create_subprocess_exec(
             *args, cwd=cwd, env=env, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT, start_new_session=True, limit=4 * 1024 * 1024,
@@ -1255,6 +1345,8 @@ class Runner:
                     event = json.loads(line)
                 except ValueError:
                     continue
+                if not isinstance(event, dict):
+                    continue
                 session = event.get("sessionID")
                 if isinstance(session, str) and SESSION_ID.fullmatch(session):
                     if session != self.task(issue)["session"]:
@@ -1265,6 +1357,12 @@ class Runner:
                         payload = {"message": payload}
                     error = str(payload.get("message") or payload.get("type") or "OpenCode error")
                     error_status = payload.get("status")
+                elif event.get("type") == "step_finish":
+                    inp, out, total, cost = _opencode_step_usage(event.get("part"))
+                    self.record_token_usage(
+                        "worker", repo, model,
+                        input_tokens=inp, output_tokens=out, total_tokens=total, cost_usd=cost,
+                    )
             status = await process.wait()
         finally:
             await stop_process(process)
@@ -1381,6 +1479,8 @@ class Runner:
             self.close_execution(execution, detail=detail)
 
     async def run_review(self, issue, args, cwd, env, log, prompt_path):
+        repo = self._issue_repo(issue)
+        model = _cli_model(args, os.environ.get("SYMPHONY_REVIEW_MODEL", REVIEW_MODEL))
         with prompt_path.open("rb") as source:
             process = await asyncio.create_subprocess_exec(
                 *args, cwd=cwd, env=env, stdin=source, stdout=asyncio.subprocess.PIPE,
@@ -1418,6 +1518,11 @@ class Runner:
                     message = part.get("messageID")
                     if isinstance(message, str):
                         last_step = (message, part.get("reason"))
+                    inp, out, total, cost = _opencode_step_usage(part)
+                    self.record_token_usage(
+                        "review", repo, model,
+                        input_tokens=inp, output_tokens=out, total_tokens=total, cost_usd=cost,
+                    )
             status = await process.wait()
         finally:
             await stop_process(process)

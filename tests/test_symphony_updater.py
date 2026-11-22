@@ -617,6 +617,9 @@ class KubernetesManifestTests(unittest.TestCase):
         self.assertEqual(sym["spec"]["ingress"], [
             {"from": [{"podSelector": {"matchLabels": {"app": "symphony-updater"}}}],
              "ports": [{"port": 8081, "protocol": "TCP"}]},
+            {"from": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "monitoring"}},
+                       "podSelector": {"matchLabels": {"app": "prometheus"}}}],
+             "ports": [{"port": 8081, "protocol": "TCP"}]},
             {"from": [{"podSelector": {"matchLabels": {"app": "symphony-webhook"}}}],
              "ports": [{"port": 8082, "protocol": "TCP"}]},
         ])
@@ -629,8 +632,10 @@ class KubernetesManifestTests(unittest.TestCase):
         service = next(d for d in load_manifests("storage-and-network.yaml") if d["kind"] == "Service")
         self.assertEqual(service["metadata"]["name"], "symphony")
         self.assertEqual(service["spec"]["selector"], {"app": "symphony"})
-        self.assertEqual(service["spec"]["ports"],
-                         [{"name": "webhook", "port": 8082, "targetPort": 8082, "protocol": "TCP"}])
+        self.assertEqual(service["spec"]["ports"], [
+            {"name": "metrics", "port": 8081, "targetPort": 8081, "protocol": "TCP"},
+            {"name": "webhook", "port": 8082, "targetPort": 8082, "protocol": "TCP"},
+        ])
 
     def test_webhook_gateway_is_separate_and_exposes_only_the_linear_route(self):
         docs = load_manifests("webhook-gateway.yaml")

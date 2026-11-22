@@ -285,7 +285,10 @@ failure has been resolved.
 
 Symphony records each issue's attempts, worker startup, verification,
 coordinator work that is explicitly tied to the issue, publication, CI waiting,
-failures, completion, and interruption in the existing SQLite ledger. These
+failures, completion, and interruption in the existing SQLite ledger, plus
+`coordinator_turns` latency/status rows and `token_usage` rows whenever real
+numeric token counts or provider USD costs are emitted (never fabricating dollar
+costs for subscription plans). These
 records survive worktree cleanup and restarts. A restart ends an open interval
 at the last recorded activity and marks the unobserved gap instead of extending
 the interval through the outage. Historical periods before these records existed
@@ -427,7 +430,10 @@ execution diagnostics.
 The public gateway reaches only the webhook listener; the private UI remains
 reachable only through its own tailnet gateway. Kubernetes NetworkPolicy
 enforces default-deny in the namespace, allowing the Symphony pod only DNS,
-public TCP 443 egress, port 8081 ingress from the updater, and port 8082 ingress
+public TCP 443 egress, port 8081 ingress from the updater and Guaranine
+Prometheus (`monitoring` namespace, `app: prometheus`, scraping internal
+`GET /metrics` in Prometheus 0.0.4 text format including explicit
+`symphony_metric_available` indicators), and port 8082 ingress
 from `app: symphony-webhook`. The webhook gateway may use DNS, public TCP 443,
 and Symphony port 8082. Linear retries failed deliveries three times with longer
 backoff and may disable an unresponsive webhook, so the 300-second reconciliation
