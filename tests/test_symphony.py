@@ -2959,7 +2959,7 @@ else:
         self.assertIn(f"Worker event for {ISSUE}: {events[1]['detail']}", received[0])
         self.assertNotIn("Worker finished", received[0])
 
-    async def test_cleanup_discards_stale_events_but_keeps_done_notification(self):
+    async def test_cleanup_discards_stale_events_without_waking_coordinator_on_clean_done(self):
         await self.worker_done()
         self.runner.change(ISSUE, phase="finishing")
         await self.runner.finish(ISSUE)
@@ -2969,12 +2969,14 @@ else:
                 (ISSUE, "Stale CI notice."),
             )
         await self.runner.cleanup(ISSUE)
-        events = {event["detail"]: event for event in self.runner.rows(
-            "SELECT detail, delivered, phase FROM events")}
-        self.assertEqual(events["Stale CI notice."], {
-            "detail": "Stale CI notice.", "delivered": 1, "phase": "ci",
+        self.assertEqual(self.runner.rows("SELECT detail, delivered, phase FROM events ORDER BY id"), [
+            {"detail": "Worker finished. Verification exited 0. Audit notes.md and review.md.",
+             "delivered": 1, "phase": "review"},
+            {"detail": "Stale CI notice.", "delivered": 1, "phase": "ci"},
+        ])
+        self.assertEqual(self.runner.rows("SELECT role, text FROM chat ORDER BY id")[-1], {
+            "role": "worker", "text": f"{ISSUE} · Done.",
         })
-        self.assertEqual(events["Done."], {"detail": "Done.", "delivered": 0, "phase": "done"})
 
         app = self.app()
         app.coordinator.account = "chatgpt"
@@ -2982,9 +2984,56 @@ else:
                           new_callable=AsyncMock, return_value="completed") as respond:
             await self.pump_until(app, lambda: not self.runner.rows(
                 "SELECT 1 FROM events WHERE delivered=0"))
-        self.assertEqual(respond.await_count, 1)
-        self.assertIn(f"Worker event for {ISSUE}: Done.", respond.await_args.args[0])
-        self.assertNotIn("Stale CI notice", respond.await_args.args[0])
+        respond.assert_not_awaited()
+
+    async def test_push_and_clean_done_skip_coordinator_wakeups_and_keep_dispatch_moving(self):
+        second = "KIAN-102"
+        await self.approve()
+        self.runner.change(ISSUE, phase="review", event="Worker finished.")
+        self.runner.change(ISSUE, workflows=json.dumps([".github/workflows/test.yml"]))
+        with patch.object(self.runner, "job", side_effect=lambda coro: coro.close()):
+            await self.runner.after_push(ISSUE)
+        self.assertEqual(self.runner.rows("SELECT delivered FROM events"), [{"delivered": 1}])
+        self.assertEqual(self.runner.rows("SELECT role, text FROM chat ORDER BY id")[-1], {
+            "role": "worker", "text": f"{ISSUE} · Pushed to main. Waiting for GitHub Actions.",
+        })
+
+        # Unphased legacy CI / clean Done rows also resolve without synthesizing wakeups on upgrade/recovery.
+        with self.runner.db:
+            self.runner.db.execute(
+                "INSERT INTO events(issue,detail,delivered,phase) VALUES (?,?,0,'')",
+                (ISSUE, "Old unphased CI"),
+            )
+        self.runner.migrate_unphased_events()
+        self.assertEqual(self.runner.rows("SELECT 1 FROM events WHERE delivered=0"), [])
+
+        # Completing cleanly logs to chat, clears stale events, skips coordinator turn, and auto-dispatches next Todo.
+        await self.runner.approve({**self.proposed_issue(), "identifier": second}, REPO)
+        self.linear.configure(ISSUE, state={"name": "In Progress", "type": "started"})
+        self.linear.configure(second, state={"name": "Todo", "type": "unstarted"})
+        self.runner.change(ISSUE, phase="finishing")
+        pending = []
+        app = self.app()
+        app.coordinator.account = "chatgpt"
+        with patch.object(self.runner, "job", side_effect=pending.append), \
+             patch.object(app.coordinator, "respond", new_callable=AsyncMock) as respond:
+            await self.runner.finish(ISSUE)
+            await self.pump_until(app, lambda: self.runner.task(second)["phase"] == "working")
+            respond.assert_not_awaited()
+        for coroutine in pending:
+            coroutine.close()
+        self.assertEqual(self.runner.rows("SELECT 1 FROM events WHERE delivered=0"), [])
+        self.assertEqual(self.runner.rows("SELECT role, text FROM chat ORDER BY id")[-1], {
+            "role": "worker", "text": f"{ISSUE} · Done.",
+        })
+
+        with self.runner.db:
+            self.runner.db.execute(
+                "INSERT INTO events(issue,detail,delivered,phase) VALUES (?,?,0,'')",
+                (ISSUE, "Old unphased done"),
+            )
+        self.runner.migrate_unphased_events()
+        self.assertEqual(self.runner.rows("SELECT 1 FROM events WHERE delivered=0"), [])
 
     async def test_mixed_issue_batch_filters_only_stale_events(self):
         other = "KIAN-102"
@@ -3136,9 +3185,10 @@ else:
         app = self.app()
         app.coordinator.account = "chatgpt"
         await self.approve()
-        self.runner.change(ISSUE, phase="ci",
-                           event="Pushed to main. Waiting for GitHub Actions.", supersede=True)
-        self.runner.change(ISSUE, event="GitHub Actions are still running.")
+        self.runner.change(ISSUE, phase="review",
+                           event="Worker finished. Verification exited 0. Audit notes.md and review.md.",
+                           supersede=True)
+        self.runner.change(ISSUE, event="Review completed cleanly.")
 
         received = []
         done = asyncio.Event()
@@ -3163,8 +3213,8 @@ else:
         first_text, first_cwd = received[0]
         self.assertEqual(first_cwd, self.repo)
         self.assertIn("Worker events (2):", first_text)
-        self.assertIn(f"- {ISSUE}: Pushed to main. Waiting for GitHub Actions.", first_text)
-        self.assertIn(f"- {ISSUE}: GitHub Actions are still running.", first_text)
+        self.assertIn(f"- {ISSUE}: Worker finished. Verification exited 0. Audit notes.md and review.md.", first_text)
+        self.assertIn(f"- {ISSUE}: Review completed cleanly.", first_text)
         self.assertEqual(first_text.count(f"Approved plan for {ISSUE}:"), 1)
 
         second_text, _ = received[1]

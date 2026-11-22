@@ -262,8 +262,11 @@ are skipped.
 The coordinator pump batches pending worker events into one turn. A committed
 lifecycle change acknowledges the issue's earlier pending notifications, and
 events whose recorded phase no longer matches the task are dropped before
-delivery; the transition's own review, blocked, publication, completion, or
-cleanup notification remains deliverable. Only the delivered batch is
+delivery; actionable review, blocked, failed Linear completion, and worktree
+cleanup warning notifications remain deliverable. Non-actionable push (`ci`)
+and clean `Done.` milestones post directly to chat, supersede earlier pending
+notifications, and wake automatic dispatch without starting a coordinator turn.
+Only the delivered batch is
 acknowledged, so events arriving during that turn stay pending.
 
 Symphony writes one squash commit and pushes directly to `main`. It waits for

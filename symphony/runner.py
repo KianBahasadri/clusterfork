@@ -303,9 +303,8 @@ def current_event(row):
     if phase == "finish_failed":
         return row["detail"] or "Publication verified. Cannot mark Linear Done."
     if phase == "done":
-        return row["detail"] or "Done."
-    if phase == "ci":
-        return "Pushed to main. Waiting for GitHub Actions."
+        detail = (row["detail"] or "").strip()
+        return detail if detail and detail != "Done." else None
     return None
 
 
@@ -535,7 +534,7 @@ class Runner:
         return self.rows("""SELECT issue, repo, phase, attempts, session, check_exit, detail, revision
                             FROM tasks WHERE phase != 'done' ORDER BY updated DESC""")
 
-    def change(self, issue, event=None, *, supersede=False, **fields):
+    def change(self, issue, event=None, *, supersede=False, notify=True, **fields):
         fields["updated"] = time.time()
         assignments = ", ".join(f"{field}=?" for field in fields)
         with self.db:
@@ -543,10 +542,11 @@ class Runner:
             if supersede:
                 self.db.execute("UPDATE events SET delivered=1 WHERE issue=? AND delivered=0", (issue,))
             if event:
-                phase = fields.get("phase")
-                if phase is None:
-                    phase = self.db.execute("SELECT phase FROM tasks WHERE issue=?", (issue,)).fetchone()["phase"]
-                self.db.execute("INSERT INTO events(issue,detail,phase) VALUES (?,?,?)", (issue, event, phase))
+                if notify:
+                    phase = fields.get("phase")
+                    if phase is None:
+                        phase = self.db.execute("SELECT phase FROM tasks WHERE issue=?", (issue,)).fetchone()["phase"]
+                    self.db.execute("INSERT INTO events(issue,detail,phase) VALUES (?,?,?)", (issue, event, phase))
                 self.db.execute("INSERT INTO chat(role,text) VALUES ('worker',?)", (f"{issue} · {event}",))
         self.wake.set()
 
@@ -1187,7 +1187,7 @@ class Runner:
         workflows = json.loads(self.task(issue)["workflows"])
         if workflows:
             self.change(issue, phase="ci", event="Pushed to main. Waiting for GitHub Actions.",
-                        supersede=True)
+                        supersede=True, notify=False)
             self.job(self.watch_ci(issue))
         else:
             self.change(issue, phase="finishing")
@@ -1328,14 +1328,17 @@ class Runner:
             self.change(issue, phase="finish_failed", detail=detail, event=detail, supersede=True)
             return
         detail = "Done."
+        cleanup_warning = False
         try:
             await self.cleanup(issue)
         except (RuntimeError, OSError, TimeoutError) as error:
             detail = f"Done. Worktree cleanup needs attention: {error}"
+            cleanup_warning = True
         self.close_open_execution(issue)
         if not self.rows("SELECT 1 FROM execution WHERE issue=? AND kind='completion'", (issue,)):
             self.record_execution(issue, "completion", started=time.time(), ended=time.time(), detail=detail)
-        self.change(issue, phase="done", detail=detail, event=detail, supersede=True)
+        self.change(issue, phase="done", detail=detail, event=detail,
+                    supersede=True, notify=cleanup_warning)
 
     async def recover_publish(self, issue):
         row = self.task(issue)
