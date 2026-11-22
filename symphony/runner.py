@@ -10,6 +10,7 @@ import sqlite3
 import time
 from uuid import uuid4
 
+from .execution import redact
 from .services import (
     CLOSED_STATES, ci_jobs, ci_runs, ci_workflows, command, git, proposed_plan, stop_process,
 )
@@ -19,6 +20,7 @@ WORKER_LIMIT = 3
 WORKER_SECONDS = 3600
 ATTEMPT_LIMIT = 3
 NOTES_LINES = 120
+NOTES_BYTES = 24000
 REVIEW_SECONDS = 600
 REVIEW_LINES = 200
 REVIEW_BYTES = 20000
@@ -171,6 +173,7 @@ concise, at most {REVIEW_LINES} lines.
 
 
 def bounded_review(text):
+    text = redact(text)
     lines = text.splitlines()
     truncated = len(lines) > REVIEW_LINES
     text = "\n".join(lines[:REVIEW_LINES])
@@ -203,6 +206,38 @@ def validate_review(text):
 def unavailable_review(reason):
     reason = " ".join(str(reason or "").split())[:2000] or "Reviewer output is unavailable."
     return f"VERDICT: UNAVAILABLE\nReview unavailable: {reason}\n"
+
+
+def review_verdict(text):
+    lines = str(text or "").splitlines()
+    first = next((line for line in lines if line.strip()), "")
+    if REVIEW_CLEAN.fullmatch(first):
+        return "NO ISSUES"
+    verdict = REVIEW_VERDICT.fullmatch(first)
+    return verdict[1].upper() if verdict else "UNAVAILABLE"
+
+
+def review_finding_count(text):
+    lines = str(text or "").splitlines()
+    first = next((index for index, line in enumerate(lines) if line.strip()), None)
+    if first is None:
+        return None
+    verdict = REVIEW_VERDICT.fullmatch(lines[first])
+    if REVIEW_CLEAN.fullmatch(lines[first]) or (
+            verdict and verdict[1].upper() == "NO ISSUES"):
+        return 0
+    if not verdict or verdict[1].upper() != "ISSUES":
+        return None
+    return sum(1 for line in lines[first + 1:] if REVIEW_FINDING.search(line))
+
+
+def bounded_snapshot(text, limit):
+    text = redact(text)
+    encoded = text.encode()
+    truncated = len(encoded) > limit
+    if truncated:
+        text = encoded[:limit].decode(errors="ignore").rstrip()
+    return text, truncated
 
 
 def dispatch_problem(live, row, resume):
@@ -346,6 +381,114 @@ class Runner:
         for row in self.rows("SELECT id FROM execution WHERE issue=? AND ended IS NULL", (issue,)):
             self.close_execution(row["id"], ended=ended, detail=detail)
 
+    def update_execution_data(self, execution_id, data, *, detail=None):
+        fields = ["data=?"]
+        values = [json.dumps(data, ensure_ascii=False)]
+        if detail is not None:
+            fields.append("detail=?")
+            values.append(detail)
+        values.append(execution_id)
+        with self.db:
+            self.db.execute(f"UPDATE execution SET {', '.join(fields)} WHERE id=?", values)
+
+    def notes_snapshot(self, issue):
+        path = self.artifacts(issue) / "notes.md"
+        try:
+            if path.is_symlink() or not path.is_file():
+                return {"available": False, "text": "", "truncated": False,
+                        "detail": "No notes.md was produced for this attempt."}
+            with path.open("rb") as stream:
+                raw = stream.read(NOTES_BYTES + 1)
+        except OSError:
+            return {"available": False, "text": "", "truncated": False,
+                    "detail": "notes.md could not be read for this attempt."}
+        if len(raw) > NOTES_BYTES:
+            return {"available": False, "text": "", "truncated": False,
+                    "detail": "notes.md exceeded the retained size limit and was not snapshotted."}
+        if not raw.strip():
+            return {"available": False, "text": "", "truncated": False,
+                    "detail": "notes.md was empty when this attempt completed."}
+        text = redact(raw.decode(errors="replace"))
+        lines = text.splitlines()
+        truncated = len(lines) > NOTES_LINES
+        text = "\n".join(lines[:NOTES_LINES])
+        text, bounded = bounded_snapshot(text, NOTES_BYTES)
+        return {"available": bool(text.strip()), "text": text,
+                "truncated": truncated or bounded,
+                "detail": "" if text.strip() else "No notes.md content was retained for this attempt."}
+
+    def mark_attempt_notes_ready(self, issue, attempt_id):
+        if attempt_id is None:
+            return
+        rows = self.rows(
+            "SELECT data FROM execution WHERE id=? AND issue=? AND kind='attempt'",
+            (attempt_id, issue),
+        )
+        if not rows:
+            return
+        try:
+            data = json.loads(rows[0]["data"] or "{}")
+        except ValueError:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        data["notesReady"] = True
+        self.update_execution_data(attempt_id, data)
+
+    def finish_attempt(self, issue, attempt_id, *, detail=None, ended=None):
+        if attempt_id is None:
+            return
+        rows = self.rows(
+            "SELECT * FROM execution WHERE id=? AND issue=? AND kind='attempt'",
+            (attempt_id, issue),
+        )
+        if not rows:
+            return
+        row = rows[0]
+        try:
+            data = json.loads(row["data"] or "{}")
+        except ValueError:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        if "notes" not in data:
+            if data.get("notesReady") is True:
+                data["notes"] = self.notes_snapshot(issue)
+            else:
+                data["notes"] = {
+                    "available": False, "text": "", "truncated": False,
+                    "detail": "This attempt did not initialize notes.md, so no notes snapshot was retained.",
+                }
+        self.update_execution_data(attempt_id, data)
+        self.close_execution(attempt_id, ended=ended, detail=detail)
+
+    def finish_open_attempt(self, issue, *, ended=None):
+        rows = self.rows("""SELECT id FROM execution
+                            WHERE issue=? AND kind='attempt' AND ended IS NULL
+                            ORDER BY id DESC LIMIT 1""", (issue,))
+        if rows:
+            self.finish_attempt(issue, rows[0]["id"], ended=ended)
+
+    def review_snapshot(self, attempt, attempt_id, model, text, detail, *,
+                        verdict=None, finding_count=None, truncated=False):
+        verdict = verdict or review_verdict(text)
+        if finding_count is None and verdict in {"NO ISSUES", "ISSUES"}:
+            finding_count = review_finding_count(text)
+        report, bounded = bounded_snapshot(text, REVIEW_BYTES)
+        truncated = truncated or bounded
+        return {
+            "attempt": attempt,
+            "attemptId": attempt_id,
+            "model": redact(model)[:200],
+            "verdict": verdict,
+            "findingCount": finding_count,
+            "findingCountComplete": finding_count is not None and not truncated,
+            "report": report,
+            "reportTruncated": truncated,
+            "available": bool(report.strip()),
+            "detail": redact(detail)[:2000],
+        }
+
     def status(self):
         return self.rows("""SELECT issue, repo, phase, attempts, session, check_exit, detail, revision
                             FROM tasks WHERE phase != 'done' ORDER BY updated DESC""")
@@ -410,6 +553,7 @@ class Runner:
 
     def block(self, issue, detail):
         detail = detail.strip() or "Interrupted."
+        self.finish_open_attempt(issue)
         self.close_open_execution(issue)
         self.record_execution(issue, "failure", started=time.time(), ended=time.time(), detail=detail)
         self.change(issue, event=f"Blocked. {detail}", phase="blocked", pid=None, detail=detail,
@@ -557,12 +701,14 @@ class Runner:
             raise
         self.acknowledge_events(issue)
         attempt = row["attempts"] + 1
+        attempt_id = self.record_execution(
+            issue, "attempt", detail=f"Attempt {attempt} started.",
+            data={"attempt": attempt, "notesReady": False},
+        )
         self.open_execution(issue, "startup", started=dispatch_started,
                             detail=f"Attempt {attempt} startup started.",
-                            data={"attempt": attempt})
-        self.record_execution(issue, "attempt", detail=f"Attempt {attempt} started.",
-                              data={"attempt": attempt})
-        self.job(self.run_worker(issue, instruction))
+                            data={"attempt": attempt, "attemptId": attempt_id})
+        self.job(self.run_worker(issue, instruction, attempt_id))
         return {"issue": issue, "phase": "working"}
 
     async def dispatch_approved(self):
@@ -613,14 +759,15 @@ class Runner:
                 or live["state"] != {"name": "In Progress", "type": "started"}):
             raise RuntimeError(f"{row['issue']} must still be In Progress in its approved Linear project.")
 
-    async def run_worker(self, issue, instruction):
+    async def run_worker(self, issue, instruction, attempt_id=None):
         row = self.task(issue)
         worktree, artifacts = self.worktree(issue), self.artifacts(issue)
         try:
             artifacts.mkdir(parents=True, exist_ok=True)
-            for name in ("checks.sh", "blocked.txt", "review.md", "review.log",
+            for name in ("checks.sh", "blocked.txt", "notes.md", "review.md", "review.log",
                          "review-input.md", "review.diff"):
                 (artifacts / name).unlink(missing_ok=True)
+            self.mark_attempt_notes_ready(issue, attempt_id)
             await self.require_in_progress(row)
             repo = await self.checkout(row["repo"])
             await git(repo, "fetch", "origin", "refs/heads/main:refs/remotes/origin/main")
@@ -644,7 +791,7 @@ class Runner:
                 args += ["--session", row["session"]]
             self.close_execution_kind(issue, "startup", detail="Worker started.")
             self.open_execution(issue, "worker", detail="OpenCode worker started.",
-                                data={"attempt": row["attempts"]})
+                                data={"attempt": row["attempts"], "attemptId": attempt_id})
             with (artifacts / "worker.log").open("ab") as log:
                 log.write(f"\n--- attempt {row['attempts']} ---\n".encode())
                 async with asyncio.timeout(WORKER_SECONDS):
@@ -658,7 +805,7 @@ class Runner:
                     log.write(f"\n--- verification ---\n{checks}\n".encode())
                     log.flush()
                     self.open_execution(issue, "verification", detail="Verification started.",
-                                        data={"command": checks[:4000]})
+                                        data={"command": checks[:4000], "attemptId": attempt_id})
                     process = await asyncio.create_subprocess_exec(
                         "bash", "-e", "-o", "pipefail", "-c", checks, cwd=worktree, env=env,
                         stdout=log, stderr=log, start_new_session=True,
@@ -678,21 +825,37 @@ class Runner:
             tree = await git(worktree, "write-tree")
             self.change(issue, check_exit=status, tree=tree)
             if status == 0:
-                review = await self.review_work(issue, row, worktree, artifacts, base, env)
+                review, review_id = await self.review_work(
+                    issue, row, worktree, artifacts, base, env, attempt_id)
                 await git(worktree, "add", "-A")
                 if await git(worktree, "write-tree") != tree:
                     detail = "The worktree changed during review. Repeat verification."
-                    self.save_review(artifacts, unavailable_review(detail))
+                    text = unavailable_review(detail)
+                    self.save_review(artifacts, text)
+                    self.update_execution_data(
+                        review_id,
+                        self.review_snapshot(
+                            row["attempts"], attempt_id,
+                            os.environ.get("SYMPHONY_REVIEW_MODEL", REVIEW_MODEL),
+                            text, detail, verdict="UNAVAILABLE",
+                        ),
+                        detail=f"Review unavailable: {detail}",
+                    )
                     raise RuntimeError(
                         "The worktree changed during review. Repeat checks before shipping.")
                 self.save_review(artifacts, review)
             else:
                 detail = f"Review skipped because verification exited {status}."
-                self.record_execution(issue, "review", started=time.time(), ended=time.time(),
-                                      detail=detail, data={"attempt": row["attempts"]})
-                self.save_review(artifacts, unavailable_review(detail))
-            self.close_execution_kind(issue, "attempt",
-                                      detail=f"Attempt finished. Verification exited {status}.")
+                text = unavailable_review(detail)
+                self.record_execution(
+                    issue, "review", started=time.time(), ended=time.time(), detail=detail,
+                    data=self.review_snapshot(
+                        row["attempts"], attempt_id, "", text, detail, verdict="UNAVAILABLE"),
+                )
+                self.save_review(artifacts, text)
+            self.finish_attempt(
+                issue, attempt_id,
+                detail=f"Attempt finished. Verification exited {status}.")
             self.change(issue, event=f"Worker finished. Verification exited {status}. "
                                      f"Audit notes.md and review.md.",
                         phase="review", pid=None, check_exit=status, tree=tree, supersede=True)
@@ -741,13 +904,16 @@ class Runner:
     def save_review(self, artifacts, text):
         (artifacts / "review.md").write_text(text)
 
-    async def review_work(self, issue, row, worktree, artifacts, base, env):
+    async def review_work(self, issue, row, worktree, artifacts, base, env, attempt_id=None):
         model = os.environ.get("SYMPHONY_REVIEW_MODEL", REVIEW_MODEL)
         execution = self.open_execution(
             issue, "review", detail=f"Review started with {model}.",
-            data={"attempt": row["attempts"], "model": model},
+            data={"attempt": row["attempts"], "attemptId": attempt_id, "model": model},
         )
         detail = "Review unavailable."
+        text = unavailable_review(detail)
+        result = self.review_snapshot(
+            row["attempts"], attempt_id, model, text, detail, verdict="UNAVAILABLE")
         try:
             diff = await git(worktree, "diff", "--no-ext-diff", base, "--")
             (artifacts / "review.diff").write_text(diff)
@@ -797,11 +963,17 @@ class Runner:
                     error = str(failure) or "The reviewer could not start."
             if error:
                 detail = f"Review unavailable: {error}"
-                return unavailable_review(error)
+                text = unavailable_review(error)
+                result = self.review_snapshot(
+                    row["attempts"], attempt_id, model, text, detail, verdict="UNAVAILABLE")
+                return text, execution
             valid = validate_review(report)
             if not valid:
                 detail = "Review unavailable: no valid structured verdict."
-                return unavailable_review("The reviewer returned no valid structured verdict.")
+                text = unavailable_review("The reviewer returned no valid structured verdict.")
+                result = self.review_snapshot(
+                    row["attempts"], attempt_id, model, text, detail, verdict="UNAVAILABLE")
+                return text, execution
             first = valid.splitlines()[0]
             verdict = REVIEW_VERDICT.fullmatch(first)
             if verdict:
@@ -810,14 +982,28 @@ class Runner:
                 detail = "Review completed: NO ISSUES."
             else:
                 detail = "Review completed."
-            return bounded_review(valid)
+            text = bounded_review(valid)
+            result = self.review_snapshot(
+                row["attempts"], attempt_id, model, text, detail,
+                verdict=review_verdict(valid),
+                finding_count=review_finding_count(valid),
+                truncated="[Review truncated.]" in text,
+            )
+            return text, execution
         except asyncio.CancelledError:
             detail = "Review interrupted."
+            text = unavailable_review(detail)
+            result = self.review_snapshot(
+                row["attempts"], attempt_id, model, text, detail, verdict="UNAVAILABLE")
             raise
         except (OSError, RuntimeError, ValueError, asyncio.LimitOverrunError) as error:
             detail = f"Review unavailable: {error}"
-            return unavailable_review(error)
+            text = unavailable_review(error)
+            result = self.review_snapshot(
+                row["attempts"], attempt_id, model, text, detail, verdict="UNAVAILABLE")
+            return text, execution
         finally:
+            self.update_execution_data(execution, result, detail=detail)
             self.close_execution(execution, detail=detail)
 
     async def run_review(self, issue, args, cwd, env, log, prompt_path):
@@ -1143,6 +1329,7 @@ class Runner:
                     if value is not None:
                         observed.append(value)
                 last_observed = min(now, max(observed))
+                self.finish_open_attempt(issue, ended=last_observed)
                 self.close_open_execution(issue, ended=last_observed)
                 if now > last_observed:
                     self.record_execution(

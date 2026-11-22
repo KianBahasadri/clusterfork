@@ -395,13 +395,29 @@ function executionCoverage(value, reason) {
   return element("p", value + (reason ? " · " + reason : ""), "muted execution-coverage");
 }
 
+function executionDetails(parent, key, summary, className = "execution-transitions") {
+  const item = element("details", "", className);
+  item.dataset.viewKey = key;
+  item.append(element("summary", summary));
+  parent.append(item);
+  return item;
+}
+
+function executionLog(parent, key, text) {
+  const item = element("pre", text, "execution-log");
+  item.dataset.viewKey = key;
+  parent.append(item);
+  return item;
+}
+
 function executionKind(kind) {
   const labels = {
     attempt: "Worker attempt", startup: "Worker startup", worker: "Worker run",
-    verification: "Verification", coordinator: "Coordinator", publication: "Publication",
-    ci_wait: "CI waiting", ci_discovery: "CI discovery", ci_run: "CI run",
-    ci_error: "CI detail failure", approval: "Approval", failure: "Failure",
-    completion: "Completion", interruption: "Restart", gap: "Unobserved outage",
+    verification: "Verification", review: "Review", coordinator: "Coordinator",
+    publication: "Publication", ci_workflow: "CI workflow", ci_wait: "CI waiting",
+    ci_discovery: "CI discovery", ci_run: "CI run", ci_error: "CI detail failure",
+    approval: "Approval", failure: "Failure", completion: "Completion",
+    interruption: "Restart", gap: "Unobserved outage",
   };
   return labels[kind] || kind.replaceAll("_", " ");
 }
@@ -424,8 +440,8 @@ function renderExecutionStages(panel, stages) {
     section.append(current);
   }
   if (stages.transitions.length) {
-    const transitions = element("details", "", "execution-transitions");
-    transitions.append(element("summary", "Status transitions · " + stages.transitions.length));
+    const transitions = executionDetails(
+      section, "stages:transitions", "Status transitions · " + stages.transitions.length);
     const list = element("ol");
     for (const entry of stages.transitions) {
       const item = element("li");
@@ -443,7 +459,7 @@ function renderExecutionBreakdown(panel, execution) {
   section.append(executionCoverage(execution.coverage, execution.reason));
   const unavailable = execution.coverage === "unavailable";
   const grid = element("div", "", "execution-metrics");
-  const order = ["startup", "worker", "verification", "coordinator", "publication",
+  const order = ["startup", "worker", "verification", "review", "coordinator", "publication",
     "ci_workflow", "ci_wait", "ci_discovery"];
   for (const kind of order) {
     const value = execution.breakdown[kind];
@@ -453,6 +469,10 @@ function renderExecutionBreakdown(panel, execution) {
         : kind === "ci_workflow" ? "Sum of workflow runs; may overlap"
           : kind === "ci_wait" ? "Waiting while CI ran" : "Recorded interval"));
   }
+  const attemptTotal = executionAttemptTotal(execution.worker, unavailable);
+  const findingTotal = executionFindingTotal(execution.worker?.findings);
+  grid.append(executionMetric("Worker attempts", attemptTotal.value, attemptTotal.detail));
+  grid.append(executionMetric("Review findings", findingTotal.value, findingTotal.detail));
   grid.append(executionMetric("Measured total",
     unavailable ? "Unavailable" : formatSeconds(execution.measuredSeconds),
     execution.lowerBound ? "Lower bound; some categories were not recorded" : "Sum of recorded intervals"));
@@ -508,10 +528,60 @@ function renderExecutionCi(panel, ci) {
   }
 }
 
+function attemptFindingLabel(review) {
+  if (!review.recorded || !Number.isInteger(review.findingCount)) return "Findings unavailable";
+  const count = review.findingCount + " finding" + (review.findingCount === 1 ? "" : "s");
+  if (review.findingCountComplete) return count;
+  return review.findingCount > 0 ? "At least " + count : "Findings partial";
+}
+
+function renderExecutionReviews(panel, worker) {
+  const section = executionSection(panel, "Reviews & notes by attempt");
+  const attempts = worker?.attempts || [];
+  if (!attempts.length) {
+    section.append(element("p", worker?.coverage === "not_started"
+      ? "No worker attempts have started."
+      : "No worker attempt records were recorded.", "muted"));
+    return;
+  }
+  for (const attempt of attempts) {
+    const review = attempt.review || {};
+    const notes = attempt.notes || {};
+    const item = element("details", "", "execution-attempt execution-transitions");
+    item.dataset.viewKey = "attempt:" + attempt.id;
+    const summary = element("summary");
+    const verdict = review.recorded ? (review.verdict || "UNAVAILABLE") : "UNAVAILABLE";
+    summary.append(element("strong", "Attempt " + attempt.number),
+      document.createTextNode(" · "),
+      element("span", verdict + " · " + attemptFindingLabel(review), "muted"));
+    if (review.truncated || notes.truncated) summary.append(element("span", " · truncated", "muted"));
+    if (attempt.open) summary.append(element("span", " · running", "muted"));
+    item.append(summary);
+    const reviewBody = executionDetails(
+      item, "attempt:" + attempt.id + ":review",
+      "review.md" + (review.model ? " · " + review.model : "") + (review.truncated ? " · truncated" : ""));
+    if (review.available) executionLog(
+      reviewBody, "attempt:" + attempt.id + ":review:log", review.text);
+    reviewBody.append(element("p", review.detail || (review.recorded
+      ? "No reviewer report content was retained for this attempt."
+      : "No reviewer record was retained for this attempt."), "muted"));
+    const notesBody = executionDetails(
+      item, "attempt:" + attempt.id + ":notes",
+      "notes.md" + (notes.truncated ? " · truncated" : ""));
+    if (notes.available) executionLog(
+      notesBody, "attempt:" + attempt.id + ":notes:log", notes.text);
+    notesBody.append(element("p", notes.detail || (notes.available
+      ? "Notes snapshot retained for inspection."
+      : "No notes.md snapshot was retained for this attempt."), "muted"));
+    section.append(item);
+  }
+}
+
 function renderExecutionTimeline(panel, events) {
   const section = executionSection(panel, "Timeline");
+  const timeline = executionDetails(section, "timeline", "Timeline · " + events.length);
   if (!events.length) {
-    section.append(element("p", "No execution events were recorded.", "muted"));
+    timeline.append(element("p", "No execution events were recorded.", "muted"));
     return;
   }
   const list = element("ol", "", "execution-timeline");
@@ -535,7 +605,7 @@ function renderExecutionTimeline(panel, events) {
     if (event.data?.url) item.append(issueLink("Open GitHub run", event.data.url));
     list.append(item);
   }
-  section.append(list);
+  timeline.append(list);
 }
 
 function renderExecutionDiagnostics(panel, diagnostics) {
@@ -545,18 +615,15 @@ function renderExecutionDiagnostics(panel, diagnostics) {
     ? "Verification exited " + verification.exit + (verification.detail ? " · " + verification.detail : "")
     : "Verification outcome unavailable.", verification.available ? "" : "muted"));
   if (diagnostics.checks.available) {
-    const checks = element("details", "", "execution-transitions");
-    checks.append(element("summary", "Verification command"),
-      element("pre", diagnostics.checks.command, "execution-log"));
-    section.append(checks);
+    const checks = executionDetails(section, "diagnostics:checks", "Verification command");
+    executionLog(checks, "diagnostics:checks:log", diagnostics.checks.command);
   } else {
     section.append(element("p", diagnostics.checks.detail, "muted"));
   }
-  const log = element("details", "", "execution-transitions");
-  log.append(element("summary", "Worker log excerpt"
-    + (diagnostics.workerLog.truncated ? " · truncated" : "")));
+  const log = executionDetails(section, "diagnostics:worker-log",
+    "Worker log excerpt" + (diagnostics.workerLog.truncated ? " · truncated" : ""));
   if (diagnostics.workerLog.available) {
-    log.append(element("pre", diagnostics.workerLog.text, "execution-log"));
+    executionLog(log, "diagnostics:worker-log:log", diagnostics.workerLog.text);
   } else {
     log.append(element("p", diagnostics.workerLog.detail, "muted"));
   }
@@ -573,6 +640,7 @@ function renderExecution(data, panel) {
   renderExecutionStages(panel, data.stages);
   renderExecutionBreakdown(panel, data.execution);
   renderExecutionCi(panel, data.execution.ci);
+  renderExecutionReviews(panel, data.execution.worker);
   renderExecutionTimeline(panel, data.execution.events);
   renderExecutionDiagnostics(panel, data.execution.diagnostics);
 }

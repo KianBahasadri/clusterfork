@@ -25,8 +25,9 @@ from symphony.__main__ import (
     Handler, Symphony, WebhookHandler, serve,
 )
 from symphony.codex import Codex, TOOLS, TOOLS_HASH
+from symphony.execution import execution_payload
 from symphony.runner import (
-    REVIEW_LINES, Runner, bounded_review, validate_review,
+    NOTES_LINES, REVIEW_LINES, Runner, bounded_review, validate_review,
 )
 from symphony.services import Linear, matches_filter, proposed_plan, with_plan
 
@@ -154,6 +155,8 @@ if config.get("mcp") == {"servers": {}}:
     elif mode == "large":
         finish("msg_final", "VERDICT: ISSUES\\n- symphony/runner.py:1 - Fixture finding.\\n"
                + "detail\\n" * 300, "stop")
+    elif mode == "custom":
+        finish("msg_final", os.environ.get("FIXTURE_REVIEW_TEXT", "VERDICT: NO ISSUES"), "stop")
     elif mode == "mutate":
         Path("verified.txt").write_text("Reviewed\\n")
         finish("msg_final", "VERDICT: NO ISSUES", "stop")
@@ -179,9 +182,16 @@ if os.environ.get("FIXTURE_LARGE_DIFF"):
     Path("large.txt").write_text("x" * 60000 + "\\nEND-OF-LARGE-DIFF\\n")
 print(json.dumps({"type":"text","sessionID":"ses_fixture"}))
 Path("verified.txt").write_text("Tested\\n")
+if not os.environ.get("FIXTURE_SKIP_NOTES"):
+    notes = os.environ.get("FIXTURE_NOTES", "None")
+    if not notes.endswith("\\n"):
+        notes += "\\n"
+    (workspace / "notes.md").write_text(notes)
+if os.environ.get("FIXTURE_BLOCK"):
+    (workspace / "blocked.txt").write_text(os.environ["FIXTURE_BLOCK"])
+    sys.exit(0)
 checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat verified.txt)" = Tested\\n'
 (workspace / "checks.sh").write_text(checks)
-(workspace / "notes.md").write_text("None\\n")
 """)
         worker.chmod(0o755)
         context = patch.dict(os.environ, {"PATH": f"{fake_bin}:{os.environ['PATH']}",
@@ -1049,6 +1059,18 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
     def review_environment(self):
         return json.loads((self.runner.artifacts(ISSUE) / "review-env.json").read_text())
 
+    def execution(self):
+        issue = {
+            "identifier": ISSUE, "title": "Fixture", "url": "",
+            "state": self.linear.state, "createdAt": "2026-01-01T00:00:00Z",
+            "project": {"id": "project", "name": "Fixture"},
+        }
+        return execution_payload(
+            ISSUE, issue, {"entries": [], "complete": False, "error": "Unavailable"}, self.runner)
+
+    def attempts(self):
+        return self.execution()["execution"]["worker"]["attempts"]
+
     @staticmethod
     def pid_alive(pid):
         try:
@@ -1620,6 +1642,11 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         self.assertEqual(len(review), 1)
         self.assertIsNotNone(review[0]["ended"])
         self.assertEqual(review[0]["detail"], "Review completed: NO ISSUES.")
+        attempt, = self.attempts()
+        self.assertEqual(attempt["review"]["verdict"], "NO ISSUES")
+        self.assertEqual(attempt["review"]["findingCount"], 0)
+        self.assertTrue(attempt["review"]["findingCountComplete"])
+        self.assertTrue(attempt["notes"]["available"])
 
     async def test_fresh_and_resumed_workers_receive_default_mcp_and_deny_websearch(self):
         with patch.dict(os.environ, {
@@ -1667,6 +1694,194 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         self.assertIn("opencode-go/review-fixture",
                       (self.runner.artifacts(ISSUE) / "review.log").read_text())
 
+    async def test_two_attempts_retain_their_own_notes_and_review_after_rework(self):
+        first_review = ("VERDICT: ISSUES\n- symphony/a.py:1 - First finding.\n"
+                        "- symphony/b.py:2 - Second finding.\n")
+        with patch.dict(os.environ, {
+                "FIXTURE_NOTES": "First attempt notes\n",
+                "FIXTURE_REVIEW": "custom", "FIXTURE_REVIEW_TEXT": first_review}):
+            await self.worker_done()
+        first, = self.attempts()
+        self.assertEqual(first["notes"]["text"], "First attempt notes")
+        self.assertFalse(first["notes"]["truncated"])
+        self.assertEqual(first["review"]["verdict"], "ISSUES")
+        self.assertEqual(first["review"]["findingCount"], 2)
+        self.assertTrue(first["review"]["findingCountComplete"])
+        self.assertEqual(first["review"]["model"], "opencode-go/kimi-k3.1-pro#low")
+        self.assertIn("First finding", first["review"]["text"])
+
+        with patch.dict(os.environ, {
+                "FIXTURE_NOTES": "Second attempt notes\n",
+                "FIXTURE_REVIEW": "custom", "FIXTURE_REVIEW_TEXT": "VERDICT: NO ISSUES"}):
+            await self.runner.dispatch(ISSUE, REPO, "Never ship from the worker. Follow up.",
+                                       resume=True)
+            await self.phase("review")
+        attempts = self.attempts()
+        self.assertEqual([attempt["number"] for attempt in attempts], [1, 2])
+        self.assertEqual([attempt["counter"] for attempt in attempts], [1, 2])
+        self.assertEqual(len({attempt["id"] for attempt in attempts}), 2)
+        self.assertEqual(attempts[0]["notes"]["text"], "First attempt notes")
+        self.assertEqual(attempts[0]["review"]["verdict"], "ISSUES")
+        self.assertEqual(attempts[0]["review"]["findingCount"], 2)
+        self.assertEqual(attempts[1]["notes"]["text"], "Second attempt notes")
+        self.assertEqual(attempts[1]["review"]["verdict"], "NO ISSUES")
+        self.assertEqual(attempts[1]["review"]["findingCount"], 0)
+        worker = self.execution()["execution"]["worker"]
+        self.assertEqual(worker["attemptCount"], 2)
+        self.assertEqual(worker["findings"], {
+            "available": True, "complete": True, "count": 2,
+            "reviewCount": 2, "unlinkedReviews": 0,
+        })
+        raw = json.dumps(self.runner.rows("SELECT data FROM execution WHERE kind='attempt'"))
+        self.assertIn("First attempt notes", raw)
+
+    async def test_identical_fresh_notes_are_retained_for_each_attempt(self):
+        with patch.dict(os.environ, {
+                "FIXTURE_NOTES": "None\n", "FIXTURE_REVIEW": "custom",
+                "FIXTURE_REVIEW_TEXT": "VERDICT: NO ISSUES"}):
+            await self.worker_done()
+            await self.runner.dispatch(
+                ISSUE, REPO, "Never ship from the worker. Follow up.", resume=True)
+            await self.phase("review")
+        attempts = self.attempts()
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual([attempt["notes"]["text"] for attempt in attempts], ["None", "None"])
+        self.assertTrue(all(attempt["notes"]["available"] for attempt in attempts))
+        self.assertEqual([attempt["review"]["verdict"] for attempt in attempts],
+                         ["NO ISSUES", "NO ISSUES"])
+
+    async def test_retry_counter_reset_keeps_separate_attempt_identities(self):
+        with patch.dict(os.environ, {
+                "FIXTURE_NOTES": "Before retry\n",
+                "FIXTURE_REVIEW": "custom",
+                "FIXTURE_REVIEW_TEXT": "VERDICT: ISSUES\n- a.py:1 - Before retry.\n"}):
+            await self.worker_done()
+        first, = self.attempts()
+        self.runner.block(ISSUE, "Parked for retry")
+        app = self.app()
+        app.respond = AsyncMock()
+        await app.handle(REPO, f"/retry {ISSUE}", f"/retry {ISSUE}")
+        self.assertEqual(self.runner.task(ISSUE)["attempts"], 0)
+        with patch.dict(os.environ, {
+                "FIXTURE_NOTES": "After retry\n",
+                "FIXTURE_REVIEW": "custom", "FIXTURE_REVIEW_TEXT": "VERDICT: NO ISSUES"}):
+            await self.runner.dispatch(ISSUE, REPO, "Never ship from the worker.", resume=True)
+            await self.phase("review")
+        attempts = self.attempts()
+        self.assertEqual([attempt["counter"] for attempt in attempts], [1, 1])
+        self.assertEqual([attempt["number"] for attempt in attempts], [1, 2])
+        self.assertEqual(attempts[0]["id"], first["id"])
+        self.assertNotEqual(attempts[0]["id"], attempts[1]["id"])
+        self.assertEqual(attempts[0]["notes"]["text"], "Before retry")
+        self.assertEqual(attempts[0]["review"]["verdict"], "ISSUES")
+        self.assertEqual(attempts[1]["notes"]["text"], "After retry")
+        self.assertEqual(attempts[1]["review"]["verdict"], "NO ISSUES")
+
+    async def test_blocked_attempts_retain_their_notes_without_reusing_old_ones(self):
+        with patch.dict(os.environ, {
+                "FIXTURE_NOTES": "Blocked attempt notes\n",
+                "FIXTURE_BLOCK": "Fixture blocked before verification."}):
+            await self.approve()
+            await self.runner.dispatch(ISSUE, REPO, "Never ship from the worker.")
+            await self.phase("blocked")
+        first, = self.attempts()
+        self.assertEqual(first["notes"]["text"], "Blocked attempt notes")
+        self.assertFalse(first["review"]["recorded"])
+        self.assertEqual(first["review"]["verdict"], "UNAVAILABLE")
+
+        with patch.dict(os.environ, {
+                "FIXTURE_SKIP_NOTES": "1", "FIXTURE_BLOCK": "Fixture blocked again."}):
+            await self.runner.dispatch(ISSUE, REPO, "Never ship from the worker.", resume=True)
+            await self.phase("blocked")
+        attempts = self.attempts()
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(attempts[0]["notes"]["text"], "Blocked attempt notes")
+        self.assertFalse(attempts[1]["notes"]["available"])
+        self.assertIn("No notes.md was produced", attempts[1]["notes"]["detail"])
+        self.assertFalse(attempts[1]["review"]["recorded"])
+        self.assertEqual(attempts[1]["review"]["verdict"], "UNAVAILABLE")
+        self.assertNotIn("VERDICT", json.dumps(attempts[1]["review"]))
+
+    async def test_artifact_cleanup_failure_does_not_attribute_previous_notes(self):
+        with patch.dict(os.environ, {
+                "FIXTURE_NOTES": "Previous attempt notes\n",
+                "FIXTURE_REVIEW": "custom", "FIXTURE_REVIEW_TEXT": "VERDICT: NO ISSUES"}):
+            await self.worker_done()
+        first, = self.attempts()
+        self.assertEqual(first["notes"]["text"], "Previous attempt notes")
+        original_unlink = Path.unlink
+
+        def fail_checks(path, *args, **kwargs):
+            if path.name == "checks.sh":
+                raise PermissionError("Fixture startup cleanup failed")
+            return original_unlink(path, *args, **kwargs)
+
+        with patch("pathlib.Path.unlink", new=fail_checks):
+            await self.runner.dispatch(ISSUE, REPO, "Never ship from the worker.", resume=True)
+            await self.phase("blocked")
+        attempts = self.attempts()
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(attempts[0]["notes"]["text"], "Previous attempt notes")
+        self.assertFalse(attempts[1]["notes"]["available"])
+        self.assertEqual(attempts[1]["notes"]["text"], "")
+        self.assertIn("did not initialize notes.md", attempts[1]["notes"]["detail"])
+        self.assertIn("Fixture startup cleanup failed", self.runner.task(ISSUE)["detail"])
+
+    async def test_notes_unlink_failure_does_not_attribute_previous_notes(self):
+        with patch.dict(os.environ, {
+                "FIXTURE_NOTES": "Previous attempt notes\n",
+                "FIXTURE_REVIEW": "custom", "FIXTURE_REVIEW_TEXT": "VERDICT: NO ISSUES"}):
+            await self.worker_done()
+        first, = self.attempts()
+        self.assertEqual(first["notes"]["text"], "Previous attempt notes")
+        original_unlink = Path.unlink
+
+        def fail_notes(path, *args, **kwargs):
+            if path.name == "notes.md":
+                raise PermissionError("Fixture notes cleanup failed")
+            return original_unlink(path, *args, **kwargs)
+
+        with patch("pathlib.Path.unlink", new=fail_notes):
+            await self.runner.dispatch(ISSUE, REPO, "Never ship from the worker.", resume=True)
+            await self.phase("blocked")
+        attempts = self.attempts()
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(attempts[0]["notes"]["text"], "Previous attempt notes")
+        self.assertFalse(attempts[1]["notes"]["available"])
+        self.assertEqual(attempts[1]["notes"]["text"], "")
+        self.assertIn("did not initialize notes.md", attempts[1]["notes"]["detail"])
+        self.assertIn("Fixture notes cleanup failed", self.runner.task(ISSUE)["detail"])
+
+    async def test_snapshots_are_redacted_bounded_and_count_findings_before_truncation(self):
+        token = "ghp_" + "a" * 30
+        notes = token + "\n" + "\n".join(f"note line {index}" for index in range(150))
+        review = ("VERDICT: ISSUES\n"
+                  + "\n".join(f"- symphony/f{index}.py:{index} - Finding {index}."
+                              for index in range(250)))
+        with patch.dict(os.environ, {
+                "FIXTURE_NOTES": notes, "FIXTURE_REVIEW": "custom",
+                "FIXTURE_REVIEW_TEXT": review}):
+            await self.worker_done()
+        attempt, = self.attempts()
+        self.assertTrue(attempt["notes"]["truncated"])
+        self.assertLessEqual(len(attempt["notes"]["text"].splitlines()), NOTES_LINES)
+        self.assertIn("[redacted]", attempt["notes"]["text"])
+        self.assertNotIn(token, attempt["notes"]["text"])
+        self.assertEqual(attempt["review"]["verdict"], "ISSUES")
+        self.assertEqual(attempt["review"]["findingCount"], 250)
+        self.assertFalse(attempt["review"]["findingCountComplete"])
+        self.assertTrue(attempt["review"]["truncated"])
+        self.assertLessEqual(len(attempt["review"]["text"].splitlines()), REVIEW_LINES + 2)
+        raw = json.dumps(self.runner.rows("SELECT data FROM execution"))
+        payload = json.dumps(self.execution())
+        self.assertNotIn(token, raw)
+        self.assertNotIn(token, payload)
+        self.assertIn("[redacted]", raw)
+        findings = self.execution()["execution"]["worker"]["findings"]
+        self.assertTrue(findings["available"])
+        self.assertFalse(findings["complete"])
+        self.assertEqual(findings["count"], 250)
+
     async def test_review_receives_the_full_diff_beyond_read_diff_limit(self):
         with patch.dict(os.environ, {"FIXTURE_LARGE_DIFF": "1"}):
             await self.worker_done()
@@ -1691,6 +1906,10 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         review = self.runner.rows("SELECT * FROM execution WHERE kind='review'")
         self.assertEqual(len(review), 1)
         self.assertIn("skipped", review[0]["detail"])
+        attempt, = self.attempts()
+        self.assertEqual(attempt["review"]["verdict"], "UNAVAILABLE")
+        self.assertIsNone(attempt["review"]["findingCount"])
+        self.assertIn("skipped", attempt["review"]["detail"])
 
     async def test_review_findings_are_readable_audit_advice(self):
         with patch.dict(os.environ, {"FIXTURE_REVIEW": "findings"}):
@@ -1700,6 +1919,10 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         audit = self.runner.read_notes(ISSUE)
         self.assertIn("- symphony/runner.py:1 - Fixture finding.", audit)
         self.assertEqual(self.runner.task(ISSUE)["phase"], "review")
+        attempt, = self.attempts()
+        self.assertEqual(attempt["review"]["verdict"], "ISSUES")
+        self.assertEqual(attempt["review"]["findingCount"], 1)
+        self.assertTrue(attempt["review"]["findingCountComplete"])
 
     async def test_malformed_review_output_is_unavailable(self):
         with patch.dict(os.environ, {"FIXTURE_REVIEW": "malformed"}):
@@ -1708,6 +1931,10 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         self.assertIn("VERDICT: UNAVAILABLE", report)
         self.assertIn("no valid structured verdict", report)
         self.assertIn("Looks fine to me.", (self.runner.artifacts(ISSUE) / "review.log").read_text())
+        attempt, = self.attempts()
+        self.assertEqual(attempt["review"]["verdict"], "UNAVAILABLE")
+        self.assertIsNone(attempt["review"]["findingCount"])
+        self.assertFalse(attempt["review"]["findingCountComplete"])
 
     async def test_empty_review_output_is_unavailable(self):
         with patch.dict(os.environ, {"FIXTURE_REVIEW": "empty"}):
@@ -1763,6 +1990,9 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         self.assertEqual(task["check_exit"], 0)
         self.assertIn("Fixture review failed",
                       self.runner.rows("SELECT * FROM execution WHERE kind='review'")[0]["detail"])
+        attempt, = self.attempts()
+        self.assertEqual(attempt["review"]["verdict"], "UNAVAILABLE")
+        self.assertIn("Fixture review failed", attempt["review"]["text"])
 
     async def test_review_timeout_cleans_up_the_process_group(self):
         with patch("symphony.runner.REVIEW_SECONDS", 0.2), \
@@ -1772,10 +2002,29 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         report = (artifacts / "review.md").read_text()
         self.assertIn("VERDICT: UNAVAILABLE", report)
         self.assertIn("exceeded", report)
+        attempt, = self.attempts()
+        self.assertEqual(attempt["review"]["verdict"], "UNAVAILABLE")
+        self.assertIsNone(attempt["review"]["findingCount"])
         pids = [int(value) for value in (artifacts / "review-pids").read_text().split()]
         async with asyncio.timeout(2):
             while any(self.pid_alive(pid) for pid in pids):
                 await asyncio.sleep(0.01)
+
+    async def test_interrupted_review_is_retained_as_unavailable(self):
+        await self.approve()
+        with patch.object(self.runner, "run_review", AsyncMock(side_effect=asyncio.CancelledError)):
+            await self.runner.dispatch(ISSUE, REPO, "Never ship from the worker.")
+            job, = list(self.runner.jobs)
+            with self.assertRaises(asyncio.CancelledError):
+                await job
+        review = self.runner.rows("SELECT * FROM execution WHERE kind='review'")
+        self.assertEqual(len(review), 1)
+        data = json.loads(review[0]["data"])
+        self.assertEqual(data["verdict"], "UNAVAILABLE")
+        self.assertEqual(review[0]["detail"], "Review interrupted.")
+        self.assertIn("Review interrupted", data["report"])
+        attempt, = self.attempts()
+        self.assertEqual(attempt["review"]["verdict"], "UNAVAILABLE")
 
     async def test_review_process_pid_is_recorded_without_replacing_session(self):
         artifacts = self.runner.artifacts(ISSUE)
@@ -1821,6 +2070,10 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         self.assertIn("VERDICT: UNAVAILABLE", report)
         self.assertIn("changed during review", report)
         self.assertTrue(self.runner.worktree(ISSUE).is_dir())
+        attempt, = self.attempts()
+        self.assertEqual(attempt["review"]["verdict"], "UNAVAILABLE")
+        self.assertNotIn("NO ISSUES", attempt["review"]["text"])
+        self.assertIn("changed during review", attempt["review"]["text"])
 
     async def test_large_review_report_is_bounded(self):
         with patch.dict(os.environ, {"FIXTURE_REVIEW": "large"}):

@@ -99,21 +99,55 @@ function childAtPath(root, path) {
   return node;
 }
 
+function executionViewKey(node, index, prefix) {
+  return node?.dataset?.viewKey || prefix + ":" + index;
+}
+
+function executionViewAnchor(root, node) {
+  const elementNode = node?.nodeType === 3 ? node.parentElement : node;
+  const keyed = elementNode?.closest?.("[data-view-key]");
+  if (!keyed || keyed === root || !root.contains(keyed)) return null;
+  return {key: keyed.dataset.viewKey, path: childPath(keyed, node)};
+}
+
+function executionKeyedNode(root, key) {
+  if (!key) return null;
+  return [...root.querySelectorAll("[data-view-key]")]
+    .find((item) => item.dataset.viewKey === key) || null;
+}
+
+function executionNodeAt(root, path, anchor) {
+  if (anchor?.key) {
+    if (!Array.isArray(anchor.path)) return null;
+    return childAtPath(executionKeyedNode(root, anchor.key), anchor.path);
+  }
+  return childAtPath(root, path);
+}
+
 function captureExecutionView(panel, scrollContainer, selection = null, activeElement = null) {
   const state = {
-    details: [...panel.querySelectorAll("details")].map((item) => item.open),
-    logs: [...panel.querySelectorAll(".execution-log")].map((item) => item.scrollTop),
+    details: {},
+    logs: {},
     scrollTop: scrollContainer?.scrollTop || 0,
     focus: childPath(panel, activeElement),
+    focusAnchor: executionViewAnchor(panel, activeElement),
     selection: null,
   };
+  [...panel.querySelectorAll("details")].forEach((item, index) => {
+    state.details[executionViewKey(item, index, "details")] = item.open;
+  });
+  [...panel.querySelectorAll(".execution-log")].forEach((item, index) => {
+    state.logs[executionViewKey(item, index, "log")] = item.scrollTop;
+  });
   if (selection?.rangeCount && panel.contains(selection.anchorNode) && panel.contains(selection.focusNode)) {
     const range = selection.getRangeAt(0);
     state.selection = {
       anchor: childPath(panel, range.startContainer),
       anchorOffset: range.startOffset,
+      anchorAnchor: executionViewAnchor(panel, range.startContainer),
       focus: childPath(panel, range.endContainer),
       focusOffset: range.endOffset,
+      focusAnchor: executionViewAnchor(panel, range.endContainer),
     };
   }
   return state;
@@ -122,18 +156,20 @@ function captureExecutionView(panel, scrollContainer, selection = null, activeEl
 function restoreExecutionView(panel, state, scrollContainer, selection = null) {
   if (!state) return;
   [...panel.querySelectorAll("details")].forEach((item, index) => {
-    if (index < state.details.length) item.open = state.details[index];
+    const key = executionViewKey(item, index, "details");
+    if (state.details && Object.hasOwn(state.details, key)) item.open = state.details[key];
   });
   [...panel.querySelectorAll(".execution-log")].forEach((item, index) => {
-    if (index < state.logs.length) item.scrollTop = state.logs[index];
+    const key = executionViewKey(item, index, "log");
+    if (state.logs && Object.hasOwn(state.logs, key)) item.scrollTop = state.logs[key];
   });
   if (scrollContainer) scrollContainer.scrollTop = state.scrollTop;
-  const focus = childAtPath(panel, state.focus);
+  const focus = executionNodeAt(panel, state.focus, state.focusAnchor);
   if (focus?.focus) focus.focus({preventScroll: true});
   if (state.selection && selection) {
     try {
-      const anchor = childAtPath(panel, state.selection.anchor);
-      const end = childAtPath(panel, state.selection.focus);
+      const anchor = executionNodeAt(panel, state.selection.anchor, state.selection.anchorAnchor);
+      const end = executionNodeAt(panel, state.selection.focus, state.selection.focusAnchor);
       if (anchor && end) {
         const range = document.createRange();
         range.setStart(anchor, state.selection.anchorOffset);
@@ -145,4 +181,31 @@ function restoreExecutionView(panel, state, scrollContainer, selection = null) {
       // The refreshed content may no longer contain the old selection offsets.
     }
   }
+}
+
+function executionAttemptTotal(worker, unavailable) {
+  if (unavailable) {
+    return {value: "Unavailable", detail: "Execution records are unavailable."};
+  }
+  if (worker?.coverage === "recorded") {
+    return {value: String(worker.attemptCount || 0), detail: "Retained attempt records"};
+  }
+  if (worker?.coverage === "not_started") {
+    return {value: "0", detail: "No worker attempts have started."};
+  }
+  return {value: "Not recorded", detail: "No worker attempt records were captured."};
+}
+
+function executionFindingTotal(findings) {
+  if (!findings?.available) {
+    return {value: "Unavailable", detail: "No attempt-linked reviewer findings were recorded."};
+  }
+  const count = Number.isInteger(findings.count) ? findings.count : 0;
+  const reviews = Number.isInteger(findings.reviewCount) ? findings.reviewCount : 0;
+  const detail = "Across " + reviews + " recorded review pass" + (reviews === 1 ? "" : "es");
+  if (findings.complete) return {value: String(count), detail};
+  return {
+    value: count > 0 ? "At least " + count : "Partial",
+    detail: "Partial; some attempts or finding counts are unavailable.",
+  };
 }

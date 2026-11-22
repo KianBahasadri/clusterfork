@@ -455,6 +455,16 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
   font-size: 13px;
 }
 .execution-job .detail { flex-basis: 100%; }
+.execution-attempt {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.execution-attempt > summary { cursor: pointer; }
+.execution-attempt > summary strong { margin-right: 8px; }
+.execution-attempt details { margin-top: 10px; }
+.execution-attempt .execution-log { max-height: 220px; }
 .execution-timeline { margin: 0; padding-left: 20px; }
 .execution-event { padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
 .execution-event:last-child { border-bottom: 0; }

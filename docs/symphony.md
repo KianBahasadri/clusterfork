@@ -77,15 +77,20 @@ including private images and range requests. The key stays on the server.
 Close the modal with Close, Escape, or the backdrop to return focus to its card.
 The modal opens on the Issue tab; the Execution tab loads on demand from a
 non-cached endpoint and refreshes while it is open. It shows tracked stage totals,
-the recorded In Progress breakdown with measured, concurrent wall, waiting, and
-overlap values, retained GitHub workflow/job/attempt details, and a chronological
-timeline. Coverage is labeled when records are partial, lower-bound, or
-unavailable; active CI runs stop at their last observed GitHub response rather
-than growing through unobserved time. Diagnostic worker-log and verification
-excerpts are bounded, redacted server-side, and rendered as text; CI entries link
-to their exact GitHub runs and job logs. Live refreshes preserve expanded
-diagnostics, focus, selection, and scroll position. Closing the tab stops its
-refresh. The app fills the viewport below the project header, keeping the page
+the recorded In Progress breakdown with worker attempt totals, reviewer time,
+measured, concurrent wall, waiting, and overlap values, retained GitHub
+workflow/job/attempt details, and a Timeline that starts collapsed. Reviews &
+notes by attempt retains bounded, redacted notes.md and review.md snapshots for
+each recorded attempt, with its reviewer verdict, model, and finding count.
+Repeated findings across reviewer passes count separately; incomplete totals are
+labeled partial or at least, and activity without retained records stays
+unavailable rather than guessed. Coverage is labeled when records are partial,
+lower-bound, or unavailable; active CI runs stop at their last observed GitHub
+response rather than growing through unobserved time. Diagnostic worker-log and
+verification excerpts are bounded, redacted server-side, and rendered as text; CI
+entries link to their exact GitHub runs and job logs. Live refreshes preserve
+expanded sections, diagnostics, focus, selection, and scroll position. Closing the
+tab stops its refresh. The app fills the viewport below the project header, keeping the page
 itself fixed while the chat and issue panes scroll independently. Connection
 failures appear as a temporary notice while Symphony reconnects.
 
