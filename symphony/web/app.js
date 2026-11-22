@@ -60,6 +60,7 @@ let pollStarted = false;
 let following = true;
 let codex = {};
 let canInterrupt = false;
+let compacting = "";
 let updateState = {updateAvailable: false, draining: false};
 let updatePending = false;
 let updateError = "";
@@ -421,6 +422,7 @@ function resetChatView(repo) {
   pendingStream = null;
   stream = "";
   renderedStream = "";
+  compacting = "";
   messages.replaceChildren();
   updateStream("", "");
   byId("welcome").hidden = false;
@@ -827,6 +829,12 @@ async function toggleDrain() {
   }
 }
 
+function formatDuration(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor(seconds / 60) % 60;
+  return [hours && hours + "h", minutes && minutes + "m", seconds % 60 + "s"].filter(Boolean).join(" ");
+}
+
 function showCodexStatus() {
   byId("status-model").textContent = [codex.model || "Codex", codex.effort].filter(Boolean).join(" ");
   const context = byId("status-context");
@@ -843,15 +851,26 @@ function showCodexStatus() {
   }
   const timing = byId("turn-timing");
   const {startedAt, completedAt, durationMs} = codex.turnTiming || {};
-  const working = canInterrupt && startedAt;
-  timing.hidden = !working && durationMs == null;
-  if (!timing.hidden) {
-    const seconds = Math.max(0, Math.floor(working ? Date.now() / 1000 - startedAt : durationMs / 1000));
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor(seconds / 60) % 60;
-    const duration = [hours && hours + "h", minutes && minutes + "m", seconds % 60 + "s"].filter(Boolean).join(" ");
-    timing.textContent = (working ? "Working for " : "Worked for ") + duration
-      + (!working && completedAt ? " · " + clockTime(completedAt) : "");
+  const working = Boolean(canInterrupt && startedAt);
+  const compactTiming = compacting === "running" && startedAt && completedAt == null && durationMs == null;
+  const elapsedSeconds = working || compactTiming
+    ? Math.max(0, Math.floor(Date.now() / 1000 - startedAt)) : 0;
+  if (compacting === "running") {
+    timing.hidden = false;
+    timing.textContent = compactTiming
+      ? "Compacting for " + formatDuration(elapsedSeconds) : "Compacting context…";
+  } else if (compacting === "queued") {
+    timing.hidden = false;
+    timing.textContent = working
+      ? "Working for " + formatDuration(elapsedSeconds) + " · Compaction queued"
+      : "Compaction queued";
+  } else {
+    timing.hidden = !working && durationMs == null;
+    if (!timing.hidden) {
+      const duration = formatDuration(working ? elapsedSeconds : Math.max(0, Math.floor(durationMs / 1000)));
+      timing.textContent = (working ? "Working for " : "Worked for ") + duration
+        + (!working && completedAt ? " · " + clockTime(completedAt) : "");
+    }
   }
   interrupt.hidden = !canInterrupt;
 }
@@ -926,6 +945,7 @@ async function poll() {
     notice.hidden = !state.issueError;
     codex = state.codex;
     canInterrupt = state.canInterrupt;
+    compacting = typeof state.compacting === "string" ? state.compacting : "";
     updateState = {updateAvailable: Boolean(state.updateAvailable), draining: Boolean(state.draining)};
     if (choicesChanged || tasksChanged) renderCommands();
     showCodexStatus();

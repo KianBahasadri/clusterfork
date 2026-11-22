@@ -3391,6 +3391,44 @@ else:
         self.assertEqual(self.runner.thread(REPO)["context_used"], 0)
         self.assertEqual(app.coordinator.status(REPO)["contextUsed"], 0)
 
+    async def test_compact_reports_queued_and_running_status(self):
+        app = self.app()
+        app.repos[REPO] = [{"id": "project", "name": "Fixture"}]
+        app.busy = True
+        app.coordinator.turns[REPO] = "turn-1"
+
+        await app.submit({"project": "project", "text": "/compact"})
+        queued_state = await app.state(0, project="project")
+        self.assertEqual(queued_state["compacting"], "queued")
+        self.assertEqual(queued_state["messages"][-1]["role"], "system")
+        self.assertEqual(queued_state["messages"][-1]["text"],
+                         "Compaction queued after the current turn.")
+
+        app.messages.clear()
+        app.busy = False
+        app.coordinator.turns.clear()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def blocking_compact(repo, cwd):
+            started.set()
+            await release.wait()
+            return "completed"
+
+        with patch.object(app.coordinator, "compact", side_effect=blocking_compact):
+            task = asyncio.create_task(app.handle(REPO, "/compact", "/compact"))
+            await started.wait()
+            running_state = await app.state(0, project="project")
+            self.assertEqual(running_state["compacting"], "running")
+            release.set()
+            await task
+        self.assertEqual((await app.state(0, project="project"))["compacting"], "")
+
+        with patch.object(app.coordinator, "compact", side_effect=RuntimeError("Compact failed")):
+            with self.assertRaisesRegex(RuntimeError, "Compact failed"):
+                await app.handle(REPO, "/compact", "/compact")
+        self.assertEqual((await app.state(0, project="project"))["compacting"], "")
+
     @staticmethod
     async def _cancel_task(task):
         task.cancel()

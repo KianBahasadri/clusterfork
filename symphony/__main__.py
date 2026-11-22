@@ -193,6 +193,7 @@ class Symphony:
         self.messages = deque()
         self.busy = False
         self.turn_repo = ""
+        self.compacting_repo = ""
         self.pending_rules = {}
         self.login = None
         self.repos = {}
@@ -617,6 +618,11 @@ class Symphony:
                  "repo": active_repo,
                  "repoActivity": self.runner.repo_chat_latest(),
                  "codex": self.coordinator.status(active_repo), "issueError": self.issue_error,
+                 "compacting": (
+                     "running" if self.compacting_repo == active_repo else
+                     "queued" if any(entry[0] == active_repo and entry[1] == "/compact"
+                                     for entry in self.messages) else ""
+                 ),
                  "updateAvailable": self.updates.available,
                  "draining": self.runner.draining}
         if self.issue_snapshot is not None and issue_revision != self.issue_revision:
@@ -678,7 +684,12 @@ class Symphony:
                 return {"message": self.saved_message(message_id)}
             except (OSError, RuntimeError, ValueError):
                 pass  # The turn or the server can exit before the steer is accepted.
+        queued_compact = text == "/compact" and bool(
+            self.busy or self.coordinator.turn_for(repo) or self.messages
+        )
         self.messages.append((repo, text, message, attachments))
+        if queued_compact:
+            self.runner.chat("system", "Compaction queued after the current turn.", repo=repo)
         self.runner.wake.set()
         return {"message": self.saved_message(message_id)}
 
@@ -752,8 +763,12 @@ class Symphony:
             await self.coordinator.new_session(repo, cwd)
             self.runner.chat("system", "Started a new coordinator session.", repo=repo)
         elif command == "/compact":
-            cwd = await self.checkout_cwd(repo)
-            await self.coordinator.compact(repo, cwd)
+            self.compacting_repo = repo
+            try:
+                cwd = await self.checkout_cwd(repo)
+                await self.coordinator.compact(repo, cwd)
+            finally:
+                self.compacting_repo = ""
         elif command == "/status":
             status = self.coordinator.status(repo)
             usage = [f"{status['model']} {status['effort']}".strip()]

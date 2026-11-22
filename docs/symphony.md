@@ -163,7 +163,7 @@ context used, 5-hour and weekly quota when available, and turn timing. `/status`
 also lists approved work. Symphony uses the design guide palette and follows the
 browser's light or dark preference. The favicon is a multi-size ICO.
 
-Use `/new` in chat to start a fresh Codex thread for the active repository, or `/compact` to compact the current thread. A message sent during a turn in the same repository steers the active turn. A message for a different repository queues for the next turn. The app uses the
+Use `/new` in chat to start a fresh Codex thread for the active repository, or `/compact` to compact the current thread (showing a queued notice when sent during an active turn and compaction progress in the timing line until complete). A message sent during a turn in the same repository steers the active turn. A message for a different repository queues for the next turn. The app uses the
 selected project's repository working directory and includes the shared
 `agents/AGENTS.md` defaults before its repository `AGENTS.md` when starting a
 session or when either instruction file changes, keeping subsequent user turns

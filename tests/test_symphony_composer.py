@@ -338,6 +338,57 @@ console.log(JSON.stringify({hidden: el.hidden, text: el.textContent}));
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(json.loads(run.stdout), {"hidden": False, "text": "Context 0% used"})
 
+    @unittest.skipUnless(shutil.which("node"), "Node is required for JavaScript checks.")
+    def test_status_displays_queued_and_running_compaction(self):
+        app = Path(__file__).resolve().parents[1] / "symphony/web/app.js"
+        probe = r"""
+const fs = require("fs");
+const vm = require("vm");
+const nodes = new Map();
+const doc = {
+  getElementById(id) {
+    if (!nodes.has(id)) nodes.set(id, {
+      id, textContent: "", hidden: true, dataset: {}, style: {setProperty() {}},
+      listeners: {}, addEventListener(t, h) { (this.listeners[t] ||= []).push(h); },
+      classList: {add() {}, remove() {}}, querySelector() { return null; },
+      querySelectorAll() { return []; }, setAttribute() {}, removeAttribute() {},
+      toggleAttribute() {}, focus() {}, closest() { return this; }, replaceChildren() {},
+    });
+    return nodes.get(id);
+  },
+  createElement() { return this.getElementById("tmp-" + Math.random()); },
+  createElementNS() { return this.getElementById("svg-" + Math.random()); },
+  querySelector() { return this.getElementById("main"); },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+};
+const RealDate = Date;
+const FakeDate = class extends RealDate {
+  static now() { return 100000; }
+};
+const ctx = vm.createContext({document: doc, Date: FakeDate, setInterval: () => 0, setTimeout, clearTimeout, console});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+const timing = doc.getElementById("turn-timing");
+const snap = (code) => { vm.runInContext(code, ctx); return {hidden: timing.hidden, text: timing.textContent}; };
+const results = {
+  queuedIdle: snap('codex = {rateLimits: {}, turnTiming: {}}; canInterrupt = false; compacting = "queued"; showCodexStatus();'),
+  queuedWorking: snap('codex = {rateLimits: {}, turnTiming: {startedAt: 95}}; canInterrupt = true; compacting = "queued"; showCodexStatus();'),
+  runningFallback: snap('codex = {rateLimits: {}, turnTiming: {startedAt: 80, completedAt: 85, durationMs: 5000}}; canInterrupt = false; compacting = "running"; showCodexStatus();'),
+  runningTimed: snap('codex = {rateLimits: {}, turnTiming: {startedAt: 92}}; canInterrupt = false; compacting = "running"; showCodexStatus();'),
+  finished: snap('codex = {rateLimits: {}, turnTiming: {startedAt: 92, durationMs: 8000}}; canInterrupt = false; compacting = ""; showCodexStatus();'),
+};
+console.log(JSON.stringify(results));
+"""
+        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout), {
+            "queuedIdle": {"hidden": False, "text": "Compaction queued"},
+            "queuedWorking": {"hidden": False, "text": "Working for 5s · Compaction queued"},
+            "runningFallback": {"hidden": False, "text": "Compacting context…"},
+            "runningTimed": {"hidden": False, "text": "Compacting for 8s"},
+            "finished": {"hidden": False, "text": "Worked for 8s"},
+        })
+
 
 if __name__ == "__main__":
     unittest.main()
