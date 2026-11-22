@@ -1,10 +1,15 @@
 """Exercise Symphony chat rendering and scheduling in managed Chromium."""
 
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 import os
 from pathlib import Path
 import re
 import shutil
+import threading
+import time
 import unittest
+from urllib.parse import urlsplit
 
 try:
     from playwright.sync_api import sync_playwright
@@ -110,6 +115,23 @@ class ChatBrowserTests(unittest.TestCase):
             item.resolve({ok: false, json: async () => ({error: message})});
           };
         }""")
+
+    @staticmethod
+    def stub_config_fetch(page, agents=None, error=""):
+        page.evaluate("""({agents, error}) => {
+          window.fetch = async (path) => {
+            if (path === "/api/agents") {
+              return error
+                ? {ok: false, json: async () => ({error})}
+                : {ok: true, json: async () => ({content: agents})};
+            }
+            return {ok: true, json: async () => ({
+              messages: [], busy: false, canInterrupt: false, stream: "", streamHtml: "",
+              tasks: [], signedIn: true, login: null, paused: "", view: "",
+              codex: {}, issueError: "", updateAvailable: false, draining: false,
+            })};
+          };
+        }""", {"agents": agents, "error": error})
 
     def tearDown(self):
         self.page.close()
@@ -1512,6 +1534,426 @@ class ChatBrowserTests(unittest.TestCase):
                 self.assertLessEqual(box["x"] + box["width"], width + 1)
                 self.assertLessEqual(box["y"] + box["height"], height + 1)
                 self.assertTrue(self.page.locator("#message").is_visible())
+
+    def test_config_dialog_viewer_matches_the_file_and_preserves_drafts(self):
+        content = ("# Global AGENTS.md\n\n<script>alert('literal')</script>\n"
+                   "- *not emphasis*\n" + "default line\n" * 90)
+        self.stub_config_fetch(self.page, content)
+        self.page.fill("#message", "Unsent composer draft")
+        self.page.evaluate("""() => {
+          attachImage(new File([new Uint8Array([1, 2, 3])], "draft.png", {type: "image/png"}));
+        }""")
+        self.page.locator("#config-open").click()
+        self.page.wait_for_function(
+            "document.getElementById('config-agents-content').textContent.includes('default line')")
+        opened = self.page.evaluate("""() => {
+          const dialog = document.getElementById("config-dialog");
+          const pre = document.getElementById("config-agents-content");
+          return {
+            open: dialog.open,
+            title: document.getElementById("config-dialog-title").textContent,
+            content: pre.textContent,
+            script: pre.querySelector("script") !== null,
+            emphasis: pre.querySelector("em") !== null,
+            selectable: getComputedStyle(pre).userSelect,
+            overflow: getComputedStyle(pre).overflowY,
+            scrollable: pre.scrollHeight > pre.clientHeight,
+          };
+        }""")
+        self.assertEqual(opened["title"], "Config")
+        self.assertTrue(opened["open"])
+        self.assertEqual(opened["content"], content)
+        self.assertFalse(opened["script"])
+        self.assertFalse(opened["emphasis"])
+        self.assertEqual(opened["selectable"], "text")
+        self.assertEqual(opened["overflow"], "auto")
+        self.assertTrue(opened["scrollable"])
+
+        before = self.page.evaluate("""() => ({
+          draft: document.getElementById("message").value,
+          images: pendingImages.length,
+        })""")
+        self.page.evaluate("async () => { await poll(); }")
+        live = self.page.evaluate("""() => ({
+          open: document.getElementById("config-dialog").open,
+          content: document.getElementById("config-agents-content").textContent,
+          draft: document.getElementById("message").value,
+          images: pendingImages.length,
+        })""")
+        self.assertEqual(live, {**before, "open": True, "content": content})
+
+        self.page.keyboard.press("Escape")
+        closed = self.page.evaluate("""() => ({
+          open: document.getElementById("config-dialog").open,
+          focus: document.activeElement.id,
+          draft: document.getElementById("message").value,
+          images: pendingImages.length,
+        })""")
+        self.assertEqual(closed, {"open": False, "focus": "config-open",
+                                  "draft": "Unsent composer draft", "images": 1})
+
+        self.page.locator("#config-open").focus()
+        self.page.keyboard.press("Enter")
+        self.page.wait_for_function("document.getElementById('config-dialog').open")
+        keyboard = self.page.evaluate("""() => ({
+          focus: document.activeElement.id,
+          expanded: document.getElementById("config-open").getAttribute("aria-expanded"),
+        })""")
+        self.assertEqual(keyboard, {"focus": "config-close", "expanded": "true"})
+        self.page.keyboard.press("Tab")
+        focus_ring = self.page.evaluate("""() => ({
+          focus: document.activeElement.id,
+          outline: getComputedStyle(document.activeElement).outlineStyle,
+        })""")
+        self.assertEqual(focus_ring, {"focus": "config-agents-content", "outline": "solid"})
+        self.page.locator("#config-close").click()
+        self.assertEqual(self.page.evaluate("document.activeElement.id"), "config-open")
+
+        self.stub_config_fetch(self.page, error="Fixture could not read the file.")
+        self.page.locator("#config-open").click()
+        self.page.wait_for_function(
+            "document.getElementById('config-agents-status').textContent.includes('Fixture could not read')")
+        failed = self.page.evaluate("""() => ({
+          status: document.getElementById("config-agents-status").textContent,
+          error: document.getElementById("config-agents-status").dataset.error,
+          content: document.getElementById("config-agents-content").textContent,
+        })""")
+        self.assertIn("Could not load global AGENTS.md: Fixture could not read the file.",
+                      failed["status"])
+        self.assertEqual(failed["error"], "true")
+        self.assertEqual(failed["content"], "")
+        self.page.keyboard.press("Escape")
+
+        self.stub_config_fetch(self.page, "")
+        self.page.locator("#config-open").click()
+        self.page.wait_for_function(
+            "document.getElementById('config-agents-status').textContent.includes('No global defaults')")
+        recovered = self.page.evaluate("""() => ({
+          content: document.getElementById("config-agents-content").textContent,
+          status: document.getElementById("config-agents-status").textContent,
+          error: document.getElementById("config-agents-status").dataset.error,
+          draft: document.getElementById("message").value,
+          images: pendingImages.length,
+        })""")
+        self.assertEqual(recovered, {
+          "content": "", "status": "No global defaults are currently defined.",
+          "error": "", "draft": "Unsent composer draft", "images": 1,
+        })
+
+    def test_config_dialog_reopen_ignores_stale_close_event(self):
+        self.page.evaluate("""() => {
+          window.__agentRequests = 0;
+          window.__agentResolvers = [];
+          window.fetch = (path) => {
+            if (path === "/api/agents") {
+              window.__agentRequests += 1;
+              return new Promise((resolve) => window.__agentResolvers.push(resolve));
+            }
+            return Promise.resolve({ok: true, json: async () => ({
+              messages: [], busy: false, canInterrupt: false, stream: "", streamHtml: "",
+              tasks: [], signedIn: true, login: null, paused: "", view: "",
+              codex: {}, issueError: "", updateAvailable: false, draining: false,
+            })});
+          };
+        }""")
+        self.page.evaluate("""() => {
+          openConfig();
+          closeConfig();
+          openConfig();
+        }""")
+        self.assertEqual(self.page.evaluate("() => window.__agentRequests"), 2)
+        self.page.evaluate("""() => new Promise((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(resolve));
+        })""")
+        stale = self.page.evaluate("""() => ({
+          open: document.getElementById("config-dialog").open,
+          expanded: document.getElementById("config-open").getAttribute("aria-expanded"),
+          focus: document.activeElement.id,
+          requests: window.__agentRequests,
+        })""")
+        self.assertEqual(stale, {"open": True, "expanded": "true",
+                                 "focus": "config-close", "requests": 2})
+        self.page.evaluate("""() => {
+          window.__agentResolvers[0]({ok: true, json: async () => ({content: "stale"})});
+          window.__agentResolvers[1]({ok: true, json: async () => ({content: "current"})});
+        }""")
+        self.page.wait_for_function(
+            "() => document.getElementById('config-agents-content').textContent === 'current'")
+        loaded = self.page.evaluate("""() => ({
+          open: document.getElementById("config-dialog").open,
+          expanded: document.getElementById("config-open").getAttribute("aria-expanded"),
+          focus: document.activeElement.id,
+          content: document.getElementById("config-agents-content").textContent,
+          requests: window.__agentRequests,
+        })""")
+        self.assertEqual(loaded, {"open": True, "expanded": "true",
+                                  "focus": "config-close", "content": "current",
+                                  "requests": 2})
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_function("""() => {
+          return !document.getElementById("config-dialog").open
+            && document.getElementById("config-open").getAttribute("aria-expanded") === "false"
+            && document.activeElement.id === "config-open";
+        }""")
+        closed = self.page.evaluate("""() => ({
+          open: document.getElementById("config-dialog").open,
+          expanded: document.getElementById("config-open").getAttribute("aria-expanded"),
+          focus: document.activeElement.id,
+        })""")
+        self.assertEqual(closed, {"open": False, "expanded": "false",
+                                  "focus": "config-open"})
+
+    def test_config_dialog_fits_light_dark_and_coarse_narrow_layouts(self):
+        content = "# Global AGENTS.md\n\n" + "default line\n" * 90
+        desktop = {}
+        for scheme in ("light", "dark"):
+            self.page.emulate_media(color_scheme=scheme)
+            self.stub_config_fetch(self.page, content)
+            self.page.locator("#config-open").click()
+            self.page.wait_for_function(
+                "document.getElementById('config-agents-content').textContent.includes('default line')")
+            desktop[scheme] = self.page.evaluate("""() => {
+              const dialog = document.getElementById("config-dialog");
+              const button = document.getElementById("config-open");
+              const pre = document.getElementById("config-agents-content");
+              const box = dialog.getBoundingClientRect();
+              const target = button.getBoundingClientRect();
+              return {
+                inside: box.left >= 0 && box.top >= 0
+                  && box.right <= window.innerWidth + 1 && box.bottom <= window.innerHeight + 1,
+                overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+                buttonSize: [target.width, target.height],
+              };
+            }""")
+            self.page.keyboard.press("Escape")
+        for scheme in ("light", "dark"):
+            self.assertTrue(desktop[scheme]["inside"])
+            self.assertFalse(desktop[scheme]["overflow"])
+
+        coarse = self.browser.new_page(viewport={"width": 390, "height": 844}, has_touch=True)
+        try:
+            self.load_app(coarse)
+            self.stub_config_fetch(coarse, content)
+            coarse.locator("#config-open").tap()
+            coarse.wait_for_function(
+                "document.getElementById('config-agents-content').textContent.includes('default line')")
+            narrow = coarse.evaluate("""() => {
+              const dialog = document.getElementById("config-dialog");
+              const button = document.getElementById("config-open");
+              const pre = document.getElementById("config-agents-content");
+              const box = dialog.getBoundingClientRect();
+              const target = button.getBoundingClientRect();
+              return {
+                inside: box.left >= 0 && box.top >= 0
+                  && box.right <= window.innerWidth + 1 && box.bottom <= window.innerHeight + 1,
+                overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+                buttonSize: [target.width, target.height],
+                scrollable: pre.scrollHeight > pre.clientHeight,
+                closeSize: (() => {
+                  const close = document.getElementById("config-close").getBoundingClientRect();
+                  return [close.width, close.height];
+                })(),
+              };
+            }""")
+            self.assertTrue(narrow["inside"])
+            self.assertFalse(narrow["overflow"])
+            self.assertGreaterEqual(narrow["buttonSize"][1], 44)
+            self.assertGreaterEqual(narrow["closeSize"][1], 44)
+            self.assertTrue(narrow["scrollable"])
+            coarse.keyboard.press("Escape")
+            self.assertEqual(coarse.evaluate("document.activeElement.id"), "config-open")
+        finally:
+            coarse.close()
+
+    def test_served_app_uses_production_headers_and_fixed_agents_endpoint(self):
+        from symphony.__main__ import CONTENT_SECURITY_POLICY
+
+        content = (Path(__file__).resolve().parents[1] / "agents/AGENTS.md").read_text()
+        static = {
+            "/": ("index.html", "text/html; charset=utf-8"),
+            "/app.js": ("app.js", "application/javascript; charset=utf-8"),
+            "/issue.js": ("issue.js", "application/javascript; charset=utf-8"),
+            "/panes.js": ("panes.js", "application/javascript; charset=utf-8"),
+            "/style.css": ("style.css", "text/css; charset=utf-8"),
+            "/favicon.ico": ("favicon.ico", "image/vnd.microsoft.icon"),
+        }
+
+        class Handler(BaseHTTPRequestHandler):
+            mode = "ok"
+            state_requests = 0
+
+            def log_message(self, *_):
+                pass
+
+            def respond(self, body, content_type, status=200):
+                self.send_response(status)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                path = urlsplit(self.path).path
+                if path in static:
+                    name, content_type = static[path]
+                    self.respond((ROOT / name).read_bytes(), content_type)
+                elif path == "/api/agents":
+                    if type(self).mode == "error":
+                        self.respond(json.dumps({"error": "Fixture read failed."}).encode(),
+                                     "application/json; charset=utf-8", 503)
+                    else:
+                        body = "" if type(self).mode == "empty" else content
+                        self.respond(json.dumps({"content": body}).encode(),
+                                     "application/json; charset=utf-8")
+                elif path == "/api/state":
+                    type(self).state_requests += 1
+                    self.respond(json.dumps({
+                        "messages": [], "busy": False, "canInterrupt": False,
+                        "stream": "", "streamHtml": "", "tasks": [], "signedIn": True,
+                        "login": None, "paused": "", "view": "", "codex": {},
+                        "issueError": "", "updateAvailable": False, "draining": False,
+                    }).encode(), "application/json; charset=utf-8")
+                else:
+                    self.respond(b'{"error":"Not found."}',
+                                 "application/json; charset=utf-8", 404)
+
+        def wait_until(predicate, timeout=5):
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                if predicate():
+                    return True
+                time.sleep(.05)
+            return False
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        url = f"http://127.0.0.1:{server.server_port}/"
+        page = self.browser.new_page(viewport={"width": 1200, "height": 800})
+        self.addCleanup(page.close)
+        page.goto(url, wait_until="load")
+        page.wait_for_selector("#config-open")
+        self.assertTrue(wait_until(lambda: Handler.state_requests > 0))
+        page.fill("#message", "Unsent served draft")
+        page.evaluate("""() => {
+          attachImage(new File([new Uint8Array([1, 2, 3])], "draft.png",
+            {type: "image/png"}));
+        }""")
+
+        page.locator("#config-open").focus()
+        page.keyboard.press("Enter")
+        self.assertTrue(wait_until(lambda: page.evaluate(
+            "() => document.getElementById('config-dialog').open")))
+        self.assertTrue(wait_until(lambda: page.evaluate(
+            "() => document.getElementById('config-agents-content').textContent")
+            == content))
+        before = Handler.state_requests
+        self.assertTrue(wait_until(lambda: Handler.state_requests > before, timeout=4))
+        state = page.evaluate("""() => {
+          const dialog = document.getElementById("config-dialog");
+          const pre = document.getElementById("config-agents-content");
+          const box = dialog.getBoundingClientRect();
+          return {
+            open: dialog.open,
+            script: pre.querySelector("script") !== null,
+            emphasis: pre.querySelector("em") !== null,
+            selectable: getComputedStyle(pre).userSelect,
+            overflow: getComputedStyle(pre).overflowY,
+            inside: box.left >= 0 && box.top >= 0
+              && box.right <= window.innerWidth + 1
+              && box.bottom <= window.innerHeight + 1,
+            horizontalOverflow: document.documentElement.scrollWidth
+              > window.innerWidth + 1,
+            draft: document.getElementById("message").value,
+            images: pendingImages.length,
+          };
+        }""")
+        self.assertEqual(state, {
+            "open": True, "script": False, "emphasis": False,
+            "selectable": "text", "overflow": "auto", "inside": True,
+            "horizontalOverflow": False, "draft": "Unsent served draft", "images": 1,
+        })
+        page.keyboard.press("Escape")
+        self.assertTrue(wait_until(lambda: not page.evaluate(
+            "() => document.getElementById('config-dialog').open")))
+        self.assertEqual(page.evaluate("() => document.activeElement.id"), "config-open")
+
+        Handler.mode = "error"
+        page.locator("#config-open").click()
+        self.assertTrue(wait_until(lambda: "Fixture read failed." in page.evaluate(
+            "() => document.getElementById('config-agents-status').textContent")))
+        error = page.evaluate("""() => ({
+          content: document.getElementById("config-agents-content").textContent,
+          draft: document.getElementById("message").value,
+        })""")
+        self.assertEqual(error, {"content": "", "draft": "Unsent served draft"})
+        page.keyboard.press("Escape")
+
+        Handler.mode = "empty"
+        page.locator("#config-open").click()
+        self.assertTrue(wait_until(lambda: "No global defaults" in page.evaluate(
+            "() => document.getElementById('config-agents-status').textContent")))
+        self.assertEqual(page.evaluate(
+            "() => document.getElementById('config-agents-content').textContent"), "")
+        page.keyboard.press("Escape")
+
+        Handler.mode = "ok"
+        fixed = page.evaluate("""async () => {
+          const same = await fetch("/api/agents?path=/etc/passwd");
+          const body = await same.json();
+          const rejected = await fetch("/api/agents/../../etc/passwd");
+          return {sameStatus: same.status, sameContent: body.content,
+                  rejectedStatus: rejected.status};
+        }""")
+        self.assertEqual(fixed, {"sameStatus": 200, "sameContent": content,
+                                 "rejectedStatus": 404})
+
+        for scheme in ("light", "dark"):
+            page.emulate_media(color_scheme=scheme)
+            page.locator("#config-open").click()
+            self.assertTrue(wait_until(lambda: page.evaluate(
+                "() => document.getElementById('config-dialog').open")))
+            self.assertTrue(page.evaluate("""() => {
+              const box = document.getElementById("config-dialog").getBoundingClientRect();
+              return box.left >= 0 && box.top >= 0
+                && box.right <= window.innerWidth + 1
+                && box.bottom <= window.innerHeight + 1;
+            }"""))
+            page.keyboard.press("Escape")
+
+        coarse = self.browser.new_page(
+            viewport={"width": 390, "height": 844}, has_touch=True)
+        try:
+            coarse.emulate_media(color_scheme="dark")
+            coarse.goto(url, wait_until="load")
+            coarse.wait_for_selector("#config-open")
+            coarse.locator("#config-open").tap()
+            self.assertTrue(wait_until(lambda: coarse.evaluate(
+                "() => document.getElementById('config-dialog').open")))
+            narrow = coarse.evaluate("""() => {
+              const box = document.getElementById("config-dialog").getBoundingClientRect();
+              return {
+                inside: box.left >= 0 && box.top >= 0
+                  && box.right <= window.innerWidth + 1
+                  && box.bottom <= window.innerHeight + 1,
+                overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+                buttonHeight: document.getElementById("config-open")
+                  .getBoundingClientRect().height,
+                closeHeight: document.getElementById("config-close")
+                  .getBoundingClientRect().height,
+              };
+            }""")
+            self.assertTrue(narrow["inside"])
+            self.assertFalse(narrow["overflow"])
+            self.assertGreaterEqual(narrow["buttonHeight"], 44)
+            self.assertGreaterEqual(narrow["closeHeight"], 44)
+        finally:
+            coarse.close()
 
 
 if __name__ == "__main__":

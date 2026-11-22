@@ -39,6 +39,7 @@ RUN PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers \
     && chmod -R a+rX /opt/playwright-browsers \
     && rm -rf /var/lib/apt/lists/*
 COPY symphony /app/symphony
+COPY agents/AGENTS.md /app/agents/AGENTS.md
 
 ARG SYMPHONY_COMMIT=""
 ENV PATH="/opt/symphony/bin:$PATH" \

@@ -98,9 +98,22 @@
       <path d="M18 6 6 18" />
       <path d="m6 6 12 12" />
     </symbol>
+    <symbol id="lucide-settings" viewBox="0 0 24 24">
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+      <circle cx="12" cy="12" r="3" />
+    </symbol>
   </svg>
   <header class="page-header">
-    <div id="repos" role="tablist" aria-label="Projects"></div>
+    <div class="page-header-row">
+      <div id="repos" role="tablist" aria-label="Projects"></div>
+      <button id="config-open" class="config-button" type="button" aria-haspopup="dialog"
+        aria-controls="config-dialog" aria-expanded="false">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <use href="#lucide-settings"></use>
+        </svg>
+        <span>Config</span>
+      </button>
+    </div>
     <p id="project-error" class="detail" role="status" hidden></p>
   </header>
   <main>
@@ -173,6 +186,22 @@
         aria-label="Todo, In Progress, and Done issues"></div>
     </aside>
   </main>
+  <dialog id="config-dialog" aria-labelledby="config-dialog-title">
+    <header class="config-dialog-header">
+      <h1 id="config-dialog-title">Config</h1>
+      <button id="config-close" type="button" autofocus>Close</button>
+    </header>
+    <section class="config-section" aria-labelledby="config-agents-heading">
+      <h2 id="config-agents-heading">Global AGENTS.md</h2>
+      <p id="config-agents-note" class="muted config-note">These are Symphony-wide defaults.
+        Repository and task instructions take precedence. Updating them uses the
+        repository workflow.</p>
+      <p id="config-agents-status" class="muted" role="status"></p>
+      <pre id="config-agents-content" class="config-agents-content" tabindex="0"
+        aria-labelledby="config-agents-heading"
+        aria-describedby="config-agents-status config-agents-note"></pre>
+    </section>
+  </dialog>
   <dialog id="issue-dialog" aria-labelledby="issue-dialog-title">
     <header class="issue-dialog-header">
       <p id="issue-dialog-identifier" class="muted"></p>

@@ -1,4 +1,6 @@
 **
+!agents/
+!agents/AGENTS.md
 !symphony/
 !symphony/__main__.py
 !symphony/__init__.py

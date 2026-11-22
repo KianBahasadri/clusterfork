@@ -159,10 +159,44 @@ browser's light or dark preference. The favicon is a multi-size ICO.
 
 A message sent during a turn in the same repo steers the active
 turn. A message for a different repo queues for the next turn. The app uses the
-selected project's repository working directory and includes its AGENTS.md and
-current work when starting a turn. Codex uses its shell and live web search
-inside the restricted pod. It can inspect checkouts and worker logs and use
-`gh` to diagnose CI. OpenCode workers handle implementation by default.
+selected project's repository working directory and includes the shared
+`agents/AGENTS.md` defaults before its AGENTS.md and current work when starting
+a turn. The Config button in the page header opens a read-only dialog showing
+that exact file from a fixed same-origin endpoint; it starts no coordinator turn.
+Explicit user or task directions and applicable repository or nested
+instructions override the shared defaults, while Symphony's approval,
+publication, and tool restrictions remain authoritative. Symphony links the same
+file into Codex's `CODEX_HOME/AGENTS.md` and the isolated
+`XDG_CONFIG_HOME/opencode/AGENTS.md` used by workers and the reviewer, so native
+discovery also applies to fresh sessions, resumed-session update notices, and
+compaction requests. A missing,
+unreadable, or oversized shared file prevents startup or appears as a viewer
+error instead of being silently ignored.
+
+Editing `agents/AGENTS.md` follows the normal repository, CI, image, and
+idle-aware updater flow. Codex reloads the file for each model turn: in
+isolated-home probes a changed file appeared in the next turn without a restart,
+and a removed file disappeared from the active instruction block after process
+restart and saved-session resume. Earlier instruction updates remained only in
+conversation history, where later updates explicitly replace them. OpenCode
+reads the current file for new sessions and the reviewer starts fresh, but a
+resumed OpenCode session keeps its original instruction block in the system
+prompt. When the file changes or disappears, OpenCode adds a system-update
+message carrying the new text or removal notice; the old block is not rewritten.
+Symphony's coordinator context also prepends the current canonical file on every
+turn, so later coordinator turns use the current defaults independently of the
+native thread.
+
+Isolated-home probes of the pinned Codex and OpenCode builds exercised completed
+manual and automatic compaction followed by ordinary model requests, plus
+changed and removed defaults and two repositories with conflicting local rules.
+The current shared defaults and repository rules were present in the actual
+model requests where applicable, including after saved-session resume, subject
+to the OpenCode resumed-session limitation above. Production credentials, live provider
+endpoints, and the idle-aware rollout were not exercised. Codex uses its shell
+and live web search inside the restricted pod. It can inspect checkouts and
+worker logs and use `gh` to diagnose CI. OpenCode workers handle implementation
+by default.
 
 OpenCode uses the Go subscription and caps concurrent workers at three. Each
 attempt has a one-hour safety timeout. Every new and resumed implementation

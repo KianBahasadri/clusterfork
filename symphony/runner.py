@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+from stat import S_ISREG
 import time
 from uuid import uuid4
 
@@ -48,6 +49,8 @@ WORKER_CONFIG = {
     },
 }
 CI_DISCOVERY_SECONDS = 480
+AGENTS_BYTES = 32000
+SHARED_AGENTS = Path(__file__).resolve().parents[1] / "agents" / "AGENTS.md"
 SESSION_ID = re.compile(r"ses_[A-Za-z0-9]+\Z")
 CHAT_IMAGE_NAME = re.compile(r"[0-9a-f]{32}\.(?:png|jpg|webp)\Z")
 REVIEW_VERDICT = re.compile(r"\s*VERDICT:\s*(NO ISSUES|ISSUES)\s*", re.I)
@@ -138,6 +141,43 @@ def read_small(path, limit):
     if len(data) > limit:
         raise RuntimeError(f"{path.name} is too large.")
     return data.decode()
+
+
+def shared_agents():
+    path = SHARED_AGENTS
+    try:
+        if path.is_symlink():
+            raise RuntimeError(f"{path.name} must be a regular file.")
+        if not S_ISREG(path.stat().st_mode):
+            raise RuntimeError(f"{path.name} must be a regular file.")
+        return read_small(path, AGENTS_BYTES)
+    except FileNotFoundError:
+        raise RuntimeError(f"Global AGENTS.md is missing at {path}.") from None
+    except RuntimeError as error:
+        raise RuntimeError(f"Global AGENTS.md is unavailable: {error}") from None
+    except (OSError, UnicodeError) as error:
+        raise RuntimeError(f"Global AGENTS.md could not be read: {error}") from None
+
+
+def install_agent_instructions(directory):
+    source = SHARED_AGENTS.resolve()
+    shared_agents()
+    for relative in (Path("codex") / "AGENTS.md",
+                     Path("worker-config") / "opencode" / "AGENTS.md"):
+        path = directory / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_symlink():
+            if path.resolve() == source:
+                continue
+            path.unlink()
+        elif path.exists():
+            if not path.is_file():
+                raise RuntimeError(f"{relative} must be a regular file or symlink.")
+            path.unlink()
+        try:
+            path.symlink_to(source)
+        except OSError as error:
+            raise RuntimeError(f"Cannot link global AGENTS.md at {relative}: {error}") from None
 
 
 def review_prompt(row, notes, diff, base):
@@ -273,6 +313,7 @@ class Runner:
     def __init__(self, directory, linear):
         self.directory = directory
         self.linear = linear
+        install_agent_instructions(directory)
         self.db = sqlite3.connect(directory / "symphony.sqlite3")
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)

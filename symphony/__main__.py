@@ -26,7 +26,7 @@ from uuid import uuid4
 from .codex import Codex, TOOL_SPECS
 from .execution import card_stage, execution_payload, history_summary
 from .issue_details import issue_details, markdown, open_asset
-from .runner import Runner, read_small
+from .runner import Runner, read_small, shared_agents
 from .services import (
     CLOSED_STATES, ISSUE_ID, CreatedIssueError, Linear, estimate_scale, proposed_plan, with_plan,
 )
@@ -667,6 +667,9 @@ class Symphony:
     async def context(self, repo, issues=()):
         cwd = await self.runner.checkout(repo, refresh=repo != self.turn_repo) if repo else self.runner.directory
         context = []
+        defaults = shared_agents()
+        if defaults.strip():
+            context.append("Global AGENTS.md defaults:\n" + defaults)
         rules = (cwd / "AGENTS.md").resolve()
         if rules.is_relative_to(cwd) and rules.is_file():
             context.append("Active repository AGENTS.md:\n" + read_small(rules, 32000))
@@ -877,6 +880,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.json_response(issue, cache_control=cache_control)
             elif url.path == "/api/execution":
                 self.json_response(self.run_async(app.execution(params.get("id", [""])[0])))
+            elif url.path == "/api/agents":
+                self.json_response({"content": shared_agents()})
             elif url.path == "/api/linear-asset":
                 self.linear_asset(params.get("url", [""])[0])
             elif url.path == "/api/chat-image":

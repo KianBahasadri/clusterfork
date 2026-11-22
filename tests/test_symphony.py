@@ -27,7 +27,8 @@ from symphony.__main__ import (
 from symphony.codex import CREATE_ISSUE_SCHEMA, Codex, TOOLS, TOOLS_HASH
 from symphony.execution import execution_payload
 from symphony.runner import (
-    NOTES_LINES, REVIEW_LINES, Runner, bounded_review, validate_review,
+    AGENTS_BYTES, NOTES_LINES, REVIEW_LINES, Runner, bounded_review,
+    install_agent_instructions, shared_agents, validate_review,
 )
 from symphony.services import (
     Linear, estimate_scale, matches_filter, proposed_plan, with_plan,
@@ -124,6 +125,8 @@ import sys
 import time
 workspace = Path(os.environ["FIXTURE_ROOT"]) / "runs/KIAN-101"
 config = json.loads(os.environ.get("OPENCODE_CONFIG_CONTENT", "{}"))
+agents_path = Path(os.environ["XDG_CONFIG_HOME"]) / "opencode" / "AGENTS.md"
+agents = agents_path.read_text() if agents_path.is_file() else None
 if config.get("mcp") == {"servers": {}}:
     prompt = sys.stdin.read()
     with (workspace / "review-runs").open("a") as stream:
@@ -135,6 +138,7 @@ if config.get("mcp") == {"servers": {}}:
         "linear": "LINEAR_API_KEY" in os.environ,
         "api_key": "OPENCODE_GO_API_KEY" in os.environ,
         "webhook": "LINEAR_WEBHOOK_SECRET" in os.environ,
+        "agents": agents,
         "prompt": prompt,
     }))
     assert "independent read-only code reviewer" in prompt
@@ -199,6 +203,7 @@ with (workspace / "worker-envs.jsonl").open("a") as stream:
         "openai": "OPENAI_API_KEY" in os.environ,
         "api_key": "OPENCODE_GO_API_KEY" in os.environ,
         "webhook": "LINEAR_WEBHOOK_SECRET" in os.environ,
+        "agents": agents,
     }) + "\\n")
 if os.environ.get("FIXTURE_LARGE_DIFF"):
     Path("large.txt").write_text("x" * 60000 + "\\nEND-OF-LARGE-DIFF\\n")
@@ -233,6 +238,22 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
     @staticmethod
     def git(cwd, *args):
         return subprocess.check_output(["git", *args], cwd=cwd, stderr=subprocess.PIPE, text=True).strip()
+
+    def add_repo(self, repo, rules=None):
+        path = self.runner.repo_dir(repo)
+        remote = self.root / (repo.replace("/", "-") + ".git")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.git(self.root, "init", "--bare", "--initial-branch=main", str(remote))
+        self.git(path.parent, "clone", str(remote), str(path))
+        self.git(path, "config", "user.name", "Fixture")
+        self.git(path, "config", "user.email", "fixture@example.test")
+        (path / "README.md").write_text("Second fixture repository\n")
+        if rules is not None:
+            (path / "AGENTS.md").write_text(rules)
+        self.git(path, "add", ".")
+        self.git(path, "commit", "-m", "Initial fixture")
+        self.git(path, "push", "origin", "main")
+        return path
 
     async def phase(self, expected):
         async with asyncio.timeout(5):
@@ -528,7 +549,9 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
                           return_value="completed") as respond:
             await app.handle(*first)
         text, cwd, attachments = respond.await_args.args
-        self.assertEqual((text, cwd), (note, self.repo))
+        self.assertEqual(cwd, self.repo)
+        self.assertTrue(text.startswith(note + "\n\n--- Current Symphony context ---\n"))
+        self.assertIn("Global AGENTS.md defaults:", text)
         self.assertEqual(attachments, first[3])
 
     async def test_chat_images_cross_a_project_switch_in_the_queue(self):
@@ -701,6 +724,163 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
             {"role": "user", "text": "Earlier chat"},
             {"role": "system", "text": "Started a fresh Codex thread to load updated tools."},
         ])
+
+    async def test_shared_defaults_precede_conflicting_repository_rules(self):
+        second = "owner/second"
+        self.add_repo(second, "# Second rules\n\n- REPO-B-RULE\n")
+        (self.repo / "AGENTS.md").write_text("# First rules\n\n- REPO-A-RULE\n")
+        self.git(self.repo, "add", "AGENTS.md")
+        self.git(self.repo, "commit", "-m", "Add first repository rules")
+        self.git(self.repo, "push", "origin", "main")
+        shared = self.root / "shared-AGENTS.md"
+        shared.write_text("# Shared defaults\n\n- GLOBAL-RULE\n")
+        app = self.app()
+        with patch("symphony.runner.SHARED_AGENTS", shared), \
+             patch.object(app.coordinator, "respond", new_callable=AsyncMock) as respond:
+            await app.respond(REPO, "First repository turn")
+            first = respond.await_args.args[0]
+            await app.respond(second, f"Worker event for {ISSUE}: Follow-up notice.")
+            second_text = respond.await_args.args[0]
+        for text, own, other in ((first, "REPO-A-RULE", "REPO-B-RULE"),
+                                 (second_text, "REPO-B-RULE", "REPO-A-RULE")):
+            self.assertLess(text.index("GLOBAL-RULE"), text.index(own))
+            self.assertIn("Global AGENTS.md defaults:", text)
+            self.assertIn("Active repository AGENTS.md:", text)
+            self.assertNotIn(other, text)
+
+    async def test_empty_shared_defaults_leave_repository_rules_only(self):
+        (self.repo / "AGENTS.md").write_text("# First rules\n\n- REPO-ONLY-RULE\n")
+        self.git(self.repo, "add", "AGENTS.md")
+        self.git(self.repo, "commit", "-m", "Add repository rules")
+        self.git(self.repo, "push", "origin", "main")
+        shared = self.root / "empty-AGENTS.md"
+        shared.write_text("")
+        app = self.app()
+        with patch("symphony.runner.SHARED_AGENTS", shared):
+            _, text = await app.context(REPO)
+        self.assertIn("Active repository AGENTS.md:", text)
+        self.assertIn("REPO-ONLY-RULE", text)
+        self.assertNotIn("Global AGENTS.md defaults:", text)
+
+    async def test_changed_or_removed_shared_defaults_do_not_linger(self):
+        shared = self.root / "changing-AGENTS.md"
+        shared.write_text("# Shared\n\n- OLD-GLOBAL-RULE\n")
+        app = self.app()
+        with patch("symphony.runner.SHARED_AGENTS", shared), \
+             patch.object(app.coordinator, "respond", new_callable=AsyncMock) as respond:
+            await app.respond(REPO, "First coordinator turn")
+            first = respond.await_args.args[0]
+            shared.write_text("# Shared\n\n- NEW-GLOBAL-RULE\n")
+            await app.respond(REPO, "Second coordinator turn")
+            second = respond.await_args.args[0]
+            shared.unlink()
+            with self.assertRaisesRegex(RuntimeError, "Global AGENTS.md is missing"):
+                await app.respond(REPO, "Third coordinator turn")
+        self.assertIn("OLD-GLOBAL-RULE", first)
+        self.assertIn("NEW-GLOBAL-RULE", second)
+        self.assertNotIn("OLD-GLOBAL-RULE", second)
+
+    def test_agent_homes_link_the_canonical_shared_file(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            shared = root / "shared-AGENTS.md"
+            shared.write_text("# Shared\n\n- GLOBAL-LINK-RULE\n")
+            with patch("symphony.runner.SHARED_AGENTS", shared):
+                runner = Runner(root / "data", self.linear)
+            try:
+                paths = (root / "data/codex/AGENTS.md",
+                         root / "data/worker-config/opencode/AGENTS.md")
+                for path in paths:
+                    self.assertTrue(path.is_symlink())
+                    self.assertEqual(path.resolve(), shared.resolve())
+                    self.assertIn("GLOBAL-LINK-RULE", path.read_text())
+                shared.write_text("# Shared\n\n- GLOBAL-LINK-UPDATED\n")
+                for path in paths:
+                    self.assertIn("GLOBAL-LINK-UPDATED", path.read_text())
+            finally:
+                runner.db.close()
+
+    def test_missing_and_unreadable_shared_defaults_are_reported(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            missing = root / "missing-AGENTS.md"
+            with patch("symphony.runner.SHARED_AGENTS", missing), \
+                 self.assertRaisesRegex(RuntimeError, "Global AGENTS.md is missing"):
+                Runner(root / "data", self.linear)
+            unreadable = root / "unreadable-AGENTS.md"
+            unreadable.write_text("# Shared\n")
+            unreadable.chmod(0)
+            try:
+                with patch("symphony.runner.SHARED_AGENTS", unreadable), \
+                     self.assertRaisesRegex(RuntimeError, "could not be read"):
+                    Runner(root / "other", self.linear)
+            finally:
+                unreadable.chmod(0o600)
+            with patch("symphony.runner.SHARED_AGENTS", unreadable), \
+                 patch("symphony.runner.AGENTS_BYTES", 1), \
+                 self.assertRaisesRegex(RuntimeError, "too large"):
+                shared_agents()
+            invalid = root / "invalid-AGENTS.md"
+            invalid.write_bytes(b"\xff\xfe")
+            with patch("symphony.runner.SHARED_AGENTS", invalid), \
+                 self.assertRaisesRegex(RuntimeError, "could not be read"):
+                shared_agents()
+
+    def test_nonregular_shared_defaults_fail_without_blocking(self):
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("FIFOs are unavailable on this platform.")
+        root = Path(__file__).resolve().parents[1]
+        script = """
+import sys
+from pathlib import Path
+import symphony.runner as runner
+runner.SHARED_AGENTS = Path(sys.argv[1])
+try:
+    runner.shared_agents()
+except RuntimeError as error:
+    print(error)
+else:
+    raise SystemExit("shared_agents unexpectedly succeeded")
+"""
+        with TemporaryDirectory() as temp:
+            temp = Path(temp)
+            fifo = temp / "fifo-AGENTS.md"
+            os.mkfifo(fifo)
+            directory = temp / "directory-AGENTS.md"
+            directory.mkdir()
+            target = temp / "target-AGENTS.md"
+            target.write_text("# Shared\n")
+            link = temp / "symlink-AGENTS.md"
+            link.symlink_to(target)
+            for path in (fifo, directory, link):
+                with self.subTest(path=path.name):
+                    result = subprocess.run(
+                        [sys.executable, "-c", script, str(path)],
+                        cwd=root, text=True, capture_output=True, timeout=2,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(
+                        result.stdout.strip(),
+                        f"Global AGENTS.md is unavailable: {path.name} must be a regular file.",
+                    )
+
+    async def test_fresh_resumed_workers_and_reviewer_receive_shared_defaults(self):
+        shared = self.root / "shared-AGENTS.md"
+        shared.write_text("# Shared\n\n- GLOBAL-WORKER-RULE\n")
+        with patch("symphony.runner.SHARED_AGENTS", shared):
+            install_agent_instructions(self.root)
+            await self.worker_done()
+            await self.runner.dispatch(
+                ISSUE, REPO, "Never ship from the worker. Follow up.", resume=True)
+            await self.phase("review")
+        records = [json.loads(line) for line in
+                   (self.runner.artifacts(ISSUE) / "worker-envs.jsonl").read_text().splitlines()]
+        self.assertEqual(len(records), 2)
+        self.assertNotIn("--session", records[0]["args"])
+        self.assertIn("--session", records[1]["args"])
+        for record in records:
+            self.assertIn("GLOBAL-WORKER-RULE", record["agents"])
+        self.assertIn("GLOBAL-WORKER-RULE", self.review_environment()["agents"])
 
     async def test_create_issue_schema_preserves_string_only_tool_validation(self):
         tools = {tool["name"]: tool for tool in TOOLS}
@@ -3039,6 +3219,59 @@ class ChatHttpTests(unittest.TestCase):
         handler.send_response.assert_called_once_with(202)
         self.assertEqual(json.loads(handler.wfile.getvalue()), payload)
 
+    @staticmethod
+    def get_handler(path):
+        handler = object.__new__(Handler)
+        handler.path = path
+        handler.headers = Message()
+        handler.server = SimpleNamespace(app=SimpleNamespace())
+        handler.wfile = BytesIO()
+        handler.send_response = Mock()
+        handler.send_header = Mock()
+        handler.end_headers = Mock()
+        return handler
+
+    def test_agents_http_serves_only_the_fixed_canonical_file(self):
+        content = "# Global\n\n<script>alert('literal')</script>\n- *not emphasis*\n"
+        handler = self.get_handler("/api/agents?path=/etc/passwd")
+        with patch("symphony.__main__.shared_agents", return_value=content) as load:
+            handler.do_GET()
+        load.assert_called_once_with()
+        handler.send_response.assert_called_once_with(200)
+        headers = dict(call.args for call in handler.send_header.call_args_list)
+        self.assertEqual(headers["Cache-Control"], "no-store")
+        self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+        self.assertIn("default-src 'none'", headers["Content-Security-Policy"])
+        self.assertEqual(json.loads(handler.wfile.getvalue()), {"content": content})
+
+        handler = self.get_handler("/api/agents/../../etc/passwd")
+        with patch("symphony.__main__.shared_agents") as load:
+            handler.do_GET()
+        load.assert_not_called()
+        handler.send_response.assert_called_once_with(404)
+
+    def test_agents_http_reports_empty_missing_and_oversized_files(self):
+        handler = self.get_handler("/api/agents")
+        with patch("symphony.__main__.shared_agents", return_value=""):
+            handler.do_GET()
+        self.assertEqual(json.loads(handler.wfile.getvalue()), {"content": ""})
+
+        handler = self.get_handler("/api/agents")
+        with patch("symphony.__main__.shared_agents",
+                   side_effect=RuntimeError("Global AGENTS.md is missing at /app/agents/AGENTS.md.")):
+            handler.do_GET()
+        handler.send_response.assert_called_once_with(503)
+        self.assertIn("Global AGENTS.md is missing", json.loads(handler.wfile.getvalue())["error"])
+
+        with TemporaryDirectory() as temp:
+            path = Path(temp) / "AGENTS.md"
+            path.write_text("x" * (AGENTS_BYTES + 1))
+            handler = self.get_handler("/api/agents")
+            with patch("symphony.runner.SHARED_AGENTS", path):
+                handler.do_GET()
+        handler.send_response.assert_called_once_with(503)
+        self.assertIn("too large", json.loads(handler.wfile.getvalue())["error"])
+
     def test_chat_http_rejects_bodies_above_the_bound_before_reading(self):
         headers = Message()
         headers["Content-Length"] = str(BODY_LIMIT + 1)
@@ -3303,13 +3536,35 @@ process.stdout.write(JSON.stringify({
         self.assertIn('id="queue-toggle"', html)
         self.assertIn('aria-controls="status-issues"', html)
         self.assertIn(">Queue</h2>", html)
+        self.assertLess(html.index('id="repos"'), html.index('id="config-open"'))
+        self.assertLess(html.index('id="config-open"'), html.index('id="config-dialog"'))
+        self.assertIn('aria-controls="config-dialog"', html)
+        self.assertIn('id="config-agents-content"', html)
         app = (root / "app.js").read_text()
         self.assertIn("pollDelay(state, document.hidden)", app)
+        self.assertIn('api("/api/agents")', app)
+        self.assertIn("configContent.textContent = content", app)
         self.assertIn('"Awaiting approval"', app)
         self.assertIn("will not run", app)
         self.assertIn("let backlogCollapsed = false;", app)
         self.assertIn("let queueCollapsed = false;", app)
         self.assertIn("function setPaneCollapsed", app)
+
+
+class SharedAgentsImageTests(unittest.TestCase):
+    def test_image_ships_the_canonical_shared_file(self):
+        root = Path(__file__).resolve().parents[1]
+        dockerfile = (root / "symphony/Dockerfile").read_text()
+        self.assertIn("COPY agents/AGENTS.md /app/agents/AGENTS.md", dockerfile)
+        self.assertLess(dockerfile.index("COPY symphony /app/symphony"),
+                        dockerfile.index("COPY agents/AGENTS.md /app/agents/AGENTS.md"))
+        ignore = (root / ".dockerignore").read_text()
+        self.assertIn("!agents/", ignore)
+        self.assertIn("!agents/AGENTS.md", ignore)
+        canonical = (root / "agents/AGENTS.md").read_text()
+        self.assertIn("# Symphony global AGENTS.md", canonical)
+        self.assertIn("instructions take precedence", canonical)
+        self.assertIn("Symphony's approval", canonical)
 
 
 class PlanTests(unittest.TestCase):

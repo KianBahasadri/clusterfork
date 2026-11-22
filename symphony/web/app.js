@@ -18,6 +18,11 @@ const messageField = byId("message");
 const attachmentList = byId("attachments");
 const commandList = byId("command-list");
 const interrupt = byId("interrupt");
+const configButton = byId("config-open");
+const configDialog = byId("config-dialog");
+const configContent = byId("config-agents-content");
+const configStatus = byId("config-agents-status");
+let configRequest = 0;
 const pendingImages = [];
 const imageTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
 const imageCount = 4;
@@ -99,6 +104,35 @@ async function api(path, options) {
   const body = await response.json();
   if (!response.ok) throw new Error(body.error || response.statusText);
   return body;
+}
+
+async function loadConfigAgents() {
+  const request = ++configRequest;
+  configContent.textContent = "";
+  configStatus.textContent = "Loading global AGENTS.md…";
+  configStatus.dataset.error = "";
+  try {
+    const result = await api("/api/agents");
+    if (request !== configRequest || !configDialog.open) return;
+    const content = typeof result.content === "string" ? result.content : "";
+    configContent.textContent = content;
+    configStatus.textContent = content ? "" : "No global defaults are currently defined.";
+  } catch (error) {
+    if (request !== configRequest || !configDialog.open) return;
+    configStatus.textContent = "Could not load global AGENTS.md: " + error.message;
+    configStatus.dataset.error = "true";
+  }
+}
+
+function openConfig() {
+  configButton.setAttribute("aria-expanded", "true");
+  if (!configDialog.open) configDialog.showModal();
+  byId("config-close").focus();
+  loadConfigAgents();
+}
+
+function closeConfig() {
+  if (configDialog.open) configDialog.close();
 }
 
 function issueDeadline(value, today) {
@@ -1043,6 +1077,28 @@ messageField.addEventListener("keydown", (event) => {
 });
 interrupt.addEventListener("click", interruptTurn);
 byId("update-action").addEventListener("click", toggleDrain);
+configButton.addEventListener("click", openConfig);
+byId("config-close").addEventListener("click", closeConfig);
+configDialog.addEventListener("keydown", (event) => {
+  if (event.key !== "Tab" || event.ctrlKey || event.altKey || event.metaKey) return;
+  const controls = [...configDialog.querySelectorAll("button:not([disabled]), [tabindex='0']")]
+    .filter((control) => control.checkVisibility());
+  const first = controls[0];
+  const last = controls.at(-1);
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
+configDialog.addEventListener("close", () => {
+  if (configDialog.open) return;
+  configRequest++;
+  configButton.setAttribute("aria-expanded", "false");
+  configButton.focus({preventScroll: true});
+});
 backlogToggle.addEventListener("click", () => setPaneCollapsed("backlog", !backlogCollapsed));
 queueToggle.addEventListener("click", () => setPaneCollapsed("queue", !queueCollapsed));
 applyPaneState();

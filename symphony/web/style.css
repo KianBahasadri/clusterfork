@@ -82,6 +82,19 @@ h2 { font-size: .94rem; font-weight: 650; }
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
+.page-header-row { display: flex; align-items: flex-start; gap: 8px; }
+.page-header-row #repos { flex: 1 1 auto; min-width: 0; }
+.config-button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+}
 main {
   --backlog-track: minmax(240px, 24vw);
   --queue-track: minmax(260px, 26vw);
@@ -386,6 +399,50 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
 #request-error { margin: 0; overflow-wrap: anywhere; }
 #send-status { margin: 0; color: var(--muted); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+#config-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 24px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--ink);
+  box-shadow: var(--overlay-shadow);
+  overflow: hidden;
+}
+#config-dialog[open] { display: flex; flex-direction: column; }
+#config-dialog::backdrop { background: rgba(0, 0, 0, .65); }
+.config-dialog-header {
+  display: flex;
+  flex: none;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  margin-bottom: 20px;
+}
+#config-dialog-title { font-size: 20px; line-height: 1.35; font-weight: 600; }
+#config-close { flex: none; }
+.config-section { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
+.config-section h2 { margin-bottom: 6px; }
+.config-note { margin-bottom: 8px; }
+#config-agents-status { min-height: 1.5em; margin-bottom: 8px; overflow-wrap: anywhere; }
+#config-agents-status[data-error="true"] { color: var(--danger); }
+.config-agents-content {
+  flex: 1 1 auto;
+  min-height: 120px;
+  max-height: min(60dvh, 480px);
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--canvas);
+  font: 12px/1.55 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
 #issue-dialog {
   width: min(1200px, calc(100vw - 32px));
   max-height: calc(100dvh - 32px);
@@ -581,6 +638,13 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
   #repos .project-chip { flex-shrink: 0; }
   .chat-log { padding-top: 12px; }
   #message { font-size: 16px; }
+  #config-dialog {
+    width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+    padding: 16px;
+  }
+  .config-dialog-header { gap: 12px; margin-bottom: 16px; }
+  .config-agents-content { max-height: min(55dvh, 420px); }
   #issue-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); padding: 16px; }
   .issue-dialog-header { gap: 12px; margin-bottom: 16px; }
   #issue-dialog-title { font-size: 20px; }
@@ -592,7 +656,8 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
   .execution-metrics { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
 }
 @media (pointer: coarse) {
-  button, #repos .project-chip, #interrupt, #command-list [role="option"] { min-height: 44px; }
+  button, .config-button, #repos .project-chip, #interrupt,
+  #command-list [role="option"] { min-height: 44px; }
   .pane-toggle { width: 44px; height: 44px; min-height: 44px; }
   .issue-plan-action { width: 44px; height: 44px; min-height: 44px; }
   .attachment-remove { width: 36px; height: 36px; min-height: 36px; top: -10px; right: -10px; }
