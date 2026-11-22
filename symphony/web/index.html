@@ -117,7 +117,7 @@
     <p id="project-error" class="detail" role="status" hidden></p>
   </header>
   <main>
-    <aside class="issues-pane backlog-pane" aria-label="Backlog issues">
+    <aside class="issues-pane backlog-pane" aria-label="Unsure and Backlog issues">
       <div class="pane-header">
         <h2 class="sidebar-heading" id="backlog-heading">Backlog</h2>
         <button id="backlog-toggle" class="pane-toggle pane-toggle-start" type="button"
@@ -129,7 +129,7 @@
         </button>
       </div>
       <div id="backlog" class="pane-content" role="tabpanel"
-        aria-label="Backlog issues"></div>
+        aria-label="Unsure and Backlog issues"></div>
     </aside>
     <section class="chat" aria-label="Coordinator chat">
       <div id="connection-error" class="notice" role="status" hidden>Connection lost. Reconnecting…</div>
@@ -194,7 +194,7 @@
         </div>
       </form>
     </section>
-    <aside class="issues-pane status-pane" aria-label="Todo, In Progress, and Done issues">
+    <aside class="issues-pane status-pane" aria-label="Todo, In Progress, Done, Canceled, and Duplicate issues">
       <div class="pane-header">
         <h2 class="sidebar-heading" id="queue-heading">Queue</h2>
         <button id="queue-toggle" class="pane-toggle pane-toggle-end" type="button"
@@ -206,7 +206,7 @@
         </button>
       </div>
       <div id="status-issues" class="pane-content" role="tabpanel"
-        aria-label="Todo, In Progress, and Done issues"></div>
+        aria-label="Todo, In Progress, Done, Canceled, and Duplicate issues"></div>
     </aside>
   </main>
   <dialog id="config-dialog" aria-labelledby="config-dialog-title">

@@ -16,8 +16,9 @@ stored chat transcript.
 
 Open Symphony on the tailnet and sign in to Codex with the device flow if
 prompted. Choose a project chip in the page header. The desktop layout puts that
-project's Backlog on the left, coordinator chat in the middle, and Todo, In
-Progress, and Done in the right-hand Queue panel. Each side panel has an
+project's Unsure and Backlog groups on the left, coordinator chat in the middle,
+and Todo, In Progress, Done, Canceled, and Duplicate in the right-hand Queue
+panel. Each side panel has an
 independent header control that collapses it to a compact rail on desktop or a
 header row on narrow screens, giving the reclaimed space to chat; either panel,
 both, or neither can be collapsed. The choice lasts for the page lifetime,
@@ -61,22 +62,25 @@ completion, plus overlapping webhook deliveries, coalesce for about 250 ms into
 one serialized refresh. A request received while a fetch is running triggers
 another refresh after it completes. Project webhooks also invalidate the
 60-second project mapping cache, so renamed projects and changed repository
-links appear promptly. The cache includes open issues and Done issues completed
-within the last rolling 24 hours, using `completedAt` rather than `updatedAt`.
-Older Done, Canceled, and Duplicate issues stay out of both panes, and expired
-Done entries disappear on a normal refresh without an issue edit. The browser
+links appear promptly. The cache includes open issues, Done issues completed
+within the last rolling 24 hours (using `completedAt` rather than `updatedAt`),
+and Canceled/Duplicate issues canceled within the last rolling 24 hours (using
+`canceledAt`). Older Done, Canceled, and Duplicate issues stay out of both panes,
+and expired entries disappear on a normal refresh without an issue edit. The browser
 receives the lists through its regular status requests when they change.
 Visible idle tabs poll `/api/state` every second, hidden idle tabs every two
 seconds, and active coordinator turns use the faster chat cadence below.
 Switching projects uses the cache and restores each pane's scroll position and
 expanded plans.
-Backlog stays on the left. Todo, In Progress, and Done are collapsible groups in
-the right-hand Queue panel, labeled with those status names. The whole Queue
-panel collapses independently from those status groups and preserves their open
-state. Todo and In Progress sort from Urgent to Low priority with unprioritized
-issues last; recent Done sorts newest completed first. Groups start expanded,
-remember their collapsed state per project, and show an empty state when they
-have no issues.
+Unsure sits above Backlog in collapsible left-pane groups (keeping Unsure out of
+automatic dispatch). Todo, In Progress, Done, Canceled, and Duplicate are
+collapsible groups in the right-hand Queue panel, labeled with those status
+names. The whole Queue panel collapses independently from those status groups
+and preserves their open state. Unsure, Backlog, Todo, and In Progress sort from
+Urgent to Low priority with unprioritized issues last; recent Done sorts newest
+completed first, and recent Canceled/Duplicate sort newest canceled first. Groups
+start expanded, remember their collapsed state per project, and show an empty
+state when they have no issues.
 Status groups open and close with a visible spring using the standard Web
 Animations API. Rapid clicks reverse from the current height; reduced motion
 disables the animation.

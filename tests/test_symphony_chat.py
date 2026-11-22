@@ -1277,13 +1277,17 @@ class ChatBrowserTests(unittest.TestCase):
         self.page.locator("#backlog-toggle").click()
         self.page.locator("#queue-toggle").click()
         self.assertEqual(self.page.evaluate("""() => ({
-          backlog: document.getElementById("backlog").textContent,
+          backlog: [...document.querySelectorAll("#backlog .issue-group-list")]
+            .map((node) => node.textContent),
           groups: [...document.querySelectorAll("#status-issues .issue-group-list")]
             .map((node) => node.textContent),
           collapsed: [backlogCollapsed, queueCollapsed],
         })"""), {
-            "backlog": "No Backlog issues for this project.",
-            "groups": ["No Todo issues.", "No In Progress issues.", "No Done issues."],
+            "backlog": ["No Unsure issues.", "No Backlog issues."],
+            "groups": [
+                "No Todo issues.", "No In Progress issues.", "No Done issues.",
+                "No Canceled issues.", "No Duplicate issues.",
+            ],
             "collapsed": [False, False],
         })
 

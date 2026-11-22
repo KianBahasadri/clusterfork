@@ -122,7 +122,8 @@ function icon(name, namespace = "lucide") {
 }
 
 function stateIcon(state) {
-  const svg = icon(state.type, "workflow");
+  const iconName = state.name?.toLowerCase() === "duplicate" ? "duplicate" : state.type;
+  const svg = icon(iconName, "workflow");
   svg.classList.add("status-icon");
   svg.style.setProperty("--status-color", state.color);
   return svg;
@@ -588,10 +589,10 @@ function renderPanes() {
   const rows = issueCache.get(selected) || [];
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const {backlog: backlogRows, groups} = partitionIssues(rows);
-  backlog.replaceChildren(...(backlogRows.length
-    ? backlogRows.map((issue) => renderIssue(issue, today))
-    : [element("p", selected ? "No Backlog issues for this project." : "No Linear project selected.", "muted")]));
+  const {backlogGroups, groups} = partitionIssues(rows);
+  backlog.replaceChildren(...(selected
+    ? backlogGroups.map((group) => renderIssueGroup(group.name, group.issues, today))
+    : [element("p", "No Linear project selected.", "muted")]));
   statusIssues.replaceChildren(...groups.map((group) => renderIssueGroup(group.name, group.issues, today)));
   if (focused) byId(focused)?.focus({preventScroll: true});
 }

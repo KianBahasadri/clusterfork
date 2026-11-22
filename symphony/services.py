@@ -244,6 +244,7 @@ class Linear:
                     or: [
                         { state: { type: { nin: $closed } } }
                         { state: { type: { eq: "completed" } }, completedAt: { gte: $done } }
+                        { state: { type: { eq: "canceled" } }, canceledAt: { gte: $done } }
                     ]"""
             declaration = ", $done: DateTimeOrDuration!"
             variables["done"] = done_since
@@ -255,7 +256,7 @@ class Linear:
                     nodes {
                         id createdAt
                         identifier title url description priority priorityLabel estimate dueDate
-                        updatedAt completedAt
+                        updatedAt completedAt canceledAt
                         state { name type color position }
                         project { id name }
                         labels(first: 10) { nodes { name color } }

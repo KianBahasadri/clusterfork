@@ -137,6 +137,9 @@ def current_issue(row, cutoff):
     if kind == "completed":
         completed = issue_timestamp(row.get("completedAt"))
         return completed is not None and completed >= cutoff
+    if kind == "canceled":
+        canceled = issue_timestamp(row.get("canceledAt"))
+        return canceled is not None and canceled >= cutoff
     return kind not in CLOSED_STATES
 
 
@@ -183,7 +186,7 @@ def issue_summary(row, stage=None):
     plan = proposed_plan(row["description"])
     summary = {**{key: row.get(key) for key in ("identifier", "title", "url", "state", "priority",
                                                 "priorityLabel", "estimate", "dueDate", "updatedAt",
-                                                "createdAt", "completedAt")},
+                                                "createdAt", "completedAt", "canceledAt")},
                "project": (row["project"] or {}).get("name", ""),
                "projectId": (row["project"] or {}).get("id", ""),
                "labels": row["labels"]["nodes"],
@@ -247,7 +250,7 @@ class Symphony:
     def history_key(row):
         state = row.get("state") or {}
         return (row["identifier"], row.get("updatedAt"), row.get("completedAt"),
-                state.get("name"), state.get("type"))
+                row.get("canceledAt"), state.get("name"), state.get("type"))
 
     async def history_for(self, row, *, fetch_missing=False):
         key = self.history_key(row)

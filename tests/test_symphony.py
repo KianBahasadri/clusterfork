@@ -1186,32 +1186,43 @@ else:
         self.assertEqual([[issue["identifier"] for issue in project["issues"]] for project in projects],
                          [["KIAN-101"], ["KIAN-102"]])
 
-    async def test_recent_done_uses_completed_at_boundary_and_expires_without_edits(self):
+    async def test_recent_done_and_canceled_use_24h_cutoff_and_expire_without_edits(self):
         app = self.app()
         repos = {REPO: [{"id": "alpha", "name": "Alpha", "icon": ""}]}
         cutoff = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
 
-        def card(identifier, state, completed=None):
+        def card(identifier, state, completed=None, canceled=None):
             return {"identifier": identifier, "title": identifier, "url": "https://linear.app/fixture/issue/" + identifier,
                     "state": {**state, "position": 5}, "description": "", "project": {"id": "alpha", "name": "Alpha"},
                     "priority": 3, "priorityLabel": "Normal", "estimate": None, "dueDate": None,
-                    "updatedAt": "2026-11-20T12:00:00Z", "completedAt": completed,
+                    "updatedAt": "2026-11-20T12:00:00Z", "completedAt": completed, "canceledAt": canceled,
                     "labels": {"nodes": []}}
 
-        nodes = [card("KIAN-101", {"name": "Backlog", "type": "backlog"}),
+        nodes = [card("KIAN-100", {"name": "Unsure", "type": "backlog"}),
+                 card("KIAN-101", {"name": "Backlog", "type": "backlog"}),
                  card("KIAN-102", {"name": "Todo", "type": "unstarted"}),
-                 card("KIAN-103", {"name": "Done", "type": "completed"}, "2026-11-20T12:00:00Z"),
-                 card("KIAN-104", {"name": "Done", "type": "completed"}, "2026-11-20T11:59:59Z"),
-                 card("KIAN-105", {"name": "Canceled", "type": "canceled"}, "2026-11-20T12:00:00Z"),
-                 card("KIAN-106", {"name": "Duplicate", "type": "duplicate"}, "2026-11-20T12:00:00Z")]
+                 card("KIAN-103", {"name": "Done", "type": "completed"}, completed="2026-11-20T12:00:00Z"),
+                 card("KIAN-104", {"name": "Done", "type": "completed"}, completed="2026-11-20T11:59:59Z"),
+                 card("KIAN-105", {"name": "Canceled", "type": "canceled"}, canceled="2026-11-20T12:00:00Z"),
+                 card("KIAN-106", {"name": "Duplicate", "type": "canceled"}, canceled="2026-11-20T12:00:00Z"),
+                 card("KIAN-107", {"name": "Canceled", "type": "canceled"}, canceled="2026-11-20T11:59:59Z"),
+                 card("KIAN-108", {"name": "Duplicate", "type": "duplicate"})]
         response = {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": False}}}
+        queries = []
+
+        async def fake_query(query, **variables):
+            queries.append((query, variables))
+            return response
+
         with patch.object(app, "refresh_projects", return_value=repos), \
-             patch.object(app.linear, "query", return_value=response), \
+             patch.object(app.linear, "query", side_effect=fake_query), \
              patch("symphony.__main__.done_cutoff", return_value=cutoff):
             await app.refresh_issue_snapshot()
             first = await app.state(0)
             self.assertEqual([issue["identifier"] for issue in first["projects"][0]["issues"]],
-                             ["KIAN-101", "KIAN-102", "KIAN-103"])
+                             ["KIAN-100", "KIAN-101", "KIAN-102", "KIAN-103", "KIAN-105", "KIAN-106"])
+            self.assertIn("canceledAt", queries[0][0])
+            self.assertIn('state: { type: { eq: "canceled" } }, canceledAt: { gte: $done }', queries[0][0])
 
             later = datetime(2026, 11, 20, 14, 0, tzinfo=timezone.utc)
             with patch("symphony.__main__.done_cutoff", return_value=later):
@@ -1219,7 +1230,7 @@ else:
             aged = await app.state(0, first["issueRevision"])
             self.assertNotEqual(aged["issueRevision"], first["issueRevision"])
             self.assertEqual([issue["identifier"] for issue in aged["projects"][0]["issues"]],
-                             ["KIAN-101", "KIAN-102"])
+                             ["KIAN-100", "KIAN-101", "KIAN-102"])
 
     async def test_refresh_loop_coalesces_bursts_and_keeps_requests_during_fetch(self):
         app = self.app()
@@ -4432,6 +4443,8 @@ class PaneTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node is required for JavaScript checks.")
     def test_backlog_and_status_panes_partition_and_order_issues(self):
         rows = [
+            {"identifier": "KIAN-11", "state": {"name": "Unsure"}, "priority": 3},
+            {"identifier": "KIAN-1", "state": {"name": "Unsure"}, "priority": 1},
             {"identifier": "KIAN-10", "state": {"name": "Backlog"}, "priority": 4},
             {"identifier": "KIAN-2", "state": {"name": "Backlog"}, "priority": 1},
             {"identifier": "KIAN-3", "state": {"name": "Todo"}, "priority": 3},
@@ -4441,7 +4454,12 @@ class PaneTests(unittest.TestCase):
              "completedAt": "2026-11-20T12:00:00Z"},
             {"identifier": "KIAN-7", "state": {"name": "Done"}, "priority": 1,
              "completedAt": "2026-11-20T13:00:00Z"},
-            {"identifier": "KIAN-8", "state": {"name": "Canceled"}, "priority": 1},
+            {"identifier": "KIAN-8", "state": {"name": "Canceled"}, "priority": 1,
+             "canceledAt": "2026-11-20T14:00:00Z"},
+            {"identifier": "KIAN-9", "state": {"name": "Canceled"}, "priority": 2,
+             "updatedAt": "2026-11-20T15:00:00Z"},
+            {"identifier": "KIAN-12", "state": {"name": "Duplicate"}, "priority": 1,
+             "canceledAt": "2026-11-20T16:00:00Z"},
         ]
         script = """const fs = require("fs");
 const vm = require("vm");
@@ -4473,12 +4491,17 @@ process.stdout.write(JSON.stringify({
         run = subprocess.run(["node", "-e", script, str(panes)], input=json.dumps(rows),
                              text=True, capture_output=True, check=True)
         result = json.loads(run.stdout)
+        self.assertEqual([group["name"] for group in result["panes"]["backlogGroups"]], ["Unsure", "Backlog"])
+        self.assertEqual([[issue["identifier"] for issue in group["issues"]]
+                          for group in result["panes"]["backlogGroups"]],
+                         [["KIAN-1", "KIAN-11"], ["KIAN-2", "KIAN-10"]])
         self.assertEqual([issue["identifier"] for issue in result["panes"]["backlog"]], ["KIAN-2", "KIAN-10"])
         self.assertEqual([group["name"] for group in result["panes"]["groups"]],
-                         ["Todo", "In Progress", "Done"])
+                         ["Todo", "In Progress", "Done", "Canceled", "Duplicate"])
         self.assertEqual([[issue["identifier"] for issue in group["issues"]]
                           for group in result["panes"]["groups"]],
-                         [["KIAN-4", "KIAN-3"], ["KIAN-5"], ["KIAN-7", "KIAN-6"]])
+                         [["KIAN-4", "KIAN-3"], ["KIAN-5"], ["KIAN-7", "KIAN-6"],
+                          ["KIAN-9", "KIAN-8"], ["KIAN-12"]])
         self.assertEqual((result["empty"], result["invalid"], result["valid"], result["none"]),
                          ("alpha", "alpha", "beta", ""))
         self.assertEqual(result["delays"], [1000, 2000, 200, 200, 200, 2000, 2000, 2000, 0, 0])
@@ -4502,6 +4525,8 @@ process.stdout.write(JSON.stringify({
         self.assertIn("configContent.innerHTML =", app)
         self.assertIn('"Awaiting approval"', app)
         self.assertIn("will not run", app)
+        self.assertIn('id="workflow-duplicate"', html)
+        self.assertIn('state.name?.toLowerCase() === "duplicate" ? "duplicate" : state.type', app)
         self.assertIn("let backlogCollapsed = false;", app)
         self.assertIn("let queueCollapsed = false;", app)
         self.assertIn("function setPaneCollapsed", app)

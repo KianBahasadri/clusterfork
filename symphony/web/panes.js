@@ -1,4 +1,5 @@
-const STATUS_GROUPS = ["Todo", "In Progress", "Done"];
+const BACKLOG_GROUPS = ["Unsure", "Backlog"];
+const STATUS_GROUPS = ["Todo", "In Progress", "Done", "Canceled", "Duplicate"];
 
 function pollDelay(state, hidden) {
   if (state.messages.length === 200) return 0;
@@ -17,18 +18,30 @@ function completedOrder(a, b) {
     || a.identifier.localeCompare(b.identifier, undefined, {numeric: true});
 }
 
+function canceledOrder(a, b) {
+  return (Date.parse(b.canceledAt || b.updatedAt) || 0) - (Date.parse(a.canceledAt || a.updatedAt) || 0)
+    || a.identifier.localeCompare(b.identifier, undefined, {numeric: true});
+}
+
 function selectableProject(projects, selected) {
   return projects.some((project) => project.id === selected) ? selected : (projects[0]?.id || "");
 }
 
 function partitionIssues(rows) {
-  const backlog = rows.filter((issue) => issue.state.name === "Backlog").toSorted(issueOrder);
+  const backlogGroups = BACKLOG_GROUPS.map((name) => ({
+    name,
+    issues: rows.filter((issue) => issue.state.name === name).toSorted(issueOrder),
+  }));
+  const unsure = backlogGroups[0].issues;
+  const backlog = backlogGroups[1].issues;
   const groups = STATUS_GROUPS.map((name) => ({
     name,
-    issues: rows.filter((issue) => issue.state.name === name)
-      .toSorted(name === "Done" ? completedOrder : issueOrder),
+    issues: rows.filter((issue) => issue.state.name === name).toSorted(
+      name === "Done" ? completedOrder
+        : (name === "Canceled" || name === "Duplicate") ? canceledOrder : issueOrder
+    ),
   }));
-  return {backlog, groups};
+  return {unsure, backlog, backlogGroups, groups};
 }
 
 function formatDuration(milliseconds) {
