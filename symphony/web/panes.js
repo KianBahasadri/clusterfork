@@ -209,17 +209,3 @@ function executionAttemptTotal(worker, unavailable) {
   }
   return {value: "Not recorded", detail: "No worker attempt records were captured."};
 }
-
-function executionFindingTotal(findings) {
-  if (!findings?.available) {
-    return {value: "Unavailable", detail: "No attempt-linked reviewer findings were recorded."};
-  }
-  const count = Number.isInteger(findings.count) ? findings.count : 0;
-  const reviews = Number.isInteger(findings.reviewCount) ? findings.reviewCount : 0;
-  const detail = "Across " + reviews + " recorded review pass" + (reviews === 1 ? "" : "es");
-  if (findings.complete) return {value: String(count), detail};
-  return {
-    value: count > 0 ? "At least " + count : "Partial",
-    detail: "Partial; some attempts or finding counts are unavailable.",
-  };
-}

@@ -323,7 +323,7 @@ def snapshot_text(value, limit=SNAPSHOT_BYTES):
     return encoded[:limit].decode(errors="ignore").rstrip(), True
 
 
-def attempt_snapshot(row, review, notes_data):
+def attempt_snapshot(row, notes_data):
     notes_data = notes_data if isinstance(notes_data, dict) else {}
     notes_text, notes_bounded = snapshot_text(notes_data.get("text", ""))
     notes_available = bool(notes_data.get("available")) and bool(notes_text.strip())
@@ -333,44 +333,12 @@ def attempt_snapshot(row, review, notes_data):
         notes_detail = "This attempt is still running; notes.md has not been snapshotted yet."
     else:
         notes_detail = "No notes.md snapshot was retained for this attempt."
-    notes = {
+    return {
         "available": notes_available,
         "text": notes_text if notes_available else "",
         "truncated": bool(notes_data.get("truncated")) or notes_bounded,
         "detail": notes_detail,
     }
-
-    review = review if isinstance(review, dict) else {}
-    review_text, review_bounded = snapshot_text(review.get("report", ""))
-    review_available = bool(review.get("available")) and bool(review_text.strip())
-    verdict = review.get("verdict") if review.get("verdict") in {
-        "NO ISSUES", "ISSUES", "UNAVAILABLE"} else "UNAVAILABLE"
-    finding_count = review.get("findingCount")
-    if not isinstance(finding_count, int) or isinstance(finding_count, bool):
-        finding_count = None
-    if verdict == "NO ISSUES" and finding_count is None:
-        finding_count = 0
-    review_detail, _ = snapshot_text(review.get("detail", ""), 2000)
-    if not review and row.get("ended") is None:
-        review_detail = "Review has not completed for this attempt."
-    elif not review:
-        review_detail = "No reviewer record was retained for this attempt."
-    elif not review_available and not review_detail:
-        review_detail = "No reviewer report was retained for this attempt."
-    review_result = {
-        "recorded": bool(review),
-        "available": review_available,
-        "verdict": verdict,
-        "findingCount": finding_count,
-        "findingCountComplete": bool(review.get("findingCountComplete")) and not review_bounded,
-        "model": redact(review.get("model", ""))[:200],
-        "text": review_text if review_available else "",
-        "truncated": bool(review.get("reportTruncated")) or review_bounded,
-        "detail": review_detail,
-        "startedAt": review.get("startedAt"),
-        "endedAt": review.get("endedAt"),
-    }
-    return notes, review_result
 
 
 def run_interval(run):
@@ -445,28 +413,10 @@ def execution_payload(identifier, issue, history, runner, now=None):
 
     attempt_rows = [row for row in execution_rows if row["kind"] == "attempt"]
     attempt_rows.sort(key=lambda row: (row["started"], row["id"]))
-    attempt_ids = {str(row["id"]): row for row in attempt_rows}
-    reviews = {}
-    unlinked_reviews = 0
-    for row in execution_rows:
-        if row["kind"] != "review":
-            continue
-        attempt_id = execution_data(row).get("attemptId")
-        key = str(attempt_id) if attempt_id is not None else ""
-        if key in attempt_ids:
-            if key not in reviews or row["id"] > reviews[key]["id"]:
-                reviews[key] = row
-        else:
-            unlinked_reviews += 1
     attempts = []
     for index, row in enumerate(attempt_rows, 1):
         data = execution_data(row)
-        review_row = reviews.get(str(row["id"]))
-        notes, review = attempt_snapshot(
-            row, execution_data(review_row) if review_row else {}, data.get("notes"))
-        if review_row:
-            review["startedAt"] = iso(moment(review_row.get("started")))
-            review["endedAt"] = iso(moment(review_row.get("ended")))
+        notes = attempt_snapshot(row, data.get("notes"))
         attempts.append({
             "id": str(row["id"]),
             "number": index,
@@ -475,35 +425,13 @@ def execution_payload(identifier, issue, history, runner, now=None):
             "endedAt": iso(moment(row.get("ended"))),
             "open": row.get("ended") is None,
             "notes": notes,
-            "review": review,
         })
-    recorded_reviews = [attempt["review"] for attempt in attempts
-                        if attempt["review"]["recorded"]]
-    known_findings = [
-        review for review in recorded_reviews
-        if review["verdict"] in {"NO ISSUES", "ISSUES"}
-        and isinstance(review["findingCount"], int)
-    ]
-    findings_complete = bool(attempts) and not unlinked_reviews and all(
-        attempt["review"]["recorded"]
-        and attempt["review"]["verdict"] in {"NO ISSUES", "ISSUES"}
-        and isinstance(attempt["review"]["findingCount"], int)
-        and attempt["review"]["findingCountComplete"]
-        for attempt in attempts
-    )
     worker = {
         "attemptCount": len(attempts),
         "coverage": ("recorded" if attempts else
                      "not_started" if task and phase in {"approving", "approved"} and task_attempts == 0
                      else "unavailable"),
         "attempts": attempts,
-        "findings": {
-            "available": bool(known_findings),
-            "complete": findings_complete,
-            "count": sum(review["findingCount"] for review in known_findings),
-            "reviewCount": len(recorded_reviews),
-            "unlinkedReviews": unlinked_reviews,
-        },
     }
 
     timeline = [{**event} for event in events]
@@ -537,12 +465,11 @@ def execution_payload(identifier, issue, history, runner, now=None):
         measured_kinds.add(event["kind"])
         intervals.append((event["startedAt"], event["endedAt"]))
     tracking = bool(measured_kinds & {
-        "startup", "worker", "verification", "review", "publication", "ci_wait", "ci_discovery",
+        "startup", "worker", "verification", "publication", "ci_wait", "ci_discovery",
     }) or any(event["kind"] == "attempt" for event in events)
-    completed_attempts = [attempt for attempt in attempts if not attempt["open"]]
     has_ci = bool(task and (task.get("revision") or task.get("workflows")
                             or phase in {"ci", "finishing"}))
-    categories = ("startup", "worker", "verification", "review", "coordinator", "publication",
+    categories = ("startup", "worker", "verification", "coordinator", "publication",
                   "ci_wait", "ci_discovery")
     missing_categories = []
     for category in categories:
@@ -561,10 +488,6 @@ def execution_payload(identifier, issue, history, runner, now=None):
         elif category == "verification":
             if task and (phase in {"approving", "approved"}
                          or (tracking and phase == "working")):
-                value = 0.0
-        elif category == "review":
-            if task and (phase in {"approving", "approved"}
-                         or (attempts and not completed_attempts)):
                 value = 0.0
         elif category == "publication":
             if (task and not task.get("revision")

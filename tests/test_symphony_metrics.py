@@ -69,7 +69,7 @@ class MetricsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('symphony_metric_available{metric="pvc_disk"} 0\n', no_disk)
         self.assertNotIn("symphony_pvc_bytes_total", no_disk)
 
-    async def test_opencode_worker_and_review_record_step_finish_tokens_and_cost(self):
+    async def test_opencode_worker_records_step_finish_tokens_and_cost(self):
         self._insert_task("KIAN-1", phase="working", attempts=1)
         artifacts = self.runner.artifacts("KIAN-1")
         artifacts.mkdir(parents=True)
@@ -92,35 +92,14 @@ class MetricsTests(unittest.IsolatedAsyncioTestCase):
                 log,
             )
 
-        prompt = artifacts / "review-input.md"
-        prompt.write_text("diff")
-        review_script = (
-            "import json; "
-            "print(json.dumps({'type':'text','part':{'messageID':'r1','text':'VERDICT: NO ISSUES'}})); "
-            "print(json.dumps({'type':'step_finish','part':{'messageID':'r1','reason':'stop',"
-            "'tokens':{'input':300,'output':40,'total':340}}}))"
-        )
-        with (artifacts / "review.log").open("wb") as log:
-            report, error = await self.runner.run_review(
-                "KIAN-1",
-                [sys.executable, "-c", review_script, "--model", "opencode-go/kimi-k3.1-pro#low"],
-                self.root,
-                os.environ,
-                log,
-                prompt,
-            )
-        self.assertEqual((report, error), ("VERDICT: NO ISSUES", ""))
-
         rows = self.runner.rows("SELECT * FROM token_usage ORDER BY id")
-        self.assertEqual(len(rows), 3)
+        self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["source"], "worker")
         self.assertEqual((rows[0]["input_tokens"], rows[0]["output_tokens"], rows[0]["total_tokens"]),
                          (120, 30, 150))
         self.assertAlmostEqual(rows[0]["cost_usd"], 0.0025)
         self.assertIsNone(rows[1]["total_tokens"])
         self.assertIsNone(rows[1]["cost_usd"])
-        self.assertEqual(rows[2]["source"], "review")
-        self.assertIsNone(rows[2]["cost_usd"])
 
         text = render_metrics(self.app)
         self.assertIn(

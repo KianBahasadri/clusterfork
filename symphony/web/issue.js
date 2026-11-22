@@ -459,7 +459,7 @@ function renderExecutionBreakdown(panel, execution) {
   section.append(executionCoverage(execution.coverage, execution.reason));
   const unavailable = execution.coverage === "unavailable";
   const grid = element("div", "", "execution-metrics");
-  const order = ["startup", "worker", "verification", "review", "coordinator", "publication",
+  const order = ["startup", "worker", "verification", "coordinator", "publication",
     "ci_workflow", "ci_wait", "ci_discovery"];
   for (const kind of order) {
     const value = execution.breakdown[kind];
@@ -470,9 +470,7 @@ function renderExecutionBreakdown(panel, execution) {
           : kind === "ci_wait" ? "Waiting while CI ran" : "Recorded interval"));
   }
   const attemptTotal = executionAttemptTotal(execution.worker, unavailable);
-  const findingTotal = executionFindingTotal(execution.worker?.findings);
   grid.append(executionMetric("Worker attempts", attemptTotal.value, attemptTotal.detail));
-  grid.append(executionMetric("Review findings", findingTotal.value, findingTotal.detail));
   grid.append(executionMetric("Measured total",
     unavailable ? "Unavailable" : formatSeconds(execution.measuredSeconds),
     execution.lowerBound ? "Lower bound; some categories were not recorded" : "Sum of recorded intervals"));
@@ -528,15 +526,8 @@ function renderExecutionCi(panel, ci) {
   }
 }
 
-function attemptFindingLabel(review) {
-  if (!review.recorded || !Number.isInteger(review.findingCount)) return "Findings unavailable";
-  const count = review.findingCount + " finding" + (review.findingCount === 1 ? "" : "s");
-  if (review.findingCountComplete) return count;
-  return review.findingCount > 0 ? "At least " + count : "Findings partial";
-}
-
-function renderExecutionReviews(panel, worker) {
-  const section = executionSection(panel, "Reviews & notes by attempt");
+function renderExecutionNotes(panel, worker) {
+  const section = executionSection(panel, "Notes by attempt");
   const attempts = worker?.attempts || [];
   if (!attempts.length) {
     section.append(element("p", worker?.coverage === "not_started"
@@ -545,26 +536,14 @@ function renderExecutionReviews(panel, worker) {
     return;
   }
   for (const attempt of attempts) {
-    const review = attempt.review || {};
     const notes = attempt.notes || {};
     const item = element("details", "", "execution-attempt execution-transitions");
     item.dataset.viewKey = "attempt:" + attempt.id;
     const summary = element("summary");
-    const verdict = review.recorded ? (review.verdict || "UNAVAILABLE") : "UNAVAILABLE";
-    summary.append(element("strong", "Attempt " + attempt.number),
-      document.createTextNode(" · "),
-      element("span", verdict + " · " + attemptFindingLabel(review), "muted"));
-    if (review.truncated || notes.truncated) summary.append(element("span", " · truncated", "muted"));
+    summary.append(element("strong", "Attempt " + attempt.number));
+    if (notes.truncated) summary.append(element("span", " · truncated", "muted"));
     if (attempt.open) summary.append(element("span", " · running", "muted"));
     item.append(summary);
-    const reviewBody = executionDetails(
-      item, "attempt:" + attempt.id + ":review",
-      "review.md" + (review.model ? " · " + review.model : "") + (review.truncated ? " · truncated" : ""));
-    if (review.available) executionLog(
-      reviewBody, "attempt:" + attempt.id + ":review:log", review.text);
-    reviewBody.append(element("p", review.detail || (review.recorded
-      ? "No reviewer report content was retained for this attempt."
-      : "No reviewer record was retained for this attempt."), "muted"));
     const notesBody = executionDetails(
       item, "attempt:" + attempt.id + ":notes",
       "notes.md" + (notes.truncated ? " · truncated" : ""));
@@ -640,7 +619,7 @@ function renderExecution(data, panel) {
   renderExecutionStages(panel, data.stages);
   renderExecutionBreakdown(panel, data.execution);
   renderExecutionCi(panel, data.execution.ci);
-  renderExecutionReviews(panel, data.execution.worker);
+  renderExecutionNotes(panel, data.execution.worker);
   renderExecutionTimeline(panel, data.execution.events);
   renderExecutionDiagnostics(panel, data.execution.diagnostics);
 }

@@ -366,14 +366,6 @@ class RunnerExecutionTests(unittest.IsolatedAsyncioTestCase):
             data = json.loads(self.runner.rows(
                 "SELECT data FROM execution WHERE id=?", (attempt_id,))[0]["data"])
             self.assertEqual(data["notes"]["text"], "Captured before overwrite")
-            self.runner.record_execution(
-                ISSUE, "review", started=1010, ended=1020,
-                detail="Review completed: NO ISSUES.",
-                data={"attempt": 1, "attemptId": attempt_id, "model": "fixture/reviewer",
-                      "verdict": "NO ISSUES", "findingCount": 0,
-                      "findingCountComplete": True, "report": "VERDICT: NO ISSUES",
-                      "reportTruncated": False, "available": True,
-                      "detail": "Review completed: NO ISSUES."})
             self.runner.worktree(ISSUE).mkdir(parents=True)
 
             async def fake_git(cwd, *args):
@@ -394,8 +386,6 @@ class RunnerExecutionTests(unittest.IsolatedAsyncioTestCase):
                 }, reopened, now=datetime(1970, 1, 1, 0, 18, tzinfo=timezone.utc))
                 attempt, = payload["execution"]["worker"]["attempts"]
                 self.assertEqual(attempt["notes"]["text"], "Captured before overwrite")
-                self.assertEqual(attempt["review"]["verdict"], "NO ISSUES")
-                self.assertEqual(attempt["review"]["findingCount"], 0)
             finally:
                 reopened.db.close()
             self.runner.db = None
@@ -659,7 +649,7 @@ class ExecutionPayloadTests(unittest.IsolatedAsyncioTestCase):
                                      detail="Coordinator handled worker events.")
         payload = execution_payload(ISSUE, issue_row("Done"), {
             "entries": [], "complete": False, "error": "Unavailable",
-        }, self.runner, now=datetime(1970, 1, 1, 0, 17, tzinfo=timezone.utc))
+        }, self.runner, now=datetime(1970, 1, 1, 0, 18, tzinfo=timezone.utc))
         execution = payload["execution"]
         self.assertEqual(execution["coverage"], "partial")
         self.assertEqual(execution["breakdown"]["coordinator"], 10)
@@ -681,7 +671,7 @@ class ExecutionPayloadTests(unittest.IsolatedAsyncioTestCase):
         self.runner.record_execution(ISSUE, "worker", started=1000, ended=1010, detail="Worker")
         payload = execution_payload(ISSUE, issue_row("Done"), {
             "entries": [], "complete": False, "error": "Unavailable",
-        }, self.runner, now=datetime(1970, 1, 1, 0, 17, tzinfo=timezone.utc))
+        }, self.runner, now=datetime(1970, 1, 1, 0, 18, tzinfo=timezone.utc))
         self.assertEqual(payload["execution"]["breakdown"]["startup"], 100)
         self.assertEqual(payload["execution"]["breakdown"]["worker"], 10)
 
@@ -741,7 +731,7 @@ class ExecutionPayloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(secret, raw)
         self.assertNotIn(secret, json.dumps(payload))
 
-    def test_known_secret_is_redacted_before_notes_and_review_persistence(self):
+    def test_known_secret_is_redacted_before_notes_persistence(self):
         secret = "fixture-linear-secret-normal"
         insert_task(self.runner, phase="review", attempts=1)
         attempt_id = self.runner.record_execution(
@@ -751,13 +741,6 @@ class ExecutionPayloadTests(unittest.IsolatedAsyncioTestCase):
         (artifacts / "notes.md").write_text(f"None with {secret}\n")
         with patch.dict(os.environ, {"LINEAR_API_KEY": secret}):
             self.runner.finish_attempt(ISSUE, attempt_id)
-            self.runner.record_execution(
-                ISSUE, "review", started=1010, ended=1020,
-                detail="Review unavailable.",
-                data=self.runner.review_snapshot(
-                    1, attempt_id, "fixture/reviewer", "VERDICT: UNAVAILABLE",
-                    f"Review detail {secret} " + "x" * 3000,
-                    verdict="UNAVAILABLE"))
             raw = json.dumps(self.runner.rows("SELECT data FROM execution"))
             payload = execution_payload(ISSUE, issue_row("Done"), {
                 "entries": [], "complete": False, "error": "Unavailable",
@@ -765,8 +748,6 @@ class ExecutionPayloadTests(unittest.IsolatedAsyncioTestCase):
         attempt, = payload["execution"]["worker"]["attempts"]
         self.assertTrue(attempt["notes"]["available"])
         self.assertEqual(attempt["notes"]["text"], "None with [redacted]")
-        self.assertIn("[redacted]", attempt["review"]["detail"])
-        self.assertLessEqual(len(attempt["review"]["detail"]), 2000)
         self.assertNotIn(secret, raw)
         self.assertNotIn(secret, json.dumps(payload))
         self.assertIn("[redacted]", raw)
@@ -774,33 +755,22 @@ class ExecutionPayloadTests(unittest.IsolatedAsyncioTestCase):
     def test_served_snapshot_details_are_redacted_and_bounded(self):
         secret = "fixture-linear-secret-detail"
         insert_task(self.runner, phase="review", attempts=1)
-        attempt_id = self.runner.record_execution(
+        self.runner.record_execution(
             ISSUE, "attempt", started=1000, ended=1010,
             data={"attempt": 1, "notes": {
                 "available": False, "text": "", "truncated": False,
                 "detail": secret + " " + "x" * 3000}})
-        self.runner.record_execution(
-            ISSUE, "review", started=1010, ended=1020,
-            detail="Review unavailable.",
-            data={"attempt": 1, "attemptId": attempt_id, "model": "fixture/reviewer",
-                  "verdict": "UNAVAILABLE", "findingCount": None,
-                  "findingCountComplete": False, "report": "VERDICT: UNAVAILABLE",
-                  "reportTruncated": False, "available": True,
-                  "detail": secret + " " + "y" * 3000})
         with patch.dict(os.environ, {"LINEAR_API_KEY": secret}):
             payload = execution_payload(ISSUE, issue_row("Done"), {
                 "entries": [], "complete": False, "error": "Unavailable",
             }, self.runner, now=NOW)
         attempt, = payload["execution"]["worker"]["attempts"]
         self.assertNotIn(secret, attempt["notes"]["detail"])
-        self.assertNotIn(secret, attempt["review"]["detail"])
         self.assertIn("[redacted]", attempt["notes"]["detail"])
-        self.assertIn("[redacted]", attempt["review"]["detail"])
         self.assertLessEqual(len(attempt["notes"]["detail"]), 2000)
-        self.assertLessEqual(len(attempt["review"]["detail"]), 2000)
         self.assertNotIn(secret, json.dumps(payload))
 
-    def test_attempt_payload_aggregates_findings_and_counts_review_time_once(self):
+    def test_attempt_payload_tracks_multiple_attempts_without_review_stage(self):
         insert_task(self.runner, phase="done", attempts=3)
         first = self.runner.record_execution(
             ISSUE, "attempt", started=1000, ended=1010,
@@ -811,24 +781,10 @@ class ExecutionPayloadTests(unittest.IsolatedAsyncioTestCase):
         self.runner.record_execution(
             ISSUE, "verification", started=1005, ended=1010, data={"attemptId": first})
         self.runner.record_execution(
-            ISSUE, "review", started=1010, ended=1020, detail="Review completed: ISSUES.",
-            data={"attempt": 1, "attemptId": first, "model": "fixture/reviewer",
-                  "verdict": "ISSUES", "findingCount": 2, "findingCountComplete": True,
-                  "report": "VERDICT: ISSUES\n- a.py:1 - One.\n- b.py:2 - Two.\n",
-                  "reportTruncated": False, "available": True,
-                  "detail": "Review completed: ISSUES."})
-        second = self.runner.record_execution(
             ISSUE, "attempt", started=1020, ended=1030,
             data={"attempt": 2, "notes": {
                 "available": False, "text": "", "truncated": False,
                 "detail": "No notes.md snapshot was retained for this attempt."}})
-        self.runner.record_execution(
-            ISSUE, "review", started=1030, ended=1040, detail="Review unavailable.",
-            data={"attempt": 2, "attemptId": second, "model": "fixture/reviewer",
-                  "verdict": "UNAVAILABLE", "findingCount": None,
-                  "findingCountComplete": False, "report": "VERDICT: UNAVAILABLE\n",
-                  "reportTruncated": False, "available": True,
-                  "detail": "Review unavailable."})
         payload = execution_payload(ISSUE, issue_row("Done"), {
             "entries": [], "complete": False, "error": "Unavailable",
         }, self.runner, now=datetime(1970, 1, 1, 0, 18, tzinfo=timezone.utc))
@@ -838,18 +794,12 @@ class ExecutionPayloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(worker["coverage"], "recorded")
         self.assertEqual([attempt["number"] for attempt in worker["attempts"]], [1, 2])
         self.assertEqual(worker["attempts"][0]["notes"]["text"], "First notes")
-        self.assertEqual(worker["attempts"][0]["review"]["model"], "fixture/reviewer")
-        self.assertEqual(worker["attempts"][0]["review"]["findingCount"], 2)
         self.assertFalse(worker["attempts"][1]["notes"]["available"])
-        self.assertEqual(worker["findings"], {
-            "available": True, "complete": False, "count": 2,
-            "reviewCount": 2, "unlinkedReviews": 0,
-        })
-        self.assertEqual(execution["breakdown"]["review"], 20)
+        self.assertNotIn("findings", worker)
         self.assertEqual(execution["breakdown"]["worker"], 5)
         self.assertEqual(execution["breakdown"]["verification"], 5)
-        self.assertEqual(execution["measuredSeconds"], 30)
-        self.assertEqual(execution["wallSeconds"], 30)
+        self.assertEqual(execution["measuredSeconds"], 10)
+        self.assertEqual(execution["wallSeconds"], 10)
         self.assertEqual(execution["overlapSeconds"], 0)
 
     async def test_real_approval_reports_known_zero_attempts_despite_approval_event(self):
@@ -862,11 +812,9 @@ class ExecutionPayloadTests(unittest.IsolatedAsyncioTestCase):
         execution = payload["execution"]
         self.assertEqual(execution["worker"]["coverage"], "not_started")
         self.assertEqual(execution["worker"]["attemptCount"], 0)
-        self.assertFalse(execution["worker"]["findings"]["available"])
         self.assertEqual(execution["breakdown"]["worker"], 0)
-        self.assertEqual(execution["breakdown"]["review"], 0)
 
-    def test_not_started_worker_has_zero_attempts_and_known_zero_review_time(self):
+    def test_not_started_worker_has_zero_attempts_and_complete_categories(self):
         insert_task(self.runner, phase="approved", attempts=0)
         payload = execution_payload(ISSUE, issue_row("Todo"), {
             "entries": [], "complete": False, "error": "Unavailable",
@@ -874,42 +822,30 @@ class ExecutionPayloadTests(unittest.IsolatedAsyncioTestCase):
         execution = payload["execution"]
         self.assertEqual(execution["worker"]["coverage"], "not_started")
         self.assertEqual(execution["worker"]["attemptCount"], 0)
-        self.assertFalse(execution["worker"]["findings"]["available"])
-        self.assertEqual(execution["breakdown"]["review"], 0)
         self.assertEqual(execution["breakdown"]["worker"], 0)
         self.assertNotIn("review", execution["missingCategories"])
 
-    def test_historical_review_time_is_unknown_and_missing_from_totals(self):
+    def test_completed_task_without_review_event_does_not_flag_review_missing(self):
         insert_task(self.runner, phase="done", attempts=1)
+        self.runner.record_execution(ISSUE, "startup", started=995, ended=1000)
         self.runner.record_execution(ISSUE, "worker", started=1000, ended=1010)
         self.runner.record_execution(ISSUE, "verification", started=1010, ended=1020)
+        self.runner.record_execution(ISSUE, "publication", started=1020, ended=1025)
         payload = execution_payload(ISSUE, issue_row("Done"), {
             "entries": [], "complete": False, "error": "Unavailable",
-        }, self.runner, now=datetime(1970, 1, 1, 0, 17, tzinfo=timezone.utc))
+        }, self.runner, now=datetime(1970, 1, 1, 0, 18, tzinfo=timezone.utc))
         execution = payload["execution"]
-        self.assertIsNone(execution["breakdown"]["review"])
-        self.assertIn("review", execution["missingCategories"])
-        self.assertEqual(execution["coverage"], "partial")
-        self.assertEqual(execution["measuredSeconds"], 20)
-        self.assertEqual(execution["wallSeconds"], 20)
-        self.assertEqual(execution["worker"]["attemptCount"], 0)
-        self.assertFalse(execution["worker"]["findings"]["available"])
+        self.assertNotIn("review", execution["missingCategories"])
+        self.assertEqual(execution["coverage"], "recorded")
+        self.assertEqual(execution["measuredSeconds"], 30)
+        self.assertEqual(execution["wallSeconds"], 30)
 
-    def test_attempt_identity_keeps_counter_resets_separate_and_flags_unlinked_reviews(self):
+    def test_attempt_identity_keeps_counter_resets_separate(self):
         insert_task(self.runner, phase="done", attempts=1)
-        first = self.runner.record_execution(
+        self.runner.record_execution(
             ISSUE, "attempt", started=1000, ended=1010, data={"attempt": 1})
-        second = self.runner.record_execution(
+        self.runner.record_execution(
             ISSUE, "attempt", started=1010, ended=1020, data={"attempt": 1})
-        self.runner.record_execution(
-            ISSUE, "review", started=1010, ended=1011, detail="Review completed: NO ISSUES.",
-            data={"attempt": 1, "attemptId": second, "model": "fixture/reviewer",
-                  "verdict": "NO ISSUES", "findingCount": 0, "findingCountComplete": True,
-                  "report": "VERDICT: NO ISSUES", "reportTruncated": False,
-                  "available": True, "detail": "Review completed: NO ISSUES."})
-        self.runner.record_execution(
-            ISSUE, "review", started=1000, ended=1001, detail="Legacy review.",
-            data={"attempt": 1})
         payload = execution_payload(ISSUE, issue_row("Done"), {
             "entries": [], "complete": False, "error": "Unavailable",
         }, self.runner, now=datetime(1970, 1, 1, 0, 18, tzinfo=timezone.utc))
@@ -917,12 +853,6 @@ class ExecutionPayloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([attempt["counter"] for attempt in worker["attempts"]], [1, 1])
         self.assertEqual([attempt["number"] for attempt in worker["attempts"]], [1, 2])
         self.assertNotEqual(worker["attempts"][0]["id"], worker["attempts"][1]["id"])
-        self.assertFalse(worker["attempts"][0]["review"]["recorded"])
-        self.assertEqual(worker["attempts"][1]["review"]["verdict"], "NO ISSUES")
-        self.assertEqual(worker["findings"]["count"], 0)
-        self.assertTrue(worker["findings"]["available"])
-        self.assertFalse(worker["findings"]["complete"])
-        self.assertEqual(worker["findings"]["unlinkedReviews"], 1)
 
     def test_unavailable_execution_and_ci_are_explicit_instead_of_zero(self):
         payload = execution_payload(ISSUE, issue_row("Backlog"), {
@@ -980,7 +910,6 @@ const updatePill = read("updateStagePill");
 const capture = read("captureExecutionView");
 const restore = read("restoreExecutionView");
 const attemptTotal = read("executionAttemptTotal");
-const findingTotal = read("executionFindingTotal");
 
 class FakeNode {
   constructor(tag = "div", className = "") {
@@ -1107,12 +1036,6 @@ process.stdout.write(JSON.stringify({
     attemptTotal({coverage: "unavailable", attemptCount: 0}, false),
     attemptTotal({coverage: "recorded", attemptCount: 3}, true),
   ],
-  findings: [
-    findingTotal({available: true, complete: true, count: 0, reviewCount: 1}),
-    findingTotal({available: true, complete: false, count: 2, reviewCount: 2}),
-    findingTotal({available: true, complete: false, count: 0, reviewCount: 2}),
-    findingTotal({available: false, complete: false, count: 0, reviewCount: 0}),
-  ],
   restored: [nextDetails.open, nextLog.scrollTop, scroller.scrollTop,
     context.document.activeElement === nextLink, selection.removed,
     Boolean(selection.added), selection.added?.start?.[1], selection.added?.end?.[1],
@@ -1142,12 +1065,6 @@ process.stdout.write(JSON.stringify({
             {"value": "0", "detail": "No worker attempts have started."},
             {"value": "Not recorded", "detail": "No worker attempt records were captured."},
             {"value": "Unavailable", "detail": "Execution records are unavailable."},
-        ])
-        self.assertEqual(result["findings"], [
-            {"value": "0", "detail": "Across 1 recorded review pass"},
-            {"value": "At least 2", "detail": "Partial; some attempts or finding counts are unavailable."},
-            {"value": "Partial", "detail": "Partial; some attempts or finding counts are unavailable."},
-            {"value": "Unavailable", "detail": "No attempt-linked reviewer findings were recorded."},
         ])
         self.assertEqual(result["restored"], [True, 123, 777, True, True, True, 2, 5, False])
 
@@ -1288,104 +1205,91 @@ const ci = {coverage: "recorded", reason: "", runs: [], runCount: 0, attemptCoun
   jobSeconds: null, jobWallSeconds: null, jobLowerBound: false, jobCoverage: "unavailable",
   waitingSeconds: 0, discoverySeconds: 0, overlapSeconds: 0, lowerBound: false};
 
-function attempt(id, number, notes, review) {
+function attempt(id, number, notes) {
   return {id, number, counter: number, startedAt: "2026-01-01T00:00:00Z",
     endedAt: "2026-01-01T00:10:00Z", open: false,
-    notes: {available: true, text: notes, truncated: false, detail: ""},
-    review: {recorded: true, available: true, verdict: "ISSUES", findingCount: 2,
-      findingCountComplete: true, model: "fixture/reviewer", text: review,
-      truncated: false, detail: "Review completed: ISSUES.",
-      startedAt: "2026-01-01T00:05:00Z", endedAt: "2026-01-01T00:10:00Z"}};
+    notes: {available: true, text: notes, truncated: false, detail: ""}};
 }
-function payload(attempts, events, findings) {
+function payload(attempts, events) {
   return {issue: {identifier: "KIAN-1", title: "Fixture", url: "", state: {name: "In Progress", type: "started"}, project: "Fixture"},
     generatedAt: "2026-01-01T00:10:00Z", stages,
     execution: {
       coverage: "recorded", reason: "", events,
-      breakdown: {startup: 1, worker: 2, verification: 3, review: 4, coordinator: 0,
+      breakdown: {startup: 1, worker: 2, verification: 3, coordinator: 0,
         publication: 0, ci_workflow: 0, ci_wait: 0, ci_discovery: 0},
       worker: {attemptCount: attempts.length, coverage: attempts.length ? "recorded" : "unavailable",
-        attempts, findings},
-      missingCategories: [], lowerBound: false, measuredSeconds: 10, wallSeconds: 10,
+        attempts},
+      missingCategories: [], lowerBound: false, measuredSeconds: 6, wallSeconds: 6,
       overlapSeconds: 0, ci, diagnostics,
     }};
 }
 
-const rawReview = "VERDICT: ISSUES\n<img src=x onerror=alert(1)>";
 const rawNotes = "Notes <script>alert(1)</script>";
 const first = payload(
-  [attempt("10", 1, rawNotes, rawReview)],
-  [{id: 1, kind: "review", startedAt: "2026-01-01T00:05:00Z",
-    endedAt: "2026-01-01T00:10:00Z", detail: "Review completed.", open: false, data: {}}],
-  {available: true, complete: true, count: 2, reviewCount: 1, unlinkedReviews: 0});
+  [attempt("10", 1, rawNotes)],
+  [{id: 1, kind: "worker", startedAt: "2026-01-01T00:05:00Z",
+    endedAt: "2026-01-01T00:10:00Z", detail: "Worker exited.", open: false, data: {}}]);
 const panel = context.document.createElement("div");
 render(first, panel);
 const timeline = byKey(panel, "timeline");
-const reviewDetails = byKey(panel, "attempt:10:review");
 const notesDetails = byKey(panel, "attempt:10:notes");
 const initial = {
   timelineSummary: timeline.childNodes[0].textContent,
   timelineOpen: timeline.open,
   timelineEvents: all(timeline).filter((node) => node.className.split(" ").includes("execution-event")).length,
-  reviewText: logText(reviewDetails),
   notesText: logText(notesDetails),
   injected: all(panel).some((node) => ["img", "script"].includes(node.tag)),
   ciWorkflow: metricValue(panel, "CI workflow"),
   attempts: metricValue(panel, "Worker attempts"),
-  findings: metricValue(panel, "Review findings"),
 };
 
 const attemptDetails = byKey(panel, "attempt:10");
 attemptDetails.open = true;
-reviewDetails.open = true;
+notesDetails.open = true;
 timeline.open = true;
-const reviewLog = all(reviewDetails).find((node) =>
+const notesLog = all(notesDetails).find((node) =>
   node.className.split(" ").includes("execution-log"));
-reviewLog.scrollTop = 88;
+notesLog.scrollTop = 88;
 const scroller = context.document.createElement("div");
 scroller.scrollTop = 321;
-reviewLog.focus();
+notesLog.focus();
 const selection = {
-  rangeCount: 1, anchorNode: reviewLog, focusNode: reviewLog, removed: false, added: null,
-  getRangeAt: () => ({startContainer: reviewLog, startOffset: 0,
-    endContainer: reviewLog, endOffset: 3}),
+  rangeCount: 1, anchorNode: notesLog, focusNode: notesLog, removed: false, added: null,
+  getRangeAt: () => ({startContainer: notesLog, startOffset: 0,
+    endContainer: notesLog, endOffset: 3}),
   removeAllRanges() { this.removed = true; },
   addRange(range) { this.added = range; },
 };
-const view = capture(panel, scroller, selection, reviewLog);
+const view = capture(panel, scroller, selection, notesLog);
 const second = payload(
-  [attempt("10", 1, rawNotes, rawReview + "\nUpdated review."),
-   attempt("11", 2, "Second notes", "VERDICT: NO ISSUES")],
-  [{id: 1, kind: "review", startedAt: "2026-01-01T00:05:00Z",
-    endedAt: "2026-01-01T00:10:00Z", detail: "Review completed.", open: false, data: {}},
+  [attempt("10", 1, rawNotes + "\nUpdated notes."),
+   attempt("11", 2, "Second notes")],
+  [{id: 1, kind: "worker", startedAt: "2026-01-01T00:05:00Z",
+    endedAt: "2026-01-01T00:10:00Z", detail: "Worker exited.", open: false, data: {}},
    {id: 2, kind: "attempt", startedAt: "2026-01-01T00:10:00Z",
-    endedAt: null, detail: "Attempt 2 started.", open: true, data: {}}],
-  {available: true, complete: false, count: 2, reviewCount: 2, unlinkedReviews: 0});
+    endedAt: null, detail: "Attempt 2 started.", open: true, data: {}}]);
 render(second, panel);
 restore(panel, view, scroller, selection);
 const newTimeline = byKey(panel, "timeline");
-const newReview = byKey(panel, "attempt:10:review");
-const newReviewLog = all(newReview).find((node) =>
+const newNotes = byKey(panel, "attempt:10:notes");
+const newNotesLog = all(newNotes).find((node) =>
   node.className.split(" ").includes("execution-log"));
 const refreshed = {
   timelineSummary: newTimeline.childNodes[0].textContent,
   timelineOpen: newTimeline.open,
   firstAttemptOpen: byKey(panel, "attempt:10").open,
   secondAttemptOpen: byKey(panel, "attempt:11").open,
-  logScroll: newReviewLog.scrollTop,
+  logScroll: newNotesLog.scrollTop,
   scroller: scroller.scrollTop,
-  focus: context.document.activeElement === newReviewLog,
+  focus: context.document.activeElement === newNotesLog,
   selection: Boolean(selection.added)
-    && selection.added.start?.[0] === newReviewLog
+    && selection.added.start?.[0] === newNotesLog
     && selection.added.end?.[1] === 3,
 };
 
 const emptyPanel = context.document.createElement("div");
-const empty = payload([], [], {available: false, complete: false, count: 0,
-  reviewCount: 0, unlinkedReviews: 0});
+const empty = payload([], []);
 empty.execution.worker.coverage = "not_started";
-empty.execution.worker.findings = {available: false, complete: false, count: 0,
-  reviewCount: 0, unlinkedReviews: 0};
 render(empty, emptyPanel);
 const emptyTimeline = byKey(emptyPanel, "timeline");
 const missing = {
@@ -1393,42 +1297,35 @@ const missing = {
   timelineOpen: emptyTimeline.open,
   timelineText: all(emptyTimeline).find((node) => node.tag === "p")?.textContent,
   attempts: metricValue(emptyPanel, "Worker attempts"),
-  findings: metricValue(emptyPanel, "Review findings"),
 };
 const shapeFirst = payload(
-  [attempt("30", 1, "First notes", "VERDICT: ISSUES\nfirst"),
-   attempt("31", 2, "Second notes", "VERDICT: NO ISSUES\nsecond")],
-  [{id: 4, kind: "review", startedAt: "2026-01-01T00:05:00Z",
-    endedAt: "2026-01-01T00:10:00Z", detail: "Review completed.", open: false, data: {}}],
-  {available: true, complete: true, count: 2, reviewCount: 2, unlinkedReviews: 0});
+  [attempt("30", 1, "First notes"),
+   attempt("31", 2, "Second notes")],
+  [{id: 4, kind: "worker", startedAt: "2026-01-01T00:05:00Z",
+    endedAt: "2026-01-01T00:10:00Z", detail: "Worker exited.", open: false, data: {}}]);
 const shapePanel = context.document.createElement("div");
 render(shapeFirst, shapePanel);
-const firstReviewLog = byKey(shapePanel, "attempt:30:review:log");
+const firstNotesLog = byKey(shapePanel, "attempt:30:notes:log");
 const secondNotesLog = byKey(shapePanel, "attempt:31:notes:log");
 secondNotesLog.scrollTop = 55;
-firstReviewLog.focus();
+firstNotesLog.focus();
 const vanishSelection = {
-  rangeCount: 1, anchorNode: firstReviewLog, focusNode: firstReviewLog, removed: false, added: null,
-  getRangeAt: () => ({startContainer: firstReviewLog, startOffset: 0,
-    endContainer: firstReviewLog, endOffset: 4}),
+  rangeCount: 1, anchorNode: firstNotesLog, focusNode: firstNotesLog, removed: false, added: null,
+  getRangeAt: () => ({startContainer: firstNotesLog, startOffset: 0,
+    endContainer: firstNotesLog, endOffset: 4}),
   removeAllRanges() { this.removed = true; },
   addRange(range) { this.added = range; },
 };
 byKey(shapePanel, "attempt:30").open = true;
-const vanishView = capture(shapePanel, scroller, vanishSelection, firstReviewLog);
+const vanishView = capture(shapePanel, scroller, vanishSelection, firstNotesLog);
 const shapeSecond = payload(
-  [attempt("30", 1, "First notes", "VERDICT: ISSUES\nfirst"),
-   attempt("31", 2, "Second notes", "VERDICT: NO ISSUES\nsecond"),
-   attempt("32", 3, "Third notes", "VERDICT: NO ISSUES\nthird")],
-  [{id: 4, kind: "review", startedAt: "2026-01-01T00:05:00Z",
-    endedAt: "2026-01-01T00:10:00Z", detail: "Review completed.", open: false, data: {}}],
-  {available: true, complete: false, count: 2, reviewCount: 3, unlinkedReviews: 0});
+  [attempt("30", 1, "First notes"),
+   attempt("31", 2, "Second notes"),
+   attempt("32", 3, "Third notes")],
+  [{id: 4, kind: "worker", startedAt: "2026-01-01T00:05:00Z",
+    endedAt: "2026-01-01T00:10:00Z", detail: "Worker exited.", open: false, data: {}}]);
 shapeSecond.execution.worker.attempts[0].notes = {available: false, text: "",
   truncated: false, detail: "No new notes."};
-shapeSecond.execution.worker.attempts[0].review = {recorded: false, available: false,
-  verdict: "UNAVAILABLE", findingCount: null, findingCountComplete: false,
-  model: "", text: "", truncated: false, detail: "No reviewer record.",
-  startedAt: null, endedAt: null};
 context.document.activeElement = null;
 render(shapeSecond, shapePanel);
 restore(shapePanel, vanishView, scroller, vanishSelection);
@@ -1440,18 +1337,7 @@ const shape = {
   keyedSelectionGone: vanishSelection.added === null,
 };
 
-const cleanPanel = context.document.createElement("div");
-const clean = payload([attempt("20", 1, "Notes", "VERDICT: NO ISSUES")],
-  [{id: 3, kind: "review", startedAt: "2026-01-01T00:05:00Z",
-    endedAt: "2026-01-01T00:10:00Z", detail: "Review completed: NO ISSUES.",
-    open: false, data: {}}],
-  {available: true, complete: true, count: 0, reviewCount: 1, unlinkedReviews: 0});
-clean.execution.worker.attempts[0].review.verdict = "NO ISSUES";
-clean.execution.worker.attempts[0].review.findingCount = 0;
-render(clean, cleanPanel);
-const cleanFindings = metricValue(cleanPanel, "Review findings");
-
-process.stdout.write(JSON.stringify({initial, refreshed, missing, cleanFindings, shape}));
+process.stdout.write(JSON.stringify({initial, refreshed, missing, shape}));
 """
         run = subprocess.run(
             ["node", "-e", script, str(root / "panes.js"), str(root / "issue.js")],
@@ -1461,12 +1347,10 @@ process.stdout.write(JSON.stringify({initial, refreshed, missing, cleanFindings,
             "timelineSummary": "Timeline · 1",
             "timelineOpen": False,
             "timelineEvents": 1,
-            "reviewText": "VERDICT: ISSUES\n<img src=x onerror=alert(1)>",
             "notesText": "Notes <script>alert(1)</script>",
             "injected": False,
             "ciWorkflow": {"value": "0s", "detail": "Sum of workflow runs; may overlap"},
             "attempts": {"value": "1", "detail": "Retained attempt records"},
-            "findings": {"value": "2", "detail": "Across 1 recorded review pass"},
         })
         self.assertEqual(result["refreshed"], {
             "timelineSummary": "Timeline · 2",
@@ -1483,11 +1367,7 @@ process.stdout.write(JSON.stringify({initial, refreshed, missing, cleanFindings,
             "timelineOpen": False,
             "timelineText": "No execution events were recorded.",
             "attempts": {"value": "0", "detail": "No worker attempts have started."},
-            "findings": {"value": "Unavailable",
-                "detail": "No attempt-linked reviewer findings were recorded."},
         })
-        self.assertEqual(result["cleanFindings"],
-            {"value": "0", "detail": "Across 1 recorded review pass"})
         self.assertEqual(result["shape"], {
             "secondNotesScroll": 55,
             "firstAttemptOpen": True,

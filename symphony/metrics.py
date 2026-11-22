@@ -22,7 +22,6 @@ EXECUTION_KINDS = (
     "startup",
     "worker",
     "verification",
-    "review",
     "coordinator",
     "publication",
     "ci_wait",
@@ -231,7 +230,7 @@ def render_metrics(app):
                     row[sum_key],
                 ))
     _emit_family(lines, "symphony_tokens_total", "counter",
-                 "Observed token counts by source (coordinator/worker/review), repository, model, and direction.",
+                 "Observed token counts by source (coordinator/worker), repository, model, and direction.",
                  token_samples)
 
     cost_rows = runner.rows(
@@ -305,12 +304,12 @@ def render_metrics(app):
         )),
         "worker_tokens": bool(runner.rows(
             """SELECT 1 FROM token_usage
-               WHERE source IN ('worker', 'review')
+               WHERE source = 'worker'
                  AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL OR total_tokens IS NOT NULL)
                LIMIT 1"""
         )),
         "worker_cost_usd": bool(runner.rows(
-            "SELECT 1 FROM token_usage WHERE source IN ('worker', 'review') AND cost_usd IS NOT NULL LIMIT 1"
+            "SELECT 1 FROM token_usage WHERE source = 'worker' AND cost_usd IS NOT NULL LIMIT 1"
         )),
         "codex_rate_limits": bool(limit_samples),
         "deployments": bool(deploy_counts),

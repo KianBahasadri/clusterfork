@@ -599,6 +599,8 @@ class Symphony:
             return self.runner.read_notes(issue_id)
         if name == "read_diff":
             return await self.runner.read_diff(issue_id)
+        if name == "verify_worker":
+            return await self.runner.verify(issue_id)
         if name == "ship_worker":
             return self.runner.ship(issue_id)
         if name == "park_worker":
@@ -887,7 +889,7 @@ class Symphony:
         if compacted:
             context.append(
                 "Context was compacted. Call worker_status for live task state "
-                "and read_notes for an issue's locked plan, notes, and review."
+                "and read_notes for an issue's locked plan and notes."
             )
         self.pending_rules[repo] = rules_hash
         return cwd, "\n\n".join(context)

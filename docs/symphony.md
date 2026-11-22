@@ -120,14 +120,11 @@ including private images and range requests. The key stays on the server.
 Close the modal with Close, Escape, or the backdrop to return focus to its card.
 The modal opens on the Issue tab; the Execution tab loads on demand from a
 non-cached endpoint and refreshes while it is open. It shows tracked stage totals,
-the recorded In Progress breakdown with worker attempt totals, reviewer time,
-measured, concurrent wall, waiting, and overlap values, retained GitHub
-workflow/job/attempt details, and a Timeline that starts collapsed. Reviews &
-notes by attempt retains bounded, redacted notes.md and review.md snapshots for
-each recorded attempt, with its reviewer verdict, model, and finding count.
-Repeated findings across reviewer passes count separately; incomplete totals are
-labeled partial or at least, and activity without retained records stays
-unavailable rather than guessed. Coverage is labeled when records are partial,
+the recorded In Progress breakdown with worker attempt totals, measured,
+concurrent wall, waiting, and overlap values, retained GitHub
+workflow/job/attempt details, and a Timeline that starts collapsed. Notes by
+attempt retains bounded, redacted `notes.md` snapshots for each recorded attempt.
+Coverage is labeled when records are partial,
 lower-bound, or unavailable; active CI runs stop at their last observed GitHub
 response rather than growing through unobserved time. Diagnostic worker-log and
 verification excerpts are bounded, redacted server-side, and rendered as text; CI
@@ -185,7 +182,7 @@ selected project's repository working directory and includes the shared
 `agents/AGENTS.md` defaults before its repository `AGENTS.md` when starting a
 session or when either instruction file changes, keeping subsequent user turns
 lean (reading live approved work from `worker_status` and each issue's locked
-approved plan, worker notes, and review report from `read_notes`). After a
+approved plan and worker notes from `read_notes`). After a
 `contextCompaction`, the next coordinator turn includes a one-shot reminder to
 use `worker_status` and `read_notes` (and re-injects instruction rules only if
 they differ from the thread's native rules or were edited). The Config button
@@ -211,7 +208,7 @@ Explicit user or task directions and applicable repository or nested
 instructions override the shared defaults, while Symphony's approval,
 publication, and tool restrictions remain authoritative. Symphony links the same
 file into Codex's `CODEX_HOME/AGENTS.md` and the isolated
-`XDG_CONFIG_HOME/opencode/AGENTS.md` used by workers and the reviewer, so native
+`XDG_CONFIG_HOME/opencode/AGENTS.md` used by workers, so native
 discovery also applies to fresh sessions, resumed-session update notices, and
 compaction requests. A missing,
 unreadable, or oversized shared file prevents startup or appears as a viewer
@@ -223,7 +220,7 @@ isolated-home probes a changed file appeared in the next turn without a restart,
 and a removed file disappeared from the active instruction block after process
 restart and saved-session resume. Earlier instruction updates remained only in
 conversation history, where later updates explicitly replace them. OpenCode
-reads the current file for new sessions and the reviewer starts fresh, but a
+reads the current file for new sessions, while a
 resumed OpenCode session keeps its original instruction block in the system
 prompt. When the file changes or disappears, OpenCode adds a system-update
 message carrying the new text or removal notice; the old block is not rewritten.
@@ -247,8 +244,7 @@ attempt has a one-hour safety timeout. Every new and resumed implementation
 worker receives default remote MCP servers for Context7
 (`https://mcp.context7.com/mcp`) and Exa web search (`https://mcp.exa.ai/mcp`)
 through `OPENCODE_CONFIG_CONTENT`, while OpenCode's interactive built-in
-`websearch` tool, direct pushes, PR creation, and subagents are denied. Worker
-and reviewer environments strip GitHub, Linear, OpenAI, Codex, OpenCode Go API
+`websearch` tool, direct pushes, PR creation, and subagents are denied. Worker environments strip GitHub, Linear, OpenAI, Codex, OpenCode Go API
 key, and Linear webhook signing-secret variables. The container image includes
 standard CLI utilities (`jq`, `rg`, `sqlite3`, `tmux`, `gawk`, `patch`, `file`,
 `zip`) and pinned Python Playwright in `/opt/symphony` with its managed Chromium
@@ -257,27 +253,19 @@ under `/opt/playwright-browsers`, discovered through
 `/opt/symphony/bin/python` with `--no-sandbox`, `--disable-dev-shm-usage`, and
 `--disable-gpu` under restricted PodSecurity; Docker, QEMU, Go, and privileged
 networking tools remain out of scope for the Symphony image.
-The checklist is a shell command file that Symphony runs a second time, in the
-worktree, to get its own exit status.
-The worker's notes and log live in `runs/<issue-id>/` on the PVC. The worktree
-stays reserved through audit, rework, and CI. After verification exits 0 and
-before the coordinator audit, Symphony runs one stateless read-only OpenCode
-reviewer in a fresh session. It uses `opencode-go/kimi-k3.1-pro#low`
-unless `SYMPHONY_REVIEW_MODEL` overrides the model. The reviewer receives the
-approved plan, notes, and full diff against the recorded base, with repository
-edits, writes, shell, subagents, and MCP tools denied. Symphony writes a bounded
-`runs/<issue-id>/review.md` with a structured verdict and file/line findings,
-or an honest unavailable/error report; raw output and the diff remain in
-`review.log` and `review.diff`. Only the terminal assistant message ending in
-the final stop step becomes the report; progress and tool-call text stay in the
-log, and a missing or nonterminal stop is unavailable. A clean verdict must
-stand alone. Review has a ten-minute ceiling, and missing, malformed, failed, or
-timed-out output is reported as unavailable rather than as a clean verdict.
-Failed verification skips review, stale reports are cleared
-on every attempt, and the tested tree is compared after review so a changed
-tree blocks handoff. Reviewer findings are advice, not approval.
-Existing work without a report shows review unavailable. The coordinator reads
-notes and review before shipping. Worker errors, rejected pushes, and failed CI
+Workers write strictly targeted checks for the changed area (not repo-wide test
+suites, which CI owns) to `runs/<issue-id>/checks.sh`, which Symphony runs in
+the worktree to record `check_exit` and the verified tree.
+The worker's optional notes and log live in `runs/<issue-id>/` on the PVC. The worktree
+stays reserved through audit, rework, and CI. The coordinator inspects the diff
+or optional `notes.md` as needed (`read_diff`, `read_notes`, or shell) and ships
+directly without a mandatory `read_notes` lock when `check_exit` is 0 and the
+diff satisfies the approved plan without concrete bugs. For small audit fixes, the coordinator can patch the worktree
+directly and call `verify_worker` to re-run `checks.sh` and refresh the verified
+tree before calling `ship_worker`, reserving `resume_worker` for substantial
+rework. During planning, the coordinator suggests combining small related issues
+(estimates 1–3) into a larger issue (~5 points) rather than running separate
+solo cycles, without ever merging issues automatically. Worker errors, rejected pushes, and failed CI
 appear in chat and the issue panes with the worktree preserved. OpenCode Go
 quota, rate-limit, and authentication failures pause new dispatches. Use
 `/retry KIAN-123` to revisit a parked issue and `/continue` when the provider
@@ -334,8 +322,9 @@ records the change in the chat history.
 
 ## Deploy on Guaranine
 
-The `test` workflow publishes the image to GHCR from `main` after tests pass.
-Deploy the full commit tag (or image digest) from the successful run. The main
+The `image` workflow (`workflow_run` after `test` succeeds on `main`) builds,
+verifies, and publishes the image to GHCR asynchronously without holding
+Symphony's push-CI repository lock. Deploy the full commit tag (or image digest) from the successful run. The main
 deployment uses a single restricted pod and an OpenEBS local PVC. A private
 Tailscale Serve sidecar proxies the app's loopback listener over tailnet HTTPS.
 A separate restricted userspace Tailscale gateway exposes only the Funnel route
@@ -424,7 +413,7 @@ time, accepts only Issue and Project create, update, or remove payloads, and
 returns 200 after signaling the refresh loop. Invalid signatures, stale or
 malformed payloads, oversized or incomplete bodies, timeouts, and wrong routes
 or methods are rejected without waking the refresh loop. The signing secret is
-stripped from worker and reviewer subprocesses, git environments, and recorded
+stripped from worker subprocesses, git environments, and recorded
 execution diagnostics.
 
 The public gateway reaches only the webhook listener; the private UI remains

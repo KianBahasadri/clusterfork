@@ -26,14 +26,14 @@ from symphony.__main__ import (
     BODY_LIMIT, CONFIG_BODY_LIMIT, ISSUE_REFRESH_SECONDS, REFRESH_COALESCE_SECONDS, WEBHOOK_BODY_LIMIT,
     Handler, Symphony, WebhookHandler, issue_summary, serve,
 )
-from symphony.codex import CREATE_ISSUE_SCHEMA, Codex, TOOLS, TOOLS_HASH
+from symphony.codex import CREATE_ISSUE_SCHEMA, INSTRUCTIONS, Codex, TOOLS, TOOLS_HASH
 from symphony.execution import execution_payload
 from symphony.runner import (
-    AGENTS_BYTES, BusyError, NOTES_LINES, REVIEW_LINES, Runner, bounded_review,
-    install_agent_instructions, shared_agents, validate_review,
+    AGENTS_BYTES, BusyError, NOTES_LINES, Runner,
+    install_agent_instructions, shared_agents, worker_prompt,
 )
 from symphony.services import (
-    Linear, estimate_scale, matches_filter, proposed_plan, with_plan,
+    Linear, ci_workflows, estimate_scale, matches_filter, proposed_plan, with_plan,
 )
 
 
@@ -174,68 +174,6 @@ workspace = Path(os.environ["FIXTURE_ROOT"]) / "runs/KIAN-101"
 config = json.loads(os.environ.get("OPENCODE_CONFIG_CONTENT", "{}"))
 agents_path = Path(os.environ["XDG_CONFIG_HOME"]) / "opencode" / "AGENTS.md"
 agents = agents_path.read_text() if agents_path.is_file() else None
-if config.get("mcp") == {"servers": {}}:
-    prompt = sys.stdin.read()
-    with (workspace / "review-runs").open("a") as stream:
-        stream.write("review\\n")
-    (workspace / "review-env.json").write_text(json.dumps({
-        "args": sys.argv,
-        "config": config,
-        "github": "GITHUB_TOKEN" in os.environ,
-        "linear": "LINEAR_API_KEY" in os.environ,
-        "api_key": "OPENCODE_GO_API_KEY" in os.environ,
-        "webhook": "LINEAR_WEBHOOK_SECRET" in os.environ,
-        "agents": agents,
-        "prompt": prompt,
-    }))
-    assert "independent read-only code reviewer" in prompt
-    mode = os.environ.get("FIXTURE_REVIEW", "")
-    def emit(kind, message, **part):
-        print(json.dumps({"type": kind, "sessionID": "ses_review",
-                          "part": {"messageID": message, **part}}))
-    def finish(message, text, reason):
-        emit("step_start", message, type="step-start")
-        if text is not None:
-            emit("text", message, type="text", text=text)
-        emit("step_finish", message, type="step-finish", reason=reason)
-    if mode == "timeout":
-        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-        (workspace / "review-pids").write_text(f"{os.getpid()} {child.pid}")
-        time.sleep(60)
-        sys.exit(0)
-    if mode == "fail":
-        print(json.dumps({"type": "error", "sessionID": "ses_review",
-                          "error": {"type": "provider.api", "message": "Fixture review failed"}}))
-        sys.exit(2)
-    if mode == "toolonly":
-        emit("tool_use", "msg_tool", type="tool", tool="grep")
-        emit("text", "msg_tool", type="text", text="VERDICT: NO ISSUES")
-        emit("step_finish", "msg_tool", type="step-finish", reason="tool-calls")
-    elif mode == "nonterminal":
-        finish("msg_tool", "VERDICT: NO ISSUES", "tool-calls")
-    elif mode == "progress":
-        finish("msg_progress", "Reviewing the diff.", "tool-calls")
-        finish("msg_final", "VERDICT: NO ISSUES", "stop")
-    elif mode == "intermediate":
-        finish("msg_early", "VERDICT: NO ISSUES", "tool-calls")
-        finish("msg_final", "VERDICT: ISSUES\\n- symphony/runner.py:1 - Final finding.", "stop")
-    elif mode == "malformed":
-        finish("msg_final", "Looks fine to me.", "stop")
-    elif mode == "empty":
-        finish("msg_final", None, "stop")
-    elif mode == "findings":
-        finish("msg_final", "VERDICT: ISSUES\\n- symphony/runner.py:1 - Fixture finding.\\n", "stop")
-    elif mode == "large":
-        finish("msg_final", "VERDICT: ISSUES\\n- symphony/runner.py:1 - Fixture finding.\\n"
-               + "detail\\n" * 300, "stop")
-    elif mode == "custom":
-        finish("msg_final", os.environ.get("FIXTURE_REVIEW_TEXT", "VERDICT: NO ISSUES"), "stop")
-    elif mode == "mutate":
-        Path("verified.txt").write_text("Reviewed\\n")
-        finish("msg_final", "VERDICT: NO ISSUES", "stop")
-    else:
-        finish("msg_final", "VERDICT: NO ISSUES", "stop")
-    sys.exit(0)
 assert "Write one verification file." in sys.argv[-1]
 assert "Never ship from the worker." in sys.argv[-1]
 assert sys.argv[sys.argv.index("--model") + 1] == "opencode-go/deepseek-v4.1-flash#max"
@@ -912,7 +850,7 @@ else:
                         f"Global AGENTS.md is unavailable: {path.name} must be a regular file.",
                     )
 
-    async def test_fresh_resumed_workers_and_reviewer_receive_shared_defaults(self):
+    async def test_fresh_and_resumed_workers_receive_shared_defaults(self):
         shared = self.root / "shared-AGENTS.md"
         shared.write_text("# Shared\n\n- GLOBAL-WORKER-RULE\n")
         with patch("symphony.runner.SHARED_AGENTS", shared):
@@ -928,7 +866,6 @@ else:
         self.assertIn("--session", records[1]["args"])
         for record in records:
             self.assertIn("GLOBAL-WORKER-RULE", record["agents"])
-        self.assertIn("GLOBAL-WORKER-RULE", self.review_environment()["agents"])
 
     async def test_create_issue_schema_preserves_string_only_tool_validation(self):
         tools = {tool["name"]: tool for tool in TOOLS}
@@ -1797,9 +1734,6 @@ else:
         self.assertEqual(self.runner.task(ISSUE)["session"], "ses_fixture")
         self.assertEqual(self.runner.task(ISSUE)["check_exit"], status)
 
-    def review_environment(self):
-        return json.loads((self.runner.artifacts(ISSUE) / "review-env.json").read_text())
-
     def execution(self):
         issue = {
             "identifier": ISSUE, "title": "Fixture", "url": "",
@@ -2300,11 +2234,9 @@ else:
         with self.assertRaisesRegex(ValueError, "No approved plan"):
             await self.runner.dispatch(ISSUE, REPO, "")
         await self.worker_done()
-        with self.assertRaisesRegex(ValueError, "Read the latest"):
-            self.runner.ship(ISSUE)
         audit = self.runner.read_notes(ISSUE)
         self.assertIn("None\n", audit)
-        self.assertIn("VERDICT: NO ISSUES", audit)
+        self.assertFalse((self.runner.artifacts(ISSUE) / "review.md").exists())
 
         observe = asyncio.Event()
 
@@ -2329,65 +2261,80 @@ else:
         self.assertFalse(self.runner.worktree(ISSUE).exists())
         self.assertEqual(self.git(self.remote, "show", "main:verified.txt"), "Tested")
         execution = {row["kind"]: row for row in self.runner.rows("SELECT * FROM execution")}
-        for kind in ("startup", "worker", "verification", "review", "attempt",
+        for kind in ("startup", "worker", "verification", "attempt",
                      "publication", "completion"):
             self.assertIn(kind, execution)
             self.assertIsNotNone(execution[kind]["ended"])
+        self.assertNotIn("review", execution)
 
-    async def test_successful_verification_runs_one_read_only_review(self):
+    async def test_ship_does_not_require_notes_or_read_notes_gate(self):
+        with patch.dict(os.environ, {"FIXTURE_SKIP_NOTES": "1"}):
+            await self.worker_done()
+        self.assertFalse((self.runner.artifacts(ISSUE) / "notes.md").exists())
+        self.assertIn("No notes.md was produced", self.runner.read_notes(ISSUE))
+        with patch("symphony.runner.ci_runs", AsyncMock(return_value=[
+                {"path": ".github/workflows/test.yml", "status": "completed", "conclusion": "success"}])):
+            self.runner.ship(ISSUE)
+            await self.phase("done")
+        self.assertEqual(self.linear.state["name"], "Done")
+
+    async def test_verify_worker_rechecks_coordinator_edits_and_allows_shipping(self):
         await self.worker_done()
+        worktree = self.runner.worktree(ISSUE)
+        (worktree / "verified.txt").write_text("Coordinator patched\n")
+        (self.runner.artifacts(ISSUE) / "checks.sh").write_text("grep -qx 'Coordinator patched' verified.txt\n")
+        app = self.app()
+        result = await app.tool("verify_worker", {"issue_id": ISSUE})
+        self.assertEqual(result["issue"], ISSUE)
+        self.assertEqual(result["phase"], "review")
+        self.assertEqual(result["check_exit"], 0)
+        with patch("symphony.runner.ci_runs", AsyncMock(return_value=[
+                {"path": ".github/workflows/test.yml", "status": "completed", "conclusion": "success"}])):
+            await app.tool("ship_worker", {"issue_id": ISSUE})
+            await self.phase("done")
+        self.assertEqual(self.git(self.remote, "show", "main:verified.txt"), "Coordinator patched")
+
+    async def test_verify_worker_recovers_blocked_worktree_and_reports_failing_checks(self):
+        await self.worker_done()
+        self.runner.block(ISSUE, "Needs quick fix")
         artifacts = self.runner.artifacts(ISSUE)
-        environment = self.review_environment()
-        self.assertEqual((artifacts / "review-runs").read_text(), "review\n")
-        self.assertEqual(environment["args"][environment["args"].index("--model") + 1],
-                         "opencode-go/kimi-k3.1-pro#low")
-        for flag in ("run", "--standalone", "--auto", "--format"):
-            self.assertIn(flag, environment["args"])
-        self.assertNotIn("--session", environment["args"])
-        self.assertFalse(environment["github"])
-        self.assertFalse(environment["linear"])
-        self.assertFalse(environment["api_key"])
-        self.assertFalse(environment["webhook"])
-        permissions = environment["config"]["permissions"]
-        self.assertEqual(permissions[0], {"action": "*", "resource": "*", "effect": "deny"})
-        for action in ("edit", "write", "shell", "subagent", "websearch"):
-            self.assertIn({"action": action, "resource": "*", "effect": "deny"}, permissions)
-        self.assertIn({"action": "shell", "resource": "git push *", "effect": "deny"},
-                      permissions)
-        self.assertIn({"action": "shell", "resource": "gh pr create *", "effect": "deny"},
-                      permissions)
-        self.assertIn({"action": "read", "resource": "*", "effect": "allow"}, permissions)
-        self.assertIn({"action": "external_directory", "resource": "*", "effect": "deny"},
-                      permissions)
-        self.assertFalse(any(rule["effect"] == "allow" and rule["action"] in
-                             {"edit", "write", "shell", "subagent"} for rule in permissions))
-        self.assertEqual(environment["config"]["mcp"], {"servers": {}})
-        self.assertIn("Write one verification file.", environment["prompt"])
-        self.assertIn("None\n", environment["prompt"])
-        self.assertIn("SYMPHONY_DIFF_BEGIN", environment["prompt"])
-        self.assertIn("verified.txt", environment["prompt"])
-        base = self.runner.task(ISSUE)["base"]
-        self.assertIsNotNone(base)
-        self.assertIn(f"recorded base {base}", environment["prompt"])
-        self.assertNotIn("recorded base None", environment["prompt"])
-        diff = self.git(self.runner.worktree(ISSUE), "diff", "--no-ext-diff",
-                        self.runner.task(ISSUE)["base"], "--")
-        self.assertEqual((artifacts / "review.diff").read_text(), diff)
-        self.assertIn("ses_review", (artifacts / "review.log").read_text())
-        report = (artifacts / "review.md").read_text()
-        self.assertIn("VERDICT: NO ISSUES", report)
-        self.assertNotIn("VERDICT: UNAVAILABLE", report)
-        self.assertIn("VERDICT: NO ISSUES", self.runner.read_notes(ISSUE))
-        self.assertEqual(self.runner.task(ISSUE)["session"], "ses_fixture")
-        review = self.runner.rows("SELECT * FROM execution WHERE kind='review'")
-        self.assertEqual(len(review), 1)
-        self.assertIsNotNone(review[0]["ended"])
-        self.assertEqual(review[0]["detail"], "Review completed: NO ISSUES.")
-        attempt, = self.attempts()
-        self.assertEqual(attempt["review"]["verdict"], "NO ISSUES")
-        self.assertEqual(attempt["review"]["findingCount"], 0)
-        self.assertTrue(attempt["review"]["findingCountComplete"])
-        self.assertTrue(attempt["notes"]["available"])
+        secret = "ghp_" + "z" * 24
+        (artifacts / "checks.sh").write_text(f"echo fail {secret}; exit 2\n")
+        with patch.dict(os.environ, {"GITHUB_TOKEN": secret}):
+            failed = await self.runner.verify(ISSUE)
+        self.assertEqual(failed["check_exit"], 2)
+        self.assertEqual(failed["phase"], "blocked")
+        self.assertNotIn(secret, failed["output"])
+        self.assertIn("[redacted]", failed["output"])
+
+        (artifacts / "checks.sh").write_text("echo ok\n")
+        recovered = await self.runner.verify(ISSUE)
+        self.assertEqual(recovered["check_exit"], 0)
+        self.assertEqual(recovered["phase"], "review")
+        self.assertIsNone(self.runner.task(ISSUE)["detail"])
+
+    async def test_prompts_enforce_targeted_checks_flexible_audit_and_merge_suggestions(self):
+        prompt = worker_prompt(
+            {"issue": ISSUE, "plan": "Plan"}, self.runner.artifacts(ISSUE), "Do it.")
+        self.assertIn("unittest discover", prompt)
+        self.assertIn("GitHub Actions CI runs the full suite", prompt)
+        self.assertIn("verify_worker", INSTRUCTIONS)
+        self.assertIn("estimates 1-3", INSTRUCTIONS)
+        self.assertIn("never merge issues", INSTRUCTIONS)
+        self.assertNotIn("review.md", INSTRUCTIONS)
+
+    async def test_workflow_run_image_workflow_does_not_block_push_ci(self):
+        (self.repo / ".github/workflows/image.yml").write_text(
+            "name: image\non:\n  workflow_run:\n    workflows: ['test']\n    types: [completed]\n"
+        )
+        self.git(self.repo, "add", ".github/workflows/image.yml")
+        self.git(self.repo, "commit", "-m", "Add workflow_run image workflow")
+        (self.repo / "verified.txt").write_text("Triggered\n")
+        self.git(self.repo, "add", "verified.txt")
+        self.git(self.repo, "commit", "-m", "Change verified file")
+        base = self.git(self.repo, "rev-parse", "HEAD~1")
+        head = self.git(self.repo, "rev-parse", "HEAD")
+        self.assertEqual(await ci_workflows(self.repo, base, head), [".github/workflows/test.yml"])
 
     async def test_fresh_and_resumed_workers_receive_default_mcp_and_deny_websearch(self):
         with patch.dict(os.environ, {
@@ -2424,36 +2371,15 @@ else:
             self.assertIn({"action": "shell", "resource": "git push *", "effect": "deny"}, permissions)
             self.assertIn({"action": "shell", "resource": "gh pr create *", "effect": "deny"}, permissions)
             self.assertIn({"action": "subagent", "resource": "*", "effect": "deny"}, permissions)
-        self.assertEqual(self.review_environment()["config"]["mcp"], {"servers": {}})
 
-    async def test_review_model_can_be_overridden(self):
-        with patch.dict(os.environ, {"SYMPHONY_REVIEW_MODEL": "opencode-go/review-fixture"}):
-            await self.worker_done()
-        environment = self.review_environment()
-        self.assertEqual(environment["args"][environment["args"].index("--model") + 1],
-                         "opencode-go/review-fixture")
-        self.assertIn("opencode-go/review-fixture",
-                      (self.runner.artifacts(ISSUE) / "review.log").read_text())
-
-    async def test_two_attempts_retain_their_own_notes_and_review_after_rework(self):
-        first_review = ("VERDICT: ISSUES\n- symphony/a.py:1 - First finding.\n"
-                        "- symphony/b.py:2 - Second finding.\n")
-        with patch.dict(os.environ, {
-                "FIXTURE_NOTES": "First attempt notes\n",
-                "FIXTURE_REVIEW": "custom", "FIXTURE_REVIEW_TEXT": first_review}):
+    async def test_two_attempts_retain_their_own_notes_after_rework(self):
+        with patch.dict(os.environ, {"FIXTURE_NOTES": "First attempt notes\n"}):
             await self.worker_done()
         first, = self.attempts()
         self.assertEqual(first["notes"]["text"], "First attempt notes")
         self.assertFalse(first["notes"]["truncated"])
-        self.assertEqual(first["review"]["verdict"], "ISSUES")
-        self.assertEqual(first["review"]["findingCount"], 2)
-        self.assertTrue(first["review"]["findingCountComplete"])
-        self.assertEqual(first["review"]["model"], "opencode-go/kimi-k3.1-pro#low")
-        self.assertIn("First finding", first["review"]["text"])
 
-        with patch.dict(os.environ, {
-                "FIXTURE_NOTES": "Second attempt notes\n",
-                "FIXTURE_REVIEW": "custom", "FIXTURE_REVIEW_TEXT": "VERDICT: NO ISSUES"}):
+        with patch.dict(os.environ, {"FIXTURE_NOTES": "Second attempt notes\n"}):
             await self.runner.dispatch(ISSUE, REPO, "Never ship from the worker. Follow up.",
                                        resume=True)
             await self.phase("review")
@@ -2462,24 +2388,14 @@ else:
         self.assertEqual([attempt["counter"] for attempt in attempts], [1, 2])
         self.assertEqual(len({attempt["id"] for attempt in attempts}), 2)
         self.assertEqual(attempts[0]["notes"]["text"], "First attempt notes")
-        self.assertEqual(attempts[0]["review"]["verdict"], "ISSUES")
-        self.assertEqual(attempts[0]["review"]["findingCount"], 2)
         self.assertEqual(attempts[1]["notes"]["text"], "Second attempt notes")
-        self.assertEqual(attempts[1]["review"]["verdict"], "NO ISSUES")
-        self.assertEqual(attempts[1]["review"]["findingCount"], 0)
         worker = self.execution()["execution"]["worker"]
         self.assertEqual(worker["attemptCount"], 2)
-        self.assertEqual(worker["findings"], {
-            "available": True, "complete": True, "count": 2,
-            "reviewCount": 2, "unlinkedReviews": 0,
-        })
         raw = json.dumps(self.runner.rows("SELECT data FROM execution WHERE kind='attempt'"))
         self.assertIn("First attempt notes", raw)
 
     async def test_identical_fresh_notes_are_retained_for_each_attempt(self):
-        with patch.dict(os.environ, {
-                "FIXTURE_NOTES": "None\n", "FIXTURE_REVIEW": "custom",
-                "FIXTURE_REVIEW_TEXT": "VERDICT: NO ISSUES"}):
+        with patch.dict(os.environ, {"FIXTURE_NOTES": "None\n"}):
             await self.worker_done()
             await self.runner.dispatch(
                 ISSUE, REPO, "Never ship from the worker. Follow up.", resume=True)
@@ -2488,14 +2404,9 @@ else:
         self.assertEqual(len(attempts), 2)
         self.assertEqual([attempt["notes"]["text"] for attempt in attempts], ["None", "None"])
         self.assertTrue(all(attempt["notes"]["available"] for attempt in attempts))
-        self.assertEqual([attempt["review"]["verdict"] for attempt in attempts],
-                         ["NO ISSUES", "NO ISSUES"])
 
     async def test_retry_counter_reset_keeps_separate_attempt_identities(self):
-        with patch.dict(os.environ, {
-                "FIXTURE_NOTES": "Before retry\n",
-                "FIXTURE_REVIEW": "custom",
-                "FIXTURE_REVIEW_TEXT": "VERDICT: ISSUES\n- a.py:1 - Before retry.\n"}):
+        with patch.dict(os.environ, {"FIXTURE_NOTES": "Before retry\n"}):
             await self.worker_done()
         first, = self.attempts()
         self.runner.block(ISSUE, "Parked for retry")
@@ -2503,9 +2414,7 @@ else:
         app.respond = AsyncMock()
         await app.handle(REPO, f"/retry {ISSUE}", f"/retry {ISSUE}")
         self.assertEqual(self.runner.task(ISSUE)["attempts"], 0)
-        with patch.dict(os.environ, {
-                "FIXTURE_NOTES": "After retry\n",
-                "FIXTURE_REVIEW": "custom", "FIXTURE_REVIEW_TEXT": "VERDICT: NO ISSUES"}):
+        with patch.dict(os.environ, {"FIXTURE_NOTES": "After retry\n"}):
             await self.runner.dispatch(ISSUE, REPO, "Never ship from the worker.", resume=True)
             await self.phase("review")
         attempts = self.attempts()
@@ -2514,9 +2423,7 @@ else:
         self.assertEqual(attempts[0]["id"], first["id"])
         self.assertNotEqual(attempts[0]["id"], attempts[1]["id"])
         self.assertEqual(attempts[0]["notes"]["text"], "Before retry")
-        self.assertEqual(attempts[0]["review"]["verdict"], "ISSUES")
         self.assertEqual(attempts[1]["notes"]["text"], "After retry")
-        self.assertEqual(attempts[1]["review"]["verdict"], "NO ISSUES")
 
     async def test_blocked_attempts_retain_their_notes_without_reusing_old_ones(self):
         with patch.dict(os.environ, {
@@ -2527,8 +2434,6 @@ else:
             await self.phase("blocked")
         first, = self.attempts()
         self.assertEqual(first["notes"]["text"], "Blocked attempt notes")
-        self.assertFalse(first["review"]["recorded"])
-        self.assertEqual(first["review"]["verdict"], "UNAVAILABLE")
 
         with patch.dict(os.environ, {
                 "FIXTURE_SKIP_NOTES": "1", "FIXTURE_BLOCK": "Fixture blocked again."}):
@@ -2539,14 +2444,9 @@ else:
         self.assertEqual(attempts[0]["notes"]["text"], "Blocked attempt notes")
         self.assertFalse(attempts[1]["notes"]["available"])
         self.assertIn("No notes.md was produced", attempts[1]["notes"]["detail"])
-        self.assertFalse(attempts[1]["review"]["recorded"])
-        self.assertEqual(attempts[1]["review"]["verdict"], "UNAVAILABLE")
-        self.assertNotIn("VERDICT", json.dumps(attempts[1]["review"]))
 
     async def test_artifact_cleanup_failure_does_not_attribute_previous_notes(self):
-        with patch.dict(os.environ, {
-                "FIXTURE_NOTES": "Previous attempt notes\n",
-                "FIXTURE_REVIEW": "custom", "FIXTURE_REVIEW_TEXT": "VERDICT: NO ISSUES"}):
+        with patch.dict(os.environ, {"FIXTURE_NOTES": "Previous attempt notes\n"}):
             await self.worker_done()
         first, = self.attempts()
         self.assertEqual(first["notes"]["text"], "Previous attempt notes")
@@ -2569,9 +2469,7 @@ else:
         self.assertIn("Fixture startup cleanup failed", self.runner.task(ISSUE)["detail"])
 
     async def test_notes_unlink_failure_does_not_attribute_previous_notes(self):
-        with patch.dict(os.environ, {
-                "FIXTURE_NOTES": "Previous attempt notes\n",
-                "FIXTURE_REVIEW": "custom", "FIXTURE_REVIEW_TEXT": "VERDICT: NO ISSUES"}):
+        with patch.dict(os.environ, {"FIXTURE_NOTES": "Previous attempt notes\n"}):
             await self.worker_done()
         first, = self.attempts()
         self.assertEqual(first["notes"]["text"], "Previous attempt notes")
@@ -2593,262 +2491,21 @@ else:
         self.assertIn("did not initialize notes.md", attempts[1]["notes"]["detail"])
         self.assertIn("Fixture notes cleanup failed", self.runner.task(ISSUE)["detail"])
 
-    async def test_snapshots_are_redacted_bounded_and_count_findings_before_truncation(self):
+    async def test_notes_snapshot_is_redacted_and_bounded(self):
         token = "ghp_" + "a" * 30
         notes = token + "\n" + "\n".join(f"note line {index}" for index in range(150))
-        review = ("VERDICT: ISSUES\n"
-                  + "\n".join(f"- symphony/f{index}.py:{index} - Finding {index}."
-                              for index in range(250)))
-        with patch.dict(os.environ, {
-                "FIXTURE_NOTES": notes, "FIXTURE_REVIEW": "custom",
-                "FIXTURE_REVIEW_TEXT": review}):
+        with patch.dict(os.environ, {"FIXTURE_NOTES": notes}):
             await self.worker_done()
         attempt, = self.attempts()
         self.assertTrue(attempt["notes"]["truncated"])
         self.assertLessEqual(len(attempt["notes"]["text"].splitlines()), NOTES_LINES)
         self.assertIn("[redacted]", attempt["notes"]["text"])
         self.assertNotIn(token, attempt["notes"]["text"])
-        self.assertEqual(attempt["review"]["verdict"], "ISSUES")
-        self.assertEqual(attempt["review"]["findingCount"], 250)
-        self.assertFalse(attempt["review"]["findingCountComplete"])
-        self.assertTrue(attempt["review"]["truncated"])
-        self.assertLessEqual(len(attempt["review"]["text"].splitlines()), REVIEW_LINES + 2)
         raw = json.dumps(self.runner.rows("SELECT data FROM execution"))
         payload = json.dumps(self.execution())
         self.assertNotIn(token, raw)
         self.assertNotIn(token, payload)
         self.assertIn("[redacted]", raw)
-        findings = self.execution()["execution"]["worker"]["findings"]
-        self.assertTrue(findings["available"])
-        self.assertFalse(findings["complete"])
-        self.assertEqual(findings["count"], 250)
-
-    async def test_review_receives_the_full_diff_beyond_read_diff_limit(self):
-        with patch.dict(os.environ, {"FIXTURE_LARGE_DIFF": "1"}):
-            await self.worker_done()
-        artifacts = self.runner.artifacts(ISSUE)
-        diff = (artifacts / "review.diff").read_text()
-        self.assertGreater(len(diff), 48000)
-        self.assertIn("END-OF-LARGE-DIFF", diff)
-        self.assertIn("END-OF-LARGE-DIFF", self.review_environment()["prompt"])
-
-    async def test_failed_verification_skips_review_and_clears_a_stale_report(self):
-        artifacts = self.runner.artifacts(ISSUE)
-        artifacts.mkdir(parents=True)
-        (artifacts / "review.md").write_text("VERDICT: NO ISSUES\nStale report.\n")
-        with patch.dict(os.environ, {"FIXTURE_CHECKS_FAIL": "1"}):
-            await self.worker_done(status=1)
-        report = (artifacts / "review.md").read_text()
-        self.assertIn("VERDICT: UNAVAILABLE", report)
-        self.assertIn("verification exited 1", report)
-        self.assertNotIn("Stale report", report)
-        self.assertFalse((artifacts / "review-runs").exists())
-        self.assertFalse((artifacts / "review.log").exists())
-        review = self.runner.rows("SELECT * FROM execution WHERE kind='review'")
-        self.assertEqual(len(review), 1)
-        self.assertIn("skipped", review[0]["detail"])
-        attempt, = self.attempts()
-        self.assertEqual(attempt["review"]["verdict"], "UNAVAILABLE")
-        self.assertIsNone(attempt["review"]["findingCount"])
-        self.assertIn("skipped", attempt["review"]["detail"])
-
-    async def test_review_findings_are_readable_audit_advice(self):
-        with patch.dict(os.environ, {"FIXTURE_REVIEW": "findings"}):
-            await self.worker_done()
-        report = (self.runner.artifacts(ISSUE) / "review.md").read_text()
-        self.assertIn("VERDICT: ISSUES", report)
-        audit = self.runner.read_notes(ISSUE)
-        self.assertIn("- symphony/runner.py:1 - Fixture finding.", audit)
-        self.assertEqual(self.runner.task(ISSUE)["phase"], "review")
-        attempt, = self.attempts()
-        self.assertEqual(attempt["review"]["verdict"], "ISSUES")
-        self.assertEqual(attempt["review"]["findingCount"], 1)
-        self.assertTrue(attempt["review"]["findingCountComplete"])
-
-    async def test_malformed_review_output_is_unavailable(self):
-        with patch.dict(os.environ, {"FIXTURE_REVIEW": "malformed"}):
-            await self.worker_done()
-        report = (self.runner.artifacts(ISSUE) / "review.md").read_text()
-        self.assertIn("VERDICT: UNAVAILABLE", report)
-        self.assertIn("no valid structured verdict", report)
-        self.assertIn("Looks fine to me.", (self.runner.artifacts(ISSUE) / "review.log").read_text())
-        attempt, = self.attempts()
-        self.assertEqual(attempt["review"]["verdict"], "UNAVAILABLE")
-        self.assertIsNone(attempt["review"]["findingCount"])
-        self.assertFalse(attempt["review"]["findingCountComplete"])
-
-    async def test_empty_review_output_is_unavailable(self):
-        with patch.dict(os.environ, {"FIXTURE_REVIEW": "empty"}):
-            await self.worker_done()
-        report = (self.runner.artifacts(ISSUE) / "review.md").read_text()
-        self.assertIn("VERDICT: UNAVAILABLE", report)
-        self.assertIn("terminal response contained no report", report)
-
-    async def test_review_uses_only_the_terminal_response_after_progress(self):
-        with patch.dict(os.environ, {"FIXTURE_REVIEW": "progress"}):
-            await self.worker_done()
-        artifacts = self.runner.artifacts(ISSUE)
-        report = (artifacts / "review.md").read_text()
-        self.assertIn("VERDICT: NO ISSUES", report)
-        self.assertNotIn("Reviewing the diff.", report)
-        log = (artifacts / "review.log").read_text()
-        self.assertIn("Reviewing the diff.", log)
-        self.assertIn('"reason": "stop"', log)
-
-    async def test_review_ignores_intermediate_clean_text_before_final_issues(self):
-        with patch.dict(os.environ, {"FIXTURE_REVIEW": "intermediate"}):
-            await self.worker_done()
-        report = (self.runner.artifacts(ISSUE) / "review.md").read_text()
-        self.assertIn("VERDICT: ISSUES", report)
-        self.assertIn("- symphony/runner.py:1 - Final finding.", report)
-        self.assertNotIn("VERDICT: NO ISSUES", report)
-
-    async def test_tool_call_only_review_is_unavailable(self):
-        with patch.dict(os.environ, {"FIXTURE_REVIEW": "toolonly"}):
-            await self.worker_done()
-        report = (self.runner.artifacts(ISSUE) / "review.md").read_text()
-        self.assertIn("VERDICT: UNAVAILABLE", report)
-        self.assertIn("stopped before a final response", report)
-
-    async def test_nonterminal_review_text_is_unavailable(self):
-        with patch.dict(os.environ, {"FIXTURE_REVIEW": "nonterminal"}):
-            await self.worker_done()
-        report = (self.runner.artifacts(ISSUE) / "review.md").read_text()
-        self.assertIn("VERDICT: UNAVAILABLE", report)
-        self.assertIn("stopped before a final response", report)
-        self.assertNotIn("VERDICT: NO ISSUES", report)
-
-    async def test_reviewer_error_is_unavailable_and_preserves_worker_outcome(self):
-        with patch.dict(os.environ, {"FIXTURE_REVIEW": "fail"}):
-            await self.worker_done()
-        artifacts = self.runner.artifacts(ISSUE)
-        report = (artifacts / "review.md").read_text()
-        self.assertIn("VERDICT: UNAVAILABLE", report)
-        self.assertIn("Fixture review failed", report)
-        self.assertIn("Fixture review failed", (artifacts / "review.log").read_text())
-        task = self.runner.task(ISSUE)
-        self.assertEqual(task["session"], "ses_fixture")
-        self.assertEqual(task["check_exit"], 0)
-        self.assertIn("Fixture review failed",
-                      self.runner.rows("SELECT * FROM execution WHERE kind='review'")[0]["detail"])
-        attempt, = self.attempts()
-        self.assertEqual(attempt["review"]["verdict"], "UNAVAILABLE")
-        self.assertIn("Fixture review failed", attempt["review"]["text"])
-
-    async def test_review_timeout_cleans_up_the_process_group(self):
-        with patch("symphony.runner.REVIEW_SECONDS", 0.2), \
-             patch.dict(os.environ, {"FIXTURE_REVIEW": "timeout"}):
-            await self.worker_done()
-        artifacts = self.runner.artifacts(ISSUE)
-        report = (artifacts / "review.md").read_text()
-        self.assertIn("VERDICT: UNAVAILABLE", report)
-        self.assertIn("exceeded", report)
-        attempt, = self.attempts()
-        self.assertEqual(attempt["review"]["verdict"], "UNAVAILABLE")
-        self.assertIsNone(attempt["review"]["findingCount"])
-        pids = [int(value) for value in (artifacts / "review-pids").read_text().split()]
-        async with asyncio.timeout(2):
-            while any(self.pid_alive(pid) for pid in pids):
-                await asyncio.sleep(0.01)
-
-    async def test_interrupted_review_is_retained_as_unavailable(self):
-        await self.approve()
-        with patch.object(self.runner, "run_review", AsyncMock(side_effect=asyncio.CancelledError)):
-            await self.runner.dispatch(ISSUE, REPO, "Never ship from the worker.")
-            job, = list(self.runner.jobs)
-            with self.assertRaises(asyncio.CancelledError):
-                await job
-        review = self.runner.rows("SELECT * FROM execution WHERE kind='review'")
-        self.assertEqual(len(review), 1)
-        data = json.loads(review[0]["data"])
-        self.assertEqual(data["verdict"], "UNAVAILABLE")
-        self.assertEqual(review[0]["detail"], "Review interrupted.")
-        self.assertIn("Review interrupted", data["report"])
-        attempt, = self.attempts()
-        self.assertEqual(attempt["review"]["verdict"], "UNAVAILABLE")
-
-    async def test_review_process_pid_is_recorded_without_replacing_session(self):
-        artifacts = self.runner.artifacts(ISSUE)
-        artifacts.mkdir(parents=True)
-        prompt = artifacts / "review-input.md"
-        prompt.write_text("fixture")
-        with self.runner.db:
-            self.runner.db.execute("""INSERT INTO tasks(issue,project,repo,title,plan,phase,
-                                      session,updated)
-                                      VALUES (?,?,?,?,?,'working',?,?)""",
-                                   (ISSUE, "project", REPO, "Fixture", "Plan",
-                                    "ses_fixture", 1))
-        script = ("import json; "
-                  "print(json.dumps({'type':'text','sessionID':'ses_review',"
-                  "'part':{'messageID':'msg_final','type':'text',"
-                  "'text':'VERDICT: NO ISSUES'}})); "
-                  "print(json.dumps({'type':'step_finish','sessionID':'ses_review',"
-                  "'part':{'messageID':'msg_final','type':'step-finish',"
-                  "'reason':'stop'}}))")
-        with (artifacts / "review.log").open("ab") as log, \
-             patch.object(self.runner, "change", wraps=self.runner.change) as change:
-            report, error = await self.runner.run_review(
-                ISSUE, [sys.executable, "-c", script], self.root, os.environ, log, prompt)
-        self.assertEqual((report, error), ("VERDICT: NO ISSUES", ""))
-        change.assert_called_once()
-        self.assertEqual(change.call_args.args, (ISSUE,))
-        self.assertIn("pid", change.call_args.kwargs)
-        self.assertNotIn("session", change.call_args.kwargs)
-        task = self.runner.task(ISSUE)
-        self.assertEqual(task["session"], "ses_fixture")
-        self.assertEqual(task["pid"], change.call_args.kwargs["pid"])
-
-    async def test_reviewer_tree_mutation_blocks_handoff(self):
-        with patch.dict(os.environ, {"FIXTURE_REVIEW": "mutate"}):
-            await self.approve()
-            await self.runner.dispatch(ISSUE, REPO, "Never ship from the worker.")
-            await self.phase("blocked")
-        task = self.runner.task(ISSUE)
-        self.assertIn("changed during review", task["detail"])
-        self.assertEqual(task["check_exit"], 0)
-        self.assertEqual(task["session"], "ses_fixture")
-        report = (self.runner.artifacts(ISSUE) / "review.md").read_text()
-        self.assertIn("VERDICT: UNAVAILABLE", report)
-        self.assertIn("changed during review", report)
-        self.assertTrue(self.runner.worktree(ISSUE).is_dir())
-        attempt, = self.attempts()
-        self.assertEqual(attempt["review"]["verdict"], "UNAVAILABLE")
-        self.assertNotIn("NO ISSUES", attempt["review"]["text"])
-        self.assertIn("changed during review", attempt["review"]["text"])
-
-    async def test_large_review_report_is_bounded(self):
-        with patch.dict(os.environ, {"FIXTURE_REVIEW": "large"}):
-            await self.worker_done()
-        report = (self.runner.artifacts(ISSUE) / "review.md").read_text()
-        self.assertIn("VERDICT: ISSUES", report)
-        self.assertIn("[Review truncated.]", report)
-        self.assertLessEqual(len(report.splitlines()), REVIEW_LINES + 2)
-
-    def test_review_validation_requires_a_leading_verdict_and_location(self):
-        self.assertEqual(validate_review("\n\nVERDICT: NO ISSUES"), "VERDICT: NO ISSUES")
-        self.assertEqual(validate_review("No issues found."), "No issues found.")
-        self.assertIsNone(validate_review("Looks fine to me."))
-        self.assertIsNone(validate_review(""))
-        self.assertIsNone(validate_review(" \n\t"))
-        self.assertIsNone(validate_review("No issues found.\nExtra commentary."))
-        self.assertIsNone(validate_review("Preamble.\nVERDICT: NO ISSUES"))
-        self.assertIsNone(validate_review("VERDICT: NO ISSUES\n- a.py:12 - Finding."))
-        self.assertIsNone(validate_review("VERDICT: NO ISSUES\nExtra commentary."))
-        self.assertIsNone(validate_review("VERDICT: NO ISSUES\nVERDICT: NO ISSUES"))
-        self.assertIsNone(validate_review("VERDICT: NO ISSUES\nVERDICT: ISSUES\n- a.py:12 - Finding."))
-        self.assertIsNone(validate_review("VERDICT: ISSUES\n- a.py:12 - Finding.\n"
-                                          "VERDICT: NO ISSUES"))
-        self.assertIsNone(validate_review("VERDICT: ISSUES\n- no file location"))
-        self.assertIsNotNone(validate_review("VERDICT: ISSUES\n- a.py:12 - Finding."))
-        self.assertIsNotNone(validate_review("VERDICT: ISSUES\nsymphony/a.py:4 - Finding."))
-        report = bounded_review("VERDICT: ISSUES\n- a.py:1 - Finding.\n" + "detail\n" * 300)
-        self.assertLessEqual(len(report.splitlines()), REVIEW_LINES + 2)
-
-    async def test_existing_work_without_a_review_report_shows_unavailable(self):
-        await self.worker_done()
-        (self.runner.artifacts(ISSUE) / "review.md").unlink()
-        self.assertIn("Review unavailable: no reviewer report",
-                      self.runner.read_notes(ISSUE))
 
     async def test_push_without_matching_workflows_finishes_immediately(self):
         (self.repo / ".github/workflows/test.yml").write_text("on:\n  push:\n    paths: ['docs/**']\n")
@@ -2941,7 +2598,7 @@ else:
     async def test_shipping_acknowledges_review_event_but_reading_audit_does_not(self):
         await self.worker_done()
         review = {
-            "detail": "Worker finished. Verification exited 0. Audit notes.md and review.md.",
+            "detail": "Worker finished. Verification exited 0. Ready to audit and ship.",
             "delivered": 0, "phase": "review",
         }
         self.assertEqual(self.runner.rows("SELECT detail, delivered, phase FROM events"), [review])
@@ -3029,7 +2686,7 @@ else:
             )
         await self.runner.cleanup(ISSUE)
         self.assertEqual(self.runner.rows("SELECT detail, delivered, phase FROM events ORDER BY id"), [
-            {"detail": "Worker finished. Verification exited 0. Audit notes.md and review.md.",
+            {"detail": "Worker finished. Verification exited 0. Ready to audit and ship.",
              "delivered": 1, "phase": "review"},
             {"detail": "Stale CI notice.", "delivered": 1, "phase": "ci"},
         ])
@@ -3385,16 +3042,10 @@ else:
         artifacts = self.runner.artifacts(ISSUE)
         artifacts.mkdir(parents=True, exist_ok=True)
         (artifacts / "notes.md").write_text("Implemented cleanly.\n")
-        (artifacts / "review.md").write_text("VERDICT: NO ISSUES\n")
 
         audit = self.runner.read_notes(ISSUE)
         self.assertIn("--- Approved plan ---\nLock step 1\nLock step 2", audit)
         self.assertIn("Implemented cleanly.", audit)
-        self.assertIn("VERDICT: NO ISSUES", audit)
-        with self.runner.db:
-            self.runner.db.execute("UPDATE tasks SET plan=? WHERE issue=?", ("Changed plan", ISSUE))
-        with self.assertRaisesRegex(ValueError, "Read the latest notes.md and review.md"):
-            self.runner.ship(ISSUE)
 
         app = self.app()
         turns = []
