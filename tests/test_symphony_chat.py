@@ -1956,5 +1956,76 @@ class ChatBrowserTests(unittest.TestCase):
             coarse.close()
 
 
+    def test_per_repo_chat_isolation_scroll_and_unread_chip_dots(self):
+        self.page.evaluate("""() => {
+          const projects = [
+            {id: "proj-a", name: "Repo A", icon: "", repo: "owner/a", issues: []},
+            {id: "proj-b", name: "Repo B", icon: "", repo: "owner/b", issues: []},
+            {id: "proj-b2", name: "Repo B Two", icon: "", repo: "owner/b", issues: []},
+          ];
+          window.__repoChats = {
+            "owner/a": Array.from({length: 30}, (_, i) => ({
+              id: i + 1, role: "user", text: "Message A" + (i + 1) + "\\nline\\nline", images: [], repo: "owner/a",
+            })),
+            "owner/b": [{id: 100, role: "assistant", text: "Hello B", html: "<p>Hello B</p>", images: [], repo: "owner/b"}],
+          };
+          window.__repoActivity = {"owner/a": 30, "owner/b": 100};
+          window.fetch = async (path) => {
+            const url = new URL(path, "https://example.test");
+            const proj = url.searchParams.get("project") || "proj-a";
+            const after = Number(url.searchParams.get("after") || "0");
+            const repo = proj === "proj-a" ? "owner/a" : "owner/b";
+            const msgs = (window.__repoChats[repo] || []).filter((m) => m.id > after);
+            return {ok: true, json: async () => ({
+              messages: msgs, busy: false, canInterrupt: false, stream: "", streamHtml: "",
+              tasks: [], signedIn: true, login: null, paused: "", view: "proj-a",
+              repo, repoActivity: {...window.__repoActivity}, codex: {}, issueError: "",
+              updateAvailable: false, draining: false, projects, issueRevision: "rev1",
+            })};
+          };
+        }""")
+        self.page.evaluate("async () => { await poll(); flushChat(); }")
+        self.assertEqual(self.page.evaluate("""() => ({
+          selected, selectedRepo,
+          msgs: document.querySelectorAll("#messages .message").length,
+          unreadA: document.querySelector('[data-project="proj-a"]').hasAttribute("data-unread"),
+          unreadB: document.querySelector('[data-project="proj-b"]').hasAttribute("data-unread"),
+        })"""), {"selected": "proj-a", "selectedRepo": "owner/a", "msgs": 30, "unreadA": False, "unreadB": False})
+
+        # Scroll repo A partway up, switch to repo B, verify repo B chat + /new command suggestion.
+        self.page.evaluate("() => { chatLog.scrollTop = 120; }")
+        self.page.locator('[data-project="proj-b"]').click()
+        self.page.wait_for_function("document.querySelectorAll('#messages .message').length === 1")
+        self.assertEqual(self.page.evaluate("""() => ({
+          selected, selectedRepo,
+          firstText: document.querySelector("#messages .message-text").textContent,
+        })"""), {"selected": "proj-b", "selectedRepo": "owner/b", "firstText": "Hello B"})
+
+        # Switching to proj-b2 (same repo owner/b) keeps chat intact.
+        self.page.locator('[data-project="proj-b2"]').click()
+        self.assertEqual(self.page.evaluate("() => document.querySelectorAll('#messages .message').length"), 1)
+
+        # New activity in owner/a marks proj-a chip unread while viewing owner/b.
+        self.page.evaluate("""async () => {
+          window.__repoChats["owner/a"].push({id: 101, role: "worker", text: "KIAN-1 · Review", images: [], repo: "owner/a"});
+          window.__repoActivity["owner/a"] = 101;
+          await poll();
+        }""")
+        self.assertTrue(self.page.locator('[data-project="proj-a"]').evaluate("n => n.hasAttribute('data-unread')"))
+
+        # Selecting proj-a clears unread dot, fetches owner/a messages, and restores scrollTop.
+        self.page.locator('[data-project="proj-a"]').click()
+        self.page.wait_for_function("document.querySelectorAll('#messages .message').length === 31")
+        self.assertEqual(self.page.evaluate("""() => ({
+          unreadA: document.querySelector('[data-project="proj-a"]').hasAttribute("data-unread"),
+          scrollTop: chatLog.scrollTop,
+          commands: (messageField.value = "/", matchingCommands().map(c => c[0])),
+        })"""), {
+            "unreadA": False, "scrollTop": 120,
+            "commands": ["/model ", "/effort ", "/new", "/compact", "/status",
+                         "/interrupt", "/login", "/continue", "/retry "],
+        })
+
+
 if __name__ == "__main__":
     unittest.main()

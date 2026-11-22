@@ -1,10 +1,16 @@
 # Symphony
 
-Symphony runs Codex as one coordinator across Linear projects. Each project
+Symphony runs one `codex app-server` subprocess with a dedicated Codex thread
+and chat history per GitHub repository, while retaining cross-repository read
+and planning access across mapped projects. Each project
 needs a GitHub repository URL in its description or external links. Repositories
 are cloned on first use. Projects that link to the same repository share its
-worktree queue. Project chips select a Linear project ID, so projects that share
-a repository remain distinct.
+worktree queue, coordinator conversation, and Codex thread. Project chips select
+a Linear project ID, so projects that share
+a repository remain distinct in the issue panes while showing an unread dot on
+unselected repository chips when new activity arrives elsewhere. Use `/new` to
+start a fresh Codex thread for the active repository without clearing the
+stored chat transcript.
 
 ## Plan and execute
 
@@ -157,8 +163,7 @@ context used, 5-hour and weekly quota when available, and turn timing. `/status`
 also lists approved work. Symphony uses the design guide palette and follows the
 browser's light or dark preference. The favicon is a multi-size ICO.
 
-A message sent during a turn in the same repo steers the active
-turn. A message for a different repo queues for the next turn. The app uses the
+Use `/new` in chat to start a fresh Codex thread for the active repository, or `/compact` to compact the current thread. A message sent during a turn in the same repository steers the active turn. A message for a different repository queues for the next turn. The app uses the
 selected project's repository working directory and includes the shared
 `agents/AGENTS.md` defaults before its AGENTS.md and current work when starting
 a turn. The Config button in the page header opens a read-only dialog showing
@@ -259,7 +264,8 @@ diagnostic. A restart recovers queued approvals once without duplicate
 dispatch; issues moved back to Backlog, canceled, or moved to another project
 are skipped.
 
-The coordinator pump batches pending worker events into one turn. A committed
+The coordinator pump batches pending worker events per repository into one turn
+in that repository's coordinator session and checkout. A committed
 lifecycle change acknowledges the issue's earlier pending notifications, and
 events whose recorded phase no longer matches the task are dropped before
 delivery; actionable review, blocked, failed Linear completion, and worktree

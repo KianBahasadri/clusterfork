@@ -168,6 +168,14 @@ main[data-queue-collapsed] #queue-toggle .icon { transform: rotate(0); }
   background: var(--action-primary);
   color: var(--ink-strong);
 }
+#repos .project-chip[data-unread]::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--focus);
+}
 .project-label { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
 .project-emoji { flex: none; font-size: 16px; line-height: 18px; }
 .project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

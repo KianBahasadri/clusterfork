@@ -33,8 +33,10 @@ const collapsedGroups = new Set();
 const pendingPlans = new Set();
 const priorityIcons = ["ellipsis", "octagon-alert", "signal", "signal-medium", "signal-low"];
 let issueCache = new Map();
+let projectRepos = new Map();
 let issueRevision = "";
 let selected = "";
+let selectedRepo = null;
 let lastMessage = 0;
 let tasks = [];
 let projectsKey = "";
@@ -46,6 +48,11 @@ let pendingMessages = [];
 let pendingMessageIds = new Set();
 let shownMessageIds = new Set();
 let chatFrame = null;
+const chatScroll = new Map();
+let pendingChatScrollRepo = null;
+const seenRepoMessage = new Map();
+const unreadRepos = new Set();
+let repoActivityInitialized = false;
 let pollTimer = null;
 let polling = false;
 let pollAgain = false;
@@ -369,8 +376,61 @@ function renderPanes() {
   if (focused) byId(focused)?.focus({preventScroll: true});
 }
 
+function renderUnreadChips() {
+  for (const tab of repos.children) {
+    const repo = tab.dataset.repo || "";
+    const unread = Boolean(repo && repo !== selectedRepo && unreadRepos.has(repo));
+    tab.toggleAttribute("data-unread", unread);
+    tab.setAttribute("aria-label", unread ? tab.title + " (unread activity)" : tab.title);
+  }
+}
+
+function updateRepoActivity(activity, activeRepo) {
+  if (!activity || typeof activity !== "object") return;
+  if (!repoActivityInitialized) {
+    repoActivityInitialized = true;
+    for (const [repo, id] of Object.entries(activity)) {
+      seenRepoMessage.set(repo, Number(id) || 0);
+    }
+    unreadRepos.delete(activeRepo);
+    renderUnreadChips();
+    return;
+  }
+  for (const [repo, raw] of Object.entries(activity)) {
+    const id = Number(raw) || 0;
+    const previous = seenRepoMessage.get(repo) || 0;
+    if (id > previous) {
+      seenRepoMessage.set(repo, id);
+      if (repo !== activeRepo) unreadRepos.add(repo);
+    }
+  }
+  unreadRepos.delete(activeRepo);
+  renderUnreadChips();
+}
+
+function resetChatView(repo) {
+  if (chatFrame !== null) {
+    if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(chatFrame);
+    else clearTimeout(chatFrame);
+    chatFrame = null;
+  }
+  lastMessage = 0;
+  pendingMessages = [];
+  pendingMessageIds.clear();
+  shownMessageIds.clear();
+  pendingStream = null;
+  stream = "";
+  renderedStream = "";
+  messages.replaceChildren();
+  updateStream("", "");
+  byId("welcome").hidden = false;
+  following = !chatScroll.has(repo);
+  pendingChatScrollRepo = repo;
+}
+
 function updateProjects(projects, redraw) {
   const previous = issueCache.get(selected);
+  projectRepos = new Map(projects.map((project) => [project.id, project.repo || ""]));
   issueCache = new Map(projects.map((project) => [project.id, project.issues]));
   issueCache.set("", projects.flatMap((project) => project.issues));
   preloadIssueDetails(issueCache.get(""));
@@ -391,6 +451,7 @@ function updateProjects(projects, redraw) {
     tab.setAttribute("role", "tab");
     tab.setAttribute("aria-controls", "backlog status-issues");
     tab.dataset.project = project.id;
+    tab.dataset.repo = project.repo || "";
     tab.addEventListener("click", () => selectProject(project.id));
     return tab;
   });
@@ -402,6 +463,18 @@ function updateProjects(projects, redraw) {
 function selectProject(project) {
   capturePaneScroll();
   selected = project;
+  const hasRepo = projectRepos.has(project);
+  const nextRepo = hasRepo ? projectRepos.get(project) : selectedRepo;
+  const switchedRepo = hasRepo && selectedRepo !== null && nextRepo !== selectedRepo;
+  if (switchedRepo) {
+    chatScroll.set(selectedRepo, chatLog.scrollTop);
+    selectedRepo = nextRepo;
+    unreadRepos.delete(nextRepo);
+    resetChatView(nextRepo);
+  } else if (hasRepo && selectedRepo === null) {
+    selectedRepo = nextRepo;
+    unreadRepos.delete(nextRepo);
+  }
   for (const tab of repos.children) {
     const active = tab.dataset.project === project;
     tab.setAttribute("aria-selected", active);
@@ -411,8 +484,10 @@ function selectProject(project) {
       statusIssues.setAttribute("aria-labelledby", tab.id);
     }
   }
+  renderUnreadChips();
   renderPanes();
   restorePaneScroll(project);
+  if (switchedRepo) wakePoll();
 }
 
 function imageUrl(name) {
@@ -588,7 +663,14 @@ function flushChat() {
     updateStream(next.text, next.html);
   }
   byId("welcome").hidden = shownMessageIds.size > 0;
-  keepBottom();
+  if (pendingChatScrollRepo !== null && pendingChatScrollRepo === selectedRepo) {
+    const target = pendingChatScrollRepo;
+    pendingChatScrollRepo = null;
+    if (chatScroll.has(target)) chatLog.scrollTop = chatScroll.get(target) || 0;
+    else keepBottom();
+  } else {
+    keepBottom();
+  }
 }
 
 function scheduleChatFrame() {
@@ -800,9 +882,21 @@ async function poll() {
     return;
   }
   polling = true;
+  const pollProject = selected;
+  const pollRepo = selectedRepo;
   let delay = 3000;
   try {
-    const state = await api("/api/state?after=" + lastMessage + "&issues=" + issueRevision);
+    const state = await api(
+      "/api/state?after=" + lastMessage
+      + "&issues=" + encodeURIComponent(issueRevision)
+      + "&project=" + encodeURIComponent(pollProject)
+    );
+    if (selectedRepo !== null && selectedRepo !== pollRepo) {
+      pollAgain = true;
+      return;
+    }
+    const activeRepo = typeof state.repo === "string" ? state.repo : (selectedRepo || "");
+    if (selectedRepo === null && typeof state.repo === "string") selectedRepo = state.repo;
     for (const item of state.messages) queueMessage(item);
     if (state.messages.length) {
       const latest = Number(state.messages[state.messages.length - 1].id);
@@ -826,6 +920,7 @@ async function poll() {
     } else if (redrawIssues) {
       renderPanes();
     }
+    updateRepoActivity(state.repoActivity, selectedRepo ?? activeRepo);
     const notice = byId("project-error");
     if (notice.textContent !== state.issueError) notice.textContent = state.issueError;
     notice.hidden = !state.issueError;
@@ -894,6 +989,7 @@ repos.addEventListener("keydown", (event) => {
 const commands = [
   ["/model ", "Choose the Codex model"],
   ["/effort ", "Set reasoning effort"],
+  ["/new", "Start a fresh session for this repository"],
   ["/compact", "Compact the conversation context"],
   ["/status", "Show Codex usage and approved work"],
   ["/interrupt", "Stop the current Codex turn"],

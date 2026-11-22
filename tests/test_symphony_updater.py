@@ -72,9 +72,9 @@ class IdleEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.app.idle())
         self.app.messages.clear()
 
-        self.app.coordinator.turn = "turn_1"
+        self.app.coordinator.turns["owner/repo"] = "turn_1"
         self.assertFalse(await self.app.idle())
-        self.app.coordinator.turn = ""
+        self.app.coordinator.turns.clear()
 
         self._insert_task("working")
         for phase in ("approving", "working", "publishing", "ci", "finishing"):

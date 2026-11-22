@@ -202,7 +202,7 @@ class Symphony:
         self.issue_revision = ""
         self.issue_error = ""
         self.history_cache = {}
-        self.stream_cache = ("", "")
+        self.stream_cache = ("", "", "")
         self.webhook_secret = os.environ.get("LINEAR_WEBHOOK_SECRET", "")
         self.updates = UpdateChecker()
 
@@ -584,21 +584,38 @@ class Symphony:
             self.runner.wake.set()
         return {"draining": self.runner.draining}
 
-    async def state(self, after, issue_revision=""):
+    def resolve_repo(self, project="", repo=""):
+        if repo and repo in self.repos:
+            return repo
+        target = project or self.runner.setting("view")
+        found = self.mapped_project(target) if target else None
+        if found:
+            return found[0]
+        if self.issue_snapshot:
+            return self.issue_snapshot[0].get("repo", "")
+        return ""
+
+    async def state(self, after, issue_revision="", project="", repo=""):
         login = self.login if not self.coordinator.account and self.login and time.monotonic() < self.login["expires"] else None
-        rows = self.runner.rows("SELECT * FROM chat WHERE id > ? ORDER BY id LIMIT 200", (after,))
+        active_repo = self.resolve_repo(project, repo)
+        rows = self.runner.rows(
+            "SELECT * FROM chat WHERE id > ? AND repo = ? ORDER BY id LIMIT 200",
+            (after, active_repo),
+        )
         messages = [chat_message(row) for row in rows]
-        text = self.coordinator.stream
-        if self.stream_cache[0] != text:
-            self.stream_cache = (text, markdown(text) if text else "")
+        text = self.coordinator.stream_for(active_repo)
+        if self.stream_cache[:2] != (active_repo, text):
+            self.stream_cache = (active_repo, text, markdown(text) if text else "")
         state = {"messages": messages,
-                 "busy": self.busy, "canInterrupt": bool(self.coordinator.turn),
+                 "busy": self.busy, "canInterrupt": bool(self.coordinator.turn_for(active_repo)),
                  "stream": text,
-                 "streamHtml": self.stream_cache[1],
+                 "streamHtml": self.stream_cache[2],
                  "tasks": self.runner.status(),
                  "signedIn": bool(self.coordinator.account), "login": login,
                  "paused": self.runner.setting("paused"), "view": self.runner.setting("view"),
-                 "codex": self.coordinator.status(), "issueError": self.issue_error,
+                 "repo": active_repo,
+                 "repoActivity": self.runner.repo_chat_latest(),
+                 "codex": self.coordinator.status(active_repo), "issueError": self.issue_error,
                  "updateAvailable": self.updates.available,
                  "draining": self.runner.draining}
         if self.issue_snapshot is not None and issue_revision != self.issue_revision:
@@ -606,7 +623,7 @@ class Symphony:
         return state
 
     async def idle(self):
-        if self.busy or self.messages or self.coordinator.turn:
+        if self.busy or self.messages or self.coordinator.any_turn():
             return False
         tasks = self.runner.status()
         if any(task["phase"] in ACTIVE_PHASES for task in tasks):
@@ -635,28 +652,28 @@ class Symphony:
             raise ValueError("Enter a message.")
         if images and text.startswith("/"):
             raise ValueError("Images cannot be sent with slash commands.")
-        if text == "/interrupt":
-            await self.coordinator.interrupt()
-            message_id = self.runner.chat("user", text)
-            return {"message": self.saved_message(message_id)}
         found = self.mapped_project(project) if project else None
+        if text == "/interrupt":
+            repo = found[0] if found else self.coordinator.active_repo()
+            await self.coordinator.interrupt(repo)
+            message_id = self.runner.chat("user", text, repo=repo)
+            return {"message": self.saved_message(message_id)}
         if project and not found:
             raise ValueError("The selected project is unavailable. Refresh the project list.")
         repo = found[0] if found else ""
         previous = self.runner.setting("view")
         if project != previous:
             self.runner.save_setting("view", project)
-        label = found[1]["name"] if found else "All projects"
-        message = f"[Switched view: {label}]\n{text}" if project != previous else text
+        message = text
         attachments = self.save_chat_images(images)
         try:
-            message_id = self.runner.chat("user", message, attachments)
+            message_id = self.runner.chat("user", message, attachments, repo=repo)
         except Exception:
             self.remove_chat_images(attachments)
             raise
-        if self.coordinator.turn and self.turn_repo == repo and not text.startswith("/"):
+        if self.coordinator.turn_for(repo) and not text.startswith("/"):
             try:
-                await self.coordinator.steer(message, attachments)
+                await self.coordinator.steer(repo, message, attachments)
                 return {"message": self.saved_message(message_id)}
             except (OSError, RuntimeError, ValueError):
                 pass  # The turn or the server can exit before the steer is accepted.
@@ -694,8 +711,8 @@ class Symphony:
         detail = "Coordinator handled worker events."
         try:
             if attachments:
-                return await self.coordinator.respond(text, cwd, attachments)
-            return await self.coordinator.respond(text, cwd)
+                return await self.coordinator.respond(repo, text, cwd, attachments)
+            return await self.coordinator.respond(repo, text, cwd)
         except (OSError, RuntimeError, TimeoutError, ValueError) as error:
             detail = f"Coordinator turn failed: {error}"
             raise
@@ -712,11 +729,15 @@ class Symphony:
             result = await self.coordinator.login()
             self.login = {"url": result["verificationUrl"], "code": result["userCode"],
                           "expires": time.monotonic() + 900}
+        elif command == "/new":
+            cwd, _ = await self.context(repo)
+            await self.coordinator.new_session(repo, cwd)
+            self.runner.chat("system", "Started a new coordinator session.", repo=repo)
         elif command == "/compact":
             cwd, _ = await self.context(repo)
-            await self.coordinator.compact(cwd)
+            await self.coordinator.compact(repo, cwd)
         elif command == "/status":
-            status = self.coordinator.status()
+            status = self.coordinator.status(repo)
             usage = [f"{status['model']} {status['effort']}".strip()]
             if status["contextUsed"] is not None:
                 usage.append(f"Context {status['contextUsed']}% used")
@@ -725,15 +746,15 @@ class Symphony:
             summary = [f"{task['issue']} · {task['phase']}" for task in self.runner.status()]
             self.runner.chat("system", "\n".join(filter(None, [
                 " · ".join(filter(None, usage)), "\n".join(summary) or "No approved work in progress.",
-            ])))
+            ])), repo=repo)
         elif command in {"/model", "/effort"}:
             if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", argument):
                 raise ValueError(f"Enter a value after {command}.")
             self.runner.save_setting(command[1:], argument)
-            self.runner.chat("system", f"{command[1:].capitalize()} set to {argument}.")
+            self.runner.chat("system", f"{command[1:].capitalize()} set to {argument}.", repo=repo)
         elif command == "/continue":
             self.runner.save_setting("paused", "")
-            self.runner.chat("system", "Automatic dispatch resumed.")
+            self.runner.chat("system", "Automatic dispatch resumed.", repo=repo)
             self.runner.wake.set()
         elif command == "/retry":
             row = self.runner.task(argument.upper())
@@ -749,7 +770,7 @@ class Symphony:
             else:
                 raise ValueError(f"{row['issue']} is {row['phase']}.")
         elif command.startswith("/"):
-            raise ValueError("Available commands: /login, /compact, /status, /model, /effort, /interrupt, /continue, /retry.")
+            raise ValueError("Available commands: /login, /new, /compact, /status, /model, /effort, /interrupt, /continue, /retry.")
         elif attachments:
             await self.respond(repo, message, (), attachments)
         else:
@@ -766,10 +787,11 @@ class Symphony:
             while True:
                 if self.messages:
                     self.busy = True
+                    entry = self.messages.popleft()
                     try:
-                        await self.handle(*self.messages.popleft())
+                        await self.handle(*entry)
                     except (ValueError, RuntimeError, OSError, TimeoutError) as error:
-                        self.runner.chat("system", str(error) or "The request timed out.")
+                        self.runner.chat("system", str(error) or "The request timed out.", repo=entry[0])
                     finally:
                         self.busy = False
                     continue
@@ -784,22 +806,23 @@ class Symphony:
                 if not events:
                     break
                 rows = {issue: self.runner.task(issue) for issue in dict.fromkeys(event["issue"] for event in events)}
-                repos = list(dict.fromkeys(row["repo"] for row in rows.values()))
-                repo = repos[0] if len(repos) == 1 else ""
-                if len(events) == 1:
-                    prompt = f"Worker event for {events[0]['issue']}: {events[0]['detail']}"
+                repo = rows[events[0]["issue"]]["repo"]
+                batch = [event for event in events if rows[event["issue"]]["repo"] == repo]
+                batch_issues = list(dict.fromkeys(event["issue"] for event in batch))
+                if len(batch) == 1:
+                    prompt = f"Worker event for {batch[0]['issue']}: {batch[0]['detail']}"
                 else:
-                    lines = "\n".join(f"- {event['issue']}: {event['detail']}" for event in events)
-                    prompt = f"Worker events ({len(events)}):\n{lines}"
+                    lines = "\n".join(f"- {event['issue']}: {event['detail']}" for event in batch)
+                    prompt = f"Worker events ({len(batch)}):\n{lines}"
                 self.busy = True
                 try:
-                    status = await self.respond(repo, prompt, tuple(rows))
-                    self.events_delivered([event["id"] for event in events])
+                    status = await self.respond(repo, prompt, tuple(batch_issues))
+                    self.events_delivered([event["id"] for event in batch])
                     if status == "interrupted":
                         break
                 except (ValueError, RuntimeError, OSError, TimeoutError) as error:
                     self.runner.save_setting("paused", str(error) or "Coordinator timed out.")
-                    self.runner.chat("system", f"Automatic dispatch paused. {self.runner.setting('paused')}")
+                    self.runner.chat("system", f"Automatic dispatch paused. {self.runner.setting('paused')}", repo=repo)
                     break
                 finally:
                     self.busy = False
@@ -871,7 +894,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.json_response({"status": "ok"})
             elif url.path == "/api/state":
                 after = int(params.get("after", ["0"])[0])
-                self.json_response(self.run_async(app.state(after, params.get("issues", [""])[0])))
+                self.json_response(self.run_async(app.state(
+                    after,
+                    params.get("issues", [""])[0],
+                    project=params.get("project", [""])[0],
+                    repo=params.get("repo", [""])[0],
+                )))
             elif url.path == "/api/issue":
                 issue = self.run_async(issue_details(app.linear, params.get("id", [""])[0]))
                 cache_control = "private, max-age=60"

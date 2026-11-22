@@ -74,7 +74,12 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE TABLE IF NOT EXISTS chat (
     id INTEGER PRIMARY KEY, role TEXT NOT NULL, text TEXT NOT NULL,
-    attachments TEXT NOT NULL DEFAULT '[]'
+    attachments TEXT NOT NULL DEFAULT '[]',
+    repo TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS threads (
+    repo TEXT PRIMARY KEY, thread_id TEXT NOT NULL,
+    tools_hash TEXT NOT NULL, context_used INTEGER
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS execution (
@@ -319,8 +324,11 @@ class Runner:
         with self.db:
             if "phase" not in {row["name"] for row in self.db.execute("PRAGMA table_info(events)")}:
                 self.db.execute("ALTER TABLE events ADD COLUMN phase TEXT NOT NULL DEFAULT ''")
-            if "attachments" not in {row["name"] for row in self.db.execute("PRAGMA table_info(chat)")}:
+            chat_columns = {row["name"] for row in self.db.execute("PRAGMA table_info(chat)")}
+            if "attachments" not in chat_columns:
                 self.db.execute("ALTER TABLE chat ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'")
+            if "repo" not in chat_columns:
+                self.db.execute("ALTER TABLE chat ADD COLUMN repo TEXT NOT NULL DEFAULT ''")
         self.migrate_unphased_events()
         self.jobs = set()
         self.cloning = {}
@@ -345,11 +353,54 @@ class Runner:
         with self.db:
             self.db.executemany("INSERT OR REPLACE INTO settings VALUES (?, ?)", values.items())
 
-    def chat(self, role, text, attachments=()):
+    def chat(self, role, text, attachments=(), *, repo=""):
         with self.db:
-            cursor = self.db.execute("INSERT INTO chat(role,text,attachments) VALUES (?,?,?)",
-                                     (role, text, json.dumps(list(attachments), ensure_ascii=False)))
+            cursor = self.db.execute(
+                "INSERT INTO chat(role,text,attachments,repo) VALUES (?,?,?,?)",
+                (role, text, json.dumps(list(attachments), ensure_ascii=False), repo),
+            )
         return cursor.lastrowid
+
+    def thread(self, repo):
+        row = self.db.execute(
+            "SELECT repo, thread_id, tools_hash, context_used FROM threads WHERE repo=?",
+            (repo,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def thread_repo(self, thread_id):
+        row = self.db.execute(
+            "SELECT repo FROM threads WHERE thread_id=?",
+            (thread_id,),
+        ).fetchone()
+        return row["repo"] if row else None
+
+    def save_thread(self, repo, thread_id, tools_hash, context_used=None):
+        with self.db:
+            self.db.execute(
+                """INSERT OR REPLACE INTO threads(repo, thread_id, tools_hash, context_used)
+                   VALUES (?,?,?,?)""",
+                (repo, thread_id, tools_hash, context_used),
+            )
+
+    def save_thread_context(self, repo, context_used):
+        with self.db:
+            self.db.execute(
+                "UPDATE threads SET context_used=? WHERE repo=?",
+                (context_used, repo),
+            )
+
+    def delete_thread(self, repo):
+        with self.db:
+            self.db.execute("DELETE FROM threads WHERE repo=?", (repo,))
+
+    def repo_chat_latest(self):
+        return {
+            row["repo"]: row["latest"]
+            for row in self.rows(
+                "SELECT repo, MAX(id) AS latest FROM chat WHERE repo != '' GROUP BY repo"
+            )
+        }
 
     def chat_image_dir(self):
         return self.directory / "chat-images"
@@ -542,12 +593,18 @@ class Runner:
             if supersede:
                 self.db.execute("UPDATE events SET delivered=1 WHERE issue=? AND delivered=0", (issue,))
             if event:
+                row = self.db.execute(
+                    "SELECT phase, repo FROM tasks WHERE issue=?", (issue,)
+                ).fetchone()
                 if notify:
                     phase = fields.get("phase")
                     if phase is None:
-                        phase = self.db.execute("SELECT phase FROM tasks WHERE issue=?", (issue,)).fetchone()["phase"]
+                        phase = row["phase"]
                     self.db.execute("INSERT INTO events(issue,detail,phase) VALUES (?,?,?)", (issue, event, phase))
-                self.db.execute("INSERT INTO chat(role,text) VALUES ('worker',?)", (f"{issue} · {event}",))
+                self.db.execute(
+                    "INSERT INTO chat(role,text,repo) VALUES ('worker',?,?)",
+                    (f"{issue} · {event}", row["repo"]),
+                )
         self.wake.set()
 
     def acknowledge_events(self, issue):

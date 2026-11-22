@@ -363,7 +363,7 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
             "```text\ncode block\n```"
         )
         self.runner.chat("user", "**plain text**")
-        app.coordinator.stream = reply
+        app.coordinator.streams[""] = reply
 
         live = await app.state(0)
         self.assertEqual(live["messages"][0]["text"], "**plain text**")
@@ -381,8 +381,8 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         self.assertIn("<pre><code", live["streamHtml"])
         stream_html = live["streamHtml"]
 
-        app.coordinator.thread = "main"
-        self.runner.save_setting("thread", "main")
+        app.coordinator.set_thread("", "main")
+        self.runner.save_thread("", "main", TOOLS_HASH)
         app.coordinator.notification("item/completed", {
             "threadId": "main", "item": {"type": "agentMessage", "text": reply},
         })
@@ -410,7 +410,8 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         rows = self.runner.rows("SELECT * FROM chat ORDER BY id")
         self.assertEqual(saved["id"], rows[-1]["id"])
         self.assertEqual(saved["role"], "user")
-        self.assertEqual(saved["text"], "[Switched view: Beta]\nUse this mockup.")
+        self.assertEqual(saved["text"], "Use this mockup.")
+        self.assertEqual(saved["repo"], "owner/second")
         self.assertEqual([item["type"] for item in saved["images"]], ["image/webp"])
         self.assertEqual(json.loads(rows[-1]["attachments"]), saved["images"])
 
@@ -419,11 +420,10 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         self.assertNotEqual(first["message"]["id"], second["message"]["id"])
         state = await app.state(0)
         self.assertEqual([message["id"] for message in state["messages"]],
-                         [row["id"] for row in rows] + [first["message"]["id"],
-                                                        second["message"]["id"]])
+                         [saved["id"], first["message"]["id"], second["message"]["id"]])
         self.assertEqual([message["text"] for message in state["messages"]][-2:],
                          ["Repeat", "Repeat"])
-        self.assertEqual(state["messages"][1], saved)
+        self.assertEqual(state["messages"][0], saved)
 
         image_only = await app.submit({"project": "beta", "images": [image_payload(PNG)]})
         self.assertEqual(image_only["message"]["text"], "")
@@ -435,18 +435,18 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
     async def test_chat_live_markdown_renders_only_when_the_stream_changes(self):
         app = self.app()
         with patch("symphony.__main__.markdown", return_value="<p>cached</p>") as render:
-            app.coordinator.stream = "Draft one"
+            app.coordinator.streams[""] = "Draft one"
             first = await app.state(0)
             second = await app.state(0)
             self.assertEqual(render.call_count, 1)
             self.assertEqual(first["streamHtml"], "<p>cached</p>")
             self.assertEqual(second["streamHtml"], "<p>cached</p>")
 
-            app.coordinator.stream = "Draft one and two"
+            app.coordinator.streams[""] = "Draft one and two"
             await app.state(0)
             self.assertEqual(render.call_count, 2)
 
-            app.coordinator.stream = ""
+            app.coordinator.streams[""] = ""
             cleared = await app.state(0)
             self.assertEqual(render.call_count, 2)
             self.assertEqual((cleared["stream"], cleared["streamHtml"]), ("", ""))
@@ -472,7 +472,7 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         saved = accepted["message"]
         row = self.runner.rows("SELECT * FROM chat")[-1]
         self.assertEqual(saved, {
-            "id": row["id"], "role": "user", "text": "Screenshot", "images": images,
+            "id": row["id"], "role": "user", "text": "Screenshot", "images": images, "repo": "",
         })
         state = await app.state(0)
         self.assertEqual(state["messages"][-1], saved)
@@ -532,8 +532,8 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         app = self.app()
         app.repos[REPO] = [{"id": "project", "name": "Fixture"}]
         app.turn_repo = REPO
-        app.coordinator.thread = "main"
-        app.coordinator.turn = "turn"
+        app.coordinator.set_thread(REPO, "main")
+        app.coordinator.turns[REPO] = "turn"
         self.runner.save_setting("view", "project")
         note = "Continue with this screenshot."
         with patch.object(app.coordinator, "steer", new_callable=AsyncMock,
@@ -548,7 +548,8 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         with patch.object(app.coordinator, "respond", new_callable=AsyncMock,
                           return_value="completed") as respond:
             await app.handle(*first)
-        text, cwd, attachments = respond.await_args.args
+        repo_arg, text, cwd, attachments = respond.await_args.args
+        self.assertEqual(repo_arg, REPO)
         self.assertEqual(cwd, self.repo)
         self.assertTrue(text.startswith(note + "\n\n--- Current Symphony context ---\n"))
         self.assertIn("Global AGENTS.md defaults:", text)
@@ -563,8 +564,7 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
                           "images": [image_payload(WEBP, "image/webp")]})
 
         repo, text, message, images = app.messages.popleft()
-        self.assertEqual((repo, text), ("owner/second", "Use this mockup."))
-        self.assertEqual(message, "[Switched view: Beta]\nUse this mockup.")
+        self.assertEqual((repo, text, message), ("owner/second", "Use this mockup.", "Use this mockup."))
         self.assertEqual(images[0]["type"], "image/webp")
         self.assertEqual(json.loads(self.runner.rows(
             "SELECT attachments FROM chat ORDER BY id DESC LIMIT 1")[0]["attachments"]), images)
@@ -576,19 +576,19 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         images = [{"name": name, "type": "image/png"}]
         path = str(self.runner.chat_image_path(name))
         codex = Codex(self.runner, None)
-        codex.thread = "thread"
-        codex.turn = "turn"
+        codex.set_thread("", "thread")
+        codex.turns[""] = "turn"
         with patch.object(codex, "ensure_thread"), \
              patch.object(codex, "turn_request", new_callable=AsyncMock,
                           return_value="completed") as turn:
-            await codex.respond("Look at this", self.root, images)
+            await codex.respond("", "Look at this", self.root, images)
             method, params = turn.await_args.args
             self.assertEqual(method, "turn/start")
             self.assertEqual(params["input"], [
                 {"type": "text", "text": "Look at this", "text_elements": []},
                 {"type": "localImage", "path": path},
             ])
-            await codex.respond("Text only", self.root)
+            await codex.respond("", "Text only", self.root)
             _, params = turn.await_args.args
             self.assertEqual(params["input"], [
                 {"type": "text", "text": "Text only", "text_elements": []},
@@ -596,7 +596,7 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
 
         with patch.object(codex, "request", new_callable=AsyncMock,
                           return_value={}) as request:
-            await codex.steer("Also this", images)
+            await codex.steer("", "Also this", images)
         method, params = request.await_args.args
         self.assertEqual(method, "turn/steer")
         self.assertEqual(params["input"], [
@@ -686,7 +686,7 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
              patch.object(codex, "request", side_effect=[
                  {}, {"account": {"type": "chatgpt"}}, {"thread": {"id": "test-thread"}},
              ]) as request:
-            await codex.ensure_thread(self.root)
+            await codex.ensure_thread("", self.root)
         self.assertIn('web_search="live"', launch.await_args.args)
         self.assertNotIn("features.shell_tool=false", launch.await_args.args)
         env = launch.await_args.kwargs["env"]
@@ -701,21 +701,22 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         self.assertIn("approve_issue", [tool["name"] for tool in params["dynamicTools"]])
 
     async def test_thread_refreshes_tools_and_resumes_afterward(self):
-        self.runner.save_settings({"thread": "previous-thread", "tools_hash": "outdated-tools"})
+        self.runner.save_thread("", "previous-thread", "outdated-tools")
         self.runner.chat("user", "Earlier chat")
         codex = Codex(self.runner, None)
         codex.account = "chatgpt"
         with patch.object(codex, "connect"), \
              patch.object(codex, "request", return_value={"thread": {"id": "current-thread"}}) as request:
-            await codex.ensure_thread(self.root)
+            await codex.ensure_thread("", self.root)
             method, params = request.await_args.args
             self.assertEqual(method, "thread/start")
             self.assertEqual(params["dynamicTools"], TOOLS)
-            self.assertEqual(self.runner.setting("thread"), "current-thread")
-            self.assertEqual(self.runner.setting("tools_hash"), TOOLS_HASH)
+            self.assertEqual(self.runner.thread("")["thread_id"], "current-thread")
+            self.assertEqual(self.runner.thread("")["tools_hash"], TOOLS_HASH)
 
-            codex.thread = ""
-            await codex.ensure_thread(self.root)
+            codex.threads.clear()
+            codex.thread_repos.clear()
+            await codex.ensure_thread("", self.root)
             method, params = request.await_args.args
             self.assertEqual(method, "thread/resume")
             self.assertEqual(params["threadId"], "current-thread")
@@ -738,9 +739,9 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         with patch("symphony.runner.SHARED_AGENTS", shared), \
              patch.object(app.coordinator, "respond", new_callable=AsyncMock) as respond:
             await app.respond(REPO, "First repository turn")
-            first = respond.await_args.args[0]
+            first = respond.await_args.args[1]
             await app.respond(second, f"Worker event for {ISSUE}: Follow-up notice.")
-            second_text = respond.await_args.args[0]
+            second_text = respond.await_args.args[1]
         for text, own, other in ((first, "REPO-A-RULE", "REPO-B-RULE"),
                                  (second_text, "REPO-B-RULE", "REPO-A-RULE")):
             self.assertLess(text.index("GLOBAL-RULE"), text.index(own))
@@ -769,10 +770,10 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         with patch("symphony.runner.SHARED_AGENTS", shared), \
              patch.object(app.coordinator, "respond", new_callable=AsyncMock) as respond:
             await app.respond(REPO, "First coordinator turn")
-            first = respond.await_args.args[0]
+            first = respond.await_args.args[1]
             shared.write_text("# Shared\n\n- NEW-GLOBAL-RULE\n")
             await app.respond(REPO, "Second coordinator turn")
-            second = respond.await_args.args[0]
+            second = respond.await_args.args[1]
             shared.unlink()
             with self.assertRaisesRegex(RuntimeError, "Global AGENTS.md is missing"):
                 await app.respond(REPO, "Third coordinator turn")
@@ -919,7 +920,7 @@ else:
         app = self.app()
         codex = app.coordinator
         codex.account = "chatgpt"
-        self.runner.save_setting("thread", "active")
+        self.runner.save_thread("", "active", TOOLS_HASH)
         codex.models = {"gpt-fixture": {
             "displayName": "GPT Fixture", "isDefault": True, "defaultReasoningEffort": "medium",
             "supportedReasoningEfforts": [{"reasoningEffort": "medium"}, {"reasoningEffort": "max"}],
@@ -952,8 +953,8 @@ else:
         app = self.app()
         codex = app.coordinator
         codex.ready = True
-        codex.thread = "main"
-        self.runner.save_setting("thread", "main")
+        codex.set_thread("", "main")
+        self.runner.save_thread("", "main", TOOLS_HASH)
         codex.process = SimpleNamespace(stdout=asyncio.StreamReader())
         codex.finished = asyncio.get_running_loop().create_future()
         codex.notification("turn/started", {"threadId": "main", "turn": {"id": "turn", "startedAt": 100}})
@@ -969,15 +970,15 @@ else:
         self.assertEqual(state["stream"], "")
         self.assertEqual(state["codex"]["turnTiming"], {})
         self.assertFalse(codex.ready)
-        self.assertEqual(codex.thread, "")
-        self.assertEqual(self.runner.setting("thread"), "main")
+        self.assertEqual(codex.threads, {})
+        self.assertEqual(self.runner.thread("")["thread_id"], "main")
 
     async def test_broken_codex_pipe_queues_chat_and_reports_interruption(self):
         app = self.app()
         app.repos[REPO] = [{"id": "project", "name": "Fixture"}]
         app.turn_repo = REPO
-        app.coordinator.thread = "main"
-        app.coordinator.turn = "turn"
+        app.coordinator.set_thread(REPO, "main")
+        app.coordinator.turns[REPO] = "turn"
         self.runner.save_setting("view", "project")
         note = "Pick up where we left off."
         with patch.object(app.coordinator, "request", side_effect=BrokenPipeError("Fixture pipe closed")) as request:
@@ -987,13 +988,13 @@ else:
         self.assertEqual([call.args[0] for call in request.await_args_list], ["turn/steer", "turn/interrupt"])
         self.assertEqual(list(app.messages), [(REPO, note, note, [])])
         self.assertTrue(self.runner.wake.is_set())
-        self.assertEqual(self.runner.rows("SELECT role, text FROM chat"), [{"role": "user", "text": note}])
+        self.assertEqual(self.runner.rows("SELECT role, text, repo FROM chat"),
+                         [{"role": "user", "text": note, "repo": REPO}])
 
     async def test_other_threads_cannot_change_or_complete_the_coordinator_turn(self):
         app = self.app()
         codex = app.coordinator
-        codex.thread = "main"
-        self.runner.save_setting("thread", "other")
+        codex.set_thread("", "main")
         codex.finished = asyncio.get_running_loop().create_future()
         codex.notification("turn/started", {"threadId": "main", "turn": {"id": "parent", "startedAt": 100}})
         codex.notification("item/agentMessage/delta", {"threadId": "main", "delta": "Main response"})
@@ -1009,7 +1010,7 @@ else:
             with self.subTest(method=method):
                 codex.notification(method, {"threadId": "other", **params})
                 self.assertEqual(await app.state(0), before)
-                self.assertEqual(codex.turn, "parent")
+                self.assertEqual(codex.turn_for(""), "parent")
                 self.assertFalse(codex.finished.done())
 
         codex.notification("item/completed", {"threadId": "main",
@@ -2919,7 +2920,7 @@ else:
         app.coordinator.account = "chatgpt"
         received = []
 
-        async def respond(text, cwd):
+        async def respond(repo, text, cwd):
             received.append(text)
             return "completed"
 
@@ -2948,7 +2949,7 @@ else:
         app.coordinator.account = "chatgpt"
         received = []
 
-        async def respond(text, cwd):
+        async def respond(repo, text, cwd):
             received.append(text)
             return "completed"
 
@@ -3051,7 +3052,7 @@ else:
         app.coordinator.account = "chatgpt"
         received = []
 
-        async def respond(text, cwd):
+        async def respond(repo, text, cwd):
             received.append(text)
             return "completed"
 
@@ -3098,7 +3099,7 @@ else:
             await self.pump_until(app, lambda: not self.runner.rows(
                 "SELECT 1 FROM events WHERE delivered=0"))
         self.assertEqual(respond.await_count, 1)
-        self.assertIn(f"Worker event for {ISSUE}: Worker finished.", respond.await_args.args[0])
+        self.assertIn(f"Worker event for {ISSUE}: Worker finished.", respond.await_args.args[1])
 
     async def test_stale_event_filtering_survives_restart(self):
         await self.approve()
@@ -3193,8 +3194,8 @@ else:
         received = []
         done = asyncio.Event()
 
-        async def fake_respond(text, cwd):
-            received.append((text, cwd))
+        async def fake_respond(repo, text, cwd):
+            received.append((repo, text, cwd))
             if len(received) == 1:
                 # An event arriving mid-turn must stay undelivered for the next batch.
                 self.runner.change(ISSUE, event="Follow-up notice.")
@@ -3210,16 +3211,100 @@ else:
             await done.wait()
 
         self.assertEqual(len(received), 2)
-        first_text, first_cwd = received[0]
+        first_repo, first_text, first_cwd = received[0]
+        self.assertEqual(first_repo, REPO)
         self.assertEqual(first_cwd, self.repo)
         self.assertIn("Worker events (2):", first_text)
         self.assertIn(f"- {ISSUE}: Worker finished. Verification exited 0. Audit notes.md and review.md.", first_text)
         self.assertIn(f"- {ISSUE}: Review completed cleanly.", first_text)
         self.assertEqual(first_text.count(f"Approved plan for {ISSUE}:"), 1)
 
-        second_text, _ = received[1]
+        second_repo, second_text, _ = received[1]
+        self.assertEqual(second_repo, REPO)
         self.assertIn(f"Worker event for {ISSUE}: Follow-up notice.", second_text)
         self.assertEqual(self.runner.rows("SELECT 1 FROM events WHERE delivered=0"), [])
+
+    async def test_per_repo_sessions_isolate_threads_chat_events_and_new_command(self):
+        second = "owner/second"
+        second_path = self.add_repo(second, "# Second rules\n\n- ONLY-SECOND-RULE\n")
+        (self.repo / "AGENTS.md").write_text("# First rules\n\n- ONLY-FIRST-RULE\n")
+        self.git(self.repo, "add", "AGENTS.md")
+        self.git(self.repo, "commit", "-m", "Add first rules")
+        self.git(self.repo, "push", "origin", "main")
+
+        app = self.app()
+        app.repos = {
+            REPO: [{"id": "alpha", "name": "Alpha"}, {"id": "alpha-2", "name": "Alpha Two"}],
+            second: [{"id": "beta", "name": "Beta"}],
+        }
+        # Legacy global row with repo='' must not leak into per-repo chat views.
+        self.runner.chat("system", "Legacy global entry", repo="")
+
+        await app.submit({"project": "alpha", "text": "Hello first"})
+        await app.submit({"project": "beta", "text": "Hello second"})
+        self.runner.chat("assistant", "Reply first", repo=REPO)
+        self.runner.chat("assistant", "Reply second", repo=second)
+
+        first_state = await app.state(0, project="alpha")
+        shared_state = await app.state(0, project="alpha-2")
+        second_state = await app.state(0, project="beta")
+        self.assertEqual([m["text"] for m in first_state["messages"]], ["Hello first", "Reply first"])
+        self.assertEqual([m["text"] for m in shared_state["messages"]], ["Hello first", "Reply first"])
+        self.assertEqual([m["text"] for m in second_state["messages"]], ["Hello second", "Reply second"])
+        self.assertEqual(first_state["repoActivity"][REPO], first_state["messages"][-1]["id"])
+        self.assertEqual(first_state["repoActivity"][second], second_state["messages"][-1]["id"])
+
+        # Per-repo Codex threads and /new command.
+        codex = app.coordinator
+        codex.account = "chatgpt"
+        started_ids = ["thread-a1", "thread-b1", "thread-a2"]
+        with patch.object(codex, "connect"), \
+             patch.object(codex, "turn_request", new_callable=AsyncMock, return_value="completed"), \
+             patch.object(codex, "request", side_effect=lambda m, p: {"thread": {"id": started_ids.pop(0)}}) as req:
+            await codex.respond(REPO, "Turn A", self.repo)
+            await codex.respond(second, "Turn B", second_path)
+            codex.notification("thread/tokenUsage/updated", {
+                "threadId": "thread-a1",
+                "tokenUsage": {"last": {"totalTokens": 32000}, "modelContextWindow": 112000},
+            })
+            self.assertEqual((await app.state(0, project="alpha"))["codex"]["contextUsed"], 20)
+            self.assertIsNone((await app.state(0, project="beta"))["codex"]["contextUsed"])
+            await app.handle(REPO, "/new", "/new")
+        self.assertEqual(self.runner.thread(REPO)["thread_id"], "thread-a2")
+        self.assertEqual(self.runner.thread(second)["thread_id"], "thread-b1")
+        self.assertEqual((await app.state(0, project="alpha"))["messages"][-1]["text"],
+                         "Started a new coordinator session.")
+        self.assertEqual(req.call_args.args[0], "thread/start")
+        self.assertEqual(req.call_args.args[1]["cwd"], str(self.repo))
+
+        # Pending events across two repos flush in separate per-repo batches with exact repo AGENTS.md.
+        self.runner.db.execute(
+            """INSERT INTO tasks(issue,project,repo,title,plan,phase,updated)
+               VALUES ('KIAN-101','alpha',?,'A','Plan A','review',0),
+                      ('KIAN-102','beta',?,'B','Plan B','blocked',1)""",
+            (REPO, second),
+        )
+        self.runner.db.commit()
+        self.runner.change("KIAN-101", event="Review A ready.")
+        self.runner.change("KIAN-102", event="Blocked B.")
+        turns = []
+
+        async def record_respond(repo, text, cwd):
+            turns.append((repo, text, cwd))
+            return "completed"
+
+        app.coordinator.respond = AsyncMock(side_effect=record_respond)
+        app.messages.clear()
+        await self.pump_until(app, lambda: not self.runner.rows("SELECT 1 FROM events WHERE delivered=0"))
+        self.assertEqual(len(turns), 2)
+        self.assertEqual(turns[0][0], REPO)
+        self.assertEqual(turns[0][2], self.repo)
+        self.assertIn("ONLY-FIRST-RULE", turns[0][1])
+        self.assertNotIn("KIAN-102", turns[0][1].split("Current approved work:")[0])
+        self.assertEqual(turns[1][0], second)
+        self.assertEqual(turns[1][2], second_path)
+        self.assertIn("ONLY-SECOND-RULE", turns[1][1])
+        self.assertNotIn("KIAN-101", turns[1][1].split("Current approved work:")[0])
 
     @staticmethod
     async def _cancel_task(task):

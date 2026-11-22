@@ -265,7 +265,7 @@ class HistorySnapshotTests(unittest.IsolatedAsyncioTestCase):
         self.app.context = AsyncMock(return_value=(self.root, ""))
         turn_count = 0
 
-        async def respond(text, cwd):
+        async def respond(repo, text, cwd):
             nonlocal turn_count
             turn_count += 1
             if turn_count == 1:
