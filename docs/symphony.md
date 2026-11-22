@@ -73,9 +73,11 @@ identifier, workflow icon and title, with compact pills for priority, due date,
 estimate, and colored labels. Workflow icons match Linear's dotted, empty,
 half-filled, and filled status shapes, using the configured colors with stronger
 contrast in light mode. Worker phases, proposed plans, and an awaiting-approval
-badge appear on their issues. Expandable proposed plans render Markdown with the same
-formatting and safety rules as issue details, while the saved plan text remains
-the source for approval.
+badge appear on their issues. A round arrow on an unstarted Backlog card asks
+the coordinator for a proposed plan in chat while preserving the composer draft;
+it neither approves nor queues work. Expandable proposed plans render Markdown
+with the same formatting and safety rules as issue details, while the saved plan
+text remains the source for approval.
 
 Click an issue card to open its details in a modal. The description, attachments,
 documents, comments, and activity appear beside its properties and related issues.

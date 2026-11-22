@@ -20,6 +20,7 @@ const imageBytes = 5 * 1024 * 1024;
 const imagesBytes = 10 * 1024 * 1024;
 const expandedPlans = new Set();
 const collapsedGroups = new Set();
+const pendingPlans = new Set();
 const priorityIcons = ["ellipsis", "octagon-alert", "signal", "signal-medium", "signal-low"];
 let issueCache = new Map();
 let issueRevision = "";
@@ -175,7 +176,21 @@ function renderIssue(issue, today) {
     meta.append(phase);
   }
   preview.append(link, heading, meta);
-  row.append(preview);
+  const cardRow = element("div", "", "issue-card-row");
+  cardRow.append(preview);
+  if (issue.state.name === "Backlog" && !task) {
+    const propose = element("button", "", "issue-plan-action");
+    propose.type = "button";
+    propose.id = "issue-propose-" + issue.identifier;
+    const label = "Propose a plan for " + issue.identifier;
+    propose.title = label;
+    propose.setAttribute("aria-label", label);
+    propose.disabled = pendingPlans.has(issue.identifier);
+    propose.append(icon("arrow-right"));
+    propose.addEventListener("click", () => proposePlan(issue, propose));
+    cardRow.append(propose);
+  }
+  row.append(cardRow);
   if (task?.detail) row.append(element("p", task.detail, "detail"));
   if (issue.plan) {
     const plan = element("details");
@@ -194,6 +209,20 @@ function renderIssue(issue, today) {
     row.append(plan);
   }
   return row;
+}
+
+async function proposePlan(issue, button) {
+  if (pendingPlans.has(issue.identifier)) return;
+  pendingPlans.add(issue.identifier);
+  button.disabled = true;
+  const project = issue.projectId || selected;
+  try {
+    await submit("Propose a plan for " + issue.identifier + ".", [], project);
+  } finally {
+    pendingPlans.delete(issue.identifier);
+    const current = byId("issue-propose-" + issue.identifier);
+    if (current) current.disabled = false;
+  }
 }
 
 function toggleIssueGroup(event) {

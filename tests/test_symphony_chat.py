@@ -48,13 +48,68 @@ class ChatBrowserTests(unittest.TestCase):
 
     def setUp(self):
         self.page = self.browser.new_page(viewport={"width": 1200, "height": 800})
+        self.load_app(self.page)
+
+    def load_app(self, page):
         html = (ROOT / "index.html").read_text()
         html = re.sub(r'<script src="[^"]+" defer></script>\s*', "", html)
         html = html.replace('<link rel="stylesheet" href="/style.css">', "")
-        self.page.set_content(html, wait_until="domcontentloaded")
-        self.page.add_style_tag(path=str(ROOT / "style.css"))
-        self.page.add_script_tag(path=str(ROOT / "panes.js"))
-        self.page.add_script_tag(path=str(ROOT / "app.js"))
+        page.set_content(html, wait_until="domcontentloaded")
+        page.add_style_tag(path=str(ROOT / "style.css"))
+        page.add_script_tag(path=str(ROOT / "panes.js"))
+        page.add_script_tag(path=str(ROOT / "app.js"))
+
+    def issue(self, identifier, state="Backlog", project="project-a", **extra):
+        state_type = {"Backlog": "backlog", "Todo": "unstarted",
+                      "In Progress": "started", "Done": "completed"}[state]
+        data = {
+            "identifier": identifier, "title": "Title for " + identifier,
+            "url": "https://linear.app/issue/" + identifier, "description": "",
+            "priority": 2, "priorityLabel": "High", "estimate": 2, "dueDate": None,
+            "createdAt": "2026-11-01T00:00:00Z", "updatedAt": "2026-11-01T00:00:00Z",
+            "completedAt": None, "labels": [], "plan": None, "planHtml": "",
+            "state": {"name": state, "type": state_type, "color": "#888888"},
+            "project": "Project A", "projectId": project,
+        }
+        data.update(extra)
+        return data
+
+    def render_cards(self, projects, tasks=()):
+        self.page.evaluate("""({projects, taskRows}) => {
+          tasks = taskRows;
+          expandedPlans.clear();
+          selected = projects[0][0];
+          issueCache = new Map(projects);
+          issueCache.set("", projects.flatMap(([, rows]) => rows));
+          renderPanes();
+        }""", {"projects": projects, "taskRows": list(tasks)})
+
+    def hold_chat_requests(self):
+        self.page.evaluate("""() => {
+          window.__requests = [];
+          window.__pending = [];
+          window.__opened = [];
+          window.openIssue = (identifier) => window.__opened.push(identifier);
+          window.fetch = (path, options) => {
+            const body = JSON.parse(options.body);
+            const request = {path, body};
+            window.__requests.push(request);
+            return new Promise((resolve) => {
+              window.__pending.push({...request, resolve});
+            });
+          };
+          window.__respond = (index, id, text, images = []) => {
+            const item = window.__pending.splice(index, 1)[0];
+            item.resolve({ok: true, json: async () => ({message: {
+              id, role: "user", text: text ?? item.body.text,
+              images,
+            }})});
+          };
+          window.__reject = (index, message) => {
+            const item = window.__pending.splice(index, 1)[0];
+            item.resolve({ok: false, json: async () => ({error: message})});
+          };
+        }""")
 
     def tearDown(self):
         self.page.close()
@@ -472,6 +527,446 @@ class ChatBrowserTests(unittest.TestCase):
         self.assertEqual(result["tail"], "Paragraph 150 is new.")
         self.assertTrue(result["text"].startswith("Paragraph 0 with enough text"))
         self.assertTrue(result["text"].endswith("Paragraph 150 is new."))
+
+    def test_quick_plan_action_renders_on_unrecorded_backlog_cards_only(self):
+        long_title = "Investigate " + "an-unbroken-description-" * 12
+        rows = [
+            self.issue("KIAN-1", title=long_title),
+            self.issue("KIAN-2", plan="Keep this plan.", planHtml="<p>Keep this plan.</p>"),
+            self.issue("KIAN-3"),
+            self.issue("KIAN-4", state="Todo"),
+            self.issue("KIAN-5", state="In Progress"),
+            self.issue("KIAN-6", state="Done"),
+        ]
+        self.render_cards([["project-a", rows]],
+                          [{"issue": "KIAN-3", "phase": "working", "detail": "Worker running."}])
+        result = self.page.evaluate("""() => {
+          const action = (id) => document.getElementById("issue-propose-" + id);
+          const preview = (id) => document.getElementById("issue-open-" + id);
+          const card = (id) => preview(id).closest("article");
+          const first = preview("KIAN-1");
+          const quick = action("KIAN-1");
+          const box = quick.getBoundingClientRect();
+          const style = getComputedStyle(quick);
+          return {
+            backlog: [...document.querySelectorAll("#backlog .issue-link")].map((node) => node.textContent),
+            actions: [...document.querySelectorAll(".issue-plan-action")].map((node) => node.id),
+            sibling: first.parentElement === quick.parentElement && first.nextElementSibling === quick,
+            row: first.parentElement.className,
+            types: [first.type, quick.type],
+            label: quick.getAttribute("aria-label"),
+            title: quick.title,
+            icon: quick.querySelector("use").getAttribute("href"),
+            nested: document.querySelectorAll("button button").length,
+            size: [box.width, box.height],
+            radius: style.borderRadius,
+            overflow: card("KIAN-1").scrollWidth > card("KIAN-1").clientWidth + 1,
+            plan: Boolean(document.querySelector("details[data-issue='KIAN-2']")),
+            planOpen: document.querySelector("details[data-issue='KIAN-2']").open,
+          };
+        }""")
+        self.assertEqual(result["backlog"], ["KIAN-1", "KIAN-2", "KIAN-3"])
+        self.assertEqual(result["actions"], ["issue-propose-KIAN-1", "issue-propose-KIAN-2"])
+        self.assertTrue(result["sibling"])
+        self.assertEqual(result["row"], "issue-card-row")
+        self.assertEqual(result["types"], ["button", "button"])
+        self.assertEqual(result["label"], "Propose a plan for KIAN-1")
+        self.assertEqual(result["title"], "Propose a plan for KIAN-1")
+        self.assertEqual(result["icon"], "#lucide-arrow-right")
+        self.assertEqual(result["nested"], 0)
+        self.assertEqual(result["size"], [34, 34])
+        self.assertEqual(result["radius"], "50%")
+        self.assertFalse(result["overflow"])
+        self.assertTrue(result["plan"])
+        self.assertFalse(result["planOpen"])
+
+        self.assertEqual(self.page.get_by_role(
+            "button", name="Propose a plan for KIAN-1", exact=True).count(), 1)
+        self.assertEqual(self.page.get_by_role(
+            "button", name="Propose a plan for KIAN-2", exact=True).count(), 1)
+        self.assertEqual(self.page.get_by_role(
+            "button", name="Propose a plan for KIAN-3", exact=True).count(), 0)
+        for identifier in ("KIAN-4", "KIAN-5", "KIAN-6"):
+            self.assertEqual(self.page.locator("#issue-propose-" + identifier).count(), 0)
+
+        self.page.locator("#plan-summary-KIAN-2").click()
+        self.assertTrue(self.page.locator(
+            "details[data-issue='KIAN-2']").evaluate("node => node.open"))
+
+        self.page.locator("#issue-open-KIAN-1").focus()
+        self.page.keyboard.press("Tab")
+        focus = self.page.evaluate("""() => ({
+          id: document.activeElement.id,
+          outline: getComputedStyle(document.activeElement).outlineWidth,
+        })""")
+        self.assertEqual(focus["id"], "issue-propose-KIAN-1")
+        self.assertNotEqual(focus["outline"], "0px")
+        self.page.evaluate("renderPanes()")
+        self.assertEqual(self.page.evaluate("document.activeElement.id"),
+                         "issue-propose-KIAN-1")
+
+    def test_quick_plan_request_captures_project_and_survives_redraws(self):
+        self.render_cards([
+            ["project-a", [self.issue("KIAN-10")]],
+            ["project-b", [self.issue("KIAN-11", project="project-b"),
+                           self.issue("KIAN-12", project="")]],
+        ])
+        self.hold_chat_requests()
+        self.page.evaluate("""() => {
+          messageField.value = "Unsent draft";
+          messageField.setSelectionRange(2, 7);
+          history.push("Earlier");
+        }""")
+        self.page.locator("#issue-propose-KIAN-10").click()
+        self.page.wait_for_function("window.__requests.length === 1")
+        pending = self.page.evaluate("""() => ({
+          request: window.__requests[0],
+          selected,
+          disabled: document.getElementById("issue-propose-KIAN-10").disabled,
+          draft: messageField.value,
+          selection: [messageField.selectionStart, messageField.selectionEnd],
+          history: history.slice(),
+          opened: window.__opened.slice(),
+        })""")
+        self.assertEqual(pending["request"], {
+            "path": "/api/chat",
+            "body": {"text": "Propose a plan for KIAN-10.", "project": "project-a", "images": []},
+        })
+        self.assertEqual(pending["selected"], "project-a")
+        self.assertTrue(pending["disabled"])
+        self.assertEqual(pending["draft"], "Unsent draft")
+        self.assertEqual(pending["selection"], [2, 7])
+        self.assertEqual(pending["history"], ["Earlier"])
+        self.assertEqual(pending["opened"], [])
+
+        self.page.evaluate('selectProject("project-b")')
+        switched = self.page.evaluate("""() => ({
+          selected,
+          absent: document.getElementById("issue-propose-KIAN-10") === null,
+          requests: window.__requests.length,
+        })""")
+        self.assertEqual(switched, {"selected": "project-b", "absent": True, "requests": 1})
+        self.page.evaluate('selectProject("project-a")')
+        redrawn = self.page.evaluate("""() => {
+          const current = document.getElementById("issue-propose-KIAN-10");
+          const first = current;
+          first.disabled = false;
+          first.click();
+          renderPanes();
+          const replacement = document.getElementById("issue-propose-KIAN-10");
+          replacement.disabled = false;
+          replacement.click();
+          return {
+            disabled: replacement.disabled,
+            replaced: replacement !== first,
+            requests: window.__requests.length,
+            pending: pendingPlans.has("KIAN-10"),
+          };
+        }""")
+        self.assertEqual(redrawn, {
+            "disabled": False, "replaced": True, "requests": 1, "pending": True,
+        })
+        self.page.evaluate("renderPanes()")
+        self.assertTrue(self.page.locator("#issue-propose-KIAN-10").is_disabled())
+
+        self.page.evaluate("__respond(0, 100)")
+        self.page.wait_for_function(
+            "document.getElementById('issue-propose-KIAN-10').disabled === false")
+        self.page.wait_for_function(
+            "document.querySelectorAll('#messages .message').length === 1")
+        acknowledged = self.page.evaluate("""() => ({
+          text: document.querySelector("#messages .message.user .message-text").textContent,
+          error: document.getElementById("request-error").textContent,
+          pending: pendingPlans.has("KIAN-10"),
+        })""")
+        self.assertEqual(acknowledged, {
+            "text": "Propose a plan for KIAN-10.", "error": "", "pending": False,
+        })
+        self.page.evaluate("""() => {
+          queueMessage({id: 100, role: "user", text: "Propose a plan for KIAN-10.", images: []});
+          flushChat();
+        }""")
+        self.assertEqual(self.page.locator("#messages .message").count(), 1)
+
+        self.page.evaluate('selectProject("project-b")')
+        self.page.locator("#issue-propose-KIAN-12").click()
+        self.page.wait_for_function("window.__requests.length === 2")
+        self.assertEqual(self.page.evaluate("window.__requests[1]"), {
+            "path": "/api/chat",
+            "body": {"text": "Propose a plan for KIAN-12.", "project": "project-b", "images": []},
+        })
+        self.page.evaluate("__respond(0, 101)")
+        self.page.wait_for_function(
+            "document.getElementById('issue-propose-KIAN-12').disabled === false")
+
+    def test_quick_plan_action_handles_keyboard_errors_and_deliberate_retry(self):
+        self.render_cards([["project-a", [self.issue("KIAN-20")]]])
+        self.hold_chat_requests()
+        for index, activation in enumerate(("mouse", "Enter", "Space"), start=1):
+            action = self.page.locator("#issue-propose-KIAN-20")
+            if activation == "mouse":
+                action.click()
+            else:
+                action.press(activation)
+            self.page.wait_for_function(f"window.__requests.length === {index}")
+            self.page.evaluate(f"__respond(0, {100 + index})")
+            self.page.wait_for_function(
+                "document.getElementById('issue-propose-KIAN-20').disabled === false")
+            self.page.wait_for_function(
+                f"document.querySelectorAll('#messages .message').length === {index}")
+        requests = self.page.evaluate("window.__requests.map((item) => item.body)")
+        self.assertEqual(requests, [
+            {"text": "Propose a plan for KIAN-20.", "project": "project-a", "images": []},
+        ] * 3)
+        self.assertEqual(self.page.evaluate("window.__opened"), [])
+
+        self.page.locator("#issue-propose-KIAN-20").click()
+        self.page.wait_for_function("window.__requests.length === 4")
+        self.page.evaluate("__reject(0, 'Fixture rejected the plan.')")
+        self.page.wait_for_function(
+            "document.getElementById('request-error').textContent === 'Fixture rejected the plan.'")
+        failed = self.page.evaluate("""() => ({
+          disabled: document.getElementById("issue-propose-KIAN-20").disabled,
+          pending: pendingPlans.has("KIAN-20"),
+          messages: document.querySelectorAll("#messages .message").length,
+          error: document.getElementById("request-error").textContent,
+        })""")
+        self.assertEqual(failed, {
+            "disabled": False, "pending": False, "messages": 3,
+            "error": "Fixture rejected the plan.",
+        })
+
+        self.page.locator("#issue-propose-KIAN-20").click()
+        self.page.wait_for_function("window.__requests.length === 5")
+        self.page.evaluate("__respond(0, 105)")
+        self.page.wait_for_function(
+            "document.getElementById('issue-propose-KIAN-20').disabled === false")
+        self.page.wait_for_function(
+            "document.querySelectorAll('#messages .message').length === 4")
+        retried = self.page.evaluate("""() => ({
+          error: document.getElementById("request-error").textContent,
+          texts: [...document.querySelectorAll("#messages .message-text")]
+            .map((node) => node.textContent),
+        })""")
+        self.assertEqual(retried, {
+            "error": "",
+            "texts": ["Propose a plan for KIAN-20."] * 4,
+        })
+        self.page.evaluate("""() => {
+          queueMessage({id: 105, role: "user", text: "Propose a plan for KIAN-20.", images: []});
+          flushChat();
+        }""")
+        self.assertEqual(self.page.locator("#messages .message").count(), 4)
+
+        self.page.locator("#issue-open-KIAN-20").click()
+        self.assertEqual(self.page.evaluate("window.__opened"), ["KIAN-20"])
+        self.assertEqual(self.page.evaluate("window.__requests.length"), 5)
+
+    def test_quick_plan_action_preserves_composer_drafts_and_concurrent_send(self):
+        self.render_cards([["project-a", [self.issue("KIAN-30")]]])
+        self.hold_chat_requests()
+        self.page.evaluate("""() => {
+          window.__revoked = [];
+          const revoke = URL.revokeObjectURL.bind(URL);
+          URL.revokeObjectURL = (url) => {
+            window.__revoked.push(url);
+            revoke(url);
+          };
+          messageField.value = "Draft survives";
+          messageField.setSelectionRange(1, 5);
+          history.push("Earlier");
+          attachImage(new File([new Uint8Array([1, 2, 3])], "one.png", {type: "image/png"}));
+        }""")
+        initial_urls = self.page.evaluate("pendingImages.map((image) => image.url)")
+        self.page.locator("#issue-propose-KIAN-30").click()
+        self.page.wait_for_function("window.__requests.length === 1")
+        self.page.evaluate("""() => {
+          messageField.value = "Edited during request";
+          messageField.setSelectionRange(3, 9);
+          attachImage(new File([new Uint8Array([4, 5, 6])], "two.png", {type: "image/png"}));
+        }""")
+        edited_urls = self.page.evaluate("pendingImages.map((image) => image.url)")
+        self.assertEqual(len(edited_urls), 2)
+        self.assertEqual(edited_urls[:1], initial_urls)
+
+        self.page.evaluate("__reject(0, 'Fixture rejected the plan.')")
+        self.page.wait_for_function(
+            "document.getElementById('request-error').textContent === 'Fixture rejected the plan.'")
+        failed = self.page.evaluate("""() => ({
+          disabled: document.getElementById("issue-propose-KIAN-30").disabled,
+          draft: messageField.value,
+          selection: [messageField.selectionStart, messageField.selectionEnd],
+          urls: pendingImages.map((image) => image.url),
+          attachments: document.querySelectorAll(".composer-attachment").length,
+          revoked: window.__revoked.slice(),
+          history: history.slice(),
+          opened: window.__opened.slice(),
+        })""")
+        self.assertEqual(failed, {
+            "disabled": False, "draft": "Edited during request", "selection": [3, 9],
+            "urls": edited_urls, "attachments": 2, "revoked": [],
+            "history": ["Earlier"], "opened": [],
+        })
+
+        self.page.locator("#issue-propose-KIAN-30").click()
+        self.page.wait_for_function("window.__requests.length === 2")
+        self.page.evaluate("""() => {
+          messageField.value = "Edited again";
+          messageField.setSelectionRange(0, 6);
+          attachImage(new File([new Uint8Array([7, 8, 9])], "three.png", {type: "image/png"}));
+        }""")
+        self.page.evaluate("__respond(0, 201)")
+        self.page.wait_for_function(
+            "document.getElementById('issue-propose-KIAN-30').disabled === false")
+        self.page.wait_for_function(
+            "document.querySelectorAll('#messages .message').length === 1")
+        succeeded = self.page.evaluate("""() => ({
+          draft: messageField.value,
+          selection: [messageField.selectionStart, messageField.selectionEnd],
+          urls: pendingImages.map((image) => image.url),
+          attachments: document.querySelectorAll(".composer-attachment").length,
+          revoked: window.__revoked.slice(),
+          history: history.slice(),
+          error: document.getElementById("request-error").textContent,
+        })""")
+        self.assertEqual(succeeded["draft"], "Edited again")
+        self.assertEqual(succeeded["selection"], [0, 6])
+        self.assertEqual(len(succeeded["urls"]), 3)
+        self.assertEqual(succeeded["urls"][:2], edited_urls)
+        self.assertEqual(succeeded["attachments"], 3)
+        self.assertEqual(succeeded["revoked"], [])
+        self.assertEqual(succeeded["history"], ["Earlier"])
+        self.assertEqual(succeeded["error"], "")
+
+        self.page.evaluate("""() => {
+          messageField.value = "Composer alongside plan";
+          messageField.setSelectionRange(0, 0);
+        }""")
+        self.page.locator("#issue-propose-KIAN-30").click()
+        self.page.wait_for_function("window.__requests.length === 3")
+        self.page.evaluate("document.getElementById('composer').requestSubmit()")
+        self.page.wait_for_function("window.__requests.length === 4")
+        concurrent = self.page.evaluate("""() => ({
+          requests: window.__requests.map((item) => item.body),
+          sending,
+          status: document.getElementById("send-status").textContent,
+          disabled: document.getElementById("issue-propose-KIAN-30").disabled,
+        })""")
+        self.assertEqual(concurrent["requests"][2], {
+            "text": "Propose a plan for KIAN-30.", "project": "project-a", "images": [],
+        })
+        self.assertEqual(concurrent["requests"][3]["text"], "Composer alongside plan")
+        self.assertEqual(concurrent["requests"][3]["project"], "project-a")
+        self.assertEqual(len(concurrent["requests"][3]["images"]), 3)
+        self.assertTrue(concurrent["sending"])
+        self.assertEqual(concurrent["status"], "Sending…")
+        self.assertTrue(concurrent["disabled"])
+
+        self.page.evaluate("""() => {
+          messageField.value = "Next unsent draft";
+          messageField.setSelectionRange(0, 4);
+        }""")
+        self.page.evaluate("__respond(0, 202)")
+        self.page.wait_for_function(
+            "document.getElementById('issue-propose-KIAN-30').disabled === false")
+        self.page.wait_for_function(
+            "document.querySelectorAll('#messages .message').length === 2")
+        after_quick = self.page.evaluate("""() => ({
+          draft: messageField.value,
+          sending,
+          status: document.getElementById("send-status").textContent,
+          images: pendingImages.length,
+          history: history.slice(),
+          messages: document.querySelectorAll("#messages .message").length,
+        })""")
+        self.assertEqual(after_quick, {
+            "draft": "Next unsent draft", "sending": True, "status": "Sending…",
+            "images": 3, "history": ["Earlier"], "messages": 2,
+        })
+
+        self.page.evaluate("__respond(0, 203)")
+        self.page.wait_for_function("sending === false")
+        self.page.wait_for_function(
+            "document.querySelectorAll('#messages .message').length === 3")
+        final = self.page.evaluate("""() => ({
+          draft: messageField.value,
+          sending,
+          status: document.getElementById("send-status").textContent,
+          images: pendingImages.length,
+          attachmentsHidden: document.getElementById("attachments").hidden,
+          revoked: window.__revoked.length,
+          history: history.slice(),
+          texts: [...document.querySelectorAll("#messages .message-text")]
+            .map((node) => node.textContent),
+        })""")
+        self.assertEqual(final, {
+            "draft": "Next unsent draft", "sending": False, "status": "",
+            "images": 0, "attachmentsHidden": True, "revoked": 3,
+            "history": ["Earlier", "Composer alongside plan"],
+            "texts": ["Propose a plan for KIAN-30.",
+                      "Propose a plan for KIAN-30.", "Composer alongside plan"],
+        })
+
+    def test_quick_plan_action_fits_desktop_and_coarse_narrow_layouts(self):
+        long_title = "A long issue title " + "that keeps wrapping " * 16
+        self.render_cards([["project-a", [
+            self.issue("KIAN-40", title=long_title),
+            self.issue("KIAN-41", plan="A detailed plan.", planHtml="<p>A detailed plan.</p>"),
+        ]]])
+        desktop = {}
+        for scheme in ("light", "dark"):
+            self.page.emulate_media(color_scheme=scheme)
+            desktop[scheme] = self.page.evaluate("""() => {
+              const action = document.getElementById("issue-propose-KIAN-40");
+              const card = action.closest("article");
+              const box = action.getBoundingClientRect();
+              return {
+                size: [box.width, box.height],
+                overflow: card.scrollWidth > card.clientWidth + 1,
+                border: getComputedStyle(action).borderStyle,
+              };
+            }""")
+        for scheme in ("light", "dark"):
+            self.assertEqual(desktop[scheme], {
+                "size": [34, 34], "overflow": False, "border": "solid",
+            })
+
+        coarse = self.browser.new_page(
+            viewport={"width": 390, "height": 844}, has_touch=True)
+        try:
+            self.load_app(coarse)
+            coarse.evaluate("""({rows}) => {
+              tasks = [];
+              selected = "project-a";
+              issueCache = new Map([["project-a", rows], ["", rows]]);
+              renderPanes();
+            }""", {"rows": [
+                self.issue("KIAN-40", title=long_title),
+                self.issue("KIAN-41", plan="A detailed plan.",
+                           planHtml="<p>A detailed plan.</p>"),
+            ]})
+            narrow = coarse.evaluate("""() => {
+              const action = document.getElementById("issue-propose-KIAN-40");
+              const card = action.closest("article");
+              const box = action.getBoundingClientRect();
+              const plan = document.querySelector("details[data-issue='KIAN-41']");
+              plan.open = true;
+              return {
+                size: [box.width, box.height],
+                cardOverflow: card.scrollWidth > card.clientWidth + 1,
+                backlogOverflow: document.getElementById("backlog").scrollWidth
+                  > document.getElementById("backlog").clientWidth + 1,
+                planOverflow: plan.scrollWidth > plan.clientWidth + 1,
+                composerVisible: document.getElementById("composer")
+                  .getBoundingClientRect().bottom <= window.innerHeight + 1,
+              };
+            }""")
+            self.assertEqual(narrow, {
+                "size": [44, 44], "cardOverflow": False, "backlogOverflow": False,
+                "planOverflow": False, "composerVisible": True,
+            })
+        finally:
+            coarse.close()
 
     def test_composer_remains_reachable_at_narrow_and_desktop_widths(self):
         for width, height in ((390, 844), (1200, 800)):
