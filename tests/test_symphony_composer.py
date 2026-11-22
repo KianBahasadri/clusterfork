@@ -389,6 +389,98 @@ console.log(JSON.stringify(results));
             "finished": {"hidden": False, "text": "Worked for 8s"},
         })
 
+    @unittest.skipUnless(shutil.which("node"), "Node is required for JavaScript checks.")
+    def test_config_dialog_clears_key_on_save_remove_close_and_keeps_on_error(self):
+        app = Path(__file__).resolve().parents[1] / "symphony/web/app.js"
+        probe = r"""
+const fs = require("fs");
+const vm = require("vm");
+const nodes = new Map();
+const makeNode = (id) => ({
+  id, textContent: "", value: "", hidden: false, disabled: false, open: false,
+  dataset: {}, style: {setProperty() {}}, listeners: {}, children: [],
+  addEventListener(t, h) { (this.listeners[t] ||= []).push(h); },
+  classList: {add() {}, remove() {}}, querySelector() { return null; },
+  querySelectorAll() { return []; }, setAttribute() {}, removeAttribute() {},
+  toggleAttribute() {}, focus() {}, closest() { return makeNode("aside"); },
+  append(...n) { this.children.push(...n); }, prepend(...n) { this.children.unshift(...n); },
+  replaceChildren(...n) { this.children = n; },
+  showModal() { this.open = true; },
+  close() { this.open = false; for (const h of this.listeners.close || []) h(); },
+});
+const doc = {
+  getElementById(id) {
+    if (!nodes.has(id)) nodes.set(id, makeNode(id));
+    return nodes.get(id);
+  },
+  createElement(tag) { return makeNode(tag); },
+  createElementNS(_ns, tag) { return makeNode(tag); },
+  querySelector() { return this.getElementById("main"); },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+};
+let failNext = false;
+const posts = [];
+let state = {
+  opencodeGo: {configured: false, malformed: false, busy: false},
+  codex: {signedIn: false, account: {}, login: null, busy: false},
+};
+const fetch = async (path, options = {}) => {
+  if (path === "/api/agents") return {ok: true, json: async () => ({content: "rules"})};
+  if (path === "/api/config") {
+    if ((options.method || "GET") === "POST") {
+      if (failNext) {
+        failNext = false;
+        return {ok: false, json: async () => ({error: "Rejected key."})};
+      }
+      const body = JSON.parse(options.body);
+      posts.push(body);
+      if (body.action === "set_opencode_key") state.opencodeGo.configured = true;
+      if (body.action === "clear_opencode_key") state.opencodeGo.configured = false;
+      if (body.action === "codex_login") state.codex.login = {url: "https://example.test/auth", code: "ABCD-1234"};
+      if (body.action === "codex_cancel_login") state.codex.login = null;
+      return {ok: true, json: async () => state};
+    }
+    return {ok: true, json: async () => state};
+  }
+  return {ok: true, json: async () => ({messages: [], busy: false, canInterrupt: false, stream: "", streamHtml: "", tasks: [], signedIn: false, login: null, paused: "", view: "", codex: {rateLimits: {}, turnTiming: {}}, issueError: ""})};
+};
+const ctx = vm.createContext({document: doc, fetch, setInterval: () => 0, setTimeout, clearTimeout, console});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+(async () => {
+  const draft = doc.getElementById("message");
+  draft.value = "Keep my draft";
+  vm.runInContext('openConfig();', ctx);
+  await new Promise((r) => setTimeout(r, 10));
+  const input = doc.getElementById("config-opencode-key");
+  input.value = "canary-bad-key";
+  failNext = true;
+  await doc.getElementById("config-opencode-form").listeners.submit[0]({preventDefault() {}});
+  await new Promise((r) => setTimeout(r, 10));
+  const afterError = {value: input.value, feedback: doc.getElementById("config-opencode-feedback").textContent};
+  input.value = "canary-good-key";
+  await doc.getElementById("config-opencode-form").listeners.submit[0]({preventDefault() {}});
+  await new Promise((r) => setTimeout(r, 10));
+  const afterSave = {value: input.value, status: doc.getElementById("config-opencode-status").textContent};
+  input.value = "stray-unsaved";
+  vm.runInContext('closeConfig();', ctx);
+  const afterClose = input.value;
+  vm.runInContext('openConfig();', ctx);
+  await new Promise((r) => setTimeout(r, 10));
+  await doc.getElementById("config-opencode-clear").listeners.click[0]();
+  await new Promise((r) => setTimeout(r, 10));
+  const afterClear = {status: doc.getElementById("config-opencode-status").textContent, draft: draft.value};
+  console.log(JSON.stringify({posts, afterError, afterSave, afterClose, afterClear}));
+})();
+"""
+        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        result = json.loads(run.stdout)
+        self.assertEqual(result["afterError"], {"value": "canary-bad-key", "feedback": "Rejected key."})
+        self.assertEqual(result["afterSave"], {"value": "", "status": "API key configured on PVC."})
+        self.assertEqual(result["afterClose"], "")
+        self.assertEqual(result["afterClear"], {"status": "Not configured.", "draft": "Keep my draft"})
+
 
 if __name__ == "__main__":
     unittest.main()

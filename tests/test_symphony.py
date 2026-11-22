@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from email.message import Message
 import hashlib
 import hmac
+import http.server
 from io import BytesIO
 import json
 import os
@@ -15,19 +16,20 @@ import sqlite3
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+import threading
 import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, call, patch
 
 from symphony.__main__ import (
-    BODY_LIMIT, ISSUE_REFRESH_SECONDS, REFRESH_COALESCE_SECONDS, WEBHOOK_BODY_LIMIT,
+    BODY_LIMIT, CONFIG_BODY_LIMIT, ISSUE_REFRESH_SECONDS, REFRESH_COALESCE_SECONDS, WEBHOOK_BODY_LIMIT,
     Handler, Symphony, WebhookHandler, serve,
 )
 from symphony.codex import CREATE_ISSUE_SCHEMA, Codex, TOOLS, TOOLS_HASH
 from symphony.execution import execution_payload
 from symphony.runner import (
-    AGENTS_BYTES, NOTES_LINES, REVIEW_LINES, Runner, bounded_review,
+    AGENTS_BYTES, BusyError, NOTES_LINES, REVIEW_LINES, Runner, bounded_review,
     install_agent_instructions, shared_agents, validate_review,
 )
 from symphony.services import (
@@ -93,6 +95,10 @@ class SymphonyTests(unittest.IsolatedAsyncioTestCase):
         self.remote = self.root / "remote.git"
         self.linear = LinearFixture()
         self.runner = Runner(self.root, self.linear)
+        auth = self.runner.opencode_auth_path()
+        auth.parent.mkdir(parents=True, exist_ok=True)
+        auth.write_text(json.dumps({"opencode-go": {"type": "api", "key": "fixture-opencode-key"}}))
+        auth.chmod(0o600)
         self.addAsyncCleanup(self.close)
         self.repo = self.runner.repo_dir(REPO)
         self.repo.parent.mkdir(parents=True)
@@ -120,9 +126,50 @@ class SymphonyTests(unittest.IsolatedAsyncioTestCase):
 import json
 from pathlib import Path
 import os
+import sqlite3
 import subprocess
 import sys
 import time
+if len(sys.argv) >= 3 and sys.argv[1] == "auth":
+    sub = sys.argv[2]
+    data_dir = Path(os.environ["XDG_DATA_HOME"]) / "opencode"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    db_path = data_dir / "opencode.db"
+    fresh = not db_path.exists()
+    con = sqlite3.connect(db_path)
+    con.execute('''CREATE TABLE IF NOT EXISTS credential (
+        id TEXT PRIMARY KEY, integration_id TEXT, label TEXT NOT NULL,
+        value TEXT NOT NULL, connector_id TEXT, method_id TEXT,
+        active INTEGER, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL
+    )''')
+    legacy = data_dir / "auth.json"
+    if fresh and legacy.is_file():
+        for integ, entry in json.loads(legacy.read_text()).items():
+            if isinstance(entry, dict) and entry.get("key"):
+                con.execute(
+                    "INSERT OR IGNORE INTO credential VALUES (?,?,?,?,NULL,NULL,1,0,0)",
+                    (f"cred_{integ}", integ, "API key", json.dumps({"type": "key", "key": entry["key"]})),
+                )
+        con.commit()
+    pos = [a for a in sys.argv[3:] if not a.startswith("-")]
+    if sub == "export":
+        target = pos[0] if pos else None
+        q = "SELECT id, integration_id, label, active, value FROM credential"
+        rows = con.execute(q + (" WHERE integration_id=?" if target else ""), (target,) if target else ()).fetchall()
+        print(json.dumps([{"id": r[0], "integrationID": r[1], "label": r[2], "active": bool(r[3]), "value": json.loads(r[4])} for r in rows]))
+    elif sub == "import":
+        for item in json.loads(sys.stdin.read()):
+            con.execute(
+                "INSERT OR IGNORE INTO credential VALUES (?,?,?,?,NULL,NULL,1,0,0)",
+                (item["id"], item["integrationID"], item.get("label", "API key"), json.dumps(item["value"])),
+            )
+        con.commit()
+    elif sub == "logout":
+        con.execute("DELETE FROM credential WHERE integration_id=? AND id=?", (pos[0], pos[1]))
+        con.commit()
+    con.close()
+    os.chmod(db_path, 0o600)
+    sys.exit(0)
 workspace = Path(os.environ["FIXTURE_ROOT"]) / "runs/KIAN-101"
 config = json.loads(os.environ.get("OPENCODE_CONFIG_CONTENT", "{}"))
 agents_path = Path(os.environ["XDG_CONFIG_HOME"]) / "opencode" / "AGENTS.md"
@@ -3429,6 +3476,257 @@ else:
                 await app.handle(REPO, "/compact", "/compact")
         self.assertEqual((await app.state(0, project="project"))["compacting"], "")
 
+    async def test_opencode_go_pvc_credentials_lifecycle_and_admission_guards(self):
+        canary = "canary-opencode-secret-999"
+        replacement = "canary-opencode-secret-next"
+        auth = self.runner.opencode_auth_path()
+        db_path = self.runner.opencode_db_path()
+        auth.unlink()
+        self.assertEqual(self.runner.opencode_go_status(), {"configured": False, "malformed": False})
+
+        await self.approve()
+        self.linear.state = {"name": "Todo", "type": "unstarted"}
+        self.assertEqual(await self.runner.dispatch_approved(), [])
+        with self.assertRaisesRegex(ValueError, "OpenCode Go API key is not configured"):
+            await self.runner.dispatch(ISSUE, REPO, "")
+        self.assertEqual(self.runner.task(ISSUE)["attempts"], 0)
+        self.assertEqual(self.runner.setting("paused"), "")
+
+        # Seed a legacy pre-migration auth.json with an unrelated provider before setting OpenCode Go.
+        auth.parent.mkdir(parents=True, exist_ok=True)
+        auth.write_text(json.dumps({"anthropic": {"type": "api", "key": "keep-other-provider"}}))
+        await self.runner.set_opencode_go_key(f"  {canary}  ")
+        self.assertEqual(db_path.stat().st_mode & 0o777, 0o600)
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            creds = {r[0]: json.loads(r[1])["key"] for r in con.execute(
+                "SELECT integration_id, value FROM credential"
+            ).fetchall()}
+        finally:
+            con.close()
+        self.assertEqual(creds, {"anthropic": "keep-other-provider", "opencode-go": canary})
+
+        app = self.app()
+        cfg = await app.config_state()
+        self.assertEqual(cfg["opencodeGo"], {"configured": True, "malformed": False, "busy": False})
+        self.assertNotIn(canary, json.dumps(cfg))
+        self.assertNotIn(canary, json.dumps(await app.state(0)))
+        self.assertEqual(self.runner.rows("SELECT * FROM chat WHERE instr(text, ?) > 0", (canary,)), [])
+        self.assertEqual(self.runner.rows("SELECT * FROM settings WHERE instr(value, ?) > 0", (canary,)), [])
+
+        # Existing pause must NOT be cleared automatically by saving credentials.
+        self.runner.save_setting("paused", "Existing pause reason")
+        await app.update_config({"action": "set_opencode_key", "apiKey": replacement})
+        self.assertEqual(self.runner.setting("paused"), "Existing pause reason")
+
+        # Update failure preserves the previous stored credential in opencode.db intact.
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            before_rows = con.execute("SELECT id, integration_id, value FROM credential ORDER BY integration_id").fetchall()
+        finally:
+            con.close()
+        with patch.object(self.runner, "_run_opencode_auth", side_effect=RuntimeError("Could not update OpenCode Go credentials.")):
+            with self.assertRaisesRegex(RuntimeError, "Could not update OpenCode Go credentials"):
+                await self.runner.set_opencode_go_key("canary-never-written")
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            after_fail_rows = con.execute("SELECT id, integration_id, value FROM credential ORDER BY integration_id").fetchall()
+        finally:
+            con.close()
+        self.assertEqual(after_fail_rows, before_rows)
+
+        # Clearing removes only opencode-go, preserves anthropic, and survives Runner restart even with env canary.
+        await app.update_config({"action": "clear_opencode_key"})
+        self.assertEqual(db_path.stat().st_mode & 0o777, 0o600)
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            remaining = {r[0]: json.loads(r[1])["key"] for r in con.execute(
+                "SELECT integration_id, value FROM credential"
+            ).fetchall()}
+        finally:
+            con.close()
+        self.assertEqual(remaining, {"anthropic": "keep-other-provider"})
+        with patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "env-ignored-canary"}):
+            restarted = Runner(self.root, self.linear)
+            self.addCleanup(restarted.db.close)
+            self.assertFalse(restarted.has_opencode_go_key())
+            self.assertEqual(await restarted.dispatch_approved(), [])
+            self.assertEqual(restarted.task(ISSUE)["attempts"], 0)
+
+        # Malformed opencode.db is reported cleanly and never overwritten destructively.
+        saved_db = db_path.read_bytes()
+        db_path.write_text("{broken sqlite")
+        self.assertEqual(self.runner.opencode_go_status(), {"configured": False, "malformed": True})
+        with self.assertRaisesRegex(RuntimeError, "invalid and cannot be updated safely"):
+            await self.runner.set_opencode_go_key(canary)
+        self.assertEqual(db_path.read_text(), "{broken sqlite")
+        db_path.write_bytes(saved_db)
+
+        # Racing key update during awaited worker admission or active work returns BusyError.
+        await app.update_config({"action": "set_opencode_key", "apiKey": canary})
+        self.runner.save_setting("paused", "")
+        in_linear = asyncio.Event()
+        release_linear = asyncio.Event()
+        original_issue = self.linear.issue
+
+        async def slow_issue(_issue):
+            in_linear.set()
+            await release_linear.wait()
+            return await original_issue(ISSUE)
+
+        with patch.object(self.linear, "issue", side_effect=slow_issue), \
+             patch.object(self.runner, "job", side_effect=lambda cor: cor.close()):
+            dispatch_task = asyncio.create_task(self.runner.dispatch(ISSUE, REPO, ""))
+            await in_linear.wait()
+            with self.assertRaises(BusyError):
+                await app.update_config({"action": "set_opencode_key", "apiKey": replacement})
+            with self.assertRaises(BusyError):
+                await app.update_config({"action": "clear_opencode_key"})
+            release_linear.set()
+            await dispatch_task
+        self.assertEqual(self.runner.opencode_go_busy(), True)
+        with self.assertRaises(BusyError):
+            await app.update_config({"action": "clear_opencode_key"})
+
+    async def test_pinned_opencode_reads_pvc_auth_and_ignores_env(self):
+        real_path = os.pathsep.join(
+            entry for entry in os.environ["PATH"].split(os.pathsep) if Path(entry) != self.root / "bin"
+        )
+        opencode_bin = shutil.which("opencode", path=real_path)
+        if not opencode_bin:
+            self.skipTest("OpenCode CLI is required for PVC store verification.")
+
+        seen_auth = []
+
+        class ProbeHandler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+
+            def do_POST(self):
+                seen_auth.append(self.headers.get("Authorization"))
+                body = b'{"error":{"message":"probe-stop"}}'
+                self.send_response(401)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ProbeHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+
+        auth = self.runner.opencode_auth_path()
+        auth.unlink()
+        auth.parent.mkdir(parents=True, exist_ok=True)
+        auth.write_text(json.dumps({"anthropic": {"type": "api", "key": "preserve-unrelated"}}))
+        auth.chmod(0o600)
+
+        canary_1 = "canary-real-opencode-1"
+        canary_2 = "canary-real-opencode-2"
+        env = self.runner.opencode_auth_env()
+        env["HOME"] = str(self.root / "home")
+        env["PATH"] = real_path
+        env["OPENCODE_GO_API_KEY"] = "env-fallback-must-not-be-used"
+        env["OPENCODE_CONFIG_CONTENT"] = json.dumps({"provider": {"opencode-go": {
+            "options": {"baseURL": f"http://127.0.0.1:{server.server_port}/v1"},
+        }}})
+
+        with patch.dict(os.environ, {"PATH": real_path, "HOME": str(self.root / "home")}):
+            await self.runner.set_opencode_go_key(canary_1)
+            subprocess.run(
+                [opencode_bin, "run", "--standalone", "--auto", "--format", "json",
+                 "--model", "opencode-go/deepseek-v4.1-flash#max", "ping"],
+                env=env, capture_output=True, text=True, check=False, timeout=20,
+            )
+            self.assertIn(f"Bearer {canary_1}", seen_auth)
+            seen_auth.clear()
+
+            await self.runner.set_opencode_go_key(canary_2)
+            subprocess.run(
+                [opencode_bin, "run", "--standalone", "--auto", "--format", "json",
+                 "--model", "opencode-go/deepseek-v4.1-flash#max", "ping"],
+                env=env, capture_output=True, text=True, check=False, timeout=20,
+            )
+            self.assertIn(f"Bearer {canary_2}", seen_auth)
+            self.assertNotIn(f"Bearer {canary_1}", seen_auth)
+
+            exported = json.loads(subprocess.check_output(
+                [opencode_bin, "auth", "export", "--standalone"], env=env, text=True, timeout=20,
+            ))
+            self.assertEqual(
+                {item["integrationID"]: item["value"]["key"] for item in exported},
+                {"anthropic": "preserve-unrelated", "opencode-go": canary_2},
+            )
+
+            await self.runner.clear_opencode_go_key()
+            listed = subprocess.run(
+                [opencode_bin, "auth", "list", "--standalone"],
+                env=env, text=True, capture_output=True, check=False, timeout=20,
+            )
+            self.assertEqual(listed.returncode, 0, listed.stderr)
+            self.assertNotIn("OpenCode Go", listed.stdout)
+            self.assertFalse(self.runner.has_opencode_go_key())
+
+    async def test_codex_account_lifecycle_shares_login_and_preserves_threads(self):
+        app = self.app()
+        codex = app.coordinator
+        self.runner.save_thread(REPO, "thread-keep", TOOLS_HASH, 15)
+        with patch.object(codex, "connect", new_callable=AsyncMock), \
+             patch.object(codex, "request", new_callable=AsyncMock) as req:
+            req.side_effect = [
+                {"loginId": "login-1", "verificationUrl": "https://example.test/dev", "userCode": "CODE-1"},
+                {},
+                {"loginId": "login-2", "verificationUrl": "https://example.test/dev", "userCode": "CODE-2"},
+            ]
+            # First /login starts login-1; config login reuses the same pending login without duplicate RPC.
+            await app.handle(REPO, "/login", "/login")
+            cfg = await app.update_config({"action": "codex_login"})
+            self.assertEqual(cfg["codex"]["login"], {"url": "https://example.test/dev", "code": "CODE-1"})
+            self.assertEqual(req.await_count, 1)
+
+            # Canceling clears login state and ignores stale completion for login-1.
+            await app.update_config({"action": "codex_cancel_login"})
+            self.assertIsNone((await app.config_state())["codex"]["login"])
+            codex.notification("account/login/completed", {"loginId": "login-1", "success": True})
+            self.assertEqual(codex.account, "")
+
+            # Starting login-2 then ignoring stale login-1 completion before accepting login-2.
+            cfg2 = await app.update_config({"action": "codex_login"})
+            self.assertEqual(cfg2["codex"]["login"]["code"], "CODE-2")
+            codex.notification("account/login/completed", {"loginId": "login-1", "success": False, "error": "stale"})
+            self.assertIsNotNone((await app.config_state())["codex"]["login"])
+
+        with patch.object(codex, "refresh_account", new_callable=AsyncMock) as refresh:
+            codex.notification("account/login/completed", {"loginId": "login-2", "success": True})
+            await asyncio.sleep(0)
+        refresh.assert_awaited_once()
+        codex.ready = True
+        with patch.object(codex, "request", new_callable=AsyncMock, return_value={
+            "account": {"type": "chatgpt", "email": "op@example.test", "planType": "pro", "workspaceName": "Team"},
+        }):
+            await codex.read_account()
+        signed_in_cfg = await app.config_state()
+        self.assertTrue(signed_in_cfg["codex"]["signedIn"])
+        self.assertEqual(signed_in_cfg["codex"]["account"], {
+            "type": "chatgpt", "email": "op@example.test", "plan": "pro", "workspace": "Team",
+        })
+
+        # Active coordinator turn blocks Codex account mutations with BusyError.
+        app.coordinator.turns[REPO] = "turn-busy"
+        with self.assertRaises(BusyError):
+            await app.update_config({"action": "codex_logout"})
+        app.coordinator.turns.clear()
+
+        # Logout clears account state cleanly while preserving saved SQLite threads.
+        with patch.object(codex, "connect", new_callable=AsyncMock), \
+             patch.object(codex, "request", new_callable=AsyncMock, return_value={}) as req:
+            logged_out = await app.update_config({"action": "codex_logout"})
+        req.assert_awaited_once_with("account/logout", {})
+        self.assertFalse(logged_out["codex"]["signedIn"])
+        self.assertEqual(logged_out["codex"]["account"], {})
+        self.assertEqual(self.runner.thread(REPO)["thread_id"], "thread-keep")
+
     @staticmethod
     async def _cancel_task(task):
         task.cancel()
@@ -3548,6 +3846,55 @@ class ChatHttpTests(unittest.TestCase):
         handler.server.app.submit.assert_not_called()
         handler.send_response.assert_called_once_with(400)
 
+    def test_config_http_enforces_origin_size_actions_busy_and_redaction(self):
+        canary = "canary-secret-never-echo"
+        handler = self.get_handler("/api/config")
+        handler.server = SimpleNamespace(app=SimpleNamespace(
+            config_state=AsyncMock(return_value={
+                "opencodeGo": {"configured": True, "malformed": False, "busy": False},
+                "codex": {"signedIn": False, "account": {}, "login": None, "busy": False},
+            }),
+        ))
+        with patch.object(Handler, "run_async", side_effect=asyncio.run):
+            handler.do_GET()
+        handler.send_response.assert_called_once_with(200)
+        headers = dict(call.args for call in handler.send_header.call_args_list)
+        self.assertEqual(headers["Cache-Control"], "no-store")
+        self.assertNotIn("canary", handler.wfile.getvalue().decode())
+
+        def post(raw, *, origin=None, host="symphony.tail:443", sym="1", app=None):
+            h = self.get_handler("/api/config")
+            h.headers["Content-Length"] = str(len(raw))
+            h.headers["Content-Type"] = "application/json"
+            h.headers["Sec-Fetch-Site"] = "same-origin"
+            h.headers["Host"] = host
+            if sym is not None:
+                h.headers["X-Symphony"] = sym
+            if origin is not None:
+                h.headers["Origin"] = origin
+            h.rfile = BytesIO(raw)
+            h.server = SimpleNamespace(app=app or SimpleNamespace())
+            h.do_POST()
+            return h.send_response.call_args.args[0], h.wfile.getvalue().decode()
+
+        raw_ok = json.dumps({"action": "set_opencode_key", "apiKey": canary}).encode()
+        self.assertEqual(post(raw_ok, sym=None)[0], 403)
+        self.assertEqual(post(raw_ok, origin="https://evil.example")[0], 403)
+
+        bad_json = b'{"action":"set_opencode_key","apiKey":"' + canary.encode()
+        status, body = post(bad_json)
+        self.assertEqual(status, 400)
+        self.assertNotIn(canary, body)
+
+        status, _ = post(b"x" * (CONFIG_BODY_LIMIT + 1))
+        self.assertEqual(status, 400)
+
+        busy_app = SimpleNamespace(update_config=AsyncMock(side_effect=BusyError("Worker running.")))
+        with patch.object(Handler, "run_async", side_effect=BusyError("Worker running.")):
+            status, body = post(raw_ok, origin="https://symphony.tail:443", app=busy_app)
+        self.assertEqual(status, 409)
+        self.assertEqual(json.loads(body), {"error": "Worker running."})
+
 
 class ServeStartupTests(unittest.IsolatedAsyncioTestCase):
     async def test_private_services_start_without_a_webhook_secret(self):
@@ -3613,6 +3960,59 @@ class ServeStartupTests(unittest.IsolatedAsyncioTestCase):
         ])
         self.assertIs(servers[2].handler, WebhookHandler)
         self.assertEqual(app.webhook_secret, "")
+
+    async def test_serve_leaves_pvc_opencode_auth_untouched_when_env_canary_set(self):
+        class FakeServer:
+            def __init__(self, *_):
+                self.app = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def serve_forever(self):
+                pass
+
+            def shutdown(self):
+                pass
+
+        class ImmediateEvent:
+            def set(self):
+                pass
+
+            async def wait(self):
+                return None
+
+        fake_app = SimpleNamespace(
+            runner=SimpleNamespace(jobs=set(), db=SimpleNamespace(close=Mock()), job=lambda c: c.close()),
+            coordinator=SimpleNamespace(close=AsyncMock()),
+            pump=AsyncMock(),
+            start=AsyncMock(),
+        )
+        for existing in (None, '{"anthropic":{"type":"api","key":"keep"},"opencode-go":{"type":"api","key":"pvc-key"}}'):
+            temp = TemporaryDirectory()
+            self.addCleanup(temp.cleanup)
+            auth = Path(temp.name) / "worker-data/opencode/auth.json"
+            if existing is not None:
+                auth.parent.mkdir(parents=True, exist_ok=True)
+                auth.write_text(existing)
+            env = {
+                "SYMPHONY_DATA": temp.name,
+                "HOME": str(Path(temp.name) / "home"),
+                "LINEAR_API_KEY": "fixture",
+                "OPENCODE_GO_API_KEY": "env-canary-must-never-seed-or-overwrite",
+            }
+            with patch.dict(os.environ, env, clear=True), \
+                 patch("symphony.__main__.ThreadingHTTPServer", FakeServer), \
+                 patch("symphony.__main__.Symphony", return_value=fake_app), \
+                 patch("symphony.__main__.asyncio.Event", return_value=ImmediateEvent()):
+                await serve()
+            if existing is None:
+                self.assertFalse(auth.exists())
+            else:
+                self.assertEqual(auth.read_text(), existing)
 
 
 class WebhookTests(unittest.TestCase):

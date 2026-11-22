@@ -172,8 +172,23 @@ approved plan, worker notes, and review report from `read_notes`). After a
 `contextCompaction`, the next coordinator turn includes a one-shot reminder to
 use `worker_status` and `read_notes` (and re-injects instruction rules only if
 they differ from the thread's native rules or were edited). The Config button
-in the page header opens a read-only dialog showing
-that exact file from a fixed same-origin endpoint; it starts no coordinator turn.
+in the page header opens a dialog for managing **OpenCode Go** credentials and
+the **Codex** account alongside a read-only view of that exact global
+`AGENTS.md` file; opening Config starts no coordinator turn. OpenCode Go uses
+OpenCode's native PVC credential store under `worker-data/opencode/opencode.db`
+(`/data/symphony/worker-data/opencode/opencode.db`, mode `0600`) via
+`XDG_DATA_HOME` (with read-only recognition of pre-migration `auth.json`),
+managed via `opencode auth --standalone` over stdin so unrelated provider
+integrations are preserved and credentials survive restarts; startup never
+reads or seeds `OPENCODE_GO_API_KEY` from the environment, and configuring or
+clearing the key waits when a worker is active (returning `409`). When OpenCode
+Go is unconfigured, new worker dispatches wait without consuming attempts until
+configured. Codex uses `/data/symphony/codex/auth.json` via `CODEX_HOME`,
+exposing sanitized status/account metadata (`email`, `plan`, `workspace`),
+device sign-in, cancellation, and sign-out in Config while preserving saved
+conversation threads across account changes and rejecting account mutations with
+`409` while the coordinator is busy. Submitted keys are never returned to the
+browser or written into chat, SQLite, logs, or responses.
 Explicit user or task directions and applicable repository or nested
 instructions override the shared defaults, while Symphony's approval,
 publication, and tool restrictions remain authoritative. Symphony links the same
@@ -315,13 +330,14 @@ Create the namespace and provide these Kubernetes secrets:
 
 | Secret | Required values |
 | --- | --- |
-| `symphony-api` | `LINEAR_API_KEY`, `GITHUB_TOKEN` with repository content and workflow write and Actions read access, `OPENCODE_GO_API_KEY`, and `LINEAR_WEBHOOK_SECRET` matching the Linear webhook signing secret |
+| `symphony-api` | `LINEAR_API_KEY`, `GITHUB_TOKEN` with repository content and workflow write and Actions read access, and `LINEAR_WEBHOOK_SECRET` matching the Linear webhook signing secret |
 | `symphony-tailnet` | Single-use, preauthorized auth key in `authkey` for `tag:guaranine-app-gateway` |
 | `symphony-webhook-tailnet` | Single-use, preauthorized auth key in `authkey` for `tag:guaranine-webhook-gateway` |
 
-Store the input files outside this checkout with mode 0600. The Codex login and
-the Tailscale node identities live on their PVCs and persist across pod
-replacements.
+Store the input files outside this checkout with mode 0600. The Codex login, OpenCode Go credentials in
+`worker-data/opencode/opencode.db`, and the Tailscale node identities live on their
+PVCs and persist across pod replacements; configure or rotate OpenCode Go
+credentials directly through the Config dialog rather than Kubernetes secrets.
 
 ```bash
 kubectl apply -f symphony/kubernetes/namespace.yaml

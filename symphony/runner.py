@@ -1,6 +1,7 @@
 """One SQLite ledger, one worktree at a time per repository."""
 
 import asyncio
+from contextlib import suppress
 from hashlib import sha256
 import json
 import os
@@ -51,6 +52,10 @@ WORKER_CONFIG = {
 CI_DISCOVERY_SECONDS = 480
 AGENTS_BYTES = 32000
 SHARED_AGENTS = Path(__file__).resolve().parents[1] / "agents" / "AGENTS.md"
+
+
+class BusyError(RuntimeError):
+    pass
 SESSION_ID = re.compile(r"ses_[A-Za-z0-9]+\Z")
 CHAT_IMAGE_NAME = re.compile(r"[0-9a-f]{32}\.(?:png|jpg|webp)\Z")
 REVIEW_VERDICT = re.compile(r"\s*VERDICT:\s*(NO ISSUES|ISSUES)\s*", re.I)
@@ -343,6 +348,7 @@ class Runner:
         self.migrate_unphased_events()
         self.jobs = set()
         self.cloning = {}
+        self.config_lock = asyncio.Lock()
         self.wake = asyncio.Event()
         self.issue_refresh = asyncio.Event()
         self.projects_changed = False
@@ -363,6 +369,179 @@ class Runner:
     def save_settings(self, values):
         with self.db:
             self.db.executemany("INSERT OR REPLACE INTO settings VALUES (?, ?)", values.items())
+
+    def opencode_db_path(self):
+        return self.directory / "worker-data" / "opencode" / "opencode.db"
+
+    def opencode_auth_path(self):
+        return self.directory / "worker-data" / "opencode" / "auth.json"
+
+    def opencode_auth_env(self):
+        env = {key: value for key, value in os.environ.items()
+               if key not in {"GITHUB_TOKEN", "GH_TOKEN", "LINEAR_API_KEY", "OPENAI_API_KEY",
+                              "CODEX_HOME", "OPENCODE_GO_API_KEY", "LINEAR_WEBHOOK_SECRET"}}
+        env["XDG_DATA_HOME"] = str(self.directory / "worker-data")
+        env["XDG_CONFIG_HOME"] = str(self.directory / "worker-config")
+        env["XDG_STATE_HOME"] = str(self.directory / "worker-state")
+        env["XDG_CACHE_HOME"] = str(self.directory / "worker-cache")
+        return env
+
+    def _read_opencode_auth_dict(self):
+        path = self.opencode_auth_path()
+        if path.is_symlink():
+            return True, None, True
+        if not path.exists():
+            return False, None, False
+        try:
+            if not S_ISREG(path.stat().st_mode):
+                return True, None, True
+            with path.open("rb") as stream:
+                raw = stream.read(65537)
+            if len(raw) > 65536:
+                return True, None, True
+            data = json.loads(raw.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError):
+            return True, None, True
+        if not isinstance(data, dict):
+            return True, None, True
+        return True, data, False
+
+    def opencode_go_status(self):
+        db_path = self.opencode_db_path()
+        if db_path.is_symlink():
+            return {"configured": False, "malformed": True}
+        if db_path.exists():
+            try:
+                if not S_ISREG(db_path.stat().st_mode):
+                    return {"configured": False, "malformed": True}
+                con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                try:
+                    rows = con.execute(
+                        "SELECT value FROM credential WHERE integration_id = 'opencode-go'"
+                    ).fetchall()
+                finally:
+                    con.close()
+                configured = False
+                for (raw_value,) in rows:
+                    entry = json.loads(raw_value)
+                    if (isinstance(entry, dict) and isinstance(entry.get("key"), str)
+                            and entry["key"].strip()):
+                        configured = True
+                        break
+                return {"configured": configured, "malformed": False}
+            except (OSError, sqlite3.Error, UnicodeDecodeError, ValueError):
+                return {"configured": False, "malformed": True}
+        _, data, malformed = self._read_opencode_auth_dict()
+        if malformed:
+            return {"configured": False, "malformed": True}
+        entry = data.get("opencode-go") if data else None
+        configured = (
+            isinstance(entry, dict)
+            and isinstance(entry.get("key"), str)
+            and bool(entry["key"].strip())
+        )
+        return {"configured": configured, "malformed": False}
+
+    def has_opencode_go_key(self):
+        return self.opencode_go_status()["configured"]
+
+    def opencode_go_busy(self):
+        return bool(self.rows("SELECT 1 FROM tasks WHERE phase='working' LIMIT 1"))
+
+    def _ensure_opencode_dirs(self):
+        db_dir = self.opencode_db_path().parent
+        if db_dir.exists():
+            return
+        worker_data = self.directory / "worker-data"
+        worker_data.mkdir(mode=0o700, exist_ok=True)
+        db_dir.mkdir(mode=0o700, exist_ok=True)
+
+    async def _run_opencode_auth(self, args, *, stdin_text=None):
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "opencode", "auth", *args,
+                cwd=self.directory, env=self.opencode_auth_env(),
+                stdin=(asyncio.subprocess.PIPE if stdin_text is not None
+                       else asyncio.subprocess.DEVNULL),
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
+            )
+        except OSError:
+            raise RuntimeError("Could not update OpenCode Go credentials.") from None
+        try:
+            async with asyncio.timeout(30):
+                stdout, _ = await process.communicate(
+                    stdin_text.encode("utf-8") if stdin_text is not None else None
+                )
+        except (OSError, TimeoutError):
+            raise RuntimeError("Could not update OpenCode Go credentials.") from None
+        finally:
+            await stop_process(process)
+        if process.returncode:
+            raise RuntimeError("Could not update OpenCode Go credentials.")
+        return stdout.decode("utf-8", errors="replace")
+
+    async def _opencode_go_ids(self):
+        raw = await self._run_opencode_auth(["export", "--standalone", "opencode-go"])
+        try:
+            items = json.loads(raw or "[]")
+        except ValueError:
+            raise RuntimeError("Could not update OpenCode Go credentials.") from None
+        if not isinstance(items, list):
+            raise RuntimeError("Could not update OpenCode Go credentials.")
+        return [item["id"] for item in items if isinstance(item, dict) and isinstance(item.get("id"), str)]
+
+    def _chmod_opencode_db(self):
+        db_path = self.opencode_db_path()
+        try:
+            if db_path.exists() and not db_path.is_symlink() and S_ISREG(db_path.stat().st_mode):
+                os.chmod(db_path, 0o600)
+        except OSError:
+            raise RuntimeError("Could not update OpenCode Go credentials.") from None
+
+    async def set_opencode_go_key(self, key):
+        if not isinstance(key, str):
+            raise ValueError("Enter a valid OpenCode Go API key.")
+        cleaned = key.strip()
+        if not cleaned or len(cleaned) > 4096 or any(ch in cleaned for ch in "\r\n\x00"):
+            raise ValueError("Enter a valid OpenCode Go API key.")
+        async with self.config_lock:
+            if self.opencode_go_busy():
+                raise BusyError("Cannot change OpenCode Go credentials while a worker is running.")
+            try:
+                self._ensure_opencode_dirs()
+            except OSError:
+                raise RuntimeError("Could not update OpenCode Go credentials.") from None
+            if self.opencode_go_status()["malformed"]:
+                raise RuntimeError("Existing OpenCode auth store is invalid and cannot be updated safely.")
+            old_ids = await self._opencode_go_ids()
+            payload = json.dumps([{
+                "id": f"cred_{uuid4().hex}",
+                "integrationID": "opencode-go",
+                "label": "API key",
+                "active": True,
+                "value": {"type": "key", "key": cleaned},
+            }])
+            await self._run_opencode_auth(["import", "--standalone"], stdin_text=payload)
+            for old_id in old_ids:
+                await self._run_opencode_auth(["logout", "--standalone", "opencode-go", old_id])
+            self._chmod_opencode_db()
+
+    async def clear_opencode_go_key(self):
+        async with self.config_lock:
+            if self.opencode_go_busy():
+                raise BusyError("Cannot change OpenCode Go credentials while a worker is running.")
+            db_path = self.opencode_db_path()
+            auth_path = self.opencode_auth_path()
+            if (not db_path.exists() and not db_path.is_symlink()
+                    and not auth_path.exists() and not auth_path.is_symlink()):
+                return
+            if self.opencode_go_status()["malformed"]:
+                raise RuntimeError("Existing OpenCode auth store is invalid and cannot be updated safely.")
+            old_ids = await self._opencode_go_ids()
+            for old_id in old_ids:
+                await self._run_opencode_auth(["logout", "--standalone", "opencode-go", old_id])
+            self._chmod_opencode_db()
 
     def chat(self, role, text, attachments=(), *, repo=""):
         with self.db:
@@ -744,28 +923,31 @@ class Runner:
         self.change(issue, detail=detail, event=detail)
 
     async def dispatch(self, issue, repo, instruction, *, resume=False):
-        row = self.task(issue)
-        if row["repo"] != repo:
-            raise ValueError(f"{issue} is approved for {row['repo']}.")
-        allowed = {"review", "blocked"} if resume else {"approved"}
-        if row["phase"] not in allowed:
-            raise ValueError(f"{issue} is {row['phase']}.")
-        if self.setting("paused"):
-            raise ValueError(f"Dispatch is paused. {self.setting('paused')}")
-        if self.draining and not resume:
-            raise ValueError("Symphony is draining for an update. Cancel draining to resume dispatch.")
-        if row["attempts"] >= ATTEMPT_LIMIT:
-            raise ValueError(f"{issue} reached its rework limit. Park it and ask the operator to /retry {issue}.")
-        if len(self.rows("SELECT 1 FROM tasks WHERE phase='working'")) >= WORKER_LIMIT:
-            raise ValueError("The worker limit is reached. Try when a worker finishes.")
-        owner = self.rows("""SELECT issue FROM tasks WHERE repo=? AND issue != ?
-                             AND phase NOT IN ('approving','approved','done')""", (repo, issue))
-        if owner:
-            raise ValueError(f"{repo} is reserved by {owner[0]['issue']}.")
-        dispatch_started = time.time()
-        previous = {key: row[key] for key in ("phase", "attempts", "check_exit", "tree", "audit", "detail")}
-        self.change(issue, phase="working", check_exit=None, tree=None, audit=None, detail=None,
-                    attempts=row["attempts"] + 1)
+        async with self.config_lock:
+            row = self.task(issue)
+            if row["repo"] != repo:
+                raise ValueError(f"{issue} is approved for {row['repo']}.")
+            allowed = {"review", "blocked"} if resume else {"approved"}
+            if row["phase"] not in allowed:
+                raise ValueError(f"{issue} is {row['phase']}.")
+            if not self.has_opencode_go_key():
+                raise ValueError("OpenCode Go API key is not configured. Open Config to add it.")
+            if self.setting("paused"):
+                raise ValueError(f"Dispatch is paused. {self.setting('paused')}")
+            if self.draining and not resume:
+                raise ValueError("Symphony is draining for an update. Cancel draining to resume dispatch.")
+            if row["attempts"] >= ATTEMPT_LIMIT:
+                raise ValueError(f"{issue} reached its rework limit. Park it and ask the operator to /retry {issue}.")
+            if len(self.rows("SELECT 1 FROM tasks WHERE phase='working'")) >= WORKER_LIMIT:
+                raise ValueError("The worker limit is reached. Try when a worker finishes.")
+            owner = self.rows("""SELECT issue FROM tasks WHERE repo=? AND issue != ?
+                                 AND phase NOT IN ('approving','approved','done')""", (repo, issue))
+            if owner:
+                raise ValueError(f"{repo} is reserved by {owner[0]['issue']}.")
+            dispatch_started = time.time()
+            previous = {key: row[key] for key in ("phase", "attempts", "check_exit", "tree", "audit", "detail")}
+            self.change(issue, phase="working", check_exit=None, tree=None, audit=None, detail=None,
+                        attempts=row["attempts"] + 1)
         try:
             try:
                 live = await self.linear.issue(issue)
@@ -822,7 +1004,7 @@ class Runner:
         return {"issue": issue, "phase": "working"}
 
     async def dispatch_approved(self):
-        if self.setting("paused") or self.draining:
+        if self.setting("paused") or self.draining or not self.has_opencode_go_key():
             return []
         ready = []
         for row in self.rows("SELECT * FROM tasks WHERE phase='approved'"):
@@ -888,12 +1070,7 @@ class Runner:
             elif row["revision"] == base and row["base"] != base:
                 await git(worktree, "reset", "--mixed", base)
             self.change(issue, base=base, revision=None, workflows=None)
-            env = {key: value for key, value in os.environ.items()
-                   if key not in {"GITHUB_TOKEN", "GH_TOKEN", "LINEAR_API_KEY", "OPENAI_API_KEY",
-                                  "CODEX_HOME", "OPENCODE_GO_API_KEY", "LINEAR_WEBHOOK_SECRET"}}
-            env["XDG_DATA_HOME"] = str(self.directory / "worker-data")
-            env["XDG_CONFIG_HOME"] = str(self.directory / "worker-config")
-            env["XDG_STATE_HOME"] = str(self.directory / "worker-state")
+            env = self.opencode_auth_env()
             env["OPENCODE_CONFIG_CONTENT"] = json.dumps(WORKER_CONFIG)
             args = ["opencode", "run", "--standalone", "--auto", "--format", "json",
                     "--model", os.environ.get("SYMPHONY_WORKER_MODEL", "opencode-go/deepseek-v4.1-flash#max")]

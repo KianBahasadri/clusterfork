@@ -26,7 +26,7 @@ from uuid import uuid4
 from .codex import Codex, TOOL_SPECS
 from .execution import card_stage, execution_payload, history_summary
 from .issue_details import issue_details, markdown, open_asset
-from .runner import Runner, read_small, rules_state, shared_agents
+from .runner import BusyError, Runner, read_small, rules_state, shared_agents
 from .services import (
     CLOSED_STATES, ISSUE_ID, CreatedIssueError, Linear, estimate_scale, proposed_plan, with_plan,
 )
@@ -44,6 +44,7 @@ STATIC = {
 }
 BODY_LIMIT = 14 * 1024 * 1024
 DRAIN_BODY_LIMIT = 1024
+CONFIG_BODY_LIMIT = 8192
 TEXT_LIMIT = 23000
 ISSUE_TITLE_LIMIT = 255
 ISSUE_DESCRIPTION_LIMIT = 24000
@@ -195,6 +196,7 @@ class Symphony:
         self.turn_repo = ""
         self.compacting_repo = ""
         self.pending_rules = {}
+        self.codex_config_lock = asyncio.Lock()
         self.login = None
         self.repos = {}
         self.link_problems = {}
@@ -597,8 +599,97 @@ class Symphony:
             return self.issue_snapshot[0].get("repo", "")
         return ""
 
+    def active_login(self):
+        if (not self.login or self.coordinator.account
+                or not self.coordinator.login_pending
+                or time.monotonic() >= self.login["expires"]):
+            self.login = None
+            return None
+        return self.login
+
+    def codex_busy(self):
+        return bool(self.busy or self.coordinator.any_turn() or self.messages)
+
+    async def start_codex_login(self):
+        current = self.active_login()
+        if current:
+            return current
+        result = await self.coordinator.login()
+        self.login = {
+            "loginId": result.get("loginId") or "",
+            "url": result["verificationUrl"],
+            "code": result["userCode"],
+            "expires": time.monotonic() + 900,
+        }
+        return self.login
+
+    async def config_state(self):
+        login = self.active_login()
+        return {
+            "opencodeGo": {**self.runner.opencode_go_status(), "busy": self.runner.opencode_go_busy()},
+            "codex": {
+                "signedIn": bool(self.coordinator.account),
+                "account": dict(self.coordinator.account_info),
+                "login": {"url": login["url"], "code": login["code"]} if login else None,
+                "busy": self.codex_busy(),
+            },
+        }
+
+    async def update_config(self, body):
+        if not isinstance(body, dict) or not isinstance(body.get("action"), str):
+            raise ValueError("Unsupported config action.")
+        action = body["action"]
+        if action == "set_opencode_key":
+            if set(body) != {"action", "apiKey"}:
+                raise ValueError("Unsupported config fields.")
+            await self.runner.set_opencode_go_key(body["apiKey"])
+            self.runner.wake.set()
+        elif action == "clear_opencode_key":
+            if set(body) != {"action"}:
+                raise ValueError("Unsupported config fields.")
+            await self.runner.clear_opencode_go_key()
+        elif action == "codex_login":
+            if set(body) != {"action"}:
+                raise ValueError("Unsupported config fields.")
+            async with self.codex_config_lock:
+                if self.codex_busy():
+                    raise BusyError("Cannot start Codex sign-in while a coordinator turn is active.")
+                await self.start_codex_login()
+        elif action == "codex_cancel_login":
+            if set(body) != {"action"}:
+                raise ValueError("Unsupported config fields.")
+            async with self.codex_config_lock:
+                if self.codex_busy():
+                    raise BusyError("Cannot cancel Codex sign-in while a coordinator turn is active.")
+                current = self.active_login()
+                if current or self.coordinator.login_pending:
+                    try:
+                        await self.coordinator.cancel_login((current or {}).get("loginId", ""))
+                    except (OSError, RuntimeError, TimeoutError):
+                        raise RuntimeError("Could not cancel Codex sign-in.") from None
+                self.login = None
+        elif action == "codex_logout":
+            if set(body) != {"action"}:
+                raise ValueError("Unsupported config fields.")
+            async with self.codex_config_lock:
+                if self.codex_busy():
+                    raise BusyError("Cannot sign out of Codex while a coordinator turn is active.")
+                current = self.active_login()
+                if current and current.get("loginId"):
+                    with suppress(OSError, RuntimeError, TimeoutError):
+                        await self.coordinator.cancel_login(current["loginId"])
+                try:
+                    await self.coordinator.logout()
+                except (OSError, RuntimeError, TimeoutError):
+                    raise RuntimeError("Could not sign out of Codex.") from None
+                self.login = None
+        else:
+            raise ValueError("Unsupported config action.")
+        return await self.config_state()
+
     async def state(self, after, issue_revision="", project="", repo=""):
-        login = self.login if not self.coordinator.account and self.login and time.monotonic() < self.login["expires"] else None
+        active_login = self.active_login()
+        login = {"url": active_login["url"], "code": active_login["code"]} if active_login else None
         active_repo = self.resolve_repo(project, repo)
         rows = self.runner.rows(
             "SELECT * FROM chat WHERE id > ? AND repo = ? ORDER BY id LIMIT 200",
@@ -755,9 +846,7 @@ class Symphony:
         if attachments and command.startswith("/"):
             raise ValueError("Images cannot be sent with slash commands.")
         if command == "/login":
-            result = await self.coordinator.login()
-            self.login = {"url": result["verificationUrl"], "code": result["userCode"],
-                          "expires": time.monotonic() + 900}
+            await self.start_codex_login()
         elif command == "/new":
             cwd = await self.checkout_cwd(repo)
             await self.coordinator.new_session(repo, cwd)
@@ -943,6 +1032,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.json_response(self.run_async(app.execution(params.get("id", [""])[0])))
             elif url.path == "/api/agents":
                 self.json_response({"content": shared_agents()})
+            elif url.path == "/api/config":
+                self.json_response(self.run_async(app.config_state()))
             elif url.path == "/api/linear-asset":
                 self.linear_asset(params.get("url", [""])[0])
             elif url.path == "/api/chat-image":
@@ -957,30 +1048,51 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, RuntimeError, OSError) as error:
             self.json_response({"error": str(error)}, 503)
 
+    def valid_origin(self):
+        origin = self.headers.get("Origin")
+        if origin is None:
+            return True
+        parsed = urlsplit(origin)
+        host = self.headers.get("Host") or ""
+        return parsed.scheme in {"http", "https"} and bool(host) and parsed.netloc == host and parsed.path in {"", "/"}
+
     def do_POST(self):
-        if self.path not in {"/api/chat", "/api/drain"}:
+        if self.path not in {"/api/chat", "/api/drain", "/api/config"}:
             self.json_response({"error": "Page not found."}, 404)
             return
         if (self.headers.get("X-Symphony") != "1" or self.headers.get_content_type() != "application/json"
-                or self.headers.get("Sec-Fetch-Site", "same-origin") != "same-origin"):
+                or self.headers.get("Sec-Fetch-Site", "same-origin") != "same-origin"
+                or not self.valid_origin()):
             self.json_response({"error": "Same-origin requests only."}, 403)
             return
         try:
             length = int(self.headers["Content-Length"])
-            limit = DRAIN_BODY_LIMIT if self.path == "/api/drain" else BODY_LIMIT
+            limit = (CONFIG_BODY_LIMIT if self.path == "/api/config"
+                     else DRAIN_BODY_LIMIT if self.path == "/api/drain" else BODY_LIMIT)
             if not 0 < length <= limit:
-                raise ValueError("Request is too large." if self.path == "/api/drain"
+                raise ValueError("Request is too large." if self.path != "/api/chat"
                                  else "Message is too large.")
-            body = json.loads(self.rfile.read(length))
+            raw = self.rfile.read(length)
+            if len(raw) != length:
+                raise ValueError("Request body is incomplete.")
+            try:
+                body = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                raise ValueError("Invalid JSON request.") from None
             if self.path == "/api/drain":
                 if (not isinstance(body, dict) or set(body) != {"draining"}
                         or not isinstance(body["draining"], bool)):
                     raise ValueError("Expected a draining boolean.")
                 self.json_response(self.run_async(self.server.app.set_draining(body["draining"])))
                 return
+            if self.path == "/api/config":
+                self.json_response(self.run_async(self.server.app.update_config(body)))
+                return
             if not isinstance(body, dict):
                 raise ValueError("Expected a chat message.")
             self.json_response(self.run_async(self.server.app.submit(body)), 202)
+        except BusyError as error:
+            self.json_response({"error": str(error)}, 409)
         except (TypeError, ValueError, RuntimeError, OSError) as error:
             self.json_response({"error": str(error)}, 400)
 
@@ -1088,12 +1200,6 @@ async def serve():
     root = Path(os.environ.get("SYMPHONY_DATA", "/data")).resolve()
     root.mkdir(parents=True, exist_ok=True)
     Path.home().mkdir(parents=True, exist_ok=True)
-    if key := os.environ.get("OPENCODE_GO_API_KEY"):
-        auth = root / "worker-data/opencode/auth.json"
-        auth.parent.mkdir(parents=True, exist_ok=True)
-        temp = auth.with_suffix(".new")
-        temp.write_text(json.dumps({"opencode-go": {"type": "api", "key": key}}))
-        temp.replace(auth)
     exit_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):

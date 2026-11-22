@@ -20,9 +20,26 @@ const commandList = byId("command-list");
 const interrupt = byId("interrupt");
 const configButton = byId("config-open");
 const configDialog = byId("config-dialog");
+const configOpenCodeStatus = byId("config-opencode-status");
+const configOpenCodeForm = byId("config-opencode-form");
+const configOpenCodeKey = byId("config-opencode-key");
+const configOpenCodeSave = byId("config-opencode-save");
+const configOpenCodeClear = byId("config-opencode-clear");
+const configOpenCodeFeedback = byId("config-opencode-feedback");
+const configCodexStatus = byId("config-codex-status");
+const configCodexDetails = byId("config-codex-details");
+const configCodexLogin = byId("config-codex-login");
+const configCodexSignin = byId("config-codex-signin");
+const configCodexCancel = byId("config-codex-cancel");
+const configCodexSignout = byId("config-codex-signout");
+const configCodexFeedback = byId("config-codex-feedback");
 const configContent = byId("config-agents-content");
 const configStatus = byId("config-agents-status");
 let configRequest = 0;
+let configDataRequest = 0;
+let configData = null;
+let configPending = false;
+let configAuthKey = "";
 const pendingImages = [];
 const imageTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
 const imageCount = 4;
@@ -114,6 +131,107 @@ async function api(path, options) {
   return body;
 }
 
+function renderConfigProviders() {
+  const data = configData;
+  const openCode = data?.opencodeGo;
+  if (!openCode) {
+    configOpenCodeStatus.textContent = "Loading OpenCode Go status…";
+    configOpenCodeStatus.dataset.error = "";
+    configOpenCodeKey.disabled = true;
+    configOpenCodeSave.disabled = true;
+    configOpenCodeClear.disabled = true;
+  } else {
+    configOpenCodeStatus.dataset.error = openCode.malformed ? "true" : "";
+    configOpenCodeStatus.textContent = openCode.malformed
+      ? "Stored auth file is unreadable. Wait for idle before replacing or removing it."
+      : (openCode.configured ? "API key configured on PVC." : "Not configured.")
+        + (openCode.busy ? " Worker active; changes are paused until idle." : "");
+    const disabled = configPending || Boolean(openCode.busy);
+    configOpenCodeKey.disabled = disabled;
+    configOpenCodeSave.disabled = disabled;
+    configOpenCodeClear.disabled = disabled || (!openCode.configured && !openCode.malformed);
+  }
+  const codexCfg = data?.codex;
+  if (!codexCfg) {
+    configCodexStatus.textContent = "Loading Codex account…";
+    configCodexDetails.hidden = true;
+    configCodexLogin.hidden = true;
+    configCodexSignin.hidden = false;
+    configCodexCancel.hidden = true;
+    configCodexSignout.hidden = true;
+    configCodexSignin.disabled = true;
+    return;
+  }
+  const account = codexCfg.account || {};
+  const busy = Boolean(codexCfg.busy);
+  configCodexStatus.textContent = (codexCfg.signedIn ? "Signed in." : "Signed out.")
+    + (busy ? " Coordinator turn active; account changes wait until idle." : "");
+  const parts = [account.email, account.plan, account.workspace].filter(Boolean);
+  configCodexDetails.textContent = parts.join(" · ");
+  configCodexDetails.hidden = !parts.length;
+  if (codexCfg.login) {
+    const link = element("a", "Open device sign-in");
+    link.href = codexCfg.login.url;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    configCodexLogin.replaceChildren(link, document.createTextNode(" and enter " + codexCfg.login.code + "."));
+    configCodexLogin.hidden = false;
+  } else {
+    configCodexLogin.replaceChildren();
+    configCodexLogin.hidden = true;
+  }
+  const codexDisabled = configPending || busy;
+  configCodexSignin.hidden = Boolean(codexCfg.signedIn || codexCfg.login);
+  configCodexCancel.hidden = !codexCfg.login;
+  configCodexSignout.hidden = !codexCfg.signedIn;
+  configCodexSignin.disabled = codexDisabled;
+  configCodexCancel.disabled = codexDisabled;
+  configCodexSignout.disabled = codexDisabled;
+}
+
+async function loadConfigState() {
+  const request = ++configDataRequest;
+  renderConfigProviders();
+  try {
+    const result = await api("/api/config");
+    if (request !== configDataRequest || !configDialog.open) return;
+    configData = result;
+    renderConfigProviders();
+  } catch (error) {
+    if (request !== configDataRequest || !configDialog.open) return;
+    configOpenCodeStatus.textContent = "Could not load configuration: " + error.message;
+    configOpenCodeStatus.dataset.error = "true";
+    configCodexStatus.textContent = "Could not load configuration: " + error.message;
+  }
+}
+
+async function mutateConfig(payload, feedbackNode, successText, clearInput = false) {
+  if (configPending) return;
+  configPending = true;
+  feedbackNode.textContent = "";
+  feedbackNode.dataset.error = "";
+  renderConfigProviders();
+  try {
+    const result = await api("/api/config", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "X-Symphony": "1"},
+      body: JSON.stringify(payload),
+    });
+    configData = result;
+    if (clearInput) configOpenCodeKey.value = "";
+    feedbackNode.textContent = successText;
+    feedbackNode.dataset.error = "";
+    wakePoll();
+  } catch (error) {
+    feedbackNode.textContent = error.message;
+    feedbackNode.dataset.error = "true";
+    loadConfigState();
+  } finally {
+    configPending = false;
+    renderConfigProviders();
+  }
+}
+
 async function loadConfigAgents() {
   const request = ++configRequest;
   configContent.textContent = "";
@@ -134,8 +252,15 @@ async function loadConfigAgents() {
 
 function openConfig() {
   configButton.setAttribute("aria-expanded", "true");
+  configOpenCodeKey.value = "";
+  configOpenCodeFeedback.textContent = "";
+  configOpenCodeFeedback.dataset.error = "";
+  configCodexFeedback.textContent = "";
+  configCodexFeedback.dataset.error = "";
+  configData = null;
   if (!configDialog.open) configDialog.showModal();
   byId("config-close").focus();
+  loadConfigState();
   loadConfigAgents();
 }
 
@@ -954,6 +1079,13 @@ async function poll() {
     byId("paused").hidden = !state.paused;
     byId("paused").textContent = state.paused ? "Dispatch paused. " + state.paused : "";
     showLogin(state);
+    const nextAuthKey = JSON.stringify([Boolean(state.signedIn), state.login?.url || "", state.login?.code || ""]);
+    if (nextAuthKey !== configAuthKey) {
+      configAuthKey = nextAuthKey;
+      if (configDialog.open) loadConfigState();
+    } else if (!state.signedIn && configAuthKey === "") {
+      configAuthKey = nextAuthKey;
+    }
     delay = pollDelay(state, document.hidden);
   } catch {
     byId("connection-error").hidden = false;
@@ -1195,10 +1327,32 @@ interrupt.addEventListener("click", interruptTurn);
 byId("update-action").addEventListener("click", toggleDrain);
 configButton.addEventListener("click", openConfig);
 byId("config-close").addEventListener("click", closeConfig);
+configOpenCodeForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  mutateConfig(
+    {action: "set_opencode_key", apiKey: configOpenCodeKey.value},
+    configOpenCodeFeedback,
+    "OpenCode Go API key saved.",
+    true,
+  );
+});
+configOpenCodeClear.addEventListener("click", () => {
+  mutateConfig({action: "clear_opencode_key"}, configOpenCodeFeedback, "OpenCode Go API key removed.", true);
+});
+configCodexSignin.addEventListener("click", () => {
+  mutateConfig({action: "codex_login"}, configCodexFeedback, "Device sign-in ready.");
+});
+configCodexCancel.addEventListener("click", () => {
+  mutateConfig({action: "codex_cancel_login"}, configCodexFeedback, "Device sign-in canceled.");
+});
+configCodexSignout.addEventListener("click", () => {
+  mutateConfig({action: "codex_logout"}, configCodexFeedback, "Signed out of Codex.");
+});
 configDialog.addEventListener("keydown", (event) => {
   if (event.key !== "Tab" || event.ctrlKey || event.altKey || event.metaKey) return;
-  const controls = [...configDialog.querySelectorAll("button:not([disabled]), [tabindex='0']")]
-    .filter((control) => control.checkVisibility());
+  const controls = [...configDialog.querySelectorAll(
+    "button:not([disabled]), input:not([disabled]), a[href], [tabindex='0']"
+  )].filter((control) => control.checkVisibility());
   const first = controls[0];
   const last = controls.at(-1);
   if (event.shiftKey && document.activeElement === first) {
@@ -1212,6 +1366,8 @@ configDialog.addEventListener("keydown", (event) => {
 configDialog.addEventListener("close", () => {
   if (configDialog.open) return;
   configRequest++;
+  configDataRequest++;
+  configOpenCodeKey.value = "";
   configButton.setAttribute("aria-expanded", "false");
   configButton.focus({preventScroll: true});
 });

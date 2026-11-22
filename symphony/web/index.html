@@ -191,16 +191,42 @@
       <h1 id="config-dialog-title">Config</h1>
       <button id="config-close" type="button" autofocus>Close</button>
     </header>
-    <section class="config-section" aria-labelledby="config-agents-heading">
-      <h2 id="config-agents-heading">Global AGENTS.md</h2>
-      <p id="config-agents-note" class="muted config-note">These are Symphony-wide defaults.
-        Repository and task instructions take precedence. Updating them uses the
-        repository workflow.</p>
-      <p id="config-agents-status" class="muted" role="status"></p>
-      <pre id="config-agents-content" class="config-agents-content" tabindex="0"
-        aria-labelledby="config-agents-heading"
-        aria-describedby="config-agents-status config-agents-note"></pre>
-    </section>
+    <div class="config-dialog-body">
+      <section class="config-section config-provider" aria-labelledby="config-opencode-heading">
+        <h2 id="config-opencode-heading">OpenCode Go</h2>
+        <p id="config-opencode-note" class="muted config-note">Stored privately on the pod PVC. Configuring a key does not verify provider access until a worker runs.</p>
+        <p id="config-opencode-status" role="status"></p>
+        <form id="config-opencode-form" class="config-controls">
+          <label class="sr-only" for="config-opencode-key">OpenCode Go API key</label>
+          <input id="config-opencode-key" type="password" autocomplete="new-password" spellcheck="false" placeholder="Enter new API key">
+          <button id="config-opencode-save" type="submit">Save</button>
+          <button id="config-opencode-clear" type="button">Remove</button>
+        </form>
+        <p id="config-opencode-feedback" class="config-feedback muted" role="status"></p>
+      </section>
+      <section class="config-section config-provider" aria-labelledby="config-codex-heading">
+        <h2 id="config-codex-heading">Codex</h2>
+        <p id="config-codex-status" role="status"></p>
+        <div id="config-codex-details" class="config-details muted" hidden></div>
+        <div id="config-codex-login" class="config-login" hidden></div>
+        <div class="config-controls">
+          <button id="config-codex-signin" type="button">Sign in</button>
+          <button id="config-codex-cancel" type="button" hidden>Cancel sign-in</button>
+          <button id="config-codex-signout" type="button" hidden>Sign out</button>
+        </div>
+        <p id="config-codex-feedback" class="config-feedback muted" role="status"></p>
+      </section>
+      <section class="config-section config-agents" aria-labelledby="config-agents-heading">
+        <h2 id="config-agents-heading">Global AGENTS.md</h2>
+        <p id="config-agents-note" class="muted config-note">These are Symphony-wide defaults.
+          Repository and task instructions take precedence. Updating them uses the
+          repository workflow.</p>
+        <p id="config-agents-status" class="muted" role="status"></p>
+        <pre id="config-agents-content" class="config-agents-content" tabindex="0"
+          aria-labelledby="config-agents-heading"
+          aria-describedby="config-agents-status config-agents-note"></pre>
+      </section>
+    </div>
   </dialog>
   <dialog id="issue-dialog" aria-labelledby="issue-dialog-title">
     <header class="issue-dialog-header">

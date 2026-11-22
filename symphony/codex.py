@@ -141,6 +141,9 @@ class Codex:
         self.finished = None
         self.streams = {}
         self.account = ""
+        self.account_info = {}
+        self.active_login_id = ""
+        self.login_pending = False
         self.reader = None
         self.model = ""
         self.effort = ""
@@ -243,10 +246,47 @@ class Codex:
         response = await self.request("account/read", {"refreshToken": False})
         account = response.get("account") or {}
         self.account = account.get("type", "")
+        self.account_info = {
+            key: value for key, value in {
+                "type": account.get("type") or "",
+                "email": account.get("email") or "",
+                "plan": account.get("planType") or "",
+                "workspace": account.get("workspaceName") or "",
+            }.items() if value
+        } if self.account else {}
+
+    async def refresh_account(self):
+        if not self.ready:
+            return
+        with suppress(OSError, RuntimeError, TimeoutError):
+            await self.read_account()
+        self.status_wake.set()
 
     async def login(self):
         await self.connect()
-        return await self.request("account/login/start", {"type": "chatgptDeviceCode"})
+        result = await self.request("account/login/start", {"type": "chatgptDeviceCode"})
+        self.active_login_id = result.get("loginId") or ""
+        self.login_pending = True
+        return result
+
+    async def cancel_login(self, login_id=""):
+        await self.connect()
+        target = login_id or self.active_login_id
+        if target:
+            await self.request("account/login/cancel", {"loginId": target})
+        if not login_id or not self.active_login_id or login_id == self.active_login_id:
+            self.active_login_id = ""
+            self.login_pending = False
+
+    async def logout(self):
+        await self.connect()
+        await self.request("account/logout", {})
+        self.account = ""
+        self.account_info = {}
+        self.rate_limits = {}
+        self.models = {}
+        self.active_login_id = ""
+        self.login_pending = False
 
     def status(self, repo=""):
         name = self.runner.setting("model") or self.model
@@ -309,6 +349,8 @@ class Codex:
             self.runner.chat("system", f"Codex stream ended: {error}", repo=self.active_repo())
         finally:
             self.ready = False
+            self.active_login_id = ""
+            self.login_pending = False
             self.threads.clear()
             self.thread_repos.clear()
             for active in list(self.turns):
@@ -348,7 +390,9 @@ class Codex:
                 self.update_rate_limits(params["rateLimits"])
         elif method == "account/updated" and not params.get("authMode"):
             self.account = ""
+            self.account_info = {}
             self.rate_limits = {}
+            self.models = {}
         elif method == "item/agentMessage/delta":
             self.streams[repo] = self.streams.get(repo, "") + params["delta"]
         elif method == "item/completed":
@@ -362,15 +406,24 @@ class Codex:
                 self.injected_rules.pop(repo, None)
                 self.runner.chat("system", "Coordinator context compacted.", repo=repo)
         elif method == "account/login/completed":
+            login_id = params.get("loginId") or ""
+            if not self.login_pending or (
+                    self.active_login_id and login_id and login_id != self.active_login_id):
+                return
+            self.active_login_id = ""
+            self.login_pending = False
             if params["success"]:
                 self.account = "chatgpt"
+                self.account_info = {"type": "chatgpt"}
                 self.models = {}
                 self.rate_limits = {}
-                self.status_wake.set()
+                self.runner.job(self.refresh_account())
                 self.runner.chat("system", "Codex signed in.")
                 self.runner.wake.set()
             else:
-                self.runner.chat("system", f"Codex sign-in failed. {params.get('error') or ''}")
+                error = str(params.get("error") or "").strip()[:200]
+                detail = f" {error}" if error else ""
+                self.runner.chat("system", f"Codex sign-in failed.{detail}")
 
     async def server_request(self, message):
         identifier = message["id"]

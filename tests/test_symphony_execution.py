@@ -296,6 +296,10 @@ class RunnerExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.temp.name)
         self.linear = FakeLinear()
         self.runner = Runner(self.root, self.linear)
+        auth = self.runner.opencode_auth_path()
+        auth.parent.mkdir(parents=True, exist_ok=True)
+        auth.write_text(json.dumps({"opencode-go": {"type": "api", "key": "fixture-opencode-key"}}))
+        auth.chmod(0o600)
         self.addCleanup(self.close)
 
     def close(self):

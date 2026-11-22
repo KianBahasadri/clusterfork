@@ -117,13 +117,23 @@ class ChatBrowserTests(unittest.TestCase):
         }""")
 
     @staticmethod
-    def stub_config_fetch(page, agents=None, error=""):
-        page.evaluate("""({agents, error}) => {
-          window.fetch = async (path) => {
+    def stub_config_fetch(page, agents=None, error="", config=None):
+        cfg = config or {
+            "opencodeGo": {"configured": False, "malformed": False, "busy": False},
+            "codex": {"signedIn": True, "account": {"type": "chatgpt"}, "login": None, "busy": False},
+        }
+        page.evaluate("""({agents, error, cfg}) => {
+          window.fetch = async (path, options) => {
             if (path === "/api/agents") {
               return error
                 ? {ok: false, json: async () => ({error})}
                 : {ok: true, json: async () => ({content: agents})};
+            }
+            if (path === "/api/config") {
+              if ((options?.method || "GET") === "POST") {
+                return {ok: true, json: async () => cfg};
+              }
+              return {ok: true, json: async () => cfg};
             }
             return {ok: true, json: async () => ({
               messages: [], busy: false, canInterrupt: false, stream: "", streamHtml: "",
@@ -131,7 +141,7 @@ class ChatBrowserTests(unittest.TestCase):
               codex: {}, issueError: "", updateAvailable: false, draining: false,
             })};
           };
-        }""", {"agents": agents, "error": error})
+        }""", {"agents": agents, "error": error, "cfg": cfg})
 
     def tearDown(self):
         self.page.close()
@@ -1605,7 +1615,13 @@ class ChatBrowserTests(unittest.TestCase):
           focus: document.activeElement.id,
           outline: getComputedStyle(document.activeElement).outlineStyle,
         })""")
-        self.assertEqual(focus_ring, {"focus": "config-agents-content", "outline": "solid"})
+        self.assertEqual(focus_ring, {"focus": "config-opencode-key", "outline": "solid"})
+        self.page.locator("#config-agents-content").focus()
+        pre_ring = self.page.evaluate("""() => ({
+          focus: document.activeElement.id,
+          outline: getComputedStyle(document.activeElement).outlineStyle,
+        })""")
+        self.assertEqual(pre_ring, {"focus": "config-agents-content", "outline": "solid"})
         self.page.locator("#config-close").click()
         self.assertEqual(self.page.evaluate("document.activeElement.id"), "config-open")
 
@@ -1800,6 +1816,11 @@ class ChatBrowserTests(unittest.TestCase):
                 if path in static:
                     name, content_type = static[path]
                     self.respond((ROOT / name).read_bytes(), content_type)
+                elif path == "/api/config":
+                    self.respond(json.dumps({
+                        "opencodeGo": {"configured": False, "malformed": False, "busy": False},
+                        "codex": {"signedIn": True, "account": {"type": "chatgpt"}, "login": None, "busy": False},
+                    }).encode(), "application/json; charset=utf-8")
                 elif path == "/api/agents":
                     if type(self).mode == "error":
                         self.respond(json.dumps({"error": "Fixture read failed."}).encode(),
@@ -1954,6 +1975,70 @@ class ChatBrowserTests(unittest.TestCase):
             self.assertGreaterEqual(narrow["closeHeight"], 44)
         finally:
             coarse.close()
+
+    def test_config_dialog_manages_opencode_go_and_codex_accounts(self):
+        self.page.fill("#message", "Keep composer draft")
+        self.page.evaluate("""() => {
+          window.__cfg = {
+            opencodeGo: {configured: false, malformed: false, busy: false},
+            codex: {signedIn: false, account: {}, login: null, busy: false},
+          };
+          window.__cfgPosts = [];
+          window.__failNextKey = true;
+          window.fetch = async (path, options = {}) => {
+            if (path === "/api/agents") return {ok: true, json: async () => ({content: "global rules"})};
+            if (path === "/api/config") {
+              if ((options.method || "GET") === "POST") {
+                const body = JSON.parse(options.body);
+                window.__cfgPosts.push(body);
+                if (body.action === "set_opencode_key") {
+                  if (window.__failNextKey) {
+                    window.__failNextKey = false;
+                    return {ok: false, json: async () => ({error: "Rejected key."})};
+                  }
+                  window.__cfg.opencodeGo.configured = true;
+                } else if (body.action === "clear_opencode_key") {
+                  window.__cfg.opencodeGo.configured = false;
+                } else if (body.action === "codex_login") {
+                  window.__cfg.codex.login = {url: "https://example.test/code", code: "DEV-1234"};
+                } else if (body.action === "codex_cancel_login") {
+                  window.__cfg.codex.login = null;
+                } else if (body.action === "codex_logout") {
+                  window.__cfg.codex.signedIn = false;
+                  window.__cfg.codex.account = {};
+                }
+                return {ok: true, json: async () => window.__cfg};
+              }
+              return {ok: true, json: async () => window.__cfg};
+            }
+            return {ok: true, json: async () => ({
+              messages: [], busy: false, canInterrupt: false, stream: "", streamHtml: "",
+              tasks: [], signedIn: window.__cfg.codex.signedIn, login: window.__cfg.codex.login,
+              paused: "", view: "", codex: {}, issueError: "", updateAvailable: false, draining: false,
+            })};
+          };
+        }""")
+        self.page.locator("#config-open").click()
+        self.page.wait_for_function(
+            "document.getElementById('config-opencode-status').textContent.includes('Not configured.')")
+        self.page.fill("#config-opencode-key", "canary-bad")
+        self.page.locator("#config-opencode-save").click()
+        self.page.wait_for_function(
+            "document.getElementById('config-opencode-feedback').textContent.includes('Rejected key.')")
+        self.assertEqual(self.page.input_value("#config-opencode-key"), "canary-bad")
+        self.page.fill("#config-opencode-key", "canary-good")
+        self.page.locator("#config-opencode-save").click()
+        self.page.wait_for_function(
+            "document.getElementById('config-opencode-status').textContent.includes('API key configured on PVC.')")
+        self.assertEqual(self.page.input_value("#config-opencode-key"), "")
+        self.page.locator("#config-codex-signin").click()
+        self.page.wait_for_function(
+            "document.getElementById('config-codex-login').textContent.includes('DEV-1234')")
+        self.page.locator("#config-codex-cancel").click()
+        self.page.wait_for_function(
+            "document.getElementById('config-codex-login').hidden === true")
+        self.page.keyboard.press("Escape")
+        self.assertEqual(self.page.input_value("#message"), "Keep composer draft")
 
 
     def test_per_repo_chat_isolation_scroll_and_unread_chip_dots(self):
