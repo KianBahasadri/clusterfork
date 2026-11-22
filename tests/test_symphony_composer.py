@@ -744,6 +744,73 @@ vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
         self.assertEqual(res["reopenedSnap"], {"hidden": False, "imgSrc": "blob:svg-2", "title": "Fixed"})
         self.assertEqual(res["revoked"], ["blob:svg-1", "blob:svg-2"])
 
+    @unittest.skipUnless(shutil.which("node"), "Node is required for JavaScript checks.")
+    def test_panes_format_duration_not_shadowed_by_app_turn_duration(self):
+        web = Path(__file__).resolve().parents[1] / "symphony/web"
+        panes = web / "panes.js"
+        app = web / "app.js"
+        probe = r"""
+const fs = require("fs");
+const vm = require("vm");
+const nodes = new Map();
+const makeNode = (tag = "div", id = "") => ({
+  tag, id, textContent: "", innerHTML: "", value: "", hidden: true, disabled: false, open: false,
+  dataset: {}, style: {setProperty() {}}, listeners: {}, children: [],
+  classList: {add() {}, remove() {}},
+  addEventListener(t, h) { (this.listeners[t] ||= []).push(h); },
+  setAttribute(n, v) { this[n] = String(v); }, removeAttribute(n) { delete this[n]; },
+  toggleAttribute() {}, focus() {}, setSelectionRange() {}, contains() { return false; },
+  closest() { return makeNode("aside"); },
+  append(...items) { this.children.push(...items); },
+  prepend(...items) { this.children.unshift(...items); },
+  replaceChildren(...items) { this.children = items; },
+  querySelector() { return null; }, querySelectorAll() { return []; },
+});
+const doc = {
+  getElementById(id) {
+    if (!nodes.has(id)) nodes.set(id, makeNode("div", id));
+    return nodes.get(id);
+  },
+  createElement(tag) { return makeNode(tag); },
+  createElementNS(_ns, tag) { return makeNode(tag); },
+  querySelector() { return this.getElementById("main"); },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+};
+const ctx = vm.createContext({document: doc, setInterval: () => 0, setTimeout, clearTimeout, Date});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), ctx);
+const now = Date.parse("2026-11-22T00:30:00Z");
+const labelNode = {textContent: ""};
+const pill = {
+  dataset: {stageStart: "2026-11-22T00:00:00Z", stageName: "Backlog", stageCoverage: "complete"},
+  lastChild: labelNode,
+  title: "",
+};
+ctx.updateStagePill(pill, now);
+vm.runInContext('codex = {model: "gpt-5", effort: "high", turnTiming: {startedAt: ' + Math.floor((now - 5000) / 1000) + '}}; canInterrupt = true;', ctx);
+const origNow = Date.now;
+Date.now = () => now;
+try {
+  ctx.showCodexStatus();
+} finally {
+  Date.now = origNow;
+}
+console.log(JSON.stringify({
+  fmtMs: ctx.formatDuration(90000),
+  stage: ctx.stageDuration("2026-11-22T00:00:00Z", now),
+  pillText: pill.lastChild.textContent,
+  turnTimingText: doc.getElementById("turn-timing").textContent,
+}));
+"""
+        run = subprocess.run(["node", "-e", probe, str(panes), str(app)], text=True, capture_output=True, check=False)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        res = json.loads(run.stdout)
+        self.assertEqual(res["fmtMs"], "1m")
+        self.assertEqual(res["stage"], "30m")
+        self.assertEqual(res["pillText"], "30m")
+        self.assertEqual(res["turnTimingText"], "Working for 5s")
+
 
 if __name__ == "__main__":
     unittest.main()

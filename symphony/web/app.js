@@ -1211,7 +1211,7 @@ async function toggleDrain() {
   }
 }
 
-function formatDuration(seconds) {
+function formatTurnDuration(seconds) {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor(seconds / 60) % 60;
   return [hours && hours + "h", minutes && minutes + "m", seconds % 60 + "s"].filter(Boolean).join(" ");
@@ -1240,16 +1240,16 @@ function showCodexStatus() {
   if (compacting === "running") {
     timing.hidden = false;
     timing.textContent = compactTiming
-      ? "Compacting for " + formatDuration(elapsedSeconds) : "Compacting context…";
+      ? "Compacting for " + formatTurnDuration(elapsedSeconds) : "Compacting context…";
   } else if (compacting === "queued") {
     timing.hidden = false;
     timing.textContent = working
-      ? "Working for " + formatDuration(elapsedSeconds) + " · Compaction queued"
+      ? "Working for " + formatTurnDuration(elapsedSeconds) + " · Compaction queued"
       : "Compaction queued";
   } else {
     timing.hidden = !working && durationMs == null;
     if (!timing.hidden) {
-      const duration = formatDuration(working ? elapsedSeconds : Math.max(0, Math.floor(durationMs / 1000)));
+      const duration = formatTurnDuration(working ? elapsedSeconds : Math.max(0, Math.floor(durationMs / 1000)));
       timing.textContent = (working ? "Working for " : "Worked for ") + duration
         + (!working && completedAt ? " · " + clockTime(completedAt) : "");
     }
