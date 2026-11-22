@@ -3856,6 +3856,28 @@ else:
             await app.tool("delete_repo_button", {"repo": REPO, "label": "Idle reload"})
             self.assertEqual((await app.state(0, project="alpha"))["buttons"], [])
 
+    async def test_render_diagram_validates_persists_and_exposes_per_repo_state(self):
+        app = self.app()
+        app.repos = {REPO: [{"id": "alpha", "name": "Alpha"}], "owner/second": [{"id": "beta", "name": "Beta"}]}
+        with patch.object(app, "refresh_projects", new_callable=AsyncMock, return_value=app.repos):
+            with self.assertRaisesRegex(ValueError, "Unknown repository"):
+                await app.tool("render_diagram", {"repo": "owner/missing", "title": "Arch", "mermaid": "graph TD; A-->B;"})
+            with self.assertRaisesRegex(ValueError, "Mermaid diagram source"):
+                await app.tool("render_diagram", {"repo": REPO, "title": "Arch", "mermaid": "   "})
+            reply = await app.tool("render_diagram", {
+                "repo": REPO.upper(), "title": "Flow", "mermaid": "flowchart LR\nA-->B",
+            })
+        self.assertIn("Rendered diagram Flow", reply)
+        state_a = await app.state(0, project="alpha")
+        state_b = await app.state(0, project="beta")
+        self.assertEqual(state_a["diagram"]["title"], "Flow")
+        self.assertEqual(state_a["diagram"]["source"], "flowchart LR\nA-->B")
+        self.assertIsNone(state_b["diagram"])
+
+        reopened = Runner(self.root, self.linear)
+        self.addCleanup(reopened.db.close)
+        self.assertEqual(reopened.diagram(REPO)["title"], "Flow")
+
     @staticmethod
     async def _cancel_task(task):
         task.cancel()
@@ -4054,6 +4076,21 @@ class ChatHttpTests(unittest.TestCase):
         with patch.object(Handler, "run_async", side_effect=BusyError("Already approved.")):
             status, body = call(raw)
         self.assertEqual((status, body), (409, {"error": "Already approved."}))
+
+    def test_mermaid_asset_route_serves_when_present_and_404_otherwise(self):
+        with TemporaryDirectory() as temp:
+            web = Path(temp)
+            handler = self.get_handler("/mermaid.min.js")
+            with patch("symphony.__main__.WEB", web):
+                handler.do_GET()
+            handler.send_response.assert_called_once_with(404)
+
+            (web / "mermaid.min.js").write_text("globalThis.mermaid = {};")
+            handler2 = self.get_handler("/mermaid.min.js")
+            with patch("symphony.__main__.WEB", web):
+                handler2.do_GET()
+            handler2.send_response.assert_called_once_with(200)
+            self.assertEqual(handler2.wfile.getvalue(), b"globalThis.mermaid = {};")
 
 
 class ServeStartupTests(unittest.IsolatedAsyncioTestCase):

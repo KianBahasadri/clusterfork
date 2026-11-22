@@ -2216,6 +2216,39 @@ class ChatBrowserTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate("() => window.__postedTexts"), ["[Keep idle]\n\nGo ahead"])
         self.assertEqual(attach_btn.get_attribute("aria-pressed"), "false")
 
+    def test_diagram_panel_renders_outside_chat_and_reports_parse_errors(self):
+        self.page.evaluate("""() => {
+          window.mermaid = {
+            initialize() {},
+            async render(id, src) {
+              if (src.includes("INVALID")) throw new Error("Parse error");
+              return {svg: "<svg id='" + id + "' xmlns='http://www.w3.org/2000/svg'></svg>"};
+            },
+          };
+          window.__diagram = {repo: "owner/a", title: "System Architecture", source: "graph LR; A-->B;", updated: 10};
+          window.fetch = async () => ({ok: true, json: async () => ({
+            messages: [{id: 1, role: "assistant", text: "Hi", html: "<p>Hi</p>", images: [], repo: "owner/a"}],
+            busy: false, canInterrupt: false, stream: "", streamHtml: "",
+            tasks: [], signedIn: true, login: null, paused: "", view: "proj-a",
+            repo: "owner/a", repoActivity: {"owner/a": 1}, diagram: window.__diagram,
+            codex: {}, issueError: "", updateAvailable: false, draining: false,
+            projects: [{id: "proj-a", name: "Repo A", icon: "", repo: "owner/a", issues: []}],
+            issueRevision: "rev-diag",
+          })});
+        }""")
+        self.page.evaluate("async () => { await poll(); }")
+        self.page.locator("#diagram-panel .diagram-svg").wait_for(state="visible")
+        self.assertEqual(self.page.locator("#diagram-title").text_content(), "System Architecture")
+        self.assertEqual(self.page.locator("#messages .diagram-panel").count(), 0)
+        self.page.evaluate("""async () => {
+          window.__diagram = {repo: "owner/a", title: "Bad", source: "INVALID", updated: 11};
+          await poll();
+        }""")
+        self.page.wait_for_function(
+            "document.getElementById('diagram-error').textContent.includes('Parse error')")
+        self.assertFalse(self.page.locator("#diagram-error").is_hidden())
+        self.assertEqual(self.page.locator("#diagram-canvas .diagram-svg").count(), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

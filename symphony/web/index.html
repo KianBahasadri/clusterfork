@@ -140,6 +140,18 @@
       </div>
       <div id="paused" class="notice" hidden></div>
       <div id="login" class="notice" hidden></div>
+      <section id="diagram-panel" class="diagram-panel" aria-labelledby="diagram-title" hidden>
+        <header class="diagram-header">
+          <h2 id="diagram-title">Diagram</h2>
+          <button id="diagram-close" type="button">Hide</button>
+        </header>
+        <p id="diagram-error" class="diagram-error" role="alert" hidden></p>
+        <div id="diagram-canvas" class="diagram-canvas"></div>
+        <details class="diagram-source-wrap">
+          <summary>Mermaid source</summary>
+          <pre id="diagram-source" class="diagram-source"></pre>
+        </details>
+      </section>
       <div id="chat-log" class="chat-log" role="log" aria-live="polite">
         <p id="welcome">Choose a project or ask the coordinator to draft a plan.</p>
         <div id="messages"></div>

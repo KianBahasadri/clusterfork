@@ -62,6 +62,7 @@ jobs:
             for name in git gh python uv node pnpm lua shellcheck terraform opencode codex jq rg sqlite3 tmux gawk patch file zip; do
               command -v "$name"
             done
+            test -s /app/symphony/web/mermaid.min.js
             python -c "import playwright, symphony.__main__"
           '
       - name: Launch managed Chromium as restricted user

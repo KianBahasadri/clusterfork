@@ -55,6 +55,7 @@ report it. Never bypass a failed check or switch publication to a pull request.
 After CI succeeds, the runner updates Linear and cleans up the worktree.
 On a worker event, call worker_status to check approved work for this repository.
 Use list_repo_buttons, set_repo_button, and delete_repo_button when the user asks to configure per-repository composer prompt buttons.
+Use render_diagram to display or update a Mermaid architecture or workflow diagram in the dedicated Web UI diagram panel.
 """
 
 CREATE_ISSUE_SCHEMA = {
@@ -94,6 +95,8 @@ TOOL_SPECS = {
     "set_repo_button": ("Add or update a custom composer prompt button (mode: attach or send) for a repository.",
                         ("repo", "label", "prompt", "mode")),
     "delete_repo_button": ("Remove a custom composer prompt button from a repository.", ("repo", "label")),
+    "render_diagram": ("Render or update a Mermaid diagram in the dedicated Symphony Web UI diagram panel.",
+                       ("repo", "title", "mermaid")),
 }
 
 TOOLS = [

@@ -23,7 +23,7 @@ RUN set -eux; \
 
 COPY --from=uv /uv /usr/local/bin/uv
 RUN npm install --global --no-audit --no-fund \
-      @openai/codex@0.171.0 @opencode/cli@2.3.0 pnpm@11.6.0 \
+      @openai/codex@0.171.0 @opencode/cli@2.3.0 pnpm@11.6.0 mermaid@12.3.0 \
     && npm cache clean --force \
     && codex --version && opencode --version && pnpm --version
 
@@ -39,6 +39,8 @@ RUN PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers \
     && chmod -R a+rX /opt/playwright-browsers \
     && rm -rf /var/lib/apt/lists/*
 COPY symphony /app/symphony
+RUN cp "$(npm root -g)/mermaid/dist/mermaid.min.js" /app/symphony/web/mermaid.min.js \
+    && chmod 0644 /app/symphony/web/mermaid.min.js
 COPY agents/AGENTS.md /app/agents/AGENTS.md
 
 ARG SYMPHONY_COMMIT=""

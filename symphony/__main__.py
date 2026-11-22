@@ -589,7 +589,7 @@ class Symphony:
         if name == "cleanup_worker":
             await self.runner.cleanup(issue_id)
             return "Worktree cleaned up."
-        if name in {"list_repo_buttons", "set_repo_button", "delete_repo_button"}:
+        if name in {"list_repo_buttons", "set_repo_button", "delete_repo_button", "render_diagram"}:
             target_repo = args["repo"].strip().lower()
             if target_repo not in await self.refresh_projects():
                 raise ValueError(f"Unknown repository {target_repo}.")
@@ -597,6 +597,9 @@ class Symphony:
                 return self.runner.repo_buttons(target_repo)
             if name == "set_repo_button":
                 return self.runner.set_repo_button(target_repo, args["label"], args["prompt"], args["mode"])
+            if name == "render_diagram":
+                saved = self.runner.save_diagram(target_repo, args["title"], args["mermaid"])
+                return f"Rendered diagram {saved['title']} for {target_repo}."
             return self.runner.delete_repo_button(target_repo, args["label"])
         raise ValueError("Unknown tool.")
 
@@ -748,6 +751,7 @@ class Symphony:
         if self.stream_cache[:2] != (active_repo, text):
             self.stream_cache = (active_repo, text, markdown(text) if text else "")
         raw_buttons = self.runner.repo_buttons(active_repo) if active_repo else []
+        raw_diagram = self.runner.diagram(active_repo) if active_repo else None
         state = {"messages": messages,
                  "busy": self.busy, "canInterrupt": bool(self.coordinator.turn_for(active_repo)),
                  "stream": text,
@@ -758,6 +762,7 @@ class Symphony:
                  "repo": active_repo,
                  "repoActivity": self.runner.repo_chat_latest(),
                  "buttons": raw_buttons if isinstance(raw_buttons, list) else [],
+                 "diagram": raw_diagram if isinstance(raw_diagram, dict) else None,
                  "codex": self.coordinator.status(active_repo), "issueError": self.issue_error,
                  "compacting": (
                      "running" if self.compacting_repo == active_repo else
@@ -1084,6 +1089,13 @@ class Handler(BaseHTTPRequestHandler):
             if url.path in STATIC:
                 name, content_type = STATIC[url.path]
                 self.respond((WEB / name).read_bytes(), content_type)
+                return
+            if url.path == "/mermaid.min.js":
+                mermaid = WEB / "mermaid.min.js"
+                if mermaid.is_file():
+                    self.respond(mermaid.read_bytes(), "application/javascript; charset=utf-8")
+                else:
+                    self.json_response({"error": "Mermaid library is unavailable."}, 404)
                 return
             if url.path == "/healthz":
                 self.json_response({"status": "ok"})

@@ -96,6 +96,12 @@ CREATE TABLE IF NOT EXISTS repo_buttons (
     updated REAL NOT NULL,
     PRIMARY KEY (repo, label)
 );
+CREATE TABLE IF NOT EXISTS diagrams (
+    repo TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    source TEXT NOT NULL,
+    updated REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS execution (
     id INTEGER PRIMARY KEY, issue TEXT NOT NULL, kind TEXT NOT NULL,
     started REAL NOT NULL, ended REAL, detail TEXT NOT NULL DEFAULT '',
@@ -421,6 +427,34 @@ class Runner:
         if not cursor.rowcount:
             raise ValueError(f"No button named {clean_label} for {clean_repo}.")
         return {"deleted": True, "repo": clean_repo, "label": clean_label}
+
+    def diagram(self, repo):
+        rows = self.rows(
+            "SELECT repo, title, source, updated FROM diagrams WHERE repo=?",
+            (repo,),
+        )
+        return rows[0] if rows else None
+
+    def save_diagram(self, repo, title, source):
+        clean_repo = (repo or "").strip().lower()
+        clean_title = (title or "").strip()
+        clean_source = (source or "").strip()
+        if not clean_repo:
+            raise ValueError("Repository is required.")
+        if not clean_title or len(clean_title) > 120:
+            raise ValueError("Diagram title must contain between 1 and 120 characters.")
+        if not clean_source or len(clean_source) > 32000:
+            raise ValueError("Mermaid diagram source must contain between 1 and 32,000 characters.")
+        updated = time.time()
+        with self.db:
+            self.db.execute(
+                """INSERT INTO diagrams(repo, title, source, updated)
+                   VALUES (?,?,?,?)
+                   ON CONFLICT(repo) DO UPDATE SET
+                       title=excluded.title, source=excluded.source, updated=excluded.updated""",
+                (clean_repo, clean_title, clean_source, updated),
+            )
+        return {"repo": clean_repo, "title": clean_title, "source": clean_source, "updated": updated}
 
     def opencode_db_path(self):
         return self.directory / "worker-data" / "opencode" / "opencode.db"

@@ -56,6 +56,13 @@ let issueCache = new Map();
 let projectRepos = new Map();
 let repoButtons = [];
 const armedButtons = new Map();
+let mermaidLoader = null;
+let diagramKey = "";
+let diagramBlobUrl = "";
+let diagramSeq = 0;
+let diagramRequest = 0;
+let currentDiagram = null;
+const dismissedDiagrams = new Map();
 let issueRevision = "";
 let selected = "";
 let selectedRepo = null;
@@ -654,6 +661,97 @@ async function handleRepoButtonClick(btn, activeRepo) {
   }
 }
 
+function loadMermaid() {
+  if (globalThis.mermaid) return Promise.resolve(globalThis.mermaid);
+  if (mermaidLoader) return mermaidLoader;
+  mermaidLoader = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "/mermaid.min.js";
+    script.addEventListener("load", () => {
+      if (globalThis.mermaid) resolve(globalThis.mermaid);
+      else reject(new Error("Mermaid bundle did not initialize."));
+    });
+    script.addEventListener("error", () => {
+      mermaidLoader = null;
+      reject(new Error("Could not load Mermaid renderer (/mermaid.min.js)."));
+    });
+    document.head.append(script);
+  });
+  return mermaidLoader;
+}
+
+function clearDiagramPanel(hide = true) {
+  if (diagramBlobUrl) {
+    URL?.revokeObjectURL?.(diagramBlobUrl);
+    diagramBlobUrl = "";
+  }
+  byId("diagram-canvas")?.replaceChildren();
+  const err = byId("diagram-error");
+  if (err) {
+    err.textContent = "";
+    err.hidden = true;
+  }
+  if (hide) {
+    const panel = byId("diagram-panel");
+    if (panel) panel.hidden = true;
+    currentDiagram = null;
+  }
+  diagramKey = "";
+}
+
+async function renderDiagramPanel(diagram, activeRepo = selectedRepo || "") {
+  const panel = byId("diagram-panel");
+  if (!panel) return;
+  if (!diagram || dismissedDiagrams.get(activeRepo) === diagram.updated) {
+    clearDiagramPanel(true);
+    return;
+  }
+  currentDiagram = {repo: activeRepo, updated: diagram.updated};
+  const key = JSON.stringify([activeRepo, diagram.updated, diagram.title, diagram.source]);
+  panel.hidden = false;
+  byId("diagram-title").textContent = diagram.title || "Diagram";
+  byId("diagram-source").textContent = diagram.source || "";
+  if (key === diagramKey) return;
+  diagramKey = key;
+  const req = ++diagramRequest;
+  const err = byId("diagram-error");
+  err.textContent = "";
+  err.hidden = true;
+  try {
+    const renderer = await loadMermaid();
+    if (req !== diagramRequest || currentDiagram?.updated !== diagram.updated) return;
+    const dark = globalThis.matchMedia?.("(prefers-color-scheme: dark)")?.matches;
+    renderer.initialize({
+      startOnLoad: false,
+      securityLevel: "strict",
+      htmlLabels: false,
+      theme: dark ? "dark" : "default",
+    });
+    const rendered = await renderer.render("symphony-diagram-" + (++diagramSeq), diagram.source);
+    if (req !== diagramRequest || currentDiagram?.updated !== diagram.updated) return;
+    const svg = rendered?.svg;
+    if (typeof svg !== "string" || !svg.trim()) {
+      throw new Error("Mermaid returned empty SVG output.");
+    }
+    const blobUrl = URL.createObjectURL(new Blob([svg], {type: "image/svg+xml"}));
+    if (diagramBlobUrl) URL?.revokeObjectURL?.(diagramBlobUrl);
+    diagramBlobUrl = blobUrl;
+    const image = element("img", "", "diagram-svg");
+    image.src = blobUrl;
+    image.alt = diagram.title || "Mermaid diagram";
+    byId("diagram-canvas").replaceChildren(image);
+  } catch (error) {
+    if (req !== diagramRequest) return;
+    if (diagramBlobUrl) {
+      URL?.revokeObjectURL?.(diagramBlobUrl);
+      diagramBlobUrl = "";
+    }
+    byId("diagram-canvas").replaceChildren();
+    err.textContent = "Mermaid render error: " + (error?.message || "Invalid diagram syntax.");
+    err.hidden = false;
+  }
+}
+
 function updateRepoActivity(activity, activeRepo) {
   if (!activity || typeof activity !== "object") return;
   if (!repoActivityInitialized) {
@@ -691,6 +789,7 @@ function resetChatView(repo) {
   stream = "";
   renderedStream = "";
   compacting = "";
+  clearDiagramPanel(false);
   messages.replaceChildren();
   updateStream("", "");
   byId("welcome").hidden = false;
@@ -1225,6 +1324,7 @@ async function poll() {
     }
     updateRepoActivity(state.repoActivity, selectedRepo ?? activeRepo);
     renderRepoButtons(state.buttons || [], selectedRepo ?? activeRepo);
+    renderDiagramPanel(state.diagram || null, selectedRepo ?? activeRepo);
     const notice = byId("project-error");
     if (notice.textContent !== state.issueError) notice.textContent = state.issueError;
     notice.hidden = !state.issueError;
@@ -1495,6 +1595,10 @@ messageField.addEventListener("keydown", (event) => {
   }
 });
 interrupt.addEventListener("click", interruptTurn);
+byId("diagram-close").addEventListener("click", () => {
+  if (currentDiagram) dismissedDiagrams.set(currentDiagram.repo, currentDiagram.updated);
+  clearDiagramPanel(true);
+});
 byId("update-action").addEventListener("click", toggleDrain);
 configButton.addEventListener("click", openConfig);
 byId("config-close").addEventListener("click", closeConfig);

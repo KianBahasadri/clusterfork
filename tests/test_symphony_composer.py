@@ -661,6 +661,89 @@ vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
             "Ship all ready",
         ])
 
+    @unittest.skipUnless(shutil.which("node"), "Node is required for JavaScript checks.")
+    def test_diagram_panel_renders_svg_blob_and_surfaces_mermaid_errors_loudly(self):
+        app = Path(__file__).resolve().parents[1] / "symphony/web/app.js"
+        probe = r"""
+const fs = require("fs");
+const vm = require("vm");
+const nodes = new Map();
+const makeNode = (tag = "div", id = "") => {
+  const node = {
+    tag, id, textContent: "", innerHTML: "", value: "", hidden: true, disabled: false, open: false,
+    dataset: {}, style: {setProperty() {}}, listeners: {}, children: [],
+    classList: {add() {}, remove() {}},
+    addEventListener(t, h) { (this.listeners[t] ||= []).push(h); },
+    setAttribute(n, v) { this[n] = String(v); }, removeAttribute(n) { delete this[n]; },
+    toggleAttribute() {}, focus() {}, setSelectionRange() {}, contains() { return false; },
+    closest() { return makeNode("aside"); },
+    append(...items) { this.children.push(...items); },
+    prepend(...items) { this.children.unshift(...items); },
+    replaceChildren(...items) { this.children = items; },
+    querySelector() { return null; }, querySelectorAll() { return []; },
+  };
+  return node;
+};
+const doc = {
+  head: makeNode("head"),
+  getElementById(id) {
+    if (!nodes.has(id)) nodes.set(id, makeNode("div", id));
+    return nodes.get(id);
+  },
+  createElement(tag) { return makeNode(tag); },
+  createElementNS(_ns, tag) { return makeNode(tag); },
+  querySelector() { return this.getElementById("main"); },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+};
+let seq = 0;
+const revoked = [];
+class FakeBlob { constructor(parts, opts) { this.parts = parts; this.type = opts?.type; } }
+const URL = {
+  createObjectURL() { return "blob:svg-" + (++seq); },
+  revokeObjectURL(url) { revoked.push(url); },
+};
+let failRender = false;
+const mermaid = {
+  initialize() {},
+  async render(id, src) {
+    if (failRender) throw new Error("Syntax error on line 2");
+    return {svg: "<svg id='" + id + "'>" + src + "</svg>"};
+  },
+};
+const ctx = vm.createContext({document: doc, URL, Blob: FakeBlob, mermaid, setInterval: () => 0, setTimeout, clearTimeout, console});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+(async () => {
+  await ctx.renderDiagramPanel({title: "Arch", source: "graph TD; A-->B;", updated: 1}, "owner/a");
+  const panel = doc.getElementById("diagram-panel");
+  const canvas = doc.getElementById("diagram-canvas");
+  const err = doc.getElementById("diagram-error");
+  const okSnap = {hidden: panel.hidden, imgSrc: canvas.children[0]?.src, errHidden: err.hidden};
+  failRender = true;
+  await ctx.renderDiagramPanel({title: "Broken", source: "graph ???", updated: 2}, "owner/a");
+  const errSnap = {hidden: panel.hidden, imgs: canvas.children.length, errHidden: err.hidden, errText: err.textContent};
+  doc.getElementById("diagram-close").listeners.click[0]();
+  const closedHidden = panel.hidden;
+  failRender = false;
+  // Same updated timestamp stays hidden; newer timestamp reopens panel.
+  await ctx.renderDiagramPanel({title: "Broken", source: "graph ???", updated: 2}, "owner/a");
+  const stillHidden = panel.hidden;
+  await ctx.renderDiagramPanel({title: "Fixed", source: "graph TD; B-->C;", updated: 3}, "owner/a");
+  const reopenedSnap = {hidden: panel.hidden, imgSrc: canvas.children[0]?.src, title: doc.getElementById("diagram-title").textContent};
+  doc.getElementById("diagram-close").listeners.click[0]();
+  console.log(JSON.stringify({okSnap, errSnap, closedHidden, stillHidden, reopenedSnap, revoked}));
+})();
+"""
+        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        res = json.loads(run.stdout)
+        self.assertEqual(res["okSnap"], {"hidden": False, "imgSrc": "blob:svg-1", "errHidden": True})
+        self.assertEqual(res["errSnap"], {"hidden": False, "imgs": 0, "errHidden": False, "errText": "Mermaid render error: Syntax error on line 2"})
+        self.assertTrue(res["closedHidden"])
+        self.assertTrue(res["stillHidden"])
+        self.assertEqual(res["reopenedSnap"], {"hidden": False, "imgSrc": "blob:svg-2", "title": "Fixed"})
+        self.assertEqual(res["revoked"], ["blob:svg-1", "blob:svg-2"])
+
 
 if __name__ == "__main__":
     unittest.main()
