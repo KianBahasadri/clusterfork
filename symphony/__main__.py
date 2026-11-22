@@ -27,7 +27,9 @@ from .codex import Codex, TOOL_SPECS
 from .execution import card_stage, execution_payload, history_summary
 from .issue_details import issue_details, markdown, open_asset
 from .runner import Runner, read_small
-from .services import CLOSED_STATES, ISSUE_ID, Linear, proposed_plan, with_plan
+from .services import (
+    CLOSED_STATES, ISSUE_ID, CreatedIssueError, Linear, estimate_scale, proposed_plan, with_plan,
+)
 from .updates import CHECK_SECONDS as UPDATE_CHECK_SECONDS, UpdateChecker
 
 
@@ -43,6 +45,9 @@ STATIC = {
 BODY_LIMIT = 14 * 1024 * 1024
 DRAIN_BODY_LIMIT = 1024
 TEXT_LIMIT = 23000
+ISSUE_TITLE_LIMIT = 255
+ISSUE_DESCRIPTION_LIMIT = 24000
+LABEL_NAME_LIMIT = 80
 IMAGE_COUNT = 4
 IMAGE_BYTES = 5 * 1024 * 1024
 IMAGES_BYTES = 10 * 1024 * 1024
@@ -370,7 +375,148 @@ class Symphony:
             raise ValueError("Image not found.")
         return path.read_bytes(), content_type
 
+    async def create_issue(self, args):
+        required = {"repo", "title", "description", "priority", "estimate"}
+        optional = {"project_id", "parent_id", "blocked_by", "labels"}
+        if not isinstance(args, dict) or not required <= set(args) <= required | optional:
+            raise ValueError("Invalid create_issue arguments.")
+        for key in ("repo", "title", "description"):
+            if not isinstance(args[key], str):
+                raise ValueError(f"{key} must be a string.")
+        repo = args["repo"].strip().lower().removesuffix(".git")
+        title = args["title"].strip()
+        description = args["description"].strip()
+        if not repo:
+            raise ValueError("repo must name an enrolled GitHub repository.")
+        if not title or len(title) > ISSUE_TITLE_LIMIT:
+            raise ValueError(f"The title must contain between 1 and {ISSUE_TITLE_LIMIT} characters.")
+        if not description or len(description) > ISSUE_DESCRIPTION_LIMIT:
+            raise ValueError("The description must contain between 1 and "
+                             f"{ISSUE_DESCRIPTION_LIMIT:,} characters.")
+        priority = args["priority"]
+        if isinstance(priority, bool) or not isinstance(priority, int) or not 1 <= priority <= 4:
+            raise ValueError("The priority must be an integer from 1 to 4.")
+        estimate = args["estimate"]
+        if isinstance(estimate, bool) or not isinstance(estimate, int):
+            raise ValueError("The estimate must be an integer from the target team's scale.")
+        project_id = args.get("project_id")
+        if project_id is not None:
+            if not isinstance(project_id, str) or not project_id.strip():
+                raise ValueError("project_id must be a nonempty Linear project ID.")
+            project_id = project_id.strip()
+        parent_id = args.get("parent_id")
+        if parent_id is not None:
+            if not isinstance(parent_id, str):
+                raise ValueError("Use an uppercase Linear issue identifier.")
+            parent_id = parent_id.strip()
+            if not ISSUE_ID.fullmatch(parent_id):
+                raise ValueError("Use an uppercase Linear issue identifier.")
+        blocked_by = args.get("blocked_by", [])
+        if not isinstance(blocked_by, list) or any(not isinstance(item, str) for item in blocked_by):
+            raise ValueError("blocked_by must be a list of uppercase Linear issue identifiers.")
+        blocked_by = [item.strip() for item in blocked_by]
+        if any(not ISSUE_ID.fullmatch(item) for item in blocked_by):
+            raise ValueError("Use uppercase Linear issue identifiers.")
+        blocked_by = list(dict.fromkeys(blocked_by))
+        labels = args.get("labels", [])
+        if not isinstance(labels, list) or any(not isinstance(item, str) for item in labels):
+            raise ValueError("labels must be a list of existing label names.")
+        labels = [item.strip() for item in labels]
+        if any(not item or len(item) > LABEL_NAME_LIMIT for item in labels):
+            raise ValueError(f"Label names must contain between 1 and {LABEL_NAME_LIMIT} characters.")
+        labels = list(dict.fromkeys(labels))
+
+        projects = (await self.refresh_projects()).get(repo)
+        if not projects:
+            raise ValueError(f"{repo} has no mapped Linear project.")
+        if project_id is not None:
+            project = next((item for item in projects if item["id"] == project_id), None)
+            if not project:
+                raise ValueError(f"Linear project {project_id} is not mapped to {repo}.")
+        elif len(projects) == 1:
+            project = projects[0]
+        else:
+            raise ValueError(f"{repo} maps to several Linear projects. Pass project_id.")
+
+        context = await self.linear.project_context(project["id"])
+        if context.get("id") != project["id"]:
+            raise RuntimeError("Linear returned the wrong project.")
+        if context.get("archivedAt"):
+            raise ValueError(f"Linear project {context.get('name') or project['name']} is archived.")
+        teams = [team for team in context.get("teams") or [] if not team.get("archivedAt")]
+        if len(teams) != 1:
+            raise ValueError(f"{project['name']} must have exactly one active owning Linear team.")
+        team = await self.linear.team_context(teams[0]["id"])
+        if team.get("id") != teams[0]["id"]:
+            raise RuntimeError("Linear returned the wrong team.")
+        if team.get("archivedAt"):
+            raise ValueError(f"Linear team {team.get('name') or teams[0]['name']} is archived.")
+
+        scale = estimate_scale(team)
+        if estimate not in scale:
+            options = ", ".join(str(value) for value in scale)
+            raise ValueError(f"The estimate must be one of {options} for the "
+                             f"{team.get('name') or 'target'} team.")
+        states = [state for state in team.get("states") or []
+                  if not state.get("archivedAt") and state.get("name") == "Backlog"
+                  and state.get("type") == "backlog"]
+        if len(states) != 1:
+            raise RuntimeError("The Linear team must have one Backlog state.")
+        state = states[0]
+
+        label_ids = []
+        if labels:
+            available = await self.linear.team_labels(team["id"])
+            for name in labels:
+                matches = [label for label in available if label.get("name") == name]
+                if not matches:
+                    raise ValueError(f"Unknown Linear label: {name}.")
+                if len(matches) != 1:
+                    raise ValueError(f"Linear label {name} is ambiguous.")
+                if matches[0].get("id") not in label_ids:
+                    label_ids.append(matches[0]["id"])
+
+        parent_issue = None
+        if parent_id:
+            parent_issue, _ = await self.live_issue(parent_id)
+        blockers = []
+        for identifier in blocked_by:
+            issue, _ = await self.live_issue(identifier)
+            blockers.append((identifier, issue))
+
+        try:
+            issue = await self.linear.create_issue(
+                project["id"], team["id"], state["id"], title, description, priority, estimate,
+                parent_id=parent_issue["id"] if parent_issue else None, label_ids=label_ids,
+            )
+        except CreatedIssueError:
+            self.request_issue_refresh()
+            raise
+        links = {"succeeded": [], "failed": []}
+        for identifier, blocker in blockers:
+            try:
+                await self.linear.create_blocks_relation(blocker["id"], issue["id"])
+            except (OSError, RuntimeError, TimeoutError, ValueError) as error:
+                links["failed"].append({"identifier": identifier,
+                                        "error": str(error) or "Blocking link failed."})
+            else:
+                links["succeeded"].append(identifier)
+        self.request_issue_refresh()
+        message = f"Created {issue['identifier']} in Backlog for {repo}."
+        if links["failed"]:
+            names = ", ".join(item["identifier"] for item in links["failed"])
+            message += (f" Blocking links failed for {names}; {issue['identifier']} was not recreated."
+                        " Reconcile those links in Linear.")
+        return {"id": issue["id"], "identifier": issue["identifier"], "url": issue["url"],
+                "project": context.get("name") or project["name"], "team": team.get("name") or "",
+                "state": "Backlog", "priority": priority, "estimate": estimate,
+                "blockedBy": links, "message": message}
+
     async def tool(self, name, args):
+        if name not in TOOL_SPECS:
+            raise ValueError("Unknown tool.")
+        if name == "create_issue":
+            return await self.create_issue(args)
         keys = TOOL_SPECS[name][1]
         if not isinstance(args, dict) or set(args) != set(keys) or any(not isinstance(args[key], str) for key in keys):
             raise ValueError("Invalid tool arguments.")

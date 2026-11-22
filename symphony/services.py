@@ -49,6 +49,54 @@ HISTORY_QUERY = """query($id: String!, $after: String) {
     }
 }"""
 HISTORY_PAGES = 20
+ESTIMATE_SCALES = {
+    "exponential": ((1, 2, 4, 8, 16), (32, 64)),
+    "fibonacci": ((1, 2, 3, 5, 8), (13, 21)),
+    "linear": ((1, 2, 3, 4, 5), (6, 7)),
+    "tShirt": ((1, 2, 3, 5, 8), (13, 21)),
+}
+CREATE_ISSUE_MUTATION = """mutation($input: IssueCreateInput!) {
+    issueCreate(input: $input) {
+        success
+        issue {
+            id identifier url priority estimate
+            state { id name type }
+            team { id }
+            project { id }
+            parent { id identifier }
+        }
+    }
+}"""
+BLOCKS_RELATION_MUTATION = """mutation($input: IssueRelationCreateInput!) {
+    issueRelationCreate(input: $input) {
+        success
+        issueRelation { id type issue { id } relatedIssue { id } }
+    }
+}"""
+
+
+class CreatedIssueError(RuntimeError):
+    """A confirmed issue creation whose returned issue failed validation."""
+
+    def __init__(self, message, issue=None):
+        self.issue = issue if isinstance(issue, dict) else {}
+        identity = ", ".join(
+            f"{key}={self.issue[key]}" for key in ("id", "identifier", "url")
+            if isinstance(self.issue.get(key), str) and self.issue[key])
+        super().__init__(message + (f" Returned issue: {identity}." if identity else ""))
+
+
+def estimate_scale(team):
+    kind = team.get("issueEstimationType")
+    if kind not in ESTIMATE_SCALES:
+        raise ValueError(f"The {team.get('name') or 'target'} team does not use a supported estimate scale.")
+    base, extended = ESTIMATE_SCALES[kind]
+    values = list(base)
+    if team.get("issueEstimationExtended") is True:
+        values.extend(extended)
+    if team.get("issueEstimationAllowZero") is True:
+        values.insert(0, 0)
+    return values
 
 
 def valid_history_connection(connection):
@@ -273,6 +321,177 @@ class Linear:
         if not result["success"]:
             raise RuntimeError("Linear rejected the issue update.")
         return result["issue"]
+
+    async def project_context(self, project_id):
+        teams = []
+        cursor = None
+        while True:
+            data = await self.query("""query($id: String!, $after: String) {
+                project(id: $id) {
+                    id name archivedAt
+                    teams(first: 50, after: $after) {
+                        nodes { id name key archivedAt }
+                        pageInfo { endCursor hasNextPage }
+                    }
+                }
+            }""", id=project_id, after=cursor)
+            project = data.get("project") if isinstance(data, dict) else None
+            if not isinstance(project, dict):
+                raise ValueError(f"Linear project {project_id} is unavailable.")
+            connection = project.get("teams")
+            if (not isinstance(connection, dict) or not isinstance(connection.get("nodes"), list)
+                    or not all(isinstance(team, dict) for team in connection["nodes"])):
+                raise RuntimeError("Linear returned malformed project teams.")
+            teams.extend(connection["nodes"])
+            page = connection.get("pageInfo")
+            if not isinstance(page, dict) or not isinstance(page.get("hasNextPage"), bool):
+                raise RuntimeError("Linear returned malformed project team pagination.")
+            if not page["hasNextPage"]:
+                return {"id": project.get("id"), "name": project.get("name"),
+                        "archivedAt": project.get("archivedAt"), "teams": teams}
+            cursor = page.get("endCursor")
+            if not cursor:
+                raise RuntimeError("Linear project team pagination did not advance.")
+
+    async def team_context(self, team_id):
+        states = []
+        cursor = None
+        while True:
+            data = await self.query("""query($id: String!, $after: String) {
+                team(id: $id) {
+                    id name key archivedAt
+                    issueEstimationType issueEstimationExtended issueEstimationAllowZero
+                    states(first: 100, after: $after) {
+                        nodes { id name type archivedAt }
+                        pageInfo { endCursor hasNextPage }
+                    }
+                }
+            }""", id=team_id, after=cursor)
+            team = data.get("team") if isinstance(data, dict) else None
+            if not isinstance(team, dict):
+                raise ValueError(f"Linear team {team_id} is unavailable.")
+            connection = team.get("states")
+            if (not isinstance(connection, dict) or not isinstance(connection.get("nodes"), list)
+                    or not all(isinstance(state, dict) for state in connection["nodes"])):
+                raise RuntimeError("Linear returned malformed team states.")
+            states.extend(connection["nodes"])
+            page = connection.get("pageInfo")
+            if not isinstance(page, dict) or not isinstance(page.get("hasNextPage"), bool):
+                raise RuntimeError("Linear returned malformed team state pagination.")
+            if not page["hasNextPage"]:
+                return {**team, "states": states}
+            cursor = page.get("endCursor")
+            if not cursor:
+                raise RuntimeError("Linear team state pagination did not advance.")
+
+    async def team_labels(self, team_id):
+        labels = []
+        cursor = None
+        seen = set()
+        pages = 0
+        while True:
+            data = await self.query("""query($team: ID!, $after: String) {
+                issueLabels(first: 100, after: $after, filter: {
+                    or: [
+                        { team: { id: { eq: $team } } }
+                        { team: { null: true } }
+                    ]
+                }) {
+                    nodes { id name archivedAt }
+                    pageInfo { endCursor hasNextPage }
+                }
+            }""", team=team_id, after=cursor)
+            connection = data.get("issueLabels") if isinstance(data, dict) else None
+            if (not isinstance(connection, dict) or not isinstance(connection.get("nodes"), list)
+                    or not all(isinstance(node, dict) for node in connection["nodes"])):
+                raise RuntimeError("Linear returned malformed labels.")
+            for node in connection["nodes"]:
+                if node.get("archivedAt"):
+                    continue
+                if not isinstance(node.get("id"), str) or not node["id"] or not isinstance(node.get("name"), str):
+                    raise RuntimeError("Linear returned malformed labels.")
+                labels.append(node)
+            page = connection.get("pageInfo")
+            if not isinstance(page, dict) or not isinstance(page.get("hasNextPage"), bool):
+                raise RuntimeError("Linear returned malformed label pagination.")
+            if not page["hasNextPage"]:
+                return labels
+            cursor = page.get("endCursor")
+            if not cursor or cursor in seen:
+                raise RuntimeError("Linear label pagination did not advance.")
+            seen.add(cursor)
+            pages += 1
+            if pages >= 20:
+                raise RuntimeError("Linear labels exceed 20 pages.")
+
+    async def create_issue(self, project_id, team_id, state_id, title, description, priority,
+                           estimate, parent_id=None, label_ids=()):
+        fields = {"teamId": team_id, "projectId": project_id, "stateId": state_id,
+                  "title": title, "description": description, "priority": priority,
+                  "estimate": estimate, "useDefaultTemplate": False}
+        if parent_id:
+            fields["parentId"] = parent_id
+        if label_ids:
+            fields["labelIds"] = list(label_ids)
+        try:
+            data = await self.query(CREATE_ISSUE_MUTATION, input=fields)
+        except (OSError, RuntimeError, TimeoutError, ValueError) as error:
+            raise RuntimeError(
+                "The Linear issue creation outcome is uncertain after an error. "
+                "Check existing issues in Linear and reconcile before creating another. "
+                + (str(error) or type(error).__name__)) from None
+        result = data.get("issueCreate") if isinstance(data, dict) else None
+        if not isinstance(result, dict):
+            raise RuntimeError("Linear returned no issue creation result. "
+                               "Check existing issues in Linear and reconcile before creating another.")
+        if result.get("success") is not True:
+            raise RuntimeError("Linear rejected the issue creation.")
+        issue = result.get("issue")
+        if not isinstance(issue, dict):
+            raise CreatedIssueError("Linear reported a successful creation without returning the issue. "
+                                    "Check existing issues in Linear and reconcile before creating another.")
+        identifier = issue.get("identifier")
+        if (not isinstance(identifier, str) or not ISSUE_ID.fullmatch(identifier)
+                or not isinstance(issue.get("id"), str) or not issue["id"]
+                or not isinstance(issue.get("url"), str) or not issue["url"]):
+            raise CreatedIssueError("Linear created an issue but returned an incomplete identity. "
+                                    "Check Linear before creating another.", issue)
+        if (issue.get("project") or {}).get("id") != project_id:
+            raise CreatedIssueError(f"Linear created {identifier} in the wrong project. "
+                                    "Check Linear before creating another.", issue)
+        if (issue.get("team") or {}).get("id") != team_id:
+            raise CreatedIssueError(f"Linear created {identifier} in the wrong team. "
+                                    "Check Linear before creating another.", issue)
+        state = issue.get("state") or {}
+        if state.get("name") != "Backlog" or state.get("type") != "backlog":
+            raise CreatedIssueError(f"Linear created {identifier} outside Backlog. "
+                                    "Check Linear before creating another.", issue)
+        if issue.get("priority") != priority or issue.get("estimate") != estimate:
+            raise CreatedIssueError(f"Linear created {identifier} without the requested priority and estimate. "
+                                    "Check Linear before creating another.", issue)
+        if parent_id and (issue.get("parent") or {}).get("id") != parent_id:
+            raise CreatedIssueError(f"Linear created {identifier} without the requested parent. "
+                                    "Check Linear before creating another.", issue)
+        return issue
+
+    async def create_blocks_relation(self, issue_id, related_issue_id):
+        try:
+            data = await self.query(BLOCKS_RELATION_MUTATION, input={
+                "issueId": issue_id, "relatedIssueId": related_issue_id, "type": "blocks"})
+        except (OSError, RuntimeError, TimeoutError, ValueError) as error:
+            raise RuntimeError("The blocking link outcome is uncertain after an error. "
+                               + (str(error) or type(error).__name__)) from None
+        result = data.get("issueRelationCreate") if isinstance(data, dict) else None
+        if not isinstance(result, dict):
+            raise RuntimeError("Linear returned no issue relation result.")
+        if result.get("success") is not True:
+            raise RuntimeError("Linear rejected the blocking link.")
+        relation = result.get("issueRelation")
+        if (not isinstance(relation, dict) or relation.get("type") != "blocks"
+                or (relation.get("issue") or {}).get("id") != issue_id
+                or (relation.get("relatedIssue") or {}).get("id") != related_issue_id):
+            raise RuntimeError("Linear returned a mismatched blocking link.")
+        return relation
 
     async def set_state(self, identifier, name, kind):
         issue = await self.issue(identifier)

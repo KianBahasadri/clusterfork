@@ -24,6 +24,24 @@ Issues returned to Backlog, canceled, or moved out of the approved project do
 not start. Completed, Canceled, and Duplicate are terminal states across issue
 lists, approvals, and state transitions.
 
+For work that genuinely spans repositories, split it into one Backlog issue per
+repository and link them with child or blocking relationships. `create_issue`
+creates one issue in an enrolled repository's active Linear project and unique
+Backlog state. It requires `repo`, `title`, `description`, an explicit `priority`
+from 1 to 4, and an `estimate` from the target team's configured scale. Optional
+`project_id` selects among several projects mapped to the repository, while
+`parent_id`, `blocked_by`, and `labels` reuse existing issues and labels. It
+rejects unmapped or archived projects, ambiguous teams or labels, invalid
+metadata, and related issues outside enrolled projects. Creation never records
+approval, moves work to Todo, or dispatches a worker. If blocking links partly
+fail, the created issue's ID, identifier, and URL are still returned with the
+failed links; reconcile them in Linear instead of recreating the issue. Reconcile
+an uncertain creation response in Linear before another create attempt. Each
+issue still needs the user's explicit chat approval before `approve_issue`; a
+parent's approval or status never approves its children, and the coordinator
+sequences dependent work in the conversation rather than relying on links to
+schedule it.
+
 Symphony keeps a shared cache of every mapped project's issues using a batched,
 paginated Linear query. It reconciles every 300 seconds, promptly after a
 successful local Linear write, and after a verified Issue or Project webhook.

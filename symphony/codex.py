@@ -23,6 +23,15 @@ plan and moves the issue to Todo. The runner then dispatches recorded Todo
 approvals automatically when a repository, worker slot, and provider permit,
 moving them to In Progress. Never dispatch unapproved work or treat a Todo
 status alone as approval.
+For genuinely cross-repository requests, split the work into one Backlog issue
+per repository with aligned Proposed Plans and link them through create_issue's
+parent_id or blocked_by fields, reusing an existing companion issue when it
+already covers a repository. create_issue requires repo, title, description,
+priority, and estimate; pass project_id when a repository maps to several
+projects, and use only existing labels. It never approves, queues, or dispatches
+work, and dependency links do not schedule anything. Sequence execution in this
+conversation. A parent's approval, status, or text never approves a child; call
+approve_issue only for each issue the user explicitly approved in chat.
 Under the Symphony data directory, checkouts are at repos/<owner>/<repo>,
 worktrees at worktrees/<issue>, and worker logs at runs/<issue>/worker.log.
 Use the shell to inspect them and gh to diagnose CI. Delegate implementation to
@@ -45,6 +54,23 @@ On a worker event, check approved work and keep unrelated repositories moving.
 For multi-repository work, sequence dispatch and shipping in this conversation.
 """
 
+CREATE_ISSUE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "repo": {"type": "string"},
+        "title": {"type": "string"},
+        "description": {"type": "string"},
+        "priority": {"type": "integer", "minimum": 1, "maximum": 4},
+        "estimate": {"type": "integer"},
+        "project_id": {"type": "string"},
+        "parent_id": {"type": "string"},
+        "blocked_by": {"type": "array", "items": {"type": "string"}},
+        "labels": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["repo", "title", "description", "priority", "estimate"],
+    "additionalProperties": False,
+}
+
 TOOL_SPECS = {
     "list_repos": ("List projects with GitHub repository links.", ()),
     "list_issues": ("List open Linear issues for a repository.", ("repo",)),
@@ -59,14 +85,17 @@ TOOL_SPECS = {
     "ship_worker": ("Push verified and audited work to main. CI follows asynchronously.", ("issue_id",)),
     "park_worker": ("Preserve a stalled task and report the reason.", ("issue_id", "reason")),
     "cleanup_worker": ("Remove a worktree after verified publication.", ("issue_id",)),
+    "create_issue": ("Create one Backlog issue in an enrolled repository without approving or dispatching it.",
+                     ("repo", "title", "description", "priority", "estimate")),
 }
 
 TOOLS = [
     {"type": "function", "name": name, "description": description,
      "inputSchema": {"type": "object", "properties": {key: {"type": "string"} for key in keys},
                      "required": list(keys), "additionalProperties": False}}
-    for name, (description, keys) in TOOL_SPECS.items()
-]
+    for name, (description, keys) in TOOL_SPECS.items() if name != "create_issue"
+] + [{"type": "function", "name": "create_issue", "description": TOOL_SPECS["create_issue"][0],
+      "inputSchema": CREATE_ISSUE_SCHEMA}]
 TOOLS_HASH = sha256(json.dumps(TOOLS, sort_keys=True).encode()).hexdigest()
 RATE_LIMIT_WINDOWS = {300: "5h", 10080: "weekly"}
 

@@ -18,22 +18,44 @@ from tempfile import TemporaryDirectory
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 from symphony.__main__ import (
     BODY_LIMIT, ISSUE_REFRESH_SECONDS, REFRESH_COALESCE_SECONDS, WEBHOOK_BODY_LIMIT,
     Handler, Symphony, WebhookHandler, serve,
 )
-from symphony.codex import Codex, TOOLS, TOOLS_HASH
+from symphony.codex import CREATE_ISSUE_SCHEMA, Codex, TOOLS, TOOLS_HASH
 from symphony.execution import execution_payload
 from symphony.runner import (
     NOTES_LINES, REVIEW_LINES, Runner, bounded_review, validate_review,
 )
-from symphony.services import Linear, matches_filter, proposed_plan, with_plan
+from symphony.services import (
+    Linear, estimate_scale, matches_filter, proposed_plan, with_plan,
+)
 
 
 ISSUE = "KIAN-101"
 REPO = "owner/project"
+PROJECT = {"id": "project", "name": "Fixture", "archivedAt": None,
+           "teams": [{"id": "team", "name": "Kian", "key": "KIAN", "archivedAt": None}]}
+TEAM = {
+    "id": "team", "name": "Kian", "key": "KIAN", "archivedAt": None,
+    "issueEstimationType": "fibonacci", "issueEstimationExtended": False,
+    "issueEstimationAllowZero": False,
+    "states": [
+        {"id": "triage", "name": "Triage", "type": "triage", "archivedAt": None},
+        {"id": "unsure", "name": "Unsure", "type": "backlog", "archivedAt": None},
+        {"id": "backlog", "name": "Backlog", "type": "backlog", "archivedAt": None},
+        {"id": "todo", "name": "Todo", "type": "unstarted", "archivedAt": None},
+    ],
+}
+CREATED_ISSUE = {
+    "id": "new-issue", "identifier": "KIAN-200",
+    "url": "https://linear.app/fixture/issue/KIAN-200",
+    "state": {"id": "backlog", "name": "Backlog", "type": "backlog"},
+    "team": {"id": "team"}, "project": {"id": "project"},
+    "parent": None, "priority": 2, "estimate": 3,
+}
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 16
 WEBP = b"RIFF" + (16).to_bytes(4, "little") + b"WEBP" + b"\x00" * 8
@@ -244,6 +266,43 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         with patch.dict(os.environ, {"LINEAR_API_KEY": "fixture"}), \
              patch("symphony.__main__.Runner", return_value=runner):
             return Symphony(self.root)
+
+    @staticmethod
+    def create_issue_args(**overrides):
+        args = {"repo": REPO, "title": "Cross-repository change",
+                "description": "Implement the fixture change.", "priority": 2, "estimate": 3}
+        args.update(overrides)
+        return args
+
+    def create_issue_fixture(self, *, repos=None, project=None, team=None, labels=None,
+                             create=None, relation=None, live=None):
+        app = self.app()
+        mocks = SimpleNamespace(
+            create=create or AsyncMock(return_value=CREATED_ISSUE),
+            relation=relation or AsyncMock(),
+            project=AsyncMock(return_value=project or PROJECT),
+            team=AsyncMock(return_value=team or TEAM),
+            labels=AsyncMock(return_value=(
+                [{"id": "bug", "name": "Bug"}, {"id": "ui", "name": "UI"}]
+                if labels is None else labels)),
+            live=live or AsyncMock(return_value=({"id": "related-issue", "identifier": "KIAN-150"}, REPO)),
+            refresh=Mock(side_effect=self.runner.request_issue_refresh),
+        )
+        patches = [
+            patch.object(app, "refresh_projects", new_callable=AsyncMock,
+                         return_value=repos or {REPO: [{"id": "project", "name": "Fixture"}]}),
+            patch.object(app.linear, "project_context", new=mocks.project),
+            patch.object(app.linear, "team_context", new=mocks.team),
+            patch.object(app.linear, "team_labels", new=mocks.labels),
+            patch.object(app.linear, "create_issue", new=mocks.create),
+            patch.object(app.linear, "create_blocks_relation", new=mocks.relation),
+            patch.object(app, "live_issue", new=mocks.live),
+            patch.object(self.runner, "request_issue_refresh", new=mocks.refresh),
+        ]
+        for patcher in patches:
+            patcher.start()
+        self.addCleanup(lambda: [patcher.stop() for patcher in patches])
+        return app, mocks
 
     async def pump_until(self, app, predicate):
         pump = asyncio.create_task(app.pump())
@@ -619,7 +678,7 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
         self.assertIn("approve_issue", [tool["name"] for tool in params["dynamicTools"]])
 
     async def test_thread_refreshes_tools_and_resumes_afterward(self):
-        self.runner.save_setting("thread", "previous-thread")
+        self.runner.save_settings({"thread": "previous-thread", "tools_hash": "outdated-tools"})
         self.runner.chat("user", "Earlier chat")
         codex = Codex(self.runner, None)
         codex.account = "chatgpt"
@@ -642,6 +701,39 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
             {"role": "user", "text": "Earlier chat"},
             {"role": "system", "text": "Started a fresh Codex thread to load updated tools."},
         ])
+
+    async def test_create_issue_schema_preserves_string_only_tool_validation(self):
+        tools = {tool["name"]: tool for tool in TOOLS}
+        self.assertEqual(tools["create_issue"]["inputSchema"], CREATE_ISSUE_SCHEMA)
+        self.assertEqual(CREATE_ISSUE_SCHEMA["required"],
+                         ["repo", "title", "description", "priority", "estimate"])
+        self.assertEqual(CREATE_ISSUE_SCHEMA["properties"]["priority"],
+                         {"type": "integer", "minimum": 1, "maximum": 4})
+        self.assertEqual(CREATE_ISSUE_SCHEMA["properties"]["estimate"], {"type": "integer"})
+        for name in ("repo", "title", "description", "project_id", "parent_id"):
+            self.assertEqual(CREATE_ISSUE_SCHEMA["properties"][name], {"type": "string"})
+        for name in ("blocked_by", "labels"):
+            self.assertEqual(CREATE_ISSUE_SCHEMA["properties"][name],
+                             {"type": "array", "items": {"type": "string"}})
+        without_create = hashlib.sha256(json.dumps(
+            [tool for tool in TOOLS if tool["name"] != "create_issue"], sort_keys=True).encode()).hexdigest()
+        self.assertNotEqual(without_create, TOOLS_HASH)
+        for name in ("set_plan", "approve_issue", "spawn_worker"):
+            schema = tools[name]["inputSchema"]
+            self.assertTrue(all(value == {"type": "string"} for value in schema["properties"].values()))
+            self.assertFalse(schema["additionalProperties"])
+
+        app = self.app()
+        for name, args in [
+            ("set_plan", {"issue_id": ISSUE, "plan": 1}),
+            ("list_issues", {"repo": REPO, "extra": "x"}),
+            ("approve_issue", {"issue_id": "kian-101"}),
+        ]:
+            with self.subTest(name=name, args=args), \
+                 self.assertRaisesRegex(ValueError, "Invalid tool arguments|uppercase"):
+                await app.tool(name, args)
+        with self.assertRaisesRegex(ValueError, "Unknown tool"):
+            await app.tool("missing_tool", {})
 
     async def test_codex_status_reports_active_context_and_usage_windows(self):
         app = self.app()
@@ -1059,6 +1151,360 @@ checks = "false\\n" if os.environ.get("FIXTURE_CHECKS_FAIL") else 'test "$(cat v
                 self.runner.db.execute("UPDATE tasks SET phase='finishing' WHERE issue=?", (ISSUE,))
             await self.runner.finish(ISSUE)
             refresh.assert_called_once_with()
+
+    async def test_create_issue_creates_backlog_issues_in_each_enrolled_repository(self):
+        for repo, project_id, created in [
+            (REPO, "project", CREATED_ISSUE),
+            ("owner/second", "beta", {**CREATED_ISSUE, "id": "second-issue",
+                                      "identifier": "KIAN-201",
+                                      "url": "https://linear.app/fixture/issue/KIAN-201",
+                                      "project": {"id": "beta"}}),
+        ]:
+            with self.subTest(repo=repo):
+                app, mocks = self.create_issue_fixture(
+                    repos={repo: [{"id": project_id, "name": "Fixture"}]},
+                    project={**PROJECT, "id": project_id},
+                    create=AsyncMock(return_value=created),
+                )
+                result = await app.tool("create_issue", self.create_issue_args(repo=repo))
+                self.assertEqual((result["id"], result["identifier"], result["url"]),
+                                 (created["id"], created["identifier"], created["url"]))
+                self.assertEqual(result["state"], "Backlog")
+                self.assertEqual(mocks.create.await_args.args[:3],
+                                 (project_id, "team", "backlog"))
+                self.assertEqual(mocks.create.await_args.kwargs,
+                                 {"parent_id": None, "label_ids": []})
+                self.assertEqual(mocks.refresh.call_args_list, [call(projects=False)])
+                self.assertEqual(self.runner.rows("SELECT * FROM tasks"), [])
+                self.assertEqual(self.runner.rows("SELECT * FROM events"), [])
+                self.assertEqual(self.runner.status(), [])
+                self.assertEqual(await self.runner.dispatch_approved(), [])
+                with self.assertRaisesRegex(ValueError, "No approved plan"):
+                    self.runner.task(result["identifier"])
+
+    async def test_create_issue_selects_an_explicit_project_among_several(self):
+        repos = {REPO: [{"id": "alpha", "name": "Alpha"}, {"id": "beta", "name": "Beta"}]}
+        app, mocks = self.create_issue_fixture(
+            repos=repos,
+            project={**PROJECT, "id": "beta", "name": "Beta"},
+            create=AsyncMock(return_value={**CREATED_ISSUE, "project": {"id": "beta"}}),
+        )
+        result = await app.tool("create_issue", self.create_issue_args(project_id="beta"))
+        self.assertEqual(mocks.create.await_args.args[:2], ("beta", "team"))
+        self.assertEqual(result["project"], "Beta")
+        self.assertEqual(result["identifier"], CREATED_ISSUE["identifier"])
+
+    async def test_create_issue_requires_one_active_mapped_project_and_team(self):
+        repos = {REPO: [{"id": "alpha", "name": "Alpha"}, {"id": "beta", "name": "Beta"}]}
+        app, mocks = self.create_issue_fixture(repos=repos)
+        for args, message in [
+            (self.create_issue_args(), "maps to several"),
+            (self.create_issue_args(project_id="other"), "not mapped"),
+            (self.create_issue_args(repo="owner/unknown"), "no mapped"),
+        ]:
+            with self.subTest(args=args), self.assertRaisesRegex(ValueError, message):
+                await app.tool("create_issue", args)
+        mocks.create.assert_not_awaited()
+
+        cases = [
+            ({**PROJECT, "id": "alpha", "archivedAt": "2026-01-01T00:00:00Z"}, TEAM, "archived"),
+            ({**PROJECT, "id": "alpha", "teams": []}, TEAM, "exactly one active"),
+            ({**PROJECT, "id": "alpha", "teams": [
+                PROJECT["teams"][0], {"id": "other", "name": "Other", "archivedAt": None},
+            ]}, TEAM, "exactly one active"),
+            ({**PROJECT, "id": "alpha"}, {**TEAM, "archivedAt": "2026-01-01T00:00:00Z"},
+             "archived"),
+        ]
+        for project, team, message in cases:
+            with self.subTest(project=project["id"], message=message):
+                mocks.project.return_value = project
+                mocks.team.return_value = team
+                with self.assertRaisesRegex(ValueError, message):
+                    await app.tool("create_issue", self.create_issue_args(project_id="alpha"))
+        mocks.create.assert_not_awaited()
+
+    async def test_create_issue_rejects_invalid_metadata_without_writing(self):
+        app, mocks = self.create_issue_fixture()
+        for overrides, message in [
+            ({"priority": True}, "priority"),
+            ({"priority": "2"}, "priority"),
+            ({"priority": 0}, "priority"),
+            ({"priority": 5}, "priority"),
+            ({"estimate": True}, "estimate"),
+            ({"estimate": "3"}, "estimate"),
+            ({"estimate": 4}, "estimate must be one of"),
+            ({"estimate": 0}, "estimate must be one of"),
+            ({"title": "   "}, "title"),
+            ({"title": "x" * 256}, "title"),
+            ({"description": "   "}, "description"),
+            ({"description": "x" * 24001}, "description"),
+            ({"parent_id": "kian-1"}, "uppercase"),
+            ({"blocked_by": ["KIAN-1", "bad"]}, "uppercase"),
+            ({"labels": [""]}, "Label names"),
+        ]:
+            with self.subTest(overrides=overrides), self.assertRaisesRegex(ValueError, message):
+                await app.tool("create_issue", self.create_issue_args(**overrides))
+        for args in [
+            {"repo": REPO, "title": "Title", "description": "Description", "priority": 2},
+            self.create_issue_args(extra="x"),
+            self.create_issue_args(estimate=3.0),
+        ]:
+            with self.subTest(args=args), \
+                 self.assertRaisesRegex(ValueError, "Invalid create_issue|estimate"):
+                await app.tool("create_issue", args)
+        mocks.create.assert_not_awaited()
+        self.assertEqual(self.runner.rows("SELECT * FROM tasks"), [])
+
+    async def test_create_issue_uses_the_configured_estimate_scale(self):
+        team = {**TEAM, "issueEstimationExtended": True, "issueEstimationAllowZero": True}
+        self.assertEqual(estimate_scale(team), [0, 1, 2, 3, 5, 8, 13, 21])
+        app, mocks = self.create_issue_fixture(team=team)
+        accepted = (0, 1, 2, 3, 5, 8, 13, 21)
+        for estimate in accepted:
+            await app.tool("create_issue", self.create_issue_args(estimate=estimate))
+            self.assertEqual(mocks.create.await_args.args[6], estimate)
+        for estimate in (4, 6, 7, 16, 34, -1):
+            with self.subTest(estimate=estimate), self.assertRaisesRegex(ValueError, "estimate must be one of"):
+                await app.tool("create_issue", self.create_issue_args(estimate=estimate))
+        self.assertEqual(mocks.create.await_count, len(accepted))
+
+        disabled = {**TEAM, "issueEstimationType": "notUsed"}
+        with self.assertRaisesRegex(ValueError, "supported estimate scale"):
+            estimate_scale(disabled)
+        app, mocks = self.create_issue_fixture(team=disabled)
+        with self.assertRaisesRegex(ValueError, "supported estimate scale"):
+            await app.tool("create_issue", self.create_issue_args())
+        mocks.create.assert_not_awaited()
+
+    async def test_create_issue_resolves_existing_labels_and_rejects_unknown_or_ambiguous(self):
+        labels = [{"id": "bug", "name": "Bug"}, {"id": "bug-copy", "name": "Bug"},
+                  {"id": "ui", "name": "UI"}]
+        app, mocks = self.create_issue_fixture(labels=labels)
+        for requested, message in [(["Bug"], "ambiguous"), (["Missing"], "Unknown")]:
+            with self.subTest(requested=requested), self.assertRaisesRegex(ValueError, message):
+                await app.tool("create_issue", self.create_issue_args(labels=requested))
+        mocks.create.assert_not_awaited()
+
+        mocks.labels.return_value = [{"id": "bug", "name": "Bug"}, {"id": "ui", "name": "UI"}]
+        await app.tool("create_issue", self.create_issue_args(labels=["Bug", "UI", "Bug"]))
+        self.assertEqual(mocks.create.await_args.kwargs["label_ids"], ["bug", "ui"])
+
+    async def test_linear_team_labels_paginates_workspace_and_team_labels(self):
+        linear = Linear("fixture")
+        pages = [
+            {"issueLabels": {
+                "nodes": [{"id": "bug", "name": "Bug", "archivedAt": None}],
+                "pageInfo": {"endCursor": "cursor-1", "hasNextPage": True},
+            }},
+            {"issueLabels": {
+                "nodes": [{"id": "ui", "name": "UI", "archivedAt": None},
+                          {"id": "old", "name": "Old", "archivedAt": "2026-01-01T00:00:00Z"}],
+                "pageInfo": {"endCursor": "cursor-2", "hasNextPage": False},
+            }},
+        ]
+        with patch.object(linear, "query", new_callable=AsyncMock,
+                          side_effect=pages) as query:
+            labels = await linear.team_labels("team")
+        self.assertEqual(labels, [{"id": "bug", "name": "Bug", "archivedAt": None},
+                                  {"id": "ui", "name": "UI", "archivedAt": None}])
+        self.assertEqual(query.await_args_list[0].kwargs, {"team": "team", "after": None})
+        self.assertEqual(query.await_args_list[1].kwargs, {"team": "team", "after": "cursor-1"})
+
+    async def test_create_issue_links_parent_and_blockers_and_reports_partial_links(self):
+        related = {
+            "KIAN-150": {"id": "parent-issue", "identifier": "KIAN-150"},
+            "KIAN-151": {"id": "blocker-one", "identifier": "KIAN-151"},
+            "KIAN-152": {"id": "blocker-two", "identifier": "KIAN-152"},
+        }
+
+        async def live(identifier):
+            return related[identifier], "owner/second"
+
+        relation = AsyncMock(side_effect=[
+            None, RuntimeError("Linear rejected the blocking link."),
+        ])
+        app, mocks = self.create_issue_fixture(live=AsyncMock(side_effect=live),
+                                               relation=relation)
+        result = await app.tool("create_issue", self.create_issue_args(
+            parent_id="KIAN-150",
+            blocked_by=["KIAN-151", "KIAN-151", "KIAN-152"],
+        ))
+        self.assertEqual((result["id"], result["identifier"], result["url"]),
+                         (CREATED_ISSUE["id"], CREATED_ISSUE["identifier"], CREATED_ISSUE["url"]))
+        self.assertEqual(mocks.create.await_args.kwargs["parent_id"], "parent-issue")
+        self.assertEqual(relation.await_args_list, [
+            call("blocker-one", "new-issue"), call("blocker-two", "new-issue"),
+        ])
+        self.assertEqual(result["blockedBy"], {
+            "succeeded": ["KIAN-151"],
+            "failed": [{"identifier": "KIAN-152",
+                        "error": "Linear rejected the blocking link."}],
+        })
+        self.assertIn("not recreated", result["message"])
+        self.assertEqual(mocks.create.await_count, 1)
+        self.assertEqual(mocks.refresh.call_args_list, [call(projects=False)])
+
+    async def test_create_issue_rejects_unmapped_related_issue_before_creation(self):
+        async def live(identifier):
+            raise ValueError(f"{identifier} is not in a mapped Linear project.")
+
+        app, mocks = self.create_issue_fixture(live=AsyncMock(side_effect=live))
+        for overrides in ({"parent_id": "KIAN-999"},
+                          {"blocked_by": ["KIAN-999"]}):
+            with self.subTest(overrides=overrides), \
+                 self.assertRaisesRegex(ValueError, "not in a mapped"):
+                await app.tool("create_issue", self.create_issue_args(**overrides))
+        mocks.create.assert_not_awaited()
+        mocks.refresh.assert_not_called()
+
+    async def test_create_issue_does_not_recreate_after_an_uncertain_failure(self):
+        create = AsyncMock(side_effect=RuntimeError(
+            "The Linear issue creation outcome is uncertain after an error. "
+            "Check existing issues in Linear and reconcile before creating another."))
+        app, mocks = self.create_issue_fixture(create=create)
+        with self.assertRaisesRegex(RuntimeError, "uncertain.*reconcile"):
+            await app.tool("create_issue",
+                           self.create_issue_args(blocked_by=["KIAN-151"]))
+        create.assert_awaited_once()
+        mocks.relation.assert_not_awaited()
+        mocks.refresh.assert_not_called()
+
+    async def test_create_issue_refreshes_confirmed_validation_failures(self):
+        app = self.app()
+        app.repos = {REPO: [{"id": "project", "name": "Fixture"}]}
+        related = {"id": "blocker-id", "identifier": "KIAN-150", "project": {"id": "project"}}
+        project = {**PROJECT, "teams": {
+            "nodes": PROJECT["teams"], "pageInfo": {"endCursor": None, "hasNextPage": False},
+        }}
+        team = {**TEAM, "states": {
+            "nodes": TEAM["states"], "pageInfo": {"endCursor": None, "hasNextPage": False},
+        }}
+        for response, message, identity in [
+            ({"issueCreate": {"success": True}}, "without returning the issue", ""),
+            ({"issueCreate": {"success": True, "issue": {**CREATED_ISSUE, "url": ""}}},
+             "incomplete identity", "KIAN-200"),
+            ({"issueCreate": {"success": True, "issue": {
+                **CREATED_ISSUE, "project": {"id": "other"}}}}, "wrong project", "KIAN-200"),
+            ({"issueCreate": {"success": True, "issue": {
+                **CREATED_ISSUE, "team": {"id": "other"}}}}, "wrong team", "KIAN-200"),
+            ({"issueCreate": {"success": True, "issue": {
+                **CREATED_ISSUE, "state": {"name": "Unsure", "type": "backlog"}}}},
+             "outside Backlog", "KIAN-200"),
+            ({"issueCreate": {"success": True, "issue": {
+                **CREATED_ISSUE, "priority": 3}}}, "priority and estimate", "KIAN-200"),
+        ]:
+            with self.subTest(message=message):
+                attempts = []
+                relation_writes = []
+
+                async def query(statement, **variables):
+                    if "issueCreate" in statement:
+                        attempts.append(variables)
+                        return response
+                    if "issueRelationCreate" in statement:
+                        relation_writes.append(variables)
+                        return {"issueRelationCreate": {"success": False}}
+                    if "issue(id: $id)" in statement:
+                        return {"issue": related}
+                    if "project(id: $id)" in statement:
+                        return {"project": project}
+                    if "team(id: $id)" in statement:
+                        return {"team": team}
+                    raise AssertionError(statement)
+
+                refresh = Mock(side_effect=self.runner.request_issue_refresh)
+                with patch.object(app, "refresh_projects", new_callable=AsyncMock,
+                                  return_value={REPO: [{"id": "project", "name": "Fixture"}]}), \
+                     patch.object(app.linear, "query", side_effect=query), \
+                     patch.object(self.runner, "request_issue_refresh", refresh):
+                    with self.assertRaisesRegex(RuntimeError, message) as raised:
+                        await app.tool("create_issue",
+                                       self.create_issue_args(blocked_by=["KIAN-150"]))
+                if identity:
+                    self.assertIn(identity, str(raised.exception))
+                self.assertEqual(len(attempts), 1)
+                self.assertIs(attempts[0]["input"]["useDefaultTemplate"], False)
+                self.assertEqual(relation_writes, [])
+                refresh.assert_called_once_with(projects=False)
+                self.assertEqual(self.runner.rows("SELECT * FROM tasks"), [])
+                self.assertEqual(self.runner.rows("SELECT * FROM events"), [])
+                self.assertEqual(self.runner.status(), [])
+                self.assertEqual(await self.runner.dispatch_approved(), [])
+
+    async def test_linear_create_issue_verifies_explicit_backlog_result(self):
+        linear = Linear("fixture")
+        issue = {**CREATED_ISSUE, "parent": {"id": "parent-issue", "identifier": "KIAN-150"}}
+
+        async def create():
+            return await linear.create_issue(
+                "project", "team", "backlog", "Title", "Description", 2, 3,
+                parent_id="parent-issue", label_ids=["bug"])
+
+        with patch.object(linear, "query", new_callable=AsyncMock, return_value={
+                "issueCreate": {"success": True, "issue": issue}}) as query:
+            self.assertEqual(await create(), issue)
+        self.assertEqual(query.await_args.kwargs["input"], {
+            "teamId": "team", "projectId": "project", "stateId": "backlog",
+            "title": "Title", "description": "Description", "priority": 2,
+            "estimate": 3, "parentId": "parent-issue", "labelIds": ["bug"],
+            "useDefaultTemplate": False,
+        })
+        self.assertIs(query.await_args.kwargs["input"]["useDefaultTemplate"], False)
+        self.assertNotIn("templateId", query.await_args.kwargs["input"])
+
+        for response, message in [
+            ({"issueCreate": {"success": False}}, "rejected"),
+            ({"issueCreate": {"success": True, "issue": {
+                **issue, "project": {"id": "other"}}}}, "wrong project"),
+            ({"issueCreate": {"success": True, "issue": {
+                **issue, "state": {"name": "Unsure", "type": "backlog"}}}}, "outside Backlog"),
+            ({"issueCreate": {"success": True, "issue": {
+                **issue, "priority": 3}}}, "priority and estimate"),
+            ({"issueCreate": {"success": True, "issue": {
+                **issue, "parent": {"id": "other"}}}}, "requested parent"),
+            ({"issueCreate": {"success": True, "issue": {**issue, "id": ""}}},
+             "incomplete identity"),
+            ({}, "no issue creation result"),
+        ]:
+            with self.subTest(response=response), \
+                 patch.object(linear, "query", new_callable=AsyncMock,
+                              return_value=response), \
+                 self.assertRaisesRegex(RuntimeError, message):
+                await create()
+
+        with patch.object(linear, "query", new_callable=AsyncMock,
+                          side_effect=RuntimeError("connection reset")):
+            with self.assertRaisesRegex(RuntimeError, "uncertain.*reconcile"):
+                await create()
+
+    async def test_linear_blocks_relation_uses_existing_issue_as_source(self):
+        linear = Linear("fixture")
+        relation = {"id": "relation", "type": "blocks", "issue": {"id": "blocker"},
+                    "relatedIssue": {"id": "new-issue"}}
+        with patch.object(linear, "query", new_callable=AsyncMock, return_value={
+                "issueRelationCreate": {"success": True, "issueRelation": relation}}) as query:
+            self.assertEqual(await linear.create_blocks_relation("blocker", "new-issue"),
+                             relation)
+        self.assertEqual(query.await_args.kwargs["input"], {
+            "issueId": "blocker", "relatedIssueId": "new-issue", "type": "blocks",
+        })
+        for response, message in [
+            ({"issueRelationCreate": {"success": False}}, "rejected"),
+            ({"issueRelationCreate": {"success": True, "issueRelation": {
+                **relation, "type": "related"}}}, "mismatched"),
+            ({"issueRelationCreate": {"success": True, "issueRelation": {
+                **relation, "relatedIssue": {"id": "other"}}}}, "mismatched"),
+            ({}, "no issue relation result"),
+        ]:
+            with self.subTest(response=response), \
+                 patch.object(linear, "query", new_callable=AsyncMock,
+                              return_value=response), \
+                 self.assertRaisesRegex(RuntimeError, message):
+                await linear.create_blocks_relation("blocker", "new-issue")
+        with patch.object(linear, "query", new_callable=AsyncMock,
+                          side_effect=RuntimeError("connection reset")):
+            with self.assertRaisesRegex(RuntimeError, "uncertain"):
+                await linear.create_blocks_relation("blocker", "new-issue")
 
     async def test_approval_retry_requests_an_issue_refresh(self):
         await self.fail_approval()
