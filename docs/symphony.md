@@ -179,8 +179,9 @@ approved plan, worker notes, and review report from `read_notes`). After a
 use `worker_status` and `read_notes` (and re-injects instruction rules only if
 they differ from the thread's native rules or were edited). The Config button
 in the page header opens a dialog for managing **OpenCode Go** credentials and
-the **Codex** account alongside a read-only view of that exact global
-`AGENTS.md` file; opening Config starts no coordinator turn. OpenCode Go uses
+the **Codex** account alongside a read-only formatted Markdown view of that
+exact global `AGENTS.md` file (with raw HTML escaped); opening Config starts no
+coordinator turn. OpenCode Go uses
 OpenCode's native PVC credential store under `worker-data/opencode/opencode.db`
 (`/data/symphony/worker-data/opencode/opencode.db`, mode `0600`) via
 `XDG_DATA_HOME` (with read-only recognition of pre-migration `auth.json`),

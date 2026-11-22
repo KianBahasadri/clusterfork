@@ -11,6 +11,8 @@ import time
 import unittest
 from urllib.parse import urlsplit
 
+from symphony.issue_details import markdown
+
 try:
     from playwright.sync_api import sync_playwright
 except Exception:  # pragma: no cover - Playwright is optional outside the image.
@@ -122,12 +124,12 @@ class ChatBrowserTests(unittest.TestCase):
             "opencodeGo": {"configured": False, "malformed": False, "busy": False},
             "codex": {"signedIn": True, "account": {"type": "chatgpt"}, "login": None, "busy": False},
         }
-        page.evaluate("""({agents, error, cfg}) => {
+        page.evaluate("""({agents, html, error, cfg}) => {
           window.fetch = async (path, options) => {
             if (path === "/api/agents") {
               return error
                 ? {ok: false, json: async () => ({error})}
-                : {ok: true, json: async () => ({content: agents})};
+                : {ok: true, json: async () => ({content: agents, html})};
             }
             if (path === "/api/config") {
               if ((options?.method || "GET") === "POST") {
@@ -141,7 +143,7 @@ class ChatBrowserTests(unittest.TestCase):
               codex: {}, issueError: "", updateAvailable: false, draining: false,
             })};
           };
-        }""", {"agents": agents, "error": error, "cfg": cfg})
+        }""", {"agents": agents, "html": markdown(agents or "") if agents else "", "error": error, "cfg": cfg})
 
     def tearDown(self):
         self.page.close()
@@ -1563,6 +1565,7 @@ class ChatBrowserTests(unittest.TestCase):
             open: dialog.open,
             title: document.getElementById("config-dialog-title").textContent,
             content: pre.textContent,
+            heading: pre.querySelector("h1")?.textContent || "",
             script: pre.querySelector("script") !== null,
             emphasis: pre.querySelector("em") !== null,
             selectable: getComputedStyle(pre).userSelect,
@@ -1572,9 +1575,10 @@ class ChatBrowserTests(unittest.TestCase):
         }""")
         self.assertEqual(opened["title"], "Config")
         self.assertTrue(opened["open"])
-        self.assertEqual(opened["content"], content)
+        self.assertIn("default line", opened["content"])
+        self.assertEqual(opened["heading"], "Global AGENTS.md")
         self.assertFalse(opened["script"])
-        self.assertFalse(opened["emphasis"])
+        self.assertTrue(opened["emphasis"])
         self.assertEqual(opened["selectable"], "text")
         self.assertEqual(opened["overflow"], "auto")
         self.assertTrue(opened["scrollable"])
@@ -1590,7 +1594,7 @@ class ChatBrowserTests(unittest.TestCase):
           draft: document.getElementById("message").value,
           images: pendingImages.length,
         })""")
-        self.assertEqual(live, {**before, "open": True, "content": content})
+        self.assertEqual(live, {**before, "open": True, "content": opened["content"]})
 
         self.page.keyboard.press("Escape")
         closed = self.page.evaluate("""() => ({
@@ -1690,8 +1694,8 @@ class ChatBrowserTests(unittest.TestCase):
         self.assertEqual(stale, {"open": True, "expanded": "true",
                                  "focus": "config-close", "requests": 2})
         self.page.evaluate("""() => {
-          window.__agentResolvers[0]({ok: true, json: async () => ({content: "stale"})});
-          window.__agentResolvers[1]({ok: true, json: async () => ({content: "current"})});
+          window.__agentResolvers[0]({ok: true, json: async () => ({content: "stale", html: "<p>stale</p>"})});
+          window.__agentResolvers[1]({ok: true, json: async () => ({content: "current", html: "<p>current</p>"})});
         }""")
         self.page.wait_for_function(
             "() => document.getElementById('config-agents-content').textContent === 'current'")
@@ -1827,7 +1831,7 @@ class ChatBrowserTests(unittest.TestCase):
                                      "application/json; charset=utf-8", 503)
                     else:
                         body = "" if type(self).mode == "empty" else content
-                        self.respond(json.dumps({"content": body}).encode(),
+                        self.respond(json.dumps({"content": body, "html": markdown(body) if body else ""}).encode(),
                                      "application/json; charset=utf-8")
                 elif path == "/api/state":
                     type(self).state_requests += 1
@@ -1871,8 +1875,8 @@ class ChatBrowserTests(unittest.TestCase):
         self.assertTrue(wait_until(lambda: page.evaluate(
             "() => document.getElementById('config-dialog').open")))
         self.assertTrue(wait_until(lambda: page.evaluate(
-            "() => document.getElementById('config-agents-content').textContent")
-            == content))
+            "() => document.getElementById('config-agents-content').querySelector('h1')?.textContent")
+            == "Symphony global AGENTS.md"))
         before = Handler.state_requests
         self.assertTrue(wait_until(lambda: Handler.state_requests > before, timeout=4))
         state = page.evaluate("""() => {

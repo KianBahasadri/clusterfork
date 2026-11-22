@@ -3927,7 +3927,12 @@ class ChatHttpTests(unittest.TestCase):
         self.assertEqual(headers["Cache-Control"], "no-store")
         self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
         self.assertIn("default-src 'none'", headers["Content-Security-Policy"])
-        self.assertEqual(json.loads(handler.wfile.getvalue()), {"content": content})
+        payload = json.loads(handler.wfile.getvalue())
+        self.assertEqual(payload["content"], content)
+        self.assertIn("<h1>Global</h1>", payload["html"])
+        self.assertIn("<em>not emphasis</em>", payload["html"])
+        self.assertIn("&lt;script&gt;", payload["html"])
+        self.assertNotIn("<script>", payload["html"])
 
         handler = self.get_handler("/api/agents/../../etc/passwd")
         with patch("symphony.__main__.shared_agents") as load:
@@ -3939,7 +3944,7 @@ class ChatHttpTests(unittest.TestCase):
         handler = self.get_handler("/api/agents")
         with patch("symphony.__main__.shared_agents", return_value=""):
             handler.do_GET()
-        self.assertEqual(json.loads(handler.wfile.getvalue()), {"content": ""})
+        self.assertEqual(json.loads(handler.wfile.getvalue()), {"content": "", "html": ""})
 
         handler = self.get_handler("/api/agents")
         with patch("symphony.__main__.shared_agents",
@@ -4356,7 +4361,7 @@ process.stdout.write(JSON.stringify({
         app = (root / "app.js").read_text()
         self.assertIn("pollDelay(state, document.hidden)", app)
         self.assertIn('api("/api/agents")', app)
-        self.assertIn("configContent.textContent = content", app)
+        self.assertIn("configContent.innerHTML =", app)
         self.assertIn('"Awaiting approval"', app)
         self.assertIn("will not run", app)
         self.assertIn("let backlogCollapsed = false;", app)

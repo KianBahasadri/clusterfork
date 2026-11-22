@@ -239,14 +239,14 @@ async function mutateConfig(payload, feedbackNode, successText, clearInput = fal
 
 async function loadConfigAgents() {
   const request = ++configRequest;
-  configContent.textContent = "";
+  configContent.replaceChildren();
   configStatus.textContent = "Loading global AGENTS.md…";
   configStatus.dataset.error = "";
   try {
     const result = await api("/api/agents");
     if (request !== configRequest || !configDialog.open) return;
     const content = typeof result.content === "string" ? result.content : "";
-    configContent.textContent = content;
+    configContent.innerHTML = content && typeof result.html === "string" ? result.html : "";
     configStatus.textContent = content ? "" : "No global defaults are currently defined.";
   } catch (error) {
     if (request !== configRequest || !configDialog.open) return;

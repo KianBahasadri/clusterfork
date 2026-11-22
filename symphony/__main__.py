@@ -1104,7 +1104,8 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == "/api/execution":
                 self.json_response(self.run_async(app.execution(params.get("id", [""])[0])))
             elif url.path == "/api/agents":
-                self.json_response({"content": shared_agents()})
+                content = shared_agents()
+                self.json_response({"content": content, "html": markdown(content)})
             elif url.path == "/api/config":
                 self.json_response(self.run_async(app.config_state()))
             elif url.path == "/api/linear-asset":

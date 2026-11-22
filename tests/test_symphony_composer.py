@@ -426,7 +426,7 @@ let state = {
   codex: {signedIn: false, account: {}, login: null, busy: false},
 };
 const fetch = async (path, options = {}) => {
-  if (path === "/api/agents") return {ok: true, json: async () => ({content: "rules"})};
+  if (path === "/api/agents") return {ok: true, json: async () => ({content: "rules", html: "<p>rules</p>"})};
   if (path === "/api/config") {
     if ((options.method || "GET") === "POST") {
       if (failNext) {
