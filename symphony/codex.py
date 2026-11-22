@@ -2,9 +2,12 @@
 
 import asyncio
 from contextlib import suppress
+from datetime import datetime, timezone
 from hashlib import sha256
 import json
 import os
+import re
+import time
 
 from .runner import rules_state
 from .services import stop_process
@@ -108,6 +111,22 @@ TOOLS = [
       "inputSchema": CREATE_ISSUE_SCHEMA}]
 TOOLS_HASH = sha256(json.dumps(TOOLS, sort_keys=True).encode()).hexdigest()
 RATE_LIMIT_WINDOWS = {300: "5h", 10080: "weekly"}
+USAGE_ERROR_RE = re.compile(
+    r"usage.limit|rate.limit|quota|out of usage|limit reached|too many requests|\b429\b",
+    re.I,
+)
+
+
+def is_usage_error(message):
+    return bool(USAGE_ERROR_RE.search(str(message or "")))
+
+
+def _format_reset_utc(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return datetime.fromtimestamp(value, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return ""
 
 
 def text_input(text):
@@ -134,9 +153,10 @@ def context_used(usage):
 
 
 class Codex:
-    def __init__(self, runner, tool):
+    def __init__(self, runner, tool, alert_repo=None):
         self.runner = runner
         self.tool = tool
+        self.alert_repo = alert_repo
         self.process = None
         self.ready = False
         self.connecting = asyncio.Lock()
@@ -162,6 +182,8 @@ class Codex:
         self.injected_rules = {}
         self.native_rules = {}
         self.compacted_repos = set()
+        self.usage_error = None
+        self._notified_usage_key = ""
         self.status_wake = asyncio.Event()
 
     def set_thread(self, repo, thread_id):
@@ -295,6 +317,7 @@ class Codex:
         self.models = {}
         self.active_login_id = ""
         self.login_pending = False
+        self.clear_usage_alert()
 
     async def mcp_servers(self):
         await self.connect()
@@ -353,6 +376,72 @@ class Codex:
                 "models": {name: model["displayName"] for name, model in self.models.items()},
                 "efforts": [item["reasoningEffort"] for item in model.get("supportedReasoningEfforts", [])]}
 
+    def usage_alert(self):
+        windows = [
+            label for label in ("5h", "weekly")
+            if label in self.rate_limits and self.rate_limits[label]["left"] == 0
+        ]
+        if windows:
+            resets = [
+                self.rate_limits[label]["resetsAt"]
+                for label in windows if self.rate_limits[label].get("resetsAt") is not None
+            ]
+            return {
+                "active": True,
+                "source": "rate_limit",
+                "windows": windows,
+                "resetsAt": max(resets) if resets else None,
+                "windowResets": {
+                    label: self.rate_limits[label].get("resetsAt") for label in windows
+                },
+                "detail": self.usage_error["detail"] if self.usage_error else "",
+            }
+        if self.usage_error:
+            return {
+                "active": True,
+                "source": "turn_error",
+                "windows": [],
+                "resetsAt": None,
+                "windowResets": {},
+                "detail": self.usage_error["detail"],
+            }
+        return None
+
+    def _sync_usage_notice(self, repo=""):
+        alert = self.usage_alert()
+        if not alert:
+            self._notified_usage_key = ""
+            return False
+        if alert["source"] == "rate_limit":
+            key = json.dumps(["rate_limit", alert["windows"], alert["resetsAt"]], sort_keys=True)
+            summary = f"Codex coordinator out of usage ({', '.join(alert['windows'])} at 0%)."
+        else:
+            key = json.dumps(["turn_error", alert["detail"]], sort_keys=True)
+            summary = "Codex coordinator out of usage."
+        if key == self._notified_usage_key:
+            return False
+        self._notified_usage_key = key
+        parts = [summary]
+        reset_text = _format_reset_utc(alert.get("resetsAt"))
+        if reset_text:
+            parts.append(f"Resets {reset_text}.")
+        if alert.get("detail"):
+            parts.append(alert["detail"])
+        target = repo or (self.alert_repo() if self.alert_repo else "")
+        self.runner.chat("system", " ".join(parts), repo=target)
+        return True
+
+    def record_usage_error(self, message, repo=""):
+        detail = str(message or "").strip()[:500] or "Codex usage limit reached."
+        self.usage_error = {"detail": detail, "at": time.time()}
+        posted = self._sync_usage_notice(repo=repo)
+        self.status_wake.set()
+        return posted
+
+    def clear_usage_alert(self):
+        self.usage_error = None
+        self._notified_usage_key = ""
+
     def update_rate_limits(self, snapshot):
         if snapshot.get("limitId") not in (None, "codex"):
             return
@@ -362,6 +451,9 @@ class Codex:
                 limits[label] = {"left": max(0, min(100, 100 - window["usedPercent"])),
                                  "resetsAt": window.get("resetsAt")}
         self.rate_limits = limits
+        if limits and all(item["left"] > 0 for item in limits.values()):
+            self.usage_error = None
+        self._sync_usage_notice()
 
     async def poll_status(self):
         while True:
@@ -439,6 +531,7 @@ class Codex:
             self.account_info = {}
             self.rate_limits = {}
             self.models = {}
+            self.clear_usage_alert()
         elif method == "item/agentMessage/delta":
             self.streams[repo] = self.streams.get(repo, "") + params["delta"]
         elif method == "item/completed":
@@ -463,6 +556,7 @@ class Codex:
                 self.account_info = {"type": "chatgpt"}
                 self.models = {}
                 self.rate_limits = {}
+                self.clear_usage_alert()
                 self.runner.job(self.refresh_account())
                 self.runner.chat("system", "Codex signed in.")
                 self.runner.wake.set()
@@ -534,6 +628,8 @@ class Codex:
             if outcome["status"] == "failed":
                 error = outcome.get("error") or {}
                 raise RuntimeError(error.get("message") or "Codex turn failed.")
+            self.usage_error = None
+            self._sync_usage_notice()
             return outcome["status"]
         finally:
             self.finished = None

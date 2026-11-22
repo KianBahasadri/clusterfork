@@ -811,6 +811,106 @@ console.log(JSON.stringify({
         self.assertEqual(res["pillText"], "30m")
         self.assertEqual(res["turnTimingText"], "Working for 5s")
 
+    @unittest.skipUnless(shutil.which("node"), "Node is required for JavaScript checks.")
+    def test_usage_alert_banner_reset_date_title_and_background_notification(self):
+        app = Path(__file__).resolve().parents[1] / "symphony/web/app.js"
+        probe = r"""
+const fs = require("fs");
+const vm = require("vm");
+const nodes = new Map();
+const makeNode = (tag = "div", id = "") => ({
+  tag, id, textContent: "", innerHTML: "", value: "", hidden: true, disabled: false, open: false,
+  dataset: {}, style: {setProperty() {}}, listeners: {}, children: [],
+  classList: {add() {}, remove() {}},
+  addEventListener(t, h) { (this.listeners[t] ||= []).push(h); },
+  setAttribute(n, v) { this[n] = String(v); }, removeAttribute(n) { delete this[n]; },
+  toggleAttribute() {}, focus() {}, setSelectionRange() {}, contains() { return false; },
+  closest() { return makeNode("aside"); },
+  append(...items) { this.children.push(...items); },
+  prepend(...items) { this.children.unshift(...items); },
+  replaceChildren(...items) { this.children = items; },
+  querySelector() { return null; }, querySelectorAll() { return []; },
+});
+const doc = {
+  title: "Symphony",
+  hidden: true,
+  hasFocus() { return false; },
+  getElementById(id) {
+    if (!nodes.has(id)) nodes.set(id, makeNode("div", id));
+    return nodes.get(id);
+  },
+  createElement(tag) { return makeNode(tag); },
+  createElementNS(_ns, tag) { return makeNode(tag); },
+  querySelector() { return this.getElementById("main"); },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+};
+const sentNotifications = [];
+function FakeNotification(title, opts) {
+  sentNotifications.push({title, body: opts.body, tag: opts.tag});
+}
+FakeNotification.permission = "default";
+FakeNotification.requestPermission = async () => {
+  FakeNotification.permission = "granted";
+  return "granted";
+};
+const ctx = vm.createContext({
+  document: doc,
+  Notification: FakeNotification,
+  setInterval: () => 0, setTimeout, clearTimeout, Date,
+});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+const box = doc.getElementById("usage-alert");
+const text = doc.getElementById("usage-alert-text");
+const btn = doc.getElementById("usage-notify-enable");
+const sameDay = ctx.formatResetTime(1700001000, new Date(1700000000 * 1000));
+const multiDay = ctx.formatResetTime(1700300000, new Date(1700000000 * 1000));
+const resetEpoch = Math.floor(Date.now() / 1000) + 4 * 86400;
+
+ctx.renderUsageAlert({active: true, source: "rate_limit", windows: ["weekly"], resetsAt: resetEpoch, detail: ""});
+const beforePerm = {
+  hidden: box.hidden,
+  text: text.textContent,
+  btnHidden: btn.hidden,
+  title: doc.title,
+  notifCount: sentNotifications.length,
+};
+(async () => {
+  await btn.listeners.click[0]();
+  const afterGrant = {btnHidden: btn.hidden, notifCount: sentNotifications.length};
+  // Identical poll does NOT fire duplicate Notification.
+  ctx.renderUsageAlert({active: true, source: "rate_limit", windows: ["weekly"], resetsAt: resetEpoch, detail: ""});
+  const afterRepeat = sentNotifications.length;
+  // Recovery clears banner, button, and document.title.
+  ctx.renderUsageAlert(null);
+  const cleared = {hidden: box.hidden, text: text.textContent, title: doc.title, btnHidden: btn.hidden};
+  console.log(JSON.stringify({
+    sameDayHasComma: sameDay.includes(","),
+    multiDay,
+    beforePerm,
+    afterGrant,
+    afterRepeat,
+    sentNotifications,
+    cleared,
+  }));
+})();
+"""
+        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        res = json.loads(run.stdout)
+        self.assertFalse(res["beforePerm"]["hidden"])
+        self.assertIn("weekly at 0%", res["beforePerm"]["text"])
+        self.assertIn("Resets ", res["beforePerm"]["text"])
+        self.assertFalse(res["beforePerm"]["btnHidden"])
+        self.assertTrue(res["beforePerm"]["title"].startswith("\u26a0 Out of usage \u00b7 Symphony"))
+        self.assertEqual(res["beforePerm"]["notifCount"], 0)
+        self.assertEqual(res["afterGrant"], {"btnHidden": True, "notifCount": 1})
+        self.assertEqual(res["afterRepeat"], 1)
+        self.assertEqual(len(res["sentNotifications"]), 1)
+        self.assertTrue(res["cleared"]["hidden"])
+        self.assertEqual(res["cleared"]["title"], "Symphony")
+        self.assertTrue(any(c.isalpha() for c in res["multiDay"]))
+
 
 if __name__ == "__main__":
     unittest.main()

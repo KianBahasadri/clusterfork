@@ -23,7 +23,7 @@ import time
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
-from .codex import Codex, TOOL_SPECS
+from .codex import Codex, TOOL_SPECS, is_usage_error
 from .execution import card_stage, execution_payload, history_summary
 from .issue_details import issue_details, markdown, open_asset
 from .runner import BusyError, Runner, read_small, rules_state, shared_agents
@@ -198,7 +198,7 @@ class Symphony:
     def __init__(self, root):
         self.linear = Linear(os.environ["LINEAR_API_KEY"])
         self.runner = Runner(root, self.linear)
-        self.coordinator = Codex(self.runner, self.tool)
+        self.coordinator = Codex(self.runner, self.tool, alert_repo=self.resolve_repo)
         self.messages = deque()
         self.busy = False
         self.turn_repo = ""
@@ -770,7 +770,8 @@ class Symphony:
                                      for entry in self.messages) else ""
                  ),
                  "updateAvailable": self.updates.available,
-                 "draining": self.runner.draining}
+                 "draining": self.runner.draining,
+                 "usageAlert": self.coordinator.usage_alert()}
         if self.issue_snapshot is not None and issue_revision != self.issue_revision:
             state.update(projects=self.issue_snapshot, issueRevision=self.issue_revision)
         return state
@@ -991,7 +992,14 @@ class Symphony:
                     try:
                         await self.handle(*entry)
                     except (ValueError, RuntimeError, OSError, TimeoutError) as error:
-                        self.runner.chat("system", str(error) or "The request timed out.", repo=entry[0])
+                        if is_usage_error(error):
+                            posted = self.coordinator.record_usage_error(str(error), repo=entry[0])
+                            if not self.runner.setting("paused"):
+                                self.runner.save_setting("paused", f"Codex usage limit: {str(error)[:500]}")
+                            if not posted:
+                                self.runner.chat("system", str(error) or "Codex usage limit reached.", repo=entry[0])
+                        else:
+                            self.runner.chat("system", str(error) or "The request timed out.", repo=entry[0])
                     finally:
                         self.busy = False
                     continue
@@ -1021,6 +1029,8 @@ class Symphony:
                     if status == "interrupted":
                         break
                 except (ValueError, RuntimeError, OSError, TimeoutError) as error:
+                    if is_usage_error(error):
+                        self.coordinator.record_usage_error(str(error), repo=repo)
                     self.runner.save_setting("paused", str(error) or "Coordinator timed out.")
                     self.runner.chat("system", f"Automatic dispatch paused. {self.runner.setting('paused')}", repo=repo)
                     break

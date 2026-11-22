@@ -93,6 +93,10 @@ let compacting = "";
 let updateState = {updateAvailable: false, draining: false};
 let updatePending = false;
 let updateError = "";
+const BASE_TITLE = document.title || "Symphony";
+let usageAlertActive = false;
+let usageNotifiedKey = "";
+let lastUsageAlert = null;
 
 function element(tag, text, className) {
   const node = document.createElement(tag);
@@ -1229,7 +1233,7 @@ function showCodexStatus() {
     if (!limit) continue;
     part.textContent = label + " " + limit.left + "% left";
     part.dataset.level = limit.left <= 10 ? "danger" : limit.left <= 35 ? "caution" : "";
-    part.title = limit.resetsAt ? "Resets at " + clockTime(limit.resetsAt) : "";
+    part.title = limit.resetsAt ? "Resets " + formatResetTime(limit.resetsAt) : "";
   }
   const timing = byId("turn-timing");
   const {startedAt, completedAt, durationMs} = codex.turnTiming || {};
@@ -1259,6 +1263,65 @@ function showCodexStatus() {
 
 function clockTime(seconds) {
   return new Date(seconds * 1000).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
+}
+
+function formatResetTime(seconds, now = new Date()) {
+  if (typeof seconds === "string") return seconds;
+  if (!Number.isFinite(seconds)) return "";
+  const date = new Date(seconds * 1000);
+  if (!Number.isFinite(date.getTime())) return "";
+  if (date.toDateString() === now.toDateString()) return clockTime(seconds);
+  return date.toLocaleString([], {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"});
+}
+
+function renderUsageAlert(alert) {
+  lastUsageAlert = alert || null;
+  const box = byId("usage-alert");
+  const textNode = byId("usage-alert-text");
+  const enableButton = byId("usage-notify-enable");
+  if (!alert?.active) {
+    box.hidden = true;
+    textNode.textContent = "";
+    enableButton.hidden = true;
+    usageNotifiedKey = "";
+    if (usageAlertActive) {
+      document.title = BASE_TITLE;
+      usageAlertActive = false;
+    }
+    return;
+  }
+  const windows = Array.isArray(alert.windows) ? alert.windows : [];
+  const parts = [windows.length
+    ? "Coordinator out of usage (" + windows.join(", ") + " at 0%)."
+    : "Coordinator out of usage."];
+  if (alert.resetsAt != null) {
+    const formatted = formatResetTime(alert.resetsAt);
+    if (formatted) parts.push("Resets " + formatted + ".");
+  }
+  if (alert.detail) parts.push(alert.detail);
+  const message = parts.join(" ");
+  textNode.textContent = message;
+  box.hidden = false;
+  usageAlertActive = true;
+  document.title = "\u26a0 Out of usage \u00b7 " + BASE_TITLE;
+  const notifier = globalThis.Notification;
+  if (typeof notifier === "function") {
+    enableButton.hidden = notifier.permission !== "default";
+    const key = JSON.stringify([alert.source || "", windows, alert.resetsAt ?? null, alert.detail || ""]);
+    if (notifier.permission === "granted" && key !== usageNotifiedKey) {
+      usageNotifiedKey = key;
+      const unfocused = document.hidden || (typeof document.hasFocus === "function" && !document.hasFocus());
+      if (unfocused) {
+        try {
+          new notifier("Symphony coordinator out of usage", {body: message, tag: "symphony-usage-alert"});
+        } catch {
+          // Ignore browsers that block constructing Notification directly.
+        }
+      }
+    }
+  } else {
+    enableButton.hidden = true;
+  }
 }
 
 function schedulePoll(delay) {
@@ -1335,6 +1398,7 @@ async function poll() {
     if (choicesChanged || tasksChanged) renderCommands();
     showCodexStatus();
     renderUpdateNotice();
+    renderUsageAlert(state.usageAlert || null);
     byId("connection-error").hidden = true;
     byId("paused").hidden = !state.paused;
     byId("paused").textContent = state.paused ? "Dispatch paused. " + state.paused : "";
@@ -1600,6 +1664,15 @@ byId("diagram-close").addEventListener("click", () => {
   clearDiagramPanel(true);
 });
 byId("update-action").addEventListener("click", toggleDrain);
+byId("usage-notify-enable").addEventListener("click", async () => {
+  const notifier = globalThis.Notification;
+  if (typeof notifier !== "function" || typeof notifier.requestPermission !== "function") return;
+  try {
+    await notifier.requestPermission();
+  } finally {
+    renderUsageAlert(lastUsageAlert);
+  }
+});
 configButton.addEventListener("click", openConfig);
 byId("config-close").addEventListener("click", closeConfig);
 configOpenCodeForm.addEventListener("submit", (event) => {

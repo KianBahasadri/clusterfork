@@ -3878,6 +3878,78 @@ else:
         self.addCleanup(reopened.db.close)
         self.assertEqual(reopened.diagram(REPO)["title"], "Flow")
 
+    async def test_codex_usage_exhaustion_alerts_once_recovers_and_handles_turn_failures(self):
+        app = self.app()
+        app.repos[REPO] = [{"id": "project", "name": "Fixture"}]
+        codex = app.coordinator
+        codex.account = "chatgpt"
+        self.runner.save_setting("view", "project")
+
+        # Repeated rate-limit exhaustion polls post only one chat notice and expose usageAlert.
+        exhausted = {
+            "limitId": "codex",
+            "primary": {"usedPercent": 100, "windowDurationMins": 300, "resetsAt": 1800000000},
+            "secondary": {"usedPercent": 42, "windowDurationMins": 10080, "resetsAt": 1800500000},
+        }
+        codex.update_rate_limits(exhausted)
+        codex.update_rate_limits(exhausted)
+        state = await app.state(0, project="project")
+        self.assertTrue(state["usageAlert"]["active"])
+        self.assertEqual(state["usageAlert"]["windows"], ["5h"])
+        self.assertEqual(state["usageAlert"]["resetsAt"], 1800000000)
+        notices = [m for m in state["messages"] if m["role"] == "system"]
+        self.assertEqual(len(notices), 1)
+        self.assertIn("5h at 0%", notices[0]["text"])
+        self.assertIn("Resets ", notices[0]["text"])
+
+        # Recovering >0% clears usageAlert; logout/login also clears stale usage error.
+        codex.update_rate_limits({
+            "limitId": "codex",
+            "primary": {"usedPercent": 20, "windowDurationMins": 300, "resetsAt": 1800000000},
+            "secondary": {"usedPercent": 42, "windowDurationMins": 10080, "resetsAt": 1800500000},
+        })
+        self.assertIsNone((await app.state(0, project="project"))["usageAlert"])
+
+        # User turn failing with a usage-limit error sets usageAlert, posts once, and pauses dispatch.
+        app.runner.save_setting("paused", "")
+        before_ids = {m["id"] for m in (await app.state(0, project="project"))["messages"]}
+        with patch.object(app, "respond", new_callable=AsyncMock,
+                          side_effect=RuntimeError("Codex turn failed: You've hit your usage limit.")):
+            await app.submit({"project": "project", "text": "Hello"})
+            await self.pump_until(app, lambda: bool(self.runner.setting("paused")))
+        err_state = await app.state(0, project="project")
+        self.assertTrue(err_state["usageAlert"]["active"])
+        self.assertEqual(err_state["usageAlert"]["source"], "turn_error")
+        self.assertIn("usage limit", err_state["usageAlert"]["detail"])
+        self.assertIn("usage limit", self.runner.setting("paused"))
+        new_notices = [
+            m for m in err_state["messages"]
+            if m["id"] not in before_ids and "Codex coordinator out of usage" in m["text"]
+        ]
+        self.assertEqual(len(new_notices), 1)
+
+        # Account switch / logout clears the turn_error alert cleanly.
+        codex.notification("account/updated", {"authMode": None})
+        self.assertIsNone((await app.state(0, project="project"))["usageAlert"])
+
+        # Worker-event turn failing with a usage/rate-limit error sets the same usageAlert cleanly.
+        codex.account = "chatgpt"
+        self.runner.save_setting("paused", "")
+        with self.runner.db:
+            self.runner.db.execute(
+                """INSERT INTO tasks(issue,project,repo,title,plan,phase,updated)
+                   VALUES ('KIAN-901','project',?,'Usage test','Plan','review',0)""",
+                (REPO,),
+            )
+            self.runner.db.execute(
+                "INSERT INTO events(issue,detail,phase,delivered) VALUES ('KIAN-901','Done','review',0)"
+            )
+        app.coordinator.respond = AsyncMock(side_effect=RuntimeError("HTTP 429 rate limit exceeded"))
+        await self.pump_until(app, lambda: bool(self.runner.setting("paused")))
+        worker_state = await app.state(0, project="project")
+        self.assertTrue(worker_state["usageAlert"]["active"])
+        self.assertIn("429 rate limit exceeded", worker_state["usageAlert"]["detail"])
+
     @staticmethod
     async def _cancel_task(task):
         task.cancel()
