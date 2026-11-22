@@ -3269,8 +3269,9 @@ else:
                 "tokenUsage": {"last": {"totalTokens": 32000}, "modelContextWindow": 112000},
             })
             self.assertEqual((await app.state(0, project="alpha"))["codex"]["contextUsed"], 20)
-            self.assertIsNone((await app.state(0, project="beta"))["codex"]["contextUsed"])
+            self.assertEqual((await app.state(0, project="beta"))["codex"]["contextUsed"], 0)
             await app.handle(REPO, "/new", "/new")
+        self.assertEqual((await app.state(0, project="alpha"))["codex"]["contextUsed"], 0)
         self.assertEqual(self.runner.thread(REPO)["thread_id"], "thread-a2")
         self.assertEqual(self.runner.thread(second)["thread_id"], "thread-b1")
         self.assertEqual((await app.state(0, project="alpha"))["messages"][-1]["text"],
@@ -3373,6 +3374,22 @@ else:
         self.assertIn("Context was compacted. Call worker_status", turns[4])
         self.assertNotIn("UPDATED-REPO-RULE", turns[4])
         self.assertEqual(turns[5], "After recovery turn")
+
+    async def test_signed_in_new_session_reports_zero_context_usage(self):
+        app = self.app()
+        self.assertIsNone((await app.state(0))["codex"]["contextUsed"])
+        app.coordinator.account = "chatgpt"
+        self.assertEqual((await app.state(0))["codex"]["contextUsed"], 0)
+        await app.handle("", "/status", "/status")
+        self.assertEqual(
+            self.runner.rows("SELECT text FROM chat ORDER BY id DESC LIMIT 1")[0]["text"],
+            "Context 0% used\nNo approved work in progress.",
+        )
+        with patch.object(app.coordinator, "connect"), \
+             patch.object(app.coordinator, "request", return_value={"thread": {"id": "thread-fresh"}}):
+            await app.coordinator.new_session(REPO, self.repo)
+        self.assertEqual(self.runner.thread(REPO)["context_used"], 0)
+        self.assertEqual(app.coordinator.status(REPO)["contextUsed"], 0)
 
     @staticmethod
     async def _cancel_task(task):

@@ -258,6 +258,8 @@ class Codex:
             saved = self.runner.thread(repo)
             if isinstance(saved, dict):
                 context_pct = saved.get("context_used")
+        if context_pct is None and self.account:
+            context_pct = 0
         return {"model": model.get("displayName", name),
                 "effort": self.runner.setting("effort") or self.effort or model.get("defaultReasoningEffort", ""),
                 "contextUsed": context_pct, "rateLimits": self.rate_limits,
@@ -404,7 +406,7 @@ class Codex:
             saved_context = saved["context_used"]
         else:
             result = await self.request("thread/start", {**params, "dynamicTools": TOOLS})
-            saved_context = None
+            saved_context = 0
             self.turn_timings.pop(repo, None)
             self.injected_rules.pop(repo, None)
             self.compacted_repos.discard(repo)

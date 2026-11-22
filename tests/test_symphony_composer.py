@@ -304,6 +304,40 @@ class ComposerWebTests(unittest.TestCase):
             "messages": [{"id": "1", "text": "Retry with changes"}],
         })
 
+    @unittest.skipUnless(shutil.which("node"), "Node is required for JavaScript checks.")
+    def test_status_displays_zero_context_usage_when_signed_in(self):
+        app = Path(__file__).resolve().parents[1] / "symphony/web/app.js"
+        probe = r"""
+const fs = require("fs");
+const vm = require("vm");
+const nodes = new Map();
+const doc = {
+  getElementById(id) {
+    if (!nodes.has(id)) nodes.set(id, {
+      id, textContent: "", hidden: true, dataset: {}, style: {setProperty() {}},
+      listeners: {}, addEventListener(t, h) { (this.listeners[t] ||= []).push(h); },
+      classList: {add() {}, remove() {}}, querySelector() { return null; },
+      querySelectorAll() { return []; }, setAttribute() {}, removeAttribute() {},
+      toggleAttribute() {}, focus() {}, closest() { return this; }, replaceChildren() {},
+    });
+    return nodes.get(id);
+  },
+  createElement() { return this.getElementById("tmp-" + Math.random()); },
+  createElementNS() { return this.getElementById("svg-" + Math.random()); },
+  querySelector() { return this.getElementById("main"); },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+};
+const ctx = vm.createContext({document: doc, setInterval: () => 0, setTimeout, clearTimeout, console});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+vm.runInContext('codex = {model: "GPT", effort: "high", contextUsed: 0, rateLimits: {}, turnTiming: {}}; canInterrupt = false; showCodexStatus();', ctx);
+const el = doc.getElementById("status-context");
+console.log(JSON.stringify({hidden: el.hidden, text: el.textContent}));
+"""
+        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout), {"hidden": False, "text": "Context 0% used"})
+
 
 if __name__ == "__main__":
     unittest.main()
