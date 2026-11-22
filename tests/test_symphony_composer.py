@@ -911,6 +911,80 @@ const beforePerm = {
         self.assertEqual(res["cleared"]["title"], "Symphony")
         self.assertTrue(any(c.isalpha() for c in res["multiDay"]))
 
+    @unittest.skipUnless(shutil.which("node"), "Node is required for JavaScript checks.")
+    def test_update_notice_renders_safe_compare_link_and_commit_summary(self):
+        app = Path(__file__).resolve().parents[1] / "symphony/web/app.js"
+        probe = r"""
+const fs = require("fs");
+const vm = require("vm");
+const nodes = new Map();
+const makeNode = (tag = "div", id = "") => ({
+  tag, id, textContent: "", innerHTML: "", value: "", hidden: true, disabled: false, open: false,
+  dataset: {}, style: {setProperty() {}}, listeners: {}, children: [],
+  classList: {add() {}, remove() {}},
+  addEventListener(t, h) { (this.listeners[t] ||= []).push(h); },
+  setAttribute(n, v) { this[n] = String(v); }, removeAttribute(n) { delete this[n]; },
+  toggleAttribute() {}, focus() {}, setSelectionRange() {}, contains() { return false; },
+  closest() { return makeNode("aside"); },
+  append(...items) { this.children.push(...items); },
+  prepend(...items) { this.children.unshift(...items); },
+  replaceChildren(...items) { this.children = items; },
+  querySelector() { return null; }, querySelectorAll() { return []; },
+});
+const doc = {
+  getElementById(id) {
+    if (!nodes.has(id)) nodes.set(id, makeNode("div", id));
+    return nodes.get(id);
+  },
+  createElement(tag) { return makeNode(tag); },
+  createElementNS(_ns, tag) { return makeNode(tag); },
+  querySelector() { return this.getElementById("main"); },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+};
+const ctx = vm.createContext({document: doc, setInterval: () => 0, setTimeout, clearTimeout});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+const run = (code) => vm.runInContext(code, ctx);
+const details = doc.getElementById("update-details");
+const shaA = "1".repeat(40);
+const shaB = "2".repeat(40);
+
+// Unsafe compareUrl is rejected; plain banner still shows cleanly.
+run(`updateState = {updateAvailable: true, draining: false, update: {runningCommit: "${shaA}", availableCommit: "${shaB}", compareUrl: "javascript:alert(1)", commits: []}}; renderUpdateNotice();`);
+const unsafeHidden = details.hidden;
+
+// Valid single-commit release renders safe link + subject.
+run(`updateState = {updateAvailable: true, draining: false, update: {runningCommit: "${shaA}", availableCommit: "${shaB}", compareUrl: "https://github.com/KianBahasadri/clusterfork/compare/${shaA}...${shaB}", commitCount: 1, commits: ["<script>KIAN-1132</script> Fix"]}}; renderUpdateNotice();`);
+const single = {
+  hidden: details.hidden,
+  href: details.children[0]?.href,
+  rel: details.children[0]?.rel,
+  target: details.children[0]?.target,
+  linkText: details.children[0]?.textContent,
+  commitText: details.children.map((n) => n.textContent),
+};
+
+// Multi-commit release renders list + remaining count.
+run(`updateState = {updateAvailable: true, draining: false, update: {runningCommit: "${shaA}", availableCommit: "${shaB}", compareUrl: "https://github.com/KianBahasadri/clusterfork/compare/${shaA}...${shaB}", commitCount: 4, commits: ["C4", "C3"]}}; renderUpdateNotice();`);
+const multi = {
+  listItems: details.children[2]?.children?.map((n) => n.textContent),
+};
+
+run(`updateState = {updateAvailable: false, draining: false, update: null}; renderUpdateNotice();`);
+console.log(JSON.stringify({unsafeHidden, single, multi, clearedHidden: details.hidden}));
+"""
+        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        res = json.loads(run.stdout)
+        self.assertTrue(res["unsafeHidden"])
+        self.assertFalse(res["single"]["hidden"])
+        self.assertEqual(res["single"]["target"], "_blank")
+        self.assertEqual(res["single"]["rel"], "noreferrer")
+        self.assertEqual(res["single"]["linkText"], "1111111\u21922222222")
+        self.assertIn("<script>KIAN-1132</script> Fix", res["single"]["commitText"])
+        self.assertEqual(res["multi"]["listItems"], ["C4", "C3", "(+2 more)"])
+        self.assertTrue(res["clearedHidden"])
+
 
 if __name__ == "__main__":
     unittest.main()

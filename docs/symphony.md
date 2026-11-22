@@ -383,9 +383,13 @@ can recover on the next push to `main`. The Symphony pod itself keeps
 
 Each image bakes its source commit as `SYMPHONY_COMMIT`. Symphony resolves that
 commit tag to a digest and compares it with the published `:main` digest at
-startup and every 60 seconds. Status polls read only the cached result, and an
-invalid or missing build identity or unavailable digest never reports an
-update. When a newer image is confirmed, chat offers **Update**. Updating holds
+startup and every 60 seconds. Whenever a new `:main` digest is observed, it
+fetches the manifest and OCI config blob once per digest to resolve the
+available `SYMPHONY_COMMIT`, builds a validated GitHub compare link, and fetches a
+cached compare commit summary (degrading gracefully if unavailable). Status
+polls read only the cached result, and an invalid or missing build identity or
+unavailable digest never reports an update. When a newer image is confirmed, chat
+offers **Update** alongside the release compare link and commit summary. Updating holds
 new automatic Todo dispatches and `spawn_worker` admissions across every
 repository while work already in progress continues; resumes, review,
 publication, CI watching, completion, coordinator chat, and worker events are

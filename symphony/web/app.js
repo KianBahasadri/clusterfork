@@ -90,9 +90,10 @@ let following = true;
 let codex = {};
 let canInterrupt = false;
 let compacting = "";
-let updateState = {updateAvailable: false, draining: false};
+let updateState = {updateAvailable: false, draining: false, update: null};
 let updatePending = false;
 let updateError = "";
+const SAFE_COMPARE_URL = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/compare\/[0-9a-f]{40}\.\.\.[0-9a-f]{40}$/;
 const BASE_TITLE = document.title || "Symphony";
 let usageAlertActive = false;
 let usageNotifiedKey = "";
@@ -1176,11 +1177,16 @@ function showLogin(state) {
 function renderUpdateNotice() {
   const notice = byId("update-notice");
   const text = byId("update-text");
+  const details = byId("update-details");
   const action = byId("update-action");
   const error = byId("update-error");
   const visible = updateState.draining || updateState.updateAvailable;
   notice.hidden = !visible;
   if (!visible) {
+    if (details) {
+      details.replaceChildren();
+      details.hidden = true;
+    }
     error.hidden = true;
     return;
   }
@@ -1188,6 +1194,46 @@ function renderUpdateNotice() {
   text.textContent = updateState.draining
     ? "New tasks are held until current work finishes."
     : "New Symphony version available.";
+  if (details) {
+    const release = updateState.updateAvailable ? updateState.update : null;
+    const compareUrl = typeof release?.compareUrl === "string" && SAFE_COMPARE_URL.test(release.compareUrl)
+      ? release.compareUrl : "";
+    const commits = Array.isArray(release?.commits)
+      ? release.commits.filter((item) => typeof item === "string" && item.trim())
+      : [];
+    if (compareUrl || commits.length) {
+      const children = [];
+      if (compareUrl) {
+        const shortRun = typeof release.runningCommit === "string" ? release.runningCommit.slice(0, 7) : "";
+        const shortAvail = typeof release.availableCommit === "string" ? release.availableCommit.slice(0, 7) : "";
+        const range = shortRun && shortAvail ? shortRun + "\u2192" + shortAvail : "Compare release";
+        const link = element("a", range, "update-compare");
+        link.href = compareUrl;
+        link.target = "_blank";
+        link.rel = "noreferrer";
+        children.push(link);
+        if (Number.isInteger(release.commitCount) && release.commitCount > 0) {
+          const noun = release.commitCount === 1 ? "commit" : "commits";
+          children.push(element("span", "(" + release.commitCount + " " + noun + ")", "muted"));
+        }
+      }
+      if (commits.length === 1 && (!Number.isInteger(release?.commitCount) || release.commitCount <= 1)) {
+        children.push(element("span", commits[0], "update-commit-single"));
+      } else if (commits.length) {
+        const list = element("ul", "", "update-commits");
+        for (const subject of commits) list.append(element("li", subject));
+        if (Number.isInteger(release?.commitCount) && release.commitCount > commits.length) {
+          list.append(element("li", "(+" + (release.commitCount - commits.length) + " more)", "muted"));
+        }
+        children.push(list);
+      }
+      details.replaceChildren(...children);
+      details.hidden = false;
+    } else {
+      details.replaceChildren();
+      details.hidden = true;
+    }
+  }
   action.textContent = updateState.draining ? "Cancel" : "Update";
   action.disabled = updatePending;
   error.textContent = updateError;
@@ -1206,7 +1252,7 @@ async function toggleDrain() {
       headers: {"Content-Type": "application/json", "X-Symphony": "1"},
       body: JSON.stringify({draining}),
     });
-    updateState = {updateAvailable: updateState.updateAvailable, draining: result.draining === true};
+    updateState = {...updateState, draining: result.draining === true};
   } catch (error) {
     updateError = error.message;
   } finally {
@@ -1394,7 +1440,11 @@ async function poll() {
     codex = state.codex;
     canInterrupt = state.canInterrupt;
     compacting = typeof state.compacting === "string" ? state.compacting : "";
-    updateState = {updateAvailable: Boolean(state.updateAvailable), draining: Boolean(state.draining)};
+    updateState = {
+      updateAvailable: Boolean(state.updateAvailable),
+      draining: Boolean(state.draining),
+      update: state.update || null,
+    };
     if (choicesChanged || tasksChanged) renderCommands();
     showCodexStatus();
     renderUpdateNotice();

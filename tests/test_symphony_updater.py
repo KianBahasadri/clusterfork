@@ -119,12 +119,20 @@ class IdleEndpointTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_state_uses_cached_update_status_without_registry_requests(self):
         self.app.updates.available = True
+        self.app.updates.release = {
+            "runningCommit": "1" * 40,
+            "availableCommit": "2" * 40,
+            "compareUrl": f"https://github.com/KianBahasadri/clusterfork/compare/{'1' * 40}...{'2' * 40}",
+            "commitCount": 1,
+            "commits": ["KIAN-1132 Add release summary"],
+        }
         self.runner.draining = True
         with patch.object(self.app.updates, "check", side_effect=AssertionError("registry request")), \
              patch.object(updates, "urlopen", side_effect=AssertionError("registry request")):
             state = await self.app.state(0)
         self.assertTrue(state["updateAvailable"])
         self.assertTrue(state["draining"])
+        self.assertEqual(state["update"], self.app.updates.release)
 
     async def test_idle_http_handler(self):
         loop = asyncio.get_running_loop()
@@ -292,11 +300,13 @@ class UpdateCheckTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"SYMPHONY_COMMIT": self.commit.upper()}), \
              patch.object(updates, "ghcr_token", return_value="token"), \
-             patch.object(updates, "ghcr_digest", side_effect=digest):
+             patch.object(updates, "ghcr_digest", side_effect=digest), \
+             patch.object(updates, "ghcr_commit_for_digest", return_value="") as commit_lookup:
             checker = updates.UpdateChecker()
             self.assertTrue(checker.check())
             self.assertTrue(checker.check())
         self.assertEqual(calls, [self.commit, "main", "main"])
+        commit_lookup.assert_called_once_with("token", DIGEST_NEW)
 
         with patch.dict(os.environ, {"SYMPHONY_COMMIT": self.commit}), \
              patch.object(updates, "ghcr_token", return_value="token"), \
@@ -362,6 +372,99 @@ class UpdateCheckTests(unittest.TestCase):
         with patch.object(updates, "urlopen", side_effect=TimeoutError("slow")):
             with self.assertRaises(TimeoutError):
                 updates.ghcr_token()
+
+    def test_release_metadata_supports_single_and_multiarch_caches_per_digest_and_degrades(self):
+        available = "2" * 40
+        child_digest = "sha256:" + "c" * 64
+        att_digest = "sha256:" + "d" * 64
+        cfg_digest = "sha256:" + "e" * 64
+
+        class FakeResponse:
+            def __init__(self, body=b"", headers=None):
+                self.body = body
+                self.headers = headers or {}
+
+            def read(self):
+                return self.body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        # Multi-arch index skips attestation manifest, picks linux/amd64, resolves SYMPHONY_COMMIT, and caches per digest.
+        requests = []
+
+        def fake_urlopen(req, timeout=15):
+            url = req.full_url if isinstance(req, Request) else req
+            requests.append(url)
+            if url.endswith("/manifests/" + DIGEST_NEW):
+                return FakeResponse(json.dumps({"manifests": [
+                    {"digest": att_digest, "annotations": {"vnd.docker.reference.type": "attestation-manifest"}},
+                    {"digest": "sha256:" + "f" * 64, "platform": {"os": "linux", "architecture": "arm64"}},
+                    {"digest": child_digest, "platform": {"os": "linux", "architecture": "amd64"}},
+                ]}).encode())
+            if url.endswith("/manifests/" + child_digest):
+                return FakeResponse(json.dumps({"config": {"digest": cfg_digest}}).encode())
+            if url.endswith("/blobs/" + cfg_digest):
+                return FakeResponse(json.dumps({"config": {"Env": [
+                    "PATH=/usr/local/bin",
+                    f"SYMPHONY_COMMIT={available.upper()}",
+                ]}}).encode())
+            if f"/compare/{self.commit}...{available}" in url:
+                self.assertEqual(req.headers.get("Authorization"), "Bearer gh-tok")
+                return FakeResponse(json.dumps({
+                    "total_commits": 2,
+                    "commits": [
+                        {"commit": {"message": "First commit\n\nBody"}},
+                        {"commit": {"message": "Second commit\n\nDetails"}},
+                    ],
+                }).encode())
+            raise AssertionError(f"Unexpected URL: {url}")
+
+        with patch.dict(os.environ, {"SYMPHONY_COMMIT": self.commit, "GITHUB_TOKEN": "gh-tok"}), \
+             patch.object(updates, "ghcr_token", return_value="token"), \
+             patch.object(updates, "ghcr_digest", side_effect=lambda _t, ref: DIGEST_OLD if ref == self.commit else DIGEST_NEW), \
+             patch.object(updates, "urlopen", side_effect=fake_urlopen):
+            checker = updates.UpdateChecker()
+            self.assertTrue(checker.check())
+            first_requests = list(requests)
+            self.assertTrue(checker.check())
+            self.assertEqual(requests, first_requests)
+
+        self.assertEqual(checker.details(), {
+            "runningCommit": self.commit,
+            "availableCommit": available,
+            "compareUrl": f"https://github.com/KianBahasadri/clusterfork/compare/{self.commit}...{available}",
+            "commitCount": 2,
+            "commits": ["Second commit", "First commit"],
+        })
+
+        # Single-arch manifest where GitHub compare fails still exposes compareUrl cleanly.
+        with patch.dict(os.environ, {"SYMPHONY_COMMIT": self.commit}), \
+             patch.object(updates, "ghcr_json", side_effect=[
+                 {"config": {"digest": cfg_digest}},
+                 {"config": {"Env": [f"SYMPHONY_COMMIT={available}"]}},
+             ]), \
+             patch.object(updates, "ghcr_token", return_value="token"), \
+             patch.object(updates, "ghcr_digest", side_effect=lambda _t, ref: DIGEST_OLD if ref == self.commit else DIGEST_NEW), \
+             patch.object(updates, "github_compare", side_effect=URLError("rate limited")):
+            degraded = updates.UpdateChecker()
+            self.assertTrue(degraded.check())
+        self.assertEqual(degraded.details()["compareUrl"],
+                         f"https://github.com/KianBahasadri/clusterfork/compare/{self.commit}...{available}")
+        self.assertEqual(degraded.details()["commits"], [])
+        self.assertIsNone(degraded.details()["commitCount"])
+
+        # Config lookup failure degrades gracefully while keeping available=True.
+        with patch.dict(os.environ, {"SYMPHONY_COMMIT": self.commit}), \
+             patch.object(updates, "ghcr_token", return_value="token"), \
+             patch.object(updates, "ghcr_digest", side_effect=lambda _t, ref: DIGEST_OLD if ref == self.commit else DIGEST_NEW), \
+             patch.object(updates, "ghcr_commit_for_digest", side_effect=URLError("down")):
+            no_cfg = updates.UpdateChecker()
+            self.assertTrue(no_cfg.check())
+        self.assertIsNone(no_cfg.details())
 
 
 class UpdaterScriptTests(unittest.TestCase):

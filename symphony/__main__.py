@@ -770,6 +770,7 @@ class Symphony:
                                      for entry in self.messages) else ""
                  ),
                  "updateAvailable": self.updates.available,
+                 "update": self.updates.details(),
                  "draining": self.runner.draining,
                  "usageAlert": self.coordinator.usage_alert()}
         if self.issue_snapshot is not None and issue_revision != self.issue_revision:

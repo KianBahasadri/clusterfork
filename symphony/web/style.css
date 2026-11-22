@@ -302,6 +302,24 @@ summary { cursor: pointer; color: var(--ink-strong); font-size: .85rem; margin-t
 #update-action:hover:not(:disabled) { background: var(--action-primary-hover); }
 #update-action:disabled { cursor: progress; opacity: .65; }
 #update-error { flex-basis: 100%; color: var(--danger); font-size: .86rem; }
+.update-details {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  font-size: .84rem;
+  color: var(--muted);
+}
+.update-compare { font-family: var(--mono); font-size: .82rem; }
+.update-commit-single { min-width: 0; overflow-wrap: anywhere; }
+.update-commits {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 2px;
+}
 .diagram-panel {
   flex: none;
   padding: 12px max(16px, calc((100% - 760px)/2));
