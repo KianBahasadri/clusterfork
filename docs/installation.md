@@ -89,10 +89,10 @@ Cursor, Command Code, and Antigravity MCP files are fully replaced after `${ENV}
 expansion from the installed `.env`. Claude plugin and Codex MCP secrets are
 resolved by the CLIs at launch; see [Agent Configs](agent-configs.md).
 
-Codex, Cursor, Grok, and OpenCode shared auth links are repaired as a best-effort
-final step. A failure there prints a warning without undoing the rest of the
-install. [Auth Rotation](auth-rotation.md#installer-repair) owns the migration
-rules. Notification preferences and history are runtime files and are not reset.
+Auth repair for Codex, Cursor, Grok, and OpenCode runs as a best-effort final
+step. A failure there prints a warning without undoing the rest of the install.
+[Auth Rotation](auth-rotation.md#installer-repair) owns the migration rules.
+Notification preferences and history are runtime files and are not reset.
 
 The install is repeatable but is not a transaction: a later error can leave
 earlier steps installed. Fix the reported problem and rerun it. Output lists

@@ -1,7 +1,8 @@
 # Auth Rotation
 
-The six `rotate-*` functions call `scripts/rotate_auth.py`, using copy (Claude),
-shared-store symlink (Codex/Cursor/Grok/OpenCode), or GNOME Keyring (Antigravity).
+The six `rotate-*` functions call `scripts/rotate_auth.py`. Claude and Cursor use
+credential copies, Codex, Grok and OpenCode use shared-store symlinks, and
+Antigravity uses GNOME Keyring.
 
 | Command | Behavior |
 | --- | --- |
@@ -21,8 +22,9 @@ Invalid/unknown names change nothing. Deletion removes the saved file/keyring
 entry and any matching detached `current` marker, preserving unrelated logins.
 
 To add an account, unhook, log in, then `--save NAME`. Shared stores refuse
-unhooking a regular `auth.json`; Claude requires a token-matching saved login;
-Antigravity requires a saved current marker. Save first when necessary. Selecting
+unhooking a regular `auth.json`. Claude and Cursor require a matching saved login
+when active credentials are present. Antigravity requires a saved current marker.
+Save first when necessary. Selecting
 a saved name reattaches it if login is abandoned. Avoid reinstalling while
 unhooked: installer repair can reconnect the previous profile.
 
@@ -115,18 +117,19 @@ but make its final exit code 1. Shared stores refuse regular `auth.json` files;
 Antigravity refuses an active item without a recoverable current profile.
 
 Each ping preserves refreshed credentials even when the model request fails.
-Claude copies them back to the saved profile; shared stores capture regular-file
-auth replacements before rebuilding their links. Codex/Cursor reject a replacement
-belonging to another account and preserve that active file.
+Claude and Cursor copy updates back to the saved profile. Shared stores capture
+regular-file auth replacements before rebuilding their links. Codex and Cursor
+reject a replacement belonging to another account and preserve that active file.
 
 Completion restores Claude's previous saved login with its updated credentials
-(or the original bytes for an unsaved login), shared stores' previous `current`
-link (removing a temporary agent link if initially unhooked), and Antigravity's
+(or the original bytes for an unsaved login), Cursor's prior login or unhooked
+state, shared stores' previous `current` link (removing a temporary agent link
+if initially unhooked), and Antigravity's
 current saved profile or fully unhooked state. Limits: Claude with
 no previous file and shared stores without `current` remain on the last profile
 (the latter warns). Antigravity cannot restore a current profile omitted from an
-explicit subset; use a full sweep when restoration matters. Claude and shared
-stores also run their preservation/restoration steps on interruption. Antigravity
+explicit subset; use a full sweep when restoration matters. Claude, Cursor and
+shared stores also run their preservation and restoration steps on interruption. Antigravity
 has no general interrupted-sweep cleanup guarantee.
 
 ## Scheduled Codex kickoff
@@ -193,12 +196,34 @@ selection copies it back because Claude rewrites credentials on refresh. Active
 identity matches `accessToken`. Unhook deletes a matching saved regular-file
 login or detaches a legacy symlink.
 
+## rotate-cursor-cli
+
+Saved OAuth profiles are `~/.local/share/clusterfork-auth/cursor/auth.json.NAME`.
+Cursor updates its regular `auth.json` in `${XDG_CONFIG_HOME:-~/.config}/cursor/`
+by atomic replacement. Before selection, unhook or kickoff, the rotator
+copies an updated login back to the saved profile with the same OAuth subject.
+The store's `current` link identifies the preferred name when profiles share a
+subject. Account labels verify the actual login against the saved profiles.
+An unrecognized active login stays in place until saved explicitly. Save
+validates the token pair and preserves the full credential record.
+
+Close Cursor sessions that use the active file before switching accounts,
+unhooking, running kickoff or reinstalling. The rotator serializes changes to
+the profile store. For named profiles, the installed shell exports
+`AGENT_CLI_CREDENTIAL_STORE=file` and `ca` passes it through tmux. Kickoff sets it
+on each ping. For a first login or a process launched outside that shell, use
+the setting explicitly.
+
+```bash
+AGENT_CLI_CREDENTIAL_STORE=file cursor-agent login
+rotate-cursor-cli --save NAME
+```
+
 ## Shared-store agents
 
 | Command | Agent auth file | Store under `~/.local/share/clusterfork-auth/` |
 | --- | --- | --- |
 | `rotate-codex` | `~/.codex/auth.json` | `codex/` |
-| `rotate-cursor-cli` | `~/.config/cursor/auth.json` | `cursor/` |
 | `rotate-grok` | `~/.grok/auth.json` | `grok/` |
 | `rotate-opencode` | `~/.local/share/opencode/auth.json` | `opencode/` |
 
@@ -211,9 +236,11 @@ a regular file. Unhook removes only the agent-side symlink, retaining store and
 ## Sharing with a container
 
 Bind-mount `~/.local/share/clusterfork-auth` at the same home-relative path.
-Directory mounts expose `current` changes immediately; mounting an individual
-`auth.json` pins its resolved target. A read-only mount supports host-owned
-rotation/refresh; container refresh cannot persist and may fail after token expiry.
+For symlink-based agents, directory mounts expose `current` changes immediately
+and mounting an individual `auth.json` pins its resolved target. A read-only mount
+supports host-owned rotation and refresh. Cursor selects a saved profile into a
+local active copy in each environment. Syncing updated Cursor credentials back
+to a saved profile requires a writable store.
 
 ## rotate-antigravity
 
@@ -235,3 +262,9 @@ of a missing agent link.
 Repair refuses regular-file agent credentials. Use the provider's `--save NAME`
 to copy that login and rebuild the chain, also when importing a new machine's
 credentials.
+
+Cursor repair materializes the active credential file from a managed symlink
+or restores the selected saved profile when the active file is missing or
+contains Cursor's OS keyring marker. A regular login is matched and backed up
+by OAuth subject. With no saved profiles, the installer leaves Cursor auth
+to the CLI.

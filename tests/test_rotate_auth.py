@@ -4,6 +4,7 @@ Filesystem paths use temporary directories. Antigravity deletion uses a fake
 secret-tool service so tests never touch the real keyring.
 """
 
+import base64
 import importlib.util
 import io
 import json
@@ -32,6 +33,11 @@ def _load_module():
 
 
 rotate_auth = _load_module()
+
+
+def cursor_credentials(subject, refresh="refresh", **fields):
+    payload = base64.urlsafe_b64encode(json.dumps({"sub": subject}).encode()).decode().rstrip("=")
+    return json.dumps({"accessToken": f"test.{payload}.test", "refreshToken": refresh, **fields}).encode()
 
 
 class ParseActionTests(unittest.TestCase):
@@ -205,10 +211,9 @@ class DeleteProfileTests(unittest.TestCase):
                 for name in ("alpha", "beta"):
                     profile = self._profile_path(backend, name)
                     profile.parent.mkdir(parents=True, exist_ok=True)
-                    profile.write_text(
-                        json.dumps({"claudeAiOauth": {"accessToken": name}}),
-                        encoding="utf-8",
-                    )
+                    contents = (cursor_credentials(name) if agent == "cursor"
+                                else json.dumps({"claudeAiOauth": {"accessToken": name}}).encode())
+                    profile.write_bytes(contents)
                 backend.select("alpha")
 
     def _profile_path(self, backend, name):
@@ -429,6 +434,140 @@ class DeleteProfileTests(unittest.TestCase):
                 self.output.truncate()
                 self.assertEqual(rotate_auth.run([agent, "--help"]), 0)
                 self.assertIn("--delete name", self.output.getvalue())
+
+
+class CursorBackendTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        environment = patch.dict(os.environ, {
+            "ROTATE_CURSOR_DIR": str(root / "cursor"),
+            "ROTATE_CURSOR_AUTH_STORE_DIR": str(root / "store"),
+        })
+        environment.start()
+        self.addCleanup(environment.stop)
+        output = patch("sys.stdout", new=io.StringIO())
+        output.start()
+        self.addCleanup(output.stop)
+        self.backend = rotate_auth.make_backend("cursor")
+        self.auth = self.backend.auth
+        self.backend.store_dir.mkdir()
+        self.alpha = self.backend.store_dir / "auth.json.alpha"
+        self.beta = self.backend.store_dir / "auth.json.beta"
+        self.alpha.write_bytes(cursor_credentials("alpha"))
+        self.beta.write_bytes(cursor_credentials("beta"))
+        self.run_rotation("alpha")
+
+    def run_rotation(self, *args):
+        return rotate_auth.run(["cursor", *args])
+
+    def replace_active(self, data):
+        temporary = self.auth.with_name(".auth.json.fixture")
+        temporary.write_bytes(data)
+        temporary.replace(self.auth)
+
+    def test_rotation_saves_atomic_refresh_and_preserves_new_credential_fields(self):
+        refreshed = cursor_credentials("alpha", "rotated", dpopKey="test-proof-key")
+        self.replace_active(refreshed)
+        self.assertEqual(self.backend.current_suffix(), "alpha")
+        self.assertEqual(self.run_rotation("beta"), 0)
+        self.assertEqual(self.alpha.read_bytes(), refreshed)
+        self.assertEqual(self.auth.read_bytes(), self.beta.read_bytes())
+        self.assertFalse(self.auth.is_symlink())
+        self.assertEqual(self.auth.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.backend.current_suffix(), "beta")
+        self.assertEqual(self.run_rotation("alpha"), 0)
+        self.assertEqual(self.auth.read_bytes(), refreshed)
+
+    def test_different_login_stays_active_until_explicit_save(self):
+        original = self.alpha.read_bytes()
+        other_login = cursor_credentials("unsaved")
+        self.replace_active(other_login)
+        self.assertIsNone(self.backend.current_suffix())
+        with self.assertRaisesRegex(rotate_auth.RotateError, "could not be matched"):
+            self.run_rotation("beta")
+        self.assertEqual(self.auth.read_bytes(), other_login)
+        self.assertEqual(self.alpha.read_bytes(), original)
+        self.assertEqual(self.run_rotation("--save", "other"), 0)
+        self.assertEqual(self.backend.current_suffix(), "other")
+
+    def test_marker_cannot_overwrite_a_saved_login(self):
+        self.replace_active(b'{"storedIn":"os-secret-store"}')
+        original = self.alpha.read_bytes()
+        with self.assertRaisesRegex(rotate_auth.RotateError, "no valid Cursor browser credentials"):
+            self.run_rotation("--save", "alpha")
+        self.assertEqual(self.alpha.read_bytes(), original)
+        self.assertIsNone(self.backend.current_suffix())
+        self.assertEqual(self.run_rotation("beta"), 0)
+        self.assertEqual(self.backend.current_suffix(), "beta")
+
+    def test_kickoff_saves_refresh_after_failure_and_restores_previous_login(self):
+        refreshed = cursor_credentials("beta", "after-ping")
+
+        def ping(args, *, env, **kwargs):
+            self.assertEqual(args, ["cursor-agent", "-p", "hi"])
+            self.assertEqual(env["AGENT_CLI_CREDENTIAL_STORE"], "file")
+            self.assertEqual(self.auth.read_bytes(), self.beta.read_bytes())
+            self.replace_active(refreshed)
+            return subprocess.CompletedProcess(args, 1, "", "test request failed")
+
+        with patch.object(rotate_auth.subprocess, "run", side_effect=ping):
+            self.assertEqual(self.run_rotation("--kickoff", "beta"), 1)
+        self.assertEqual(self.beta.read_bytes(), refreshed)
+        self.assertEqual(self.auth.read_bytes(), self.alpha.read_bytes())
+        self.assertEqual(self.backend.current_suffix(), "alpha")
+
+    def test_kickoff_preserves_an_unexpected_active_login(self):
+        original = self.beta.read_bytes()
+        unexpected_login = cursor_credentials("unsaved")
+
+        def ping(command):
+            self.replace_active(unexpected_login)
+            return True, "ok"
+
+        with patch.object(rotate_auth, "ping_agent", side_effect=ping):
+            with self.assertRaisesRegex(rotate_auth.RotateError, "kickoff login changed"):
+                self.run_rotation("--kickoff", "beta")
+        self.assertEqual(self.auth.read_bytes(), unexpected_login)
+        self.assertEqual(self.beta.read_bytes(), original)
+        self.assertIsNone(self.backend.current_suffix())
+
+    def test_kickoff_keeps_a_refresh_when_saving_it_fails(self):
+        refreshed = cursor_credentials("beta", "after-ping")
+
+        def ping(command):
+            self.replace_active(refreshed)
+            return True, "ok"
+
+        write = rotate_auth.atomic_write_bytes
+
+        def write_credentials(path, data):
+            if path == self.beta:
+                raise PermissionError("test profile is read-only")
+            write(path, data)
+
+        with (patch.object(rotate_auth, "ping_agent", side_effect=ping),
+              patch.object(rotate_auth, "atomic_write_bytes", side_effect=write_credentials),
+              self.assertRaises(PermissionError)):
+            self.run_rotation("--kickoff", "beta")
+        self.assertEqual(self.auth.read_bytes(), refreshed)
+        self.assertEqual(self.backend.current_suffix(), "beta")
+
+    def test_second_rotation_refuses_while_store_is_locked(self):
+        original = self.auth.read_bytes()
+        with self.backend.lock():
+            with self.assertRaisesRegex(rotate_auth.RotateError, "in progress"):
+                self.run_rotation("beta")
+        self.assertEqual(self.auth.read_bytes(), original)
+        self.assertEqual(self.backend.current_suffix(), "alpha")
+
+    def test_repair_materializes_the_existing_symlink(self):
+        self.auth.unlink()
+        self.auth.symlink_to(self.backend.current)
+        self.assertEqual(self.run_rotation("--repair"), 0)
+        self.assertFalse(self.auth.is_symlink())
+        self.assertEqual(self.auth.read_bytes(), self.alpha.read_bytes())
 
 
 class SharedStoreBackendTests(unittest.TestCase):

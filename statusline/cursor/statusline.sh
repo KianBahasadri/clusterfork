@@ -19,19 +19,8 @@ param=${F[1]}
 max_mode=${F[2]}
 ctx_pct=${F[3]}
 
-# Active Cursor account: suffix of the file ~/.config/cursor/auth.json resolves to
-# (e.g. auth.json.ida -> ida), labeled like the conky overlay. Empty when there
-# is no suffixed multi-account file; segment is skipped then.
-CURSOR_AUTH="${CURSOR_HOME:-$HOME/.config/cursor}/auth.json"
-acct=$(readlink -f "$CURSOR_AUTH" 2>/dev/null)
-acct=${acct##*/}
-acct=${acct#auth.json}
-acct=${acct#.}
-
-if [[ -z $acct ]]; then
-  acct=$(jq -r 'first(.accounts[]? | select(.isSelected) | .label) // empty' \
-    "$HOME/live-wallpaper/conky-linear-HUP/cache/cursor-usage.json" 2>/dev/null)
-fi
+acct=$(ROTATE_CURSOR_DIR="${CURSOR_HOME:-${ROTATE_CURSOR_DIR:-}}" \
+  python3 -S "$HOME/.config/clusterfork/bin/clusterfork-tmux-label" cursor --account 2>/dev/null)
 
 USAGE_CACHE="$HOME/.cursor/.usage-cache.json"
 auto_pct=""

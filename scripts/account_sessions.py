@@ -198,8 +198,7 @@ def account_identity(auth, provider="codex"):
     if not isinstance(auth, dict) or len(json.dumps(auth)) > 30_000:
         raise ValueError("Invalid account credentials")
     if provider == "cursor":
-        if (set(auth) - {"accessToken", "refreshToken"}
-                or not all(isinstance(auth.get(k), str) and auth[k] for k in ("accessToken", "refreshToken"))):
+        if not all(isinstance(auth.get(k), str) and auth[k] for k in ("accessToken", "refreshToken")):
             raise ValueError("Incomplete Cursor CLI account credentials")
         subject = jwt_payload(auth["accessToken"]).get("sub")
         if not isinstance(subject, str) or not subject:

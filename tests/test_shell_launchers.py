@@ -5,6 +5,7 @@ session-name sanitization and arg/env forwarding. No real tmux
 server or flaky pty timing required.
 """
 
+import base64
 import json
 import os
 import shutil
@@ -292,7 +293,9 @@ class MockTmuxTests(unittest.TestCase):
         env_no_tmux = {
             k: v
             for k, v in os.environ.items()
-            if k not in ("TMUX", "CI", "GROK_HEADLESS", "NONINTERACTIVE")
+            if k not in ("TMUX", "CI", "GROK_HEADLESS", "NONINTERACTIVE",
+                         "AGENT_CLI_CREDENTIAL_STORE", "ROTATE_CURSOR_DIR",
+                         "ROTATE_CURSOR_AUTH_STORE_DIR", "XDG_CONFIG_HOME")
         }
         self.base_env = {
             **env_no_tmux,
@@ -342,13 +345,19 @@ class MockTmuxTests(unittest.TestCase):
             store = self.tmp_path / ".local/share/clusterfork-auth" / agent
             store.mkdir(parents=True)
             for name in ("kian", "ida"):
-                (store / f"auth.json.{name}").write_text(
-                    json.dumps({"opencode-go": {"key": f"test-key-{name}"}})
-                )
+                if agent == "cursor":
+                    payload = base64.urlsafe_b64encode(json.dumps({"sub": name}).encode()).decode()
+                    credentials = {"accessToken": f"test.{payload}.test", "refreshToken": "fixture"}
+                else:
+                    credentials = {"opencode-go": {"key": f"test-key-{name}"}}
+                (store / f"auth.json.{name}").write_text(json.dumps(credentials))
             (store / "current").symlink_to("auth.json.kian")
             active = self.tmp_path / directory / "auth.json"
             active.parent.mkdir(parents=True, exist_ok=True)
-            active.symlink_to(store / "current")
+            if agent == "cursor":
+                active.write_bytes((store / "current").read_bytes())
+            else:
+                active.symlink_to(store / "current")
         claude = self.tmp_path / ".claude"
         claude.mkdir()
         for suffix, token in (("", "active"), (".ida", "other"), (".kian", "active")):
@@ -394,6 +403,22 @@ class MockTmuxTests(unittest.TestCase):
         self.assertEqual(len(launches), 2)
         self.assertIn("-n codex - kian", launches[0])
         self.assertIn("-n codex - ida", launches[1])
+
+    def test_managed_cursor_uses_file_store_in_shell_and_tmux(self):
+        self._save_account_fixtures()
+        proc = self._script_run(
+            "'source bash_profile.sh; printenv AGENT_CLI_CREDENTIAL_STORE; ca --help'"
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("file", proc.stdout.splitlines())
+        self.assertIn("-e AGENT_CLI_CREDENTIAL_STORE=file -- cursor-agent --yolo --help", self._log())
+
+    def test_unmanaged_cursor_keeps_default_store(self):
+        proc = self._script_run(
+            "'source bash_profile.sh; test -z \"$AGENT_CLI_CREDENTIAL_STORE\" && ca --help'"
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertNotIn("AGENT_CLI_CREDENTIAL_STORE", self._log())
 
     def test_detached_login_does_not_use_previous_store_label(self):
         self._save_account_fixtures()

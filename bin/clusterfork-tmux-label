@@ -13,7 +13,6 @@ CLAUDE_PREFIX = ".credentials.json."
 
 SHARED_STORES = {
     "codex": ("ROTATE_CODEX_CODEX_DIR", "ROTATE_CODEX_AUTH_STORE_DIR", ".codex", ".local/share/clusterfork-auth/codex"),
-    "cursor": ("ROTATE_CURSOR_DIR", "ROTATE_CURSOR_AUTH_STORE_DIR", ".config/cursor", ".local/share/clusterfork-auth/cursor"),
     "grok": ("ROTATE_GROK_DIR", "ROTATE_GROK_AUTH_STORE_DIR", ".grok", ".local/share/clusterfork-auth/grok"),
     "opencode": ("ROTATE_OPENCODE_DIR", "ROTATE_OPENCODE_AUTH_STORE_DIR", ".local/share/opencode", ".local/share/clusterfork-auth/opencode"),
 }
@@ -63,6 +62,11 @@ def account_name(agent):
     home = Path.home()
     if agent == "cmd":
         return read_json(home / ".commandcode/auth.json").get("userName")
+
+    if agent == "cursor":
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        from rotate_auth import CursorBackend
+        return CursorBackend().current_suffix()
 
     if agent == "claude":
         claude_dir = env_path("CLAUDE_CONFIG_DIR", env_path("ROTATE_CLAUDE_DIR", home / ".claude"))
@@ -124,7 +128,7 @@ def account_name(agent):
     return None
 
 
-def format_label(agent):
+def format_label(agent, *, account_only=False):
     try:
         name = account_name(agent)
     except (OSError, UnicodeError, ValueError, RuntimeError):
@@ -134,11 +138,11 @@ def format_label(agent):
         name = "".join(c for c in name if c.isprintable() and c != "#").strip()
     else:
         name = ""
-    return f"{agent} - {name or 'unknown'}"
+    return name if account_only else f"{agent} - {name or 'unknown'}"
 
 
 def main():
-    print(format_label(sys.argv[1]))
+    print(format_label(sys.argv[1], account_only=sys.argv[2:] == ["--account"]))
 
 
 if __name__ == "__main__":

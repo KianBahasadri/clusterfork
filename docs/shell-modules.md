@@ -56,7 +56,8 @@ existing `$TMUX`, non-TTY stdin or missing tmux runs directly; internal
 `-e NAME=value` variables reach either path.
 
 `bin/clusterfork-tmux-label` names windows `<agent> - <account>` using Claude token
-matches, shared auth links, Antigravity marker or Command Code `userName`.
+matches, shared auth links, the [verified Cursor profile](auth-rotation.md#rotate-cursor-cli),
+the Antigravity marker or Command Code `userName`.
 Claude/Grok may fall back to single-account email; `occ` matches an overriding
 `OPENCODE_API_KEY` to saved profiles. Missing/detached means `unknown`. Overrides
 include `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `OCC_OPENCODE_AUTH_FILE` and rotation

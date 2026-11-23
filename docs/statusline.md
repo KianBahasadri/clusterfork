@@ -31,9 +31,10 @@ Clusterfork does not install this scraper. If available it refreshes old caches;
 
 ## Cursor
 
-Layout: `model · params/max · account · ctx% · auto% · api%`. Label uses resolved
-`auth.json` suffix under `${CURSOR_HOME:-~/.config/cursor}`, then selected label in
-`~/live-wallpaper/conky-linear-HUP/cache/cursor-usage.json`. `cursor-usage-fetch.py`
+Layout: `model · params/max · account · ctx% · auto% · api%`. The account label
+uses the [verified Cursor profile](auth-rotation.md#rotate-cursor-cli).
+`CURSOR_HOME` overrides the directory used to read the active login.
+`cursor-usage-fetch.py`
 updates `~/.cursor/.usage-cache.json` from conky or dashboard API; `CURSOR_USAGE_TTL`
 is 120 seconds, `CURSOR_AUTH_PATH` overrides credentials, failures retain cache.
 

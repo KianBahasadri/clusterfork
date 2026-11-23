@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Rotate saved accounts for Claude, Codex, Cursor, Grok, OpenCode, and Antigravity.
 
-Shell wrappers (`rotate-claude`, `rotate-codex`, …) call this script. Three
-backends share one CLI: copy (Claude), shared-store symlink (Codex / Cursor /
-Grok / OpenCode), and GNOME Keyring (Antigravity).
+Shell wrappers (`rotate-claude`, `rotate-codex`, …) call this script. The
+backends use copies (Claude and Cursor), shared-store symlinks (Codex, Grok
+and OpenCode), or GNOME Keyring (Antigravity).
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import locale
 import os
@@ -16,6 +17,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Iterable
+from contextlib import contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -136,8 +138,10 @@ def atomic_write_bytes(dest: Path, data: bytes, mode: int = 0o600) -> None:
     tmp = dest.with_name(f".{dest.name}.tmp.{os.getpid()}")
     tmp.unlink(missing_ok=True)
     try:
-        tmp.write_bytes(data)
-        os.chmod(tmp, mode)
+        fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
+        with os.fdopen(fd, "wb") as stream:
+            os.fchmod(stream.fileno(), mode)
+            stream.write(data)
     except OSError:
         tmp.unlink(missing_ok=True)
         raise
@@ -186,6 +190,9 @@ def ping_agent(command_key: str) -> tuple[bool, str]:
     argv = KICKOFF_PINGS.get(command_key)
     if argv is None:
         return False, f"no ping command registered for {command_key}"
+    env = None
+    if command_key == "rotate-cursor-cli":
+        env = {**os.environ, "AGENT_CLI_CREDENTIAL_STORE": "file"}
     try:
         proc = subprocess.run(
             argv,
@@ -193,6 +200,7 @@ def ping_agent(command_key: str) -> tuple[bool, str]:
             text=True,
             timeout=PING_TIMEOUT_SECONDS,
             stdin=subprocess.DEVNULL,
+            env=env,
         )
     except FileNotFoundError:
         return False, f"{argv[0]} not found on PATH"
@@ -561,10 +569,7 @@ class SharedStoreBackend:
         selected = self.current.is_symlink() and (
             realpath_ms(resolve_link(self.current)) == realpath_ms(profile)
         )
-        directly_linked = self.auth.is_symlink() and (
-            realpath_ms(resolve_link(self.auth)) == realpath_ms(profile)
-        )
-        if directly_linked or (selected and self._auth_links_to_current()):
+        if self._profile_is_active(profile, selected):
             refuse_active_delete(self.command, name)
         if not confirm_delete(self.command, name):
             return 1
@@ -573,6 +578,12 @@ class SharedStoreBackend:
             self.current.unlink()
         print(f"{self.command}: deleted profile {name}")
         return 0
+
+    def _profile_is_active(self, profile: Path, selected: bool) -> bool:
+        directly_linked = self.auth.is_symlink() and (
+            realpath_ms(resolve_link(self.auth)) == realpath_ms(profile)
+        )
+        return directly_linked or (selected and self._auth_links_to_current())
 
     def save(self, name: str) -> int:
         validate_suffix(self.command, name)
@@ -644,11 +655,10 @@ class SharedStoreBackend:
                     # Save the refresh before reconnecting or selecting another login.
                     if self.auth.is_file() and not self.auth.is_symlink():
                         profile = self.store_dir / f"{PROFILE_PREFIX}{name}"
-                        if self.command in {"rotate-codex", "rotate-cursor-cli"}:
-                            provider = "cursor" if self.command == "rotate-cursor-cli" else "codex"
+                        if self.command == "rotate-codex":
                             try:
-                                identity = account_identity(json.loads(self.auth.read_text()), provider)
-                                if identity != account_identity(json.loads(profile.read_text()), provider):
+                                identity = account_identity(json.loads(self.auth.read_text()))
+                                if identity != account_identity(json.loads(profile.read_text())):
                                     raise ValueError("Account changed during kickoff")
                             except (OSError, ValueError, TypeError):
                                 fail(f"{self.command}: kickoff login changed; active credentials were kept")
@@ -709,6 +719,220 @@ class SharedStoreBackend:
         if not self.auth.is_symlink() or not self.current.is_symlink():
             return False
         return realpath_ms(resolve_link(self.auth)) == realpath_ms(self.current)
+
+
+class CursorBackend(SharedStoreBackend):
+    """Keep the named store and give Cursor its own regular active file."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            command="rotate-cursor-cli",
+            label="Cursor",
+            agent_dir_env="ROTATE_CURSOR_DIR",
+            store_dir_env="ROTATE_CURSOR_AUTH_STORE_DIR",
+            default_agent=env_path("XDG_CONFIG_HOME", Path.home() / ".config") / "cursor",
+            default_store=Path(".local/share/clusterfork-auth/cursor"),
+        )
+
+    @contextmanager
+    def lock(self, *, create: bool = False):
+        if create and not self.store_dir.is_dir():
+            self._login_to_save()
+            self.store_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            fd = os.open(self.store_dir, os.O_RDONLY | os.O_DIRECTORY)
+        except FileNotFoundError:
+            yield
+            return
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                fail(f"{self.command}: another Cursor rotation or repair is in progress")
+            yield
+        finally:
+            os.close(fd)
+
+    @staticmethod
+    def _read(path: Path) -> bytes | None:
+        try:
+            return path.read_bytes()
+        except FileNotFoundError:
+            return None
+
+    @staticmethod
+    def _identity(contents: bytes | None) -> str | None:
+        if contents is None:
+            return None
+        try:
+            return account_identity(json.loads(contents), "cursor")
+        except ValueError:
+            return None
+
+    def _profile(self, name: str) -> Path:
+        return self.store_dir / f"{PROFILE_PREFIX}{name}"
+
+    def _matching_profile(self, identity: str | None) -> str | None:
+        if identity is None:
+            return None
+        marked = super().current_suffix()
+        names = self.suffixes()
+        for name in sorted(names, key=lambda name: name != marked):
+            profile = self._profile(name)
+            if profile.is_file() and self._identity(self._read(profile)) == identity:
+                return name
+        return None
+
+    def current_suffix(self) -> str | None:
+        return self._matching_profile(self._identity(self._read(self.auth)))
+
+    def _profile_is_active(self, profile: Path, selected: bool) -> bool:
+        current = self.current_suffix()
+        return current is not None and profile == self._profile(current)
+
+    def _load_profile(self, name: str) -> bytes:
+        data = self._read(self._profile(name))
+        if data is None or self._identity(data) is None:
+            fail(f"{self.command}: {name} has no valid Cursor browser credentials")
+        return data
+
+    def _install(self, data: bytes) -> None:
+        self.agent_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        atomic_write_bytes(self.auth, data)
+
+    def _mark(self, name: str) -> None:
+        target = f"{PROFILE_PREFIX}{name}"
+        if not self.current.is_symlink() or readlink_text(self.current) != target:
+            atomic_symlink(target, self.current)
+
+    def _login_to_save(self) -> bytes:
+        active = self._read(self.auth)
+        if active is None or self._identity(active) is None:
+            fail(
+                f"{self.command}: no valid Cursor browser credentials in {self.auth}",
+                "  Log in with AGENT_CLI_CREDENTIAL_STORE=file cursor-agent login",
+            )
+        return active
+
+    @staticmethod
+    def _inactive_state(active: bytes) -> str | None:
+        try:
+            state = json.loads(active)
+        except ValueError:
+            return None
+        if not isinstance(state, dict) or set(state) - {"storedIn", "signedOut", "dpopKey"}:
+            return None
+        if state.get("signedOut") is True:
+            return "signed out"
+        if state.get("storedIn") == "os-secret-store":
+            return "keyring"
+        return None
+
+    def _capture_active(self) -> tuple[bytes | None, str | None]:
+        active = self._read(self.auth)
+        if active is None:
+            return None, None
+        identity = self._identity(active)
+        if identity is None:
+            if self._inactive_state(active):
+                return active, None
+            fail(f"{self.command}: active Cursor credentials are unreadable")
+        name = self._matching_profile(identity)
+        if name is None:
+            fail(
+                f"{self.command}: active login could not be matched to a saved profile",
+                f"  Save the login first: {self.command} --save NAME",
+            )
+        profile = self._profile(name)
+        if active != self._read(profile):
+            atomic_write_bytes(profile, active)
+        return active, name
+
+    def select(self, requested: str | None) -> int:
+        names = self.suffixes()
+        if requested is not None:
+            self._choose(names, requested)
+        self._capture_active()
+        name = requested or self._choose(names, None)
+        self._install(self._load_profile(name))
+        self._mark(name)
+        print(f"{self.command}: selected profile {name}")
+        return 0
+
+    def save(self, name: str) -> int:
+        validate_suffix(self.command, name)
+        active = self._login_to_save()
+        self.store_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.store_dir.chmod(0o700)
+        atomic_write_bytes(self._profile(name), active)
+        self._install(active)
+        self._mark(name)
+        print(f"{self.command}: saved active credentials as {name}")
+        return 0
+
+    def unhook(self) -> int:
+        self._capture_active()
+        self.auth.unlink(missing_ok=True)
+        print(f"{self.command}: unhooked active credentials")
+        print("  Log in with AGENT_CLI_CREDENTIAL_STORE=file cursor-agent login")
+        print(f"  Then run {self.command} --save NAME")
+        return 0
+
+    def kickoff(self, selected: list[str] | None = None) -> int:
+        names = self.suffixes()
+        if not names:
+            fail(f"{self.command}: no saved profiles")
+        if selected is not None:
+            for name in selected:
+                self._choose(names, name)
+            names = [name for name in names if name in selected]
+        original, current = self._capture_active()
+        logins = {name: self._load_profile(name) for name in names}
+        failures = 0
+        restore_previous = True
+        print(f"{self.command}: kickoff — pinging each saved profile with {KICKOFF_MESSAGE!r}")
+        try:
+            for name, credentials in logins.items():
+                self._install(credentials)
+                try:
+                    ok, detail = ping_agent(self.command)
+                finally:
+                    # Keep the current file if verification or backup fails.
+                    restore_previous = False
+                    active = self._read(self.auth)
+                    if active is not None and active != credentials:
+                        if self._identity(active) != self._identity(credentials):
+                            fail(f"{self.command}: kickoff login changed; active credentials were kept")
+                        atomic_write_bytes(self._profile(name), active)
+                    restore_previous = True
+                print(f"  {name}: " + ("ok" if ok else "FAIL") + (f" ({detail})" if detail else ""))
+                if not ok:
+                    failures += 1
+        finally:
+            if restore_previous:
+                restore = self._load_profile(current) if current else original
+                if restore is None:
+                    self.auth.unlink(missing_ok=True)
+                else:
+                    self._install(restore)
+        return 1 if failures else 0
+
+    def repair(self) -> int:
+        names = self.suffixes()
+        if not names:
+            return 0
+        active, name = self._capture_active()
+        if name is None:
+            if active is not None and self._inactive_state(active) == "signed out":
+                return 0
+            name = super().current_suffix() or (names[0] if len(names) == 1 else None)
+            if name not in names:
+                fail(f"{self.command}: select a saved profile to restore Cursor credentials")
+            self._install(self._load_profile(name))
+        elif self.auth.is_symlink() or (self.auth.stat().st_mode & 0o777) != 0o600:
+            self._install(active)
+        self._mark(name)
+        return 0
 
 
 class AntigravityBackend:
@@ -1009,14 +1233,6 @@ def make_backend(agent: str) -> ClaudeBackend | SharedStoreBackend | Antigravity
             default_agent=Path(".codex"),
             default_store=Path(".local/share/clusterfork-auth/codex"),
         ),
-        "cursor": dict(
-            command="rotate-cursor-cli",
-            label="Cursor",
-            agent_dir_env="ROTATE_CURSOR_DIR",
-            store_dir_env="ROTATE_CURSOR_AUTH_STORE_DIR",
-            default_agent=Path(".config/cursor"),
-            default_store=Path(".local/share/clusterfork-auth/cursor"),
-        ),
         "grok": dict(
             command="rotate-grok",
             label="Grok",
@@ -1036,6 +1252,8 @@ def make_backend(agent: str) -> ClaudeBackend | SharedStoreBackend | Antigravity
     }
     if agent == "claude":
         return ClaudeBackend()
+    if agent == "cursor":
+        return CursorBackend()
     if agent == "antigravity":
         return AntigravityBackend()
     if agent in shared:
@@ -1057,6 +1275,9 @@ def run(argv: list[str]) -> int:
         return 0 if argv else 1
 
     backend = make_backend(argv[0])
+    if isinstance(backend, CursorBackend) and argv[1:] == ["--repair"]:
+        with backend.lock():
+            return backend.repair()
     action, name = parse_action(backend.command, argv[1:])
     if action == "help":
         print("\n".join(usage(backend.command)))
@@ -1067,6 +1288,13 @@ def run(argv: list[str]) -> int:
         name = prompt_name(backend.command)
     if action == "list":
         return backend.list_profiles()
+    if isinstance(backend, CursorBackend):
+        with backend.lock(create=action == "save"):
+            return apply_action(backend, action, name)
+    return apply_action(backend, action, name)
+
+
+def apply_action(backend, action: str, name: str | list[str] | None) -> int:
     if action == "unhook":
         return backend.unhook()
     if action == "kickoff":

@@ -12,8 +12,10 @@ import urllib.request
 from pathlib import Path
 
 HOME = Path.home()
-CURSOR_HOME = Path(os.environ.get("CURSOR_HOME", HOME / ".config" / "cursor")).expanduser()
-DEFAULT_AUTH = "auth.json"
+CURSOR_HOME = Path(
+    os.environ.get("CURSOR_HOME") or os.environ.get("ROTATE_CURSOR_DIR")
+    or Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config") / "cursor"
+).expanduser()
 API_BASE_URL = "https://api2.cursor.sh/aiserver.v1.DashboardService"
 USER_AGENT = "cursor/3.7.21"
 CACHE = HOME / ".cursor" / ".usage-cache.json"
@@ -44,26 +46,11 @@ def fresh(cache):
     return (auto is not None or api is not None) and time.time() - cache.get("fetched_at", 0) < TTL
 
 
-def default_auth_path():
-    return CURSOR_HOME / DEFAULT_AUTH
-
-
 def selected_auth_path():
     configured = os.environ.get("CURSOR_AUTH_PATH", "").strip()
     if configured:
         return Path(configured).expanduser()
-    default = default_auth_path()
-    if default.is_symlink() or default.is_file():
-        return default
-    suffixed = sorted(p for p in default.parent.glob(f"{DEFAULT_AUTH}.*") if p.is_file())
-    for path in suffixed:
-        try:
-            if default.resolve() == path.resolve():
-                return path
-        except OSError:
-            if default == path:
-                return path
-    return default
+    return CURSOR_HOME / "auth.json"
 
 
 def read_token(path):

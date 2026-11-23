@@ -42,6 +42,10 @@ Preconditions:
   none are present, tell the user and stop.
 - Non-interactive only: always `--print` (never open the interactive TUI from
   this skill).
+- With Clusterfork Cursor rotation configured, run the CLI with
+  `AGENT_CLI_CREDENTIAL_STORE=file`. The installed Clusterfork shell profile
+  exports it for named profiles. Set it explicitly in processes started
+  outside that shell profile.
 
 Shared settings every call:
 

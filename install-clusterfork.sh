@@ -40,8 +40,8 @@
 #  16. Ensures statusLine in ~/.cursor/cli-config.json (key only; does not
 #      replace the whole file)
 #  17. Appends a source line to ~/.bashrc if it is not already present
-#  18. Best-effort: ensures Codex/Cursor/Grok/OpenCode auth.json links through
-#      ~/.local/share/clusterfork-auth/<agent>/current when profiles exist
+#  18. Best-effort: repairs Codex/Grok/OpenCode auth links and Cursor's active
+#      credential copy when named profiles exist
 #  19. Installs the Codex kickoff timer and enables it when this home's systemd
 #      user manager is available
 #  20. Installs the optional Hex workspace and merges its live rewrite settings
@@ -125,8 +125,7 @@ CODEX_AUTH_STORE_DIR="$SHARED_AUTH_ROOT/codex"
 CODEX_STATUSLINE_SRC="$STATUSLINE_SRC_DIR/codex/statusline.config.toml"
 CODEX_STATUSLINE_SHARED="$CODEX_AUTH_STORE_DIR/statusline.config.toml"
 CODEX_STATUSLINE_LINK="$HOME/.codex/clusterfork-statusline.toml"
-CURSOR_AUTH_DIR="$HOME/.config/cursor"
-CURSOR_AUTH_STORE_DIR="$SHARED_AUTH_ROOT/cursor"
+CURSOR_AUTH_STORE_DIR="${ROTATE_CURSOR_AUTH_STORE_DIR:-$SHARED_AUTH_ROOT/cursor}"
 GROK_AUTH_DIR="$HOME/.grok"
 GROK_AUTH_STORE_DIR="$SHARED_AUTH_ROOT/grok"
 OPENCODE_AUTH_DIR="$HOME/.local/share/opencode"
@@ -330,19 +329,6 @@ configure_shared_auth() {
     [[ -f "$path" && ! -L "$path" ]] || continue
     chmod 600 "$path" || return 1
   done
-
-  if [[ "$label" == "Codex" || "$label" == "Cursor" ]]; then
-    python3 - "$(dirname "$ROTATE_AUTH_DEST")" "$store_dir" "$active_suffix" "$label" <<'PY' || return 1
-import sys
-from pathlib import Path
-sys.path.insert(0, sys.argv[1])
-from rotate_auth import load_remote_profiles, profile_is_local
-store = Path(sys.argv[2])
-manifest = load_remote_profiles(store)
-if manifest and not profile_is_local(store, sys.argv[3], manifest, sys.argv[4].lower()):
-    raise SystemExit("Selected account has no registered independent local login")
-PY
-  fi
 
   tmp_link="$store_dir/.current.tmp.$$"
   rm -f -- "$tmp_link" || return 1
@@ -1121,13 +1107,13 @@ else
     "Fix the reported auth state, then re-run the installer."
 fi
 
-if configure_shared_auth "Cursor" "$CURSOR_AUTH_DIR" "$CURSOR_AUTH_STORE_DIR"; then
-  if (( AUTH_STORE_CONFIGURED )); then
+if python3 -BS "$ROTATE_AUTH_DEST" cursor --repair; then
+  if [[ -L "$CURSOR_AUTH_STORE_DIR/current" ]]; then
     step "cursor auth" "$CURSOR_AUTH_STORE_DIR"
   fi
 else
   warn \
-    "Cursor shared auth was not configured; the rest of the install is complete." \
+    "Cursor auth repair failed; the rest of the install is complete." \
     "Fix the reported auth state, then re-run the installer."
 fi
 
@@ -1186,7 +1172,6 @@ printf '    %-5s %-18s %s\n' gk "grok" ""
 printf '    %-5s %-18s %s\n' chrome "prime-run google-chrome" "--ozone-platform=x11 --remote-debugging-port=9222 (background)"
 printf '    %-5s %-18s %s\n' codeview "bin/codeview" "start|stop|restart|reload|status|open (no args = start)"
 printf '    %-5s %-18s %s\n' "rotate-*" "rotate_auth.py" "[name] --save name --delete name --unhook --list --kickoff [names]"
-printf '    %-5s %-18s %s\n' "" "Codex/Cursor" "[--local|--remote] --save name; --remote --list/--delete name"
 
 # Skills: enabled and disabled groups, with short descriptions from metadata.
 python3 - "$SKILLS_SRC_DIR" "$REPO_DIR/disabled-skills" <<'PY'
