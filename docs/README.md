@@ -42,6 +42,7 @@ Dated records establish neither current health nor compatibility; recheck upstre
 - [Codex account-scoped history, 0.169.0](archive/codex-account-scoped-history.md) — disappearing-session diagnosis, custom-build attempt and why it was abandoned
 - [Codex usage-limit bell](archive/codex-usage-limit-bell.md) — completion-hook gap and rejected watcher
 - [Command Code resume](archive/cmd-resume-bug.md) — empty-directory failure and reverted fallback
+- [Hex rewrite effort, Nov 2026](archive/hex-rewrite-effort-2026-11.md) — DeepSeek Flash vs. Haiku latency and adaptive `low`-vs-`medium` prompt experiments
 - [Retired integrations](archive/retired-integrations.md) — removed Aerolink and Pioneer gateways
 
 Current topics describe implemented behavior, not a proposed specification.
