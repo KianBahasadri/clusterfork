@@ -19,7 +19,7 @@ class BackgroundVocabularyTests(unittest.TestCase):
         self.settings = Path(directory.name) / "settings.json"
         self.settings.write_text(json.dumps({
             "dictation_processing": {"default_mode": {"post_processing": {
-                "model": "opencode-go/deepseek-v4.1-flash", "variant": "low", "deadline_seconds": 30,
+                "model": "opencode-go/claude-haiku-5-5", "variant": "none", "deadline_seconds": 30,
             }}},
             "vocabulary": ["Kobo"],
         }))
@@ -100,7 +100,7 @@ class BackgroundVocabularyTests(unittest.TestCase):
             self.assertEqual(reference["current_transcript"], "Restart syncthing.")
             self.assertEqual(reference["pasted_text"], "Restart Syncthing.")
             self.assertEqual(reference["vocabulary"], ["Kobo"])
-            self.assertEqual(profile["model"], "opencode-go/deepseek-v4.1-flash")
+            self.assertEqual(profile["model"], "opencode-go/claude-haiku-5-5")
             self.assertEqual(profile["variant"], "low")
             settings = json.loads(self.settings.read_text())
             settings["vocabulary"].append("Syncthing")

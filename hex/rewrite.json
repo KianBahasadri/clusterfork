@@ -1,6 +1,6 @@
 {
   "deadline_seconds": 30,
   "enabled": false,
-  "model": "opencode-go/deepseek-v4.1-flash",
-  "variant": "low"
+  "model": "opencode-go/claude-haiku-5-5",
+  "variant": "none"
 }

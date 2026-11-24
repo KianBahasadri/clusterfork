@@ -109,8 +109,8 @@ class HexInstallerTests(unittest.TestCase):
             self.assertEqual(self.mode[key], self.original[key])
         self.assertEqual(self.mode["transformations"], ["conversation-context", "lowercase", "no-trailing-punctuation"])
         profile = self.mode["post_processing"]
-        self.assertEqual(profile["model"], "opencode-go/deepseek-v4.1-flash")
-        self.assertEqual(profile["variant"], "low")
+        self.assertEqual(profile["model"], "opencode-go/claude-haiku-5-5")
+        self.assertEqual(profile["variant"], "none")
         self.assertFalse(profile["enabled"])
         self.assertEqual(profile["future_option"], "keep")
         self.assertIn(str(self.home / "guaranine"), profile["prompt"])

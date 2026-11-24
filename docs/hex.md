@@ -52,8 +52,8 @@ pane. The installer does not write Hex's approval state. Unchanged config
 bytes are not rewritten, preserving an existing approval. The transformation
 template keeps its old Luna wording because changing its bytes would invalidate
 this machine's approved configuration; Luna is no longer the rewrite model.
-The actual model comes from `hex/rewrite.json`, which selects DeepSeek V4.1
-Flash. The helper still bounds its history excerpt to 2000 words, matching the
+The actual model comes from `hex/rewrite.json`, which selects Claude Haiku 5.5.
+The helper still bounds its history excerpt to 2000 words, matching the
 template's total-word-limit description. Hex-owned `AGENTS.md`, `hex.d.ts`,
 and `tsconfig.json` are left alone. Run
 `hex commands init` if you want Hex to generate or refresh its editor typings.
@@ -222,17 +222,18 @@ uncertainty, quotations, identifiers, and intended numbers. Preserve unresolved
 contradictions instead of guessing. `@HOME@` is expanded during installation
 in the personal Guaranine repository reference.
 
-`hex/rewrite.json` selects DeepSeek V4.1 Flash on OpenCode Go, with explicit
-`low` reasoning and a 30-second deadline. The helper reads these values from the
-saved Global profile for each dictation and sends that explicit variant; it does
-not omit reasoning to accept a provider default. DeepSeek V4.1 Flash exposes
-`low`, `high`, and `max`, so `low` is the minimum supported setting and there is
-no `none` variant for this model. The saved model and variant are used for every
-dictation; the helper does not change the background vocabulary worker's effort,
-which continues to request its own explicit `low` reasoning. Other models and
-explicit reasoning variants are preserved. Reasoning shares the existing
-deadline and failure fallback. Built-in post-processing stays disabled because
-the `conversation-context` transformation performs the rewrite once.
+`hex/rewrite.json` selects Claude Haiku 5.5 on OpenCode Go, base variant `none`,
+with a 30-second deadline. The helper reads these values from the saved Global
+profile for each dictation. With that model and base variant, a current
+dictation of **100 words or more** requests `medium` reasoning for that rewrite;
+shorter dictations keep `none`. Only the current text counts toward the
+threshold, not history, vocabulary, or instructions. `LONG_DICTATION_WORDS` in
+the helper owns the threshold. The selection is per request: it does not write
+settings or change the background vocabulary worker's effort. Other models and
+explicit reasoning variants are preserved. The helper logs the current word
+count and selected variant. Reasoning shares the existing deadline and failure
+fallback. Built-in post-processing stays disabled because the
+`conversation-context` transformation performs the rewrite once.
 
 The helper includes up to 2000 whitespace-separated words from earlier
 nonempty dictations retained in Hex History. There is no age or message-count
