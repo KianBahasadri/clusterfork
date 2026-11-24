@@ -941,7 +941,7 @@ class Symphony:
                 self.compacting_repo = ""
         elif command == "/status":
             status = self.coordinator.status(repo)
-            usage = [status["model"]]
+            usage = [status["model"] or "Antigravity (signed out)"]
             usage.extend(f"{label} {status['rateLimits'][label]['left']}% left"
                          for label in ("5h", "weekly") if label in status["rateLimits"])
             summary = [

@@ -760,6 +760,11 @@ class SymphonyTests(unittest.IsolatedAsyncioTestCase):
         cancelled = await app.update_config({"action": "antigravity_cancel_login"})
         self.assertIsNone(cancelled["antigravity"]["login"])
 
+        # Signed out status omits model name and model list cleanly.
+        signed_out_status = (await app.state(0))["coordinator"]
+        self.assertEqual(signed_out_status["model"], "")
+        self.assertEqual(signed_out_status["models"], {})
+
         # Start again and submit valid authorization code -> saves 0600 token & signs in.
         await app.update_config({"action": "antigravity_login"})
         completed = await app.update_config({"action": "antigravity_complete_login", "code": "4/0A-fixture-code"})
@@ -767,6 +772,7 @@ class SymphonyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed["antigravity"]["account"]["email"], "kian@example.test")
         self.assertIsNone(completed["antigravity"]["login"])
         self.assertEqual(app.coordinator.token_path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual((await app.state(0))["coordinator"]["model"], "Gemini 4 Neon (High)")
 
         # Active turn blocks logout with BusyError.
         app.coordinator.turns[REPO] = "turn-busy"

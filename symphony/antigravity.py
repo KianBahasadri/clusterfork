@@ -444,6 +444,16 @@ class Antigravity:
         return True, ""
 
     def status(self, repo=""):
+        if not self.account:
+            return {
+                "model": "",
+                "effort": "",
+                "contextUsed": None,
+                "rateLimits": {},
+                "turnTiming": {},
+                "models": {},
+                "efforts": [],
+            }
         name = self.current_model()
         display = self.models.get(name, name)
         return {
