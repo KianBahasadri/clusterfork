@@ -1320,7 +1320,7 @@ function formatTurnDuration(seconds) {
 }
 
 function showCoordinatorStatus() {
-  byId("status-model").textContent = [coordinator.model || "Antigravity", coordinator.effort].filter(Boolean).join(" ");
+  byId("status-model").textContent = [coordinator.model || "No model selected", coordinator.effort].filter(Boolean).join(" ");
   const context = byId("status-context");
   context.hidden = coordinator.contextUsed == null;
   if (!context.hidden) context.textContent = "Context " + coordinator.contextUsed + "% used";
