@@ -429,7 +429,7 @@ def execution_payload(identifier, issue, history, runner, now=None):
     worker = {
         "attemptCount": len(attempts),
         "coverage": ("recorded" if attempts else
-                     "not_started" if task and phase in {"approving", "approved"} and task_attempts == 0
+                     "not_started" if task and phase == "queued" and task_attempts == 0
                      else "unavailable"),
         "attempts": attempts,
     }
@@ -479,20 +479,20 @@ def execution_payload(identifier, issue, history, runner, now=None):
         if category == "coordinator":
             value = 0.0 if tracking else None
         elif category == "startup":
-            if task and task_attempts == 0 and phase in {"approving", "approved"}:
+            if task and task_attempts == 0 and phase == "queued":
                 value = 0.0
         elif category == "worker":
-            if task and ((task_attempts == 0 and phase in {"approving", "approved"})
+            if task and ((task_attempts == 0 and phase == "queued")
                          or (tracking and phase == "working")):
                 value = 0.0
         elif category == "verification":
-            if task and (phase in {"approving", "approved"}
+            if task and (phase == "queued"
                          or (tracking and phase == "working")):
                 value = 0.0
         elif category == "publication":
             if (task and not task.get("revision")
                     and phase not in {"publishing", "ci", "finishing", "done", "finish_failed"}
-                    and (tracking or phase in {"approving", "approved"})):
+                    and (tracking or phase == "queued")):
                 value = 0.0
         elif category in {"ci_wait", "ci_discovery"}:
             if task and not has_ci and tracking:

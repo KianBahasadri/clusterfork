@@ -330,7 +330,7 @@ const doc = {
 };
 const ctx = vm.createContext({document: doc, setInterval: () => 0, setTimeout, clearTimeout, console});
 vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
-vm.runInContext('codex = {model: "GPT", effort: "high", contextUsed: 0, rateLimits: {}, turnTiming: {}}; canInterrupt = false; showCodexStatus();', ctx);
+vm.runInContext('coordinator = {model: "gemini-4-neon-high", contextUsed: 0, rateLimits: {}, turnTiming: {}}; canInterrupt = false; showCoordinatorStatus();', ctx);
 const el = doc.getElementById("status-context");
 console.log(JSON.stringify({hidden: el.hidden, text: el.textContent}));
 """
@@ -371,11 +371,11 @@ vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
 const timing = doc.getElementById("turn-timing");
 const snap = (code) => { vm.runInContext(code, ctx); return {hidden: timing.hidden, text: timing.textContent}; };
 const results = {
-  queuedIdle: snap('codex = {rateLimits: {}, turnTiming: {}}; canInterrupt = false; compacting = "queued"; showCodexStatus();'),
-  queuedWorking: snap('codex = {rateLimits: {}, turnTiming: {startedAt: 95}}; canInterrupt = true; compacting = "queued"; showCodexStatus();'),
-  runningFallback: snap('codex = {rateLimits: {}, turnTiming: {startedAt: 80, completedAt: 85, durationMs: 5000}}; canInterrupt = false; compacting = "running"; showCodexStatus();'),
-  runningTimed: snap('codex = {rateLimits: {}, turnTiming: {startedAt: 92}}; canInterrupt = false; compacting = "running"; showCodexStatus();'),
-  finished: snap('codex = {rateLimits: {}, turnTiming: {startedAt: 92, durationMs: 8000}}; canInterrupt = false; compacting = ""; showCodexStatus();'),
+  queuedIdle: snap('coordinator = {rateLimits: {}, turnTiming: {}}; canInterrupt = false; compacting = "queued"; showCoordinatorStatus();'),
+  queuedWorking: snap('coordinator = {rateLimits: {}, turnTiming: {startedAt: 95}}; canInterrupt = true; compacting = "queued"; showCoordinatorStatus();'),
+  runningFallback: snap('coordinator = {rateLimits: {}, turnTiming: {startedAt: 80, completedAt: 85, durationMs: 5000}}; canInterrupt = false; compacting = "running"; showCoordinatorStatus();'),
+  runningTimed: snap('coordinator = {rateLimits: {}, turnTiming: {startedAt: 92}}; canInterrupt = false; compacting = "running"; showCoordinatorStatus();'),
+  finished: snap('coordinator = {rateLimits: {}, turnTiming: {startedAt: 92, durationMs: 8000}}; canInterrupt = false; compacting = ""; showCoordinatorStatus();'),
 };
 console.log(JSON.stringify(results));
 """
@@ -423,7 +423,7 @@ let failNext = false;
 const posts = [];
 let state = {
   opencodeGo: {configured: false, malformed: false, busy: false},
-  codex: {signedIn: false, account: {}, login: null, busy: false},
+  antigravity: {signedIn: false, account: {}, login: null, busy: false},
 };
 const fetch = async (path, options = {}) => {
   if (path === "/api/agents") return {ok: true, json: async () => ({content: "rules", html: "<p>rules</p>"})};
@@ -437,13 +437,13 @@ const fetch = async (path, options = {}) => {
       posts.push(body);
       if (body.action === "set_opencode_key") state.opencodeGo.configured = true;
       if (body.action === "clear_opencode_key") state.opencodeGo.configured = false;
-      if (body.action === "codex_login") state.codex.login = {url: "https://example.test/auth", code: "ABCD-1234"};
-      if (body.action === "codex_cancel_login") state.codex.login = null;
+      if (body.action === "antigravity_login") state.antigravity.login = {url: "https://example.test/auth"};
+      if (body.action === "antigravity_cancel_login") state.antigravity.login = null;
       return {ok: true, json: async () => state};
     }
     return {ok: true, json: async () => state};
   }
-  return {ok: true, json: async () => ({messages: [], busy: false, canInterrupt: false, stream: "", streamHtml: "", tasks: [], signedIn: false, login: null, paused: "", view: "", codex: {rateLimits: {}, turnTiming: {}}, issueError: ""})};
+  return {ok: true, json: async () => ({messages: [], busy: false, canInterrupt: false, stream: "", streamHtml: "", tasks: [], signedIn: false, login: null, paused: "", view: "", coordinator: {rateLimits: {}, turnTiming: {}}, issueError: ""})};
 };
 const ctx = vm.createContext({document: doc, fetch, setInterval: () => 0, setTimeout, clearTimeout, console});
 vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
@@ -788,11 +788,11 @@ const pill = {
   title: "",
 };
 ctx.updateStagePill(pill, now);
-vm.runInContext('codex = {model: "gpt-5", effort: "high", turnTiming: {startedAt: ' + Math.floor((now - 5000) / 1000) + '}}; canInterrupt = true;', ctx);
+vm.runInContext('coordinator = {model: "gemini-4-neon-high", turnTiming: {startedAt: ' + Math.floor((now - 5000) / 1000) + '}}; canInterrupt = true;', ctx);
 const origNow = Date.now;
 Date.now = () => now;
 try {
-  ctx.showCodexStatus();
+  ctx.showCoordinatorStatus();
 } finally {
   Date.now = origNow;
 }
@@ -1194,42 +1194,42 @@ vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
 const snap = () => ({hidden: rawTiming.hidden, text: rawTiming.textContent, anim: rawTiming.dataset.animation || "", writes});
 
 // Turn 1 (startedAt=95): picks index 0 ("rainbow"), stays stable across polls, elapsed seconds, and project switches.
-vm.runInContext('codex = {rateLimits: {}, turnTiming: {startedAt: 95}}; canInterrupt = true; compacting = ""; showCodexStatus();', ctx);
+vm.runInContext('coordinator = {rateLimits: {}, turnTiming: {startedAt: 95}}; canInterrupt = true; compacting = ""; showCoordinatorStatus();', ctx);
 const t1Start = snap();
 nowMs = 104000;
-vm.runInContext('showCodexStatus();', ctx);
+vm.runInContext('showCoordinatorStatus();', ctx);
 const t1Poll = snap();
-vm.runInContext('resetChatView("other"); showCodexStatus();', ctx);
+vm.runInContext('resetChatView("other"); showCoordinatorStatus();', ctx);
 const t1Switch = snap();
 
 // Completed ("Worked for"): clears animation.
-vm.runInContext('codex = {rateLimits: {}, turnTiming: {startedAt: 95, completedAt: 105, durationMs: 10000}}; canInterrupt = false; showCodexStatus();', ctx);
+vm.runInContext('coordinator = {rateLimits: {}, turnTiming: {startedAt: 95, completedAt: 105, durationMs: 10000}}; canInterrupt = false; showCoordinatorStatus();', ctx);
 const afterComplete = snap();
 
 // Same startedAt after idle poll picks a fresh random animation -> index 1 ("spinner").
-vm.runInContext('codex = {rateLimits: {}, turnTiming: {startedAt: 95}}; canInterrupt = true; showCodexStatus();', ctx);
+vm.runInContext('coordinator = {rateLimits: {}, turnTiming: {startedAt: 95}}; canInterrupt = true; showCoordinatorStatus();', ctx);
 const sameStartAfterIdle = snap();
 
 // Interrupted / canInterrupt=false without durationMs clears animation.
-vm.runInContext('canInterrupt = false; showCodexStatus();', ctx);
+vm.runInContext('canInterrupt = false; showCoordinatorStatus();', ctx);
 const afterInterrupt = snap();
 
 // New active turn -> index 2 ("pulse"), then direct jump to startedAt=120 with no idle poll -> index 3 ("shimmer").
-vm.runInContext('codex = {rateLimits: {}, turnTiming: {startedAt: 110}}; canInterrupt = true; showCodexStatus();', ctx);
+vm.runInContext('coordinator = {rateLimits: {}, turnTiming: {startedAt: 110}}; canInterrupt = true; showCoordinatorStatus();', ctx);
 const turnPulse = snap();
-vm.runInContext('codex = {rateLimits: {}, turnTiming: {startedAt: 120}}; canInterrupt = true; showCodexStatus();', ctx);
+vm.runInContext('coordinator = {rateLimits: {}, turnTiming: {startedAt: 120}}; canInterrupt = true; showCoordinatorStatus();', ctx);
 const turnShimmer = snap();
 
 // Missing turnTiming clears animation.
-vm.runInContext('codex = {rateLimits: {}}; canInterrupt = true; showCodexStatus();', ctx);
+vm.runInContext('coordinator = {rateLimits: {}}; canInterrupt = true; showCoordinatorStatus();', ctx);
 const missingTiming = snap();
 
 // Compaction running clears animation even if canInterrupt/startedAt happen to be set; queued still animates.
-vm.runInContext('codex = {rateLimits: {}, turnTiming: {startedAt: 130}}; canInterrupt = true; compacting = "queued"; showCodexStatus();', ctx);
+vm.runInContext('coordinator = {rateLimits: {}, turnTiming: {startedAt: 130}}; canInterrupt = true; compacting = "queued"; showCoordinatorStatus();', ctx);
 const queuedAnim = snap();
-vm.runInContext('compacting = "running"; showCodexStatus();', ctx);
+vm.runInContext('compacting = "running"; showCoordinatorStatus();', ctx);
 const compactingClears = snap();
-vm.runInContext('compacting = ""; showCodexStatus();', ctx);
+vm.runInContext('compacting = ""; showCoordinatorStatus();', ctx);
 const afterCompactingIdleStillStarted = snap();
 
 console.log(JSON.stringify({

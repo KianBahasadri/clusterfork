@@ -180,8 +180,8 @@
           <ul id="command-list" role="listbox" aria-label="Slash command suggestions" hidden></ul>
         </div>
         <div class="composer-meta">
-          <div id="codex-status" role="group" aria-label="Codex status">
-            <span id="status-model">Codex</span>
+          <div id="coordinator-status" role="group" aria-label="Antigravity status">
+            <span id="status-model">Antigravity</span>
             <span id="status-context" hidden></span>
             <span id="status-5h" hidden></span>
             <span id="status-weekly" hidden></span>
@@ -227,17 +227,22 @@
         </form>
         <p id="config-opencode-feedback" class="config-feedback muted" role="status"></p>
       </section>
-      <section class="config-section config-provider" aria-labelledby="config-codex-heading">
-        <h2 id="config-codex-heading">Codex</h2>
-        <p id="config-codex-status" role="status"></p>
-        <div id="config-codex-details" class="config-details muted" hidden></div>
-        <div id="config-codex-login" class="config-login" hidden></div>
+      <section class="config-section config-provider" aria-labelledby="config-antigravity-heading">
+        <h2 id="config-antigravity-heading">Antigravity</h2>
+        <p id="config-antigravity-status" role="status"></p>
+        <div id="config-antigravity-details" class="config-details muted" hidden></div>
+        <div id="config-antigravity-login" class="config-login" hidden></div>
+        <form id="config-antigravity-code-form" class="config-controls" hidden>
+          <label class="sr-only" for="config-antigravity-code">Google authorization code</label>
+          <input id="config-antigravity-code" type="text" autocomplete="off" spellcheck="false" placeholder="Paste Google authorization code">
+          <button id="config-antigravity-submit" type="submit">Complete sign-in</button>
+        </form>
         <div class="config-controls">
-          <button id="config-codex-signin" type="button">Sign in</button>
-          <button id="config-codex-cancel" type="button" hidden>Cancel sign-in</button>
-          <button id="config-codex-signout" type="button" hidden>Sign out</button>
+          <button id="config-antigravity-signin" type="button">Sign in</button>
+          <button id="config-antigravity-cancel" type="button" hidden>Cancel sign-in</button>
+          <button id="config-antigravity-signout" type="button" hidden>Sign out</button>
         </div>
-        <p id="config-codex-feedback" class="config-feedback muted" role="status"></p>
+        <p id="config-antigravity-feedback" class="config-feedback muted" role="status"></p>
       </section>
       <section class="config-section config-agents" aria-labelledby="config-agents-heading">
         <h2 id="config-agents-heading">Global AGENTS.md</h2>

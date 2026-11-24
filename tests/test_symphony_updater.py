@@ -61,14 +61,14 @@ class IdleEndpointTests(unittest.IsolatedAsyncioTestCase):
         with self.runner.db:
             self.runner.db.execute("UPDATE tasks SET phase=? WHERE issue='KIAN-1'", (phase,))
 
-    async def test_idle_checks_coordinator_tasks_and_events(self):
+    async def test_idle_checks_coordinator_and_tasks(self):
         self.assertTrue(await self.app.idle())
 
         self.app.busy = True
         self.assertFalse(await self.app.idle())
         self.app.busy = False
 
-        self.app.messages.append(("owner/repo", "hi", "hi"))
+        self.app.messages.append(("owner/repo", "hi", "hi", ()))
         self.assertFalse(await self.app.idle())
         self.app.messages.clear()
 
@@ -77,44 +77,30 @@ class IdleEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.app.coordinator.turns.clear()
 
         self._insert_task("working")
-        for phase in ("approving", "working", "publishing", "ci", "finishing"):
+        for phase in ("working", "publishing", "ci", "finishing"):
             self._set_phase(phase)
             self.assertFalse(await self.app.idle(), f"{phase} should not be idle")
 
-        for phase in ("approved", "review", "blocked", "finish_failed", "done"):
+        for phase in ("queued", "parked", "finish_failed", "done"):
             self._set_phase(phase)
             self.assertTrue(await self.app.idle(), f"{phase} should be idle")
 
-        with self.runner.db:
-            self.runner.db.execute("INSERT INTO events(issue,detail,delivered) VALUES ('KIAN-1','Done.',0)")
-
-        # Signed out: pump will not deliver events, so still idle.
-        self.assertTrue(await self.app.idle())
-
-        # Signed in and unpaused: undelivered event means coordinator is about to wake.
-        self.app.coordinator.account = "chatgpt"
-        self.assertFalse(await self.app.idle())
-
-        # Paused: pump will not deliver events, so updates can still roll out.
-        self.runner.save_setting("paused", "quota")
-        self.assertTrue(await self.app.idle())
-
     async def test_draining_holds_unfinished_work_but_not_queued_todo(self):
-        self._insert_task("approved")
+        self._insert_task("queued")
         self.assertTrue(await self.app.idle())
         self.runner.draining = True
         for phase in ("working", "publishing", "ci", "finishing"):
             self._set_phase(phase)
             self.assertFalse(await self.app.idle(), f"{phase} should never be idle")
-        for phase in ("review", "blocked", "finish_failed"):
+        for phase in ("finish_failed",):
             self._set_phase(phase)
             self.assertFalse(await self.app.idle(), f"{phase} should hold draining")
-        for phase in ("approved", "done"):
+        for phase in ("queued", "parked", "done"):
             self._set_phase(phase)
             self.assertTrue(await self.app.idle(), f"{phase} should not hold draining")
 
         self.runner.draining = False
-        self._set_phase("blocked")
+        self._set_phase("finish_failed")
         self.assertTrue(await self.app.idle())
 
     async def test_state_uses_cached_update_status_without_registry_requests(self):
@@ -222,7 +208,7 @@ class DrainHttpTests(unittest.IsolatedAsyncioTestCase):
         with self.runner.db:
             self.runner.db.execute(
                 """INSERT INTO tasks(issue,project,repo,title,plan,phase,updated)
-                   VALUES ('KIAN-1','proj','owner/repo','Title','Plan','approved',0)"""
+                   VALUES ('KIAN-1','proj','owner/repo','Title','Plan','queued',0)"""
             )
         tasks = self.runner.rows("SELECT * FROM tasks")
         chat = self.runner.rows("SELECT * FROM chat")

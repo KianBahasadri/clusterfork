@@ -21,11 +21,29 @@ RUN set -eux; \
     unzip "$archive" terraform -d /usr/local/bin; \
     rm "$archive"
 
+RUN set -eux; \
+    platform="linux_${TARGETARCH:-amd64}"; \
+    manifest="$(curl -fsSL "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/${platform}.json")"; \
+    url="$(printf '%s' "$manifest" | jq -r '.url')"; \
+    sha512="$(printf '%s' "$manifest" | jq -r '.sha512')"; \
+    test -n "$url" && test "$url" != "null"; \
+    test -n "$sha512" && test "$sha512" != "null"; \
+    cd /tmp; \
+    curl -fsSL -o agy.payload "$url"; \
+    printf '%s  agy.payload\n' "$sha512" | sha512sum --check -; \
+    case "$url" in \
+      *.tar.gz*) tar -xzf agy.payload -C /tmp antigravity && mv /tmp/antigravity /usr/local/bin/agy ;; \
+      *) mv agy.payload /usr/local/bin/agy ;; \
+    esac; \
+    rm -f /tmp/agy.payload; \
+    chmod 0755 /usr/local/bin/agy; \
+    agy --version
+
 COPY --from=uv /uv /usr/local/bin/uv
 RUN npm install --global --no-audit --no-fund \
-      @openai/codex@0.171.0 @opencode/cli@2.3.0 pnpm@11.6.0 mermaid@12.3.0 \
+      @opencode/cli@2.3.0 pnpm@11.6.0 mermaid@12.3.0 \
     && npm cache clean --force \
-    && codex --version && opencode --version && pnpm --version
+    && opencode --version && pnpm --version
 
 WORKDIR /app
 COPY symphony/requirements.txt /app/requirements.txt
@@ -45,6 +63,7 @@ COPY agents/AGENTS.md /app/agents/AGENTS.md
 
 ARG SYMPHONY_COMMIT=""
 ENV PATH="/opt/symphony/bin:$PATH" \
+    PYTHONPATH="/app" \
     HOME="/data/symphony/home" \
     PLAYWRIGHT_BROWSERS_PATH="/opt/playwright-browsers" \
     SYMPHONY_COMMIT="${SYMPHONY_COMMIT}" \

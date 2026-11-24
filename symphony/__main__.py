@@ -16,6 +16,7 @@ import math
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import signal
 import sqlite3
@@ -24,11 +25,11 @@ import time
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
-from .codex import Codex, TOOL_SPECS, is_usage_error
+from .antigravity import Antigravity, TOOL_SPECS, is_usage_error
 from .execution import card_stage, execution_payload, history_summary
 from .issue_details import issue_details, markdown, open_asset
 from .metrics import render_metrics
-from .runner import BusyError, Runner, read_small, rules_state, shared_agents
+from .runner import BusyError, Runner, rules_state, shared_agents
 from .services import (
     CLOSED_STATES, ISSUE_ID, CreatedIssueError, Linear, estimate_scale, proposed_plan, with_plan,
 )
@@ -48,6 +49,7 @@ BODY_LIMIT = 14 * 1024 * 1024
 DRAIN_BODY_LIMIT = 1024
 CONFIG_BODY_LIMIT = 8192
 APPROVE_BODY_LIMIT = 1024
+TOOL_BODY_LIMIT = 256 * 1024
 TEXT_LIMIT = 23000
 ISSUE_TITLE_LIMIT = 255
 ISSUE_DESCRIPTION_LIMIT = 24000
@@ -73,8 +75,8 @@ WEBHOOK_TYPES = {"Issue", "Project"}
 WEBHOOK_ACTIONS = {"create", "update", "remove"}
 HISTORY_CONCURRENCY = 3
 RECENT_DONE = timedelta(hours=24)
-ACTIVE_PHASES = {"approving", "working", "publishing", "ci", "finishing"}
-DRAINING_PHASES = {"review", "blocked", "finish_failed"}
+ACTIVE_PHASES = {"working", "publishing", "ci", "finishing"}
+DRAINING_PHASES = {"finish_failed"}
 
 
 def image_matches(mime, data):
@@ -216,14 +218,21 @@ def web_version():
 class Symphony:
     def __init__(self, root):
         self.linear = Linear(os.environ["LINEAR_API_KEY"])
+        self.internal_token = secrets.token_hex(32)
         self.runner = Runner(root, self.linear)
-        self.coordinator = Codex(self.runner, self.tool, alert_repo=self.resolve_repo)
+        self.coordinator = Antigravity(
+            self.runner,
+            self.tool,
+            alert_repo=self.resolve_repo,
+            internal_token=self.internal_token,
+        )
+        self.runner.escalator = self.coordinator
         self.messages = deque()
         self.busy = False
         self.turn_repo = ""
         self.compacting_repo = ""
         self.pending_rules = {}
-        self.codex_config_lock = asyncio.Lock()
+        self.auth_config_lock = asyncio.Lock()
         self.login = None
         self.repos = {}
         self.link_problems = {}
@@ -308,7 +317,8 @@ class Symphony:
         if snapshot != self.issue_snapshot:
             self.issue_snapshot = snapshot
             self.issue_revision = uuid4().hex
-        if self.runner.rows("SELECT 1 FROM tasks WHERE phase='approved' LIMIT 1"):
+        self.runner.sync_todo_issues(snapshot)
+        if self.runner.rows("SELECT 1 FROM tasks WHERE phase='queued' LIMIT 1"):
             self.runner.wake.set()
 
     async def poll_issues(self):
@@ -549,6 +559,13 @@ class Symphony:
             raise ValueError("Unknown tool.")
         if name == "create_issue":
             return await self.create_issue(args)
+        if name == "enqueue_task":
+            if not isinstance(args, dict) or not {"repo", "prompt"} <= set(args) <= {"repo", "prompt", "title"}:
+                raise ValueError("Invalid enqueue_task arguments.")
+            repo = str(args["repo"]).strip().lower().removesuffix(".git")
+            if repo not in await self.refresh_projects():
+                raise ValueError(f"Unknown repository {repo}.")
+            return self.runner.enqueue_adhoc(repo, str(args["prompt"]), str(args.get("title") or ""))
         keys = TOOL_SPECS[name][1]
         if not isinstance(args, dict) or set(args) != set(keys) or any(not isinstance(args[key], str) for key in keys):
             raise ValueError("Invalid tool arguments.")
@@ -564,8 +581,6 @@ class Symphony:
             return {**issue, "repo": repo}
         if name == "set_plan":
             issue, repo = await self.live_issue(issue_id)
-            if self.runner.rows("SELECT 1 FROM tasks WHERE issue=?", (issue_id,)):
-                raise ValueError("The proposed plan is locked by approval.")
             plan = args["plan"].strip()
             if not plan or len(plan) > 24000:
                 raise ValueError("The plan must contain between 1 and 24,000 characters.")
@@ -584,33 +599,10 @@ class Symphony:
                 meta={"kind": "plan_proposal", "issue": issue_id, "title": title, "planHash": plan_hash},
             )
             return f"Saved the Proposed Plan section for {issue_id}."
-        if name == "approve_issue":
-            issue, repo = await self.live_issue(issue_id)
-            await self.runner.approve(issue, repo)
-            return f"Approved {issue_id}. Its plan is locked and the issue is queued in Todo."
         if name == "worker_status":
-            return self.runner.status()
-        if name == "spawn_worker":
-            return await self.runner.dispatch(issue_id, args["repo"].lower(), args["task"])
-        if name == "resume_worker":
-            return await self.runner.dispatch(issue_id, self.runner.task(issue_id)["repo"],
-                                              args["message"], resume=True)
-        if name == "read_notes":
-            return self.runner.read_notes(issue_id)
-        if name == "read_diff":
-            return await self.runner.read_diff(issue_id)
-        if name == "verify_worker":
-            return await self.runner.verify(issue_id)
-        if name == "ship_worker":
-            return self.runner.ship(issue_id)
-        if name == "park_worker":
-            if self.runner.task(issue_id)["phase"] not in {"review", "blocked"}:
-                raise ValueError("Wait until the current worker or publication has stopped.")
-            self.runner.block(issue_id, args["reason"][:2000])
-            return "Worktree and worker session preserved."
-        if name == "cleanup_worker":
-            await self.runner.cleanup(issue_id)
-            return "Worktree cleaned up."
+            return {"tasks": self.runner.status(), "stats": self.runner.stats()}
+        if name == "retry_task":
+            return self.runner.retry(args["task_id"])
         if name in {"list_repo_buttons", "set_repo_button", "delete_repo_button", "render_diagram"}:
             target_repo = args["repo"].strip().lower()
             if target_repo not in await self.refresh_projects():
@@ -640,25 +632,24 @@ class Symphony:
         return {"draining": self.runner.draining}
 
     async def approve_plan(self, body):
-        if (not isinstance(body, dict) or set(body) != {"issue", "planHash"}
-                or not isinstance(body["issue"], str) or not ISSUE_ID.fullmatch(body["issue"])
-                or not isinstance(body["planHash"], str)
-                or not re.fullmatch(r"[0-9a-f]{64}", body["planHash"])):
-            raise ValueError("Expected an issue identifier and planHash.")
+        """Move a planned Backlog issue straight to Todo so the Flash queue runs it."""
+        if (not isinstance(body, dict) or not {"issue"} <= set(body) <= {"issue", "planHash"}
+                or not isinstance(body["issue"], str) or not ISSUE_ID.fullmatch(body["issue"])):
+            raise ValueError("Expected an issue identifier.")
         issue_id = body["issue"]
-        if self.runner.rows("SELECT 1 FROM tasks WHERE issue=?", (issue_id,)):
-            raise BusyError(f"{issue_id} already has a recorded approval.")
         issue, repo = await self.live_issue(issue_id)
-        plan = proposed_plan(issue.get("description") or "")
-        if not plan:
-            raise BusyError(f"{issue_id} no longer has a proposed plan.")
-        live_hash = hashlib.sha256(plan.encode()).hexdigest()
-        if not hmac.compare_digest(live_hash, body["planHash"]):
-            raise BusyError(f"The proposed plan for {issue_id} changed since it was proposed.")
-        if self.runner.rows("SELECT 1 FROM tasks WHERE issue=?", (issue_id,)):
-            raise BusyError(f"{issue_id} already has a recorded approval.")
-        await self.runner.approve(issue, repo)
-        self.runner.chat("system", f"Approved {issue_id} and queued in Todo.", repo=repo)
+        if issue["state"]["type"] in CLOSED_STATES:
+            raise BusyError(f"{issue_id} is already {issue['state']['name']}.")
+        if body.get("planHash"):
+            plan = proposed_plan(issue.get("description") or "")
+            if not plan:
+                raise BusyError(f"{issue_id} no longer has a proposed plan.")
+            live_hash = hashlib.sha256(plan.encode()).hexdigest()
+            if not hmac.compare_digest(live_hash, str(body["planHash"])):
+                raise BusyError(f"The proposed plan for {issue_id} changed since it was proposed.")
+        await self.linear.set_state(issue_id, "Todo", "unstarted")
+        self.request_issue_refresh()
+        self.runner.chat("system", f"Moved {issue_id} to Todo for automatic Flash dispatch.", repo=repo)
         return {"approved": issue_id, "repo": repo}
 
     def resolve_repo(self, project="", repo=""):
@@ -680,18 +671,16 @@ class Symphony:
             return None
         return self.login
 
-    def codex_busy(self):
+    def coordinator_busy(self):
         return bool(self.busy or self.coordinator.any_turn() or self.messages)
 
-    async def start_codex_login(self):
+    async def start_antigravity_login(self):
         current = self.active_login()
         if current:
             return current
         result = await self.coordinator.login()
         self.login = {
-            "loginId": result.get("loginId") or "",
-            "url": result["verificationUrl"],
-            "code": result["userCode"],
+            "url": result["url"],
             "expires": time.monotonic() + 900,
         }
         return self.login
@@ -700,11 +689,11 @@ class Symphony:
         login = self.active_login()
         return {
             "opencodeGo": {**self.runner.opencode_go_status(), "busy": self.runner.opencode_go_busy()},
-            "codex": {
+            "antigravity": {
                 "signedIn": bool(self.coordinator.account),
                 "account": dict(self.coordinator.account_info),
-                "login": {"url": login["url"], "code": login["code"]} if login else None,
-                "busy": self.codex_busy(),
+                "login": {"url": login["url"]} if login else None,
+                "busy": self.coordinator_busy(),
             },
         }
 
@@ -721,40 +710,36 @@ class Symphony:
             if set(body) != {"action"}:
                 raise ValueError("Unsupported config fields.")
             await self.runner.clear_opencode_go_key()
-        elif action == "codex_login":
+        elif action == "antigravity_login":
             if set(body) != {"action"}:
                 raise ValueError("Unsupported config fields.")
-            async with self.codex_config_lock:
-                if self.codex_busy():
-                    raise BusyError("Cannot start Codex sign-in while a coordinator turn is active.")
-                await self.start_codex_login()
-        elif action == "codex_cancel_login":
-            if set(body) != {"action"}:
+            async with self.auth_config_lock:
+                if self.coordinator_busy():
+                    raise BusyError("Cannot start Antigravity sign-in while a coordinator turn is active.")
+                await self.start_antigravity_login()
+        elif action == "antigravity_complete_login":
+            if set(body) != {"action", "code"}:
                 raise ValueError("Unsupported config fields.")
-            async with self.codex_config_lock:
-                if self.codex_busy():
-                    raise BusyError("Cannot cancel Codex sign-in while a coordinator turn is active.")
-                current = self.active_login()
-                if current or self.coordinator.login_pending:
-                    try:
-                        await self.coordinator.cancel_login((current or {}).get("loginId", ""))
-                    except (OSError, RuntimeError, TimeoutError):
-                        raise RuntimeError("Could not cancel Codex sign-in.") from None
+            async with self.auth_config_lock:
+                if self.coordinator_busy():
+                    raise BusyError("Cannot complete Antigravity sign-in while a coordinator turn is active.")
+                await self.coordinator.complete_login(body["code"])
                 self.login = None
-        elif action == "codex_logout":
+        elif action == "antigravity_cancel_login":
             if set(body) != {"action"}:
                 raise ValueError("Unsupported config fields.")
-            async with self.codex_config_lock:
-                if self.codex_busy():
-                    raise BusyError("Cannot sign out of Codex while a coordinator turn is active.")
-                current = self.active_login()
-                if current and current.get("loginId"):
-                    with suppress(OSError, RuntimeError, TimeoutError):
-                        await self.coordinator.cancel_login(current["loginId"])
-                try:
-                    await self.coordinator.logout()
-                except (OSError, RuntimeError, TimeoutError):
-                    raise RuntimeError("Could not sign out of Codex.") from None
+            async with self.auth_config_lock:
+                if self.coordinator_busy():
+                    raise BusyError("Cannot cancel Antigravity sign-in while a coordinator turn is active.")
+                await self.coordinator.cancel_login()
+                self.login = None
+        elif action == "antigravity_logout":
+            if set(body) != {"action"}:
+                raise ValueError("Unsupported config fields.")
+            async with self.auth_config_lock:
+                if self.coordinator_busy():
+                    raise BusyError("Cannot sign out of Antigravity while a coordinator turn is active.")
+                await self.coordinator.logout()
                 self.login = None
         else:
             raise ValueError("Unsupported config action.")
@@ -762,7 +747,7 @@ class Symphony:
 
     async def state(self, after, issue_revision="", project="", repo=""):
         active_login = self.active_login()
-        login = {"url": active_login["url"], "code": active_login["code"]} if active_login else None
+        login = {"url": active_login["url"]} if active_login else None
         active_repo = self.resolve_repo(project, repo)
         rows = self.runner.rows(
             "SELECT * FROM chat WHERE id > ? AND repo = ? ORDER BY id LIMIT 200",
@@ -774,28 +759,34 @@ class Symphony:
             self.stream_cache = (active_repo, text, markdown(text) if text else "")
         raw_buttons = self.runner.repo_buttons(active_repo) if active_repo else []
         raw_diagram = self.runner.diagram(active_repo) if active_repo else None
-        state = {"messages": messages,
-                 "busy": self.busy, "canInterrupt": bool(self.coordinator.turn_for(active_repo)),
-                 "stream": text,
-                 "streamHtml": self.stream_cache[2],
-                 "tasks": self.runner.status(),
-                 "signedIn": bool(self.coordinator.account), "login": login,
-                 "paused": self.runner.setting("paused"), "view": self.runner.setting("view"),
-                 "repo": active_repo,
-                 "repoActivity": self.runner.repo_chat_latest(),
-                 "buttons": raw_buttons if isinstance(raw_buttons, list) else [],
-                 "diagram": raw_diagram if isinstance(raw_diagram, dict) else None,
-                 "codex": self.coordinator.status(active_repo), "issueError": self.issue_error,
-                 "compacting": (
-                     "running" if self.compacting_repo == active_repo else
-                     "queued" if any(entry[0] == active_repo and entry[1] == "/compact"
-                                     for entry in self.messages) else ""
-                 ),
-                 "updateAvailable": self.updates.available,
-                 "update": self.updates.details(),
-                 "draining": self.runner.draining,
-                 "version": self.version,
-                 "usageAlert": self.coordinator.usage_alert()}
+        state = {
+            "messages": messages,
+            "busy": self.busy,
+            "canInterrupt": bool(self.coordinator.turn_for(active_repo)),
+            "stream": text,
+            "streamHtml": self.stream_cache[2],
+            "tasks": self.runner.status(),
+            "signedIn": bool(self.coordinator.account),
+            "login": login,
+            "paused": self.runner.setting("paused"),
+            "view": self.runner.setting("view"),
+            "repo": active_repo,
+            "repoActivity": self.runner.repo_chat_latest(),
+            "buttons": raw_buttons if isinstance(raw_buttons, list) else [],
+            "diagram": raw_diagram if isinstance(raw_diagram, dict) else None,
+            "coordinator": self.coordinator.status(active_repo),
+            "issueError": self.issue_error,
+            "compacting": (
+                "running" if self.compacting_repo == active_repo else
+                "queued" if any(entry[0] == active_repo and entry[1] == "/compact"
+                                for entry in self.messages) else ""
+            ),
+            "updateAvailable": self.updates.available,
+            "update": self.updates.details(),
+            "draining": self.runner.draining,
+            "version": self.version,
+            "usageAlert": self.coordinator.usage_alert(),
+        }
         if self.issue_snapshot is not None and issue_revision != self.issue_revision:
             state.update(projects=self.issue_snapshot, issueRevision=self.issue_revision)
         return state
@@ -808,9 +799,6 @@ class Symphony:
             return False
         if self.runner.draining and any(task["phase"] in DRAINING_PHASES for task in tasks):
             return False
-        if self.coordinator.account and not self.runner.setting("paused"):
-            if self.runner.rows("SELECT 1 FROM events WHERE delivered=0 LIMIT 1"):
-                return False
         return True
 
     async def metrics(self):
@@ -852,12 +840,6 @@ class Symphony:
         except Exception:
             self.remove_chat_images(attachments)
             raise
-        if self.coordinator.turn_for(repo) and not text.startswith("/"):
-            try:
-                await self.coordinator.steer(repo, message, attachments)
-                return {"message": self.saved_message(message_id)}
-            except (OSError, RuntimeError, ValueError):
-                pass  # The turn or the server can exit before the steer is accepted.
         queued_compact = text == "/compact" and bool(
             self.busy or self.coordinator.turn_for(repo) or self.messages
         )
@@ -877,20 +859,13 @@ class Symphony:
         defaults, repo_rules, rules_hash = rules_state(cwd)
         context = []
         compacted = repo in self.coordinator.compacted_repos
-        needs_rules = (
-            self.coordinator.injected_rules.get(repo) != rules_hash
-            and not (compacted and self.coordinator.native_rules.get(repo) == rules_hash)
-        )
-        if needs_rules:
+        if self.coordinator.injected_rules.get(repo) != rules_hash:
             if defaults.strip():
                 context.append("Global AGENTS.md defaults:\n" + defaults)
             if repo_rules:
                 context.append("Active repository AGENTS.md:\n" + repo_rules)
         if compacted:
-            context.append(
-                "Context was compacted. Call worker_status for live task state "
-                "and read_notes for an issue's locked plan and notes."
-            )
+            context.append("Context was compacted. Call worker_status for live task state.")
         self.pending_rules[repo] = rules_hash
         return cwd, "\n\n".join(context)
 
@@ -905,13 +880,10 @@ class Symphony:
             issue, "coordinator", started=started, detail="Coordinator turn started.",
             data={"issues": attributed},
         )) for issue in attributed]
-        detail = "Coordinator handled worker events."
+        detail = "Coordinator turn finished."
         status = "failed"
         try:
-            if attachments:
-                outcome = await self.coordinator.respond(repo, text, cwd, attachments)
-            else:
-                outcome = await self.coordinator.respond(repo, text, cwd)
+            outcome = await self.coordinator.respond(repo, text, cwd, attachments)
             status = outcome if isinstance(outcome, str) and outcome else "completed"
         except (OSError, RuntimeError, TimeoutError, ValueError) as error:
             detail = f"Coordinator turn failed: {error}"
@@ -927,12 +899,9 @@ class Symphony:
             return outcome
         finally:
             ended = time.time()
-            model = self.coordinator.current_model() if hasattr(self.coordinator, "current_model") else ""
-            if not model:
-                model = getattr(self.coordinator, "model", "") or self.runner.setting("model") or "unknown"
+            model = self.coordinator.current_model() or "unknown"
             self.runner.record_coordinator_turn(repo, model, started=started, ended=ended, status=status)
-            tokens = (self.coordinator.consume_turn_tokens(repo)
-                      if hasattr(self.coordinator, "consume_turn_tokens") else None)
+            tokens = self.coordinator.consume_turn_tokens(repo)
             if tokens:
                 self.runner.record_token_usage(
                     "coordinator", repo, model,
@@ -950,10 +919,17 @@ class Symphony:
         if attachments and command.startswith("/"):
             raise ValueError("Images cannot be sent with slash commands.")
         if command == "/login":
-            await self.start_codex_login()
+            await self.start_antigravity_login()
+        elif command == "/run":
+            if not repo:
+                raise ValueError("Select a project before running an ad-hoc task.")
+            if not argument.strip():
+                raise ValueError("Enter a task after /run.")
+            self.runner.enqueue_adhoc(repo, argument.strip())
+        elif command == "/stats":
+            self.runner.chat("system", self.runner.stats(), repo=repo)
         elif command == "/new":
-            cwd = await self.checkout_cwd(repo)
-            await self.coordinator.new_session(repo, cwd)
+            await self.coordinator.new_session(repo)
             self.runner.chat("system", "Started a new coordinator session.", repo=repo)
         elif command == "/compact":
             self.compacting_repo = repo
@@ -964,70 +940,43 @@ class Symphony:
                 self.compacting_repo = ""
         elif command == "/status":
             status = self.coordinator.status(repo)
-            usage = [f"{status['model']} {status['effort']}".strip()]
-            if status["contextUsed"] is not None:
-                usage.append(f"Context {status['contextUsed']}% used")
+            usage = [status["model"]]
             usage.extend(f"{label} {status['rateLimits'][label]['left']}% left"
                          for label in ("5h", "weekly") if label in status["rateLimits"])
-            summary = [f"{task['issue']} · {task['phase']}" for task in self.runner.status()]
+            summary = [
+                f"{task['issue']} · {task['phase']}" + (f" ({task['tier']})" if task.get("tier") else "")
+                for task in self.runner.status()
+            ]
             self.runner.chat("system", "\n".join(filter(None, [
-                " · ".join(filter(None, usage)), "\n".join(summary) or "No approved work in progress.",
+                " · ".join(filter(None, usage)), "\n".join(summary) or "No active or queued work.",
             ])), repo=repo)
         elif command == "/mcp":
-            sections = ["Symphony dynamic tools:"]
+            sections = ["Symphony tools (via MCP):"]
             for tool_name, (description, params) in TOOL_SPECS.items():
                 sections.append(f"- {tool_name}({', '.join(params)}) — {description}")
-            try:
-                servers = await self.coordinator.mcp_servers()
-            except (OSError, RuntimeError, TimeoutError, ValueError) as error:
-                sections.append(f"\nMCP servers unavailable: {error}")
-            else:
-                if not servers:
-                    sections.append("\nMCP servers: none connected.")
-                else:
-                    sections.append("\nMCP servers:")
-                    for server in servers:
-                        auth = f" [{server['authStatus']}]" if server["authStatus"] else ""
-                        sections.append(f"- {server['name']}{auth}")
-                        if not server["tools"]:
-                            sections.append("  (no tools reported)")
-                        for tool in server["tools"]:
-                            desc = tool.get("description", "").strip()
-                            suffix = f" — {desc.splitlines()[0]}" if desc else ""
-                            sections.append(f"  - {tool['name']}{suffix}")
+            servers = await self.coordinator.mcp_servers()
+            if servers:
+                sections.append("\nConfigured MCP servers:")
+                for server in servers:
+                    sections.append(f"- {server['name']} [{server['authStatus']}]")
             self.runner.chat("system", "\n".join(sections), repo=repo)
-        elif command in {"/model", "/effort"}:
+        elif command == "/model":
             if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", argument):
-                raise ValueError(f"Enter a value after {command}.")
-            self.runner.save_setting(command[1:], argument)
-            self.runner.chat("system", f"{command[1:].capitalize()} set to {argument}.", repo=repo)
+                raise ValueError("Enter a model ID after /model.")
+            self.runner.save_setting("model", argument)
+            self.runner.chat("system", f"Model set to {argument}.", repo=repo)
         elif command == "/continue":
             self.runner.save_setting("paused", "")
             self.runner.chat("system", "Automatic dispatch resumed.", repo=repo)
             self.runner.wake.set()
         elif command == "/retry":
-            row = self.runner.task(argument.upper())
-            if row["phase"] == "approving":
-                await self.runner.activate(row["issue"], notify=True)
-            elif row["phase"] == "finish_failed":
-                self.runner.change(row["issue"], phase="finishing")
-                self.runner.job(self.runner.finish(row["issue"]))
-            elif row["phase"] == "blocked":
-                self.runner.change(row["issue"], attempts=0)
-                await self.respond(row["repo"], f"The operator requested another attempt at {row['issue']}.",
-                                   (row["issue"],))
-            else:
-                raise ValueError(f"{row['issue']} is {row['phase']}.")
+            self.runner.retry(argument)
         elif command.startswith("/"):
-            raise ValueError("Available commands: /login, /new, /compact, /status, /mcp, /model, /effort, /interrupt, /continue, /retry.")
-        elif attachments:
-            await self.respond(repo, message, (), attachments)
+            raise ValueError(
+                "Available commands: /run, /stats, /login, /new, /compact, /status, /mcp, /model, /interrupt, /continue, /retry."
+            )
         else:
-            await self.respond(repo, message)
-
-    def events_delivered(self, event_ids):
-        with self.runner.db:
-            self.runner.db.executemany("UPDATE events SET delivered=1 WHERE id=?", [(eid,) for eid in event_ids])
+            await self.respond(repo, message, (), attachments)
 
     async def pump(self):
         while True:
@@ -1042,10 +991,8 @@ class Symphony:
                     except (ValueError, RuntimeError, OSError, TimeoutError) as error:
                         if is_usage_error(error):
                             posted = self.coordinator.record_usage_error(str(error), repo=entry[0])
-                            if not self.runner.setting("paused"):
-                                self.runner.save_setting("paused", f"Codex usage limit: {str(error)[:500]}")
                             if not posted:
-                                self.runner.chat("system", str(error) or "Codex usage limit reached.", repo=entry[0])
+                                self.runner.chat("system", str(error) or "Antigravity usage limit reached.", repo=entry[0])
                         else:
                             self.runner.chat("system", str(error) or "The request timed out.", repo=entry[0])
                     finally:
@@ -1053,37 +1000,9 @@ class Symphony:
                     continue
                 if self.runner.setting("paused"):
                     break
-                if await self.runner.dispatch_approved():
+                if await self.runner.dispatch_queued():
                     continue
-                if not self.coordinator.account:
-                    break
-                self.runner.discard_stale_events()
-                events = self.runner.rows("SELECT * FROM events WHERE delivered=0 ORDER BY id")
-                if not events:
-                    break
-                rows = {issue: self.runner.task(issue) for issue in dict.fromkeys(event["issue"] for event in events)}
-                repo = rows[events[0]["issue"]]["repo"]
-                batch = [event for event in events if rows[event["issue"]]["repo"] == repo]
-                batch_issues = list(dict.fromkeys(event["issue"] for event in batch))
-                if len(batch) == 1:
-                    prompt = f"Worker event for {batch[0]['issue']}: {batch[0]['detail']}"
-                else:
-                    lines = "\n".join(f"- {event['issue']}: {event['detail']}" for event in batch)
-                    prompt = f"Worker events ({len(batch)}):\n{lines}"
-                self.busy = True
-                try:
-                    status = await self.respond(repo, prompt, tuple(batch_issues))
-                    self.events_delivered([event["id"] for event in batch])
-                    if status == "interrupted":
-                        break
-                except (ValueError, RuntimeError, OSError, TimeoutError) as error:
-                    if is_usage_error(error):
-                        self.coordinator.record_usage_error(str(error), repo=repo)
-                    self.runner.save_setting("paused", str(error) or "Coordinator timed out.")
-                    self.runner.chat("system", f"Automatic dispatch paused. {self.runner.setting('paused')}", repo=repo)
-                    break
-                finally:
-                    self.busy = False
+                break
 
     async def start(self):
         self.runner.recover()
@@ -1092,7 +1011,7 @@ class Symphony:
         try:
             await self.coordinator.connect()
         except (OSError, RuntimeError, TimeoutError) as error:
-            self.runner.chat("system", str(error) or "Codex startup timed out.")
+            self.runner.chat("system", str(error) or "Antigravity initialization failed.")
         self.runner.job(self.coordinator.poll_status())
         self.runner.wake.set()
 
@@ -1200,7 +1119,32 @@ class Handler(BaseHTTPRequestHandler):
         host = self.headers.get("Host") or ""
         return parsed.scheme in {"http", "https"} and bool(host) and parsed.netloc == host and parsed.path in {"", "/"}
 
+    def _handle_internal_tool(self):
+        auth = self.headers.get("Authorization") or ""
+        expected = f"Bearer {self.server.app.internal_token}"
+        if not self.server.app.internal_token or not hmac.compare_digest(auth, expected):
+            self.json_response({"error": "Unauthorized."}, 401)
+            return
+        try:
+            length = int(self.headers["Content-Length"])
+            if not 0 < length <= TOOL_BODY_LIMIT:
+                raise ValueError("Tool request is too large.")
+            raw = self.rfile.read(length)
+            body = json.loads(raw)
+            name = body.get("name")
+            arguments = body.get("arguments") or {}
+            if not isinstance(name, str) or not isinstance(arguments, dict):
+                raise ValueError("Expected tool name and arguments object.")
+            result = self.run_async(self.server.app.tool(name, arguments))
+            text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+            self.json_response({"ok": True, "text": text})
+        except (KeyError, TypeError, ValueError, RuntimeError, OSError) as error:
+            self.json_response({"ok": False, "text": str(error) or "Tool call failed."})
+
     def do_POST(self):
+        if self.path == "/internal/tool":
+            self._handle_internal_tool()
+            return
         if self.path not in {"/api/chat", "/api/drain", "/api/config", "/api/approve"}:
             self.json_response({"error": "Page not found."}, 404)
             return

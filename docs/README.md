@@ -25,7 +25,7 @@ Complete documentation before this prune: parent commit [`f5642f9103c77727752316
 - [Skills](skills.md) — installation, discovery, invocation, and skill catalog
 - [Dashboard](dashboard.md) — codeview commands, views, caches, and shipped tabs
 - [Codeview modules](codeview-modules.md) — drop-in API, frames, theme, and reload behavior
-- [Symphony](symphony.md) — Linear plan approval, OpenCode worktrees, and Guaranine deployment
+- [Symphony](symphony.md) — Antigravity coordinator, 2-tier Flash-to-Hydrogen queue, and Guaranine deployment
 - [Symphony follow-ups](symphony-follow-ups.md) — work deferred from the MVP
 
 ## Historical investigations

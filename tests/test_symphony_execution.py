@@ -265,7 +265,7 @@ class HistorySnapshotTests(unittest.IsolatedAsyncioTestCase):
         self.app.context = AsyncMock(return_value=(self.root, ""))
         turn_count = 0
 
-        async def respond(repo, text, cwd):
+        async def respond(repo, text, cwd, attachments=()):
             nonlocal turn_count
             turn_count += 1
             if turn_count == 1:
@@ -308,32 +308,34 @@ class RunnerExecutionTests(unittest.IsolatedAsyncioTestCase):
         for job in list(self.runner.jobs):
             job.cancel()
 
-    def test_approval_attempt_retry_failure_and_records_survive_cleanup_and_reopen(self):
+    def test_queue_attempt_retry_failure_and_records_survive_cleanup_and_reopen(self):
         async def run():
-            issue = {"identifier": ISSUE, "title": "Fixture", "project": {"id": "project"},
-                     "state": status("Todo"), "description": "## Proposed Plan\n\nPlan"}
-            await self.runner.approve(issue, REPO)
+            snapshot = [{
+                "id": "project",
+                "repo": REPO,
+                "issues": [{"identifier": ISSUE, "title": "Fixture", "plan": "Plan",
+                            "priority": 2, "state": status("Todo")}],
+            }]
+            self.runner.sync_todo_issues(snapshot)
             self.runner.job = Mock()
-            await self.runner.dispatch(ISSUE, REPO, "")
+            await self.runner.dispatch_queued()
             self.runner.job.call_args.args[0].close()
             self.assertEqual(self.runner.task(ISSUE)["attempts"], 1)
-            self.assertEqual(self.runner.rows("SELECT kind FROM execution WHERE kind='attempt'"),
-                             [{"kind": "attempt"}])
-            self.runner.block(ISSUE, "Fixture failure")
-            attempt = self.runner.rows("SELECT * FROM execution WHERE kind='attempt'")[0]
+            attempt_id = self.runner.record_execution(ISSUE, "attempt", detail="Attempt 1")
+            await self.runner.park(ISSUE, "Fixture failure")
+            attempt = self.runner.rows("SELECT * FROM execution WHERE id=?", (attempt_id,))[0]
             self.assertIsNotNone(attempt["ended"])
+            self.assertEqual(self.runner.task(ISSUE)["phase"], "parked")
             self.assertEqual(self.runner.rows("SELECT kind FROM execution WHERE kind='failure'"),
                              [{"kind": "failure"}])
 
-            self.linear.issue_state = {"name": "In Progress", "type": "started"}
-            with self.runner.db:
-                self.runner.db.execute("""UPDATE tasks SET phase='blocked', attempts=1, detail='Paused'
-                                          WHERE issue=?""", (ISSUE,))
+            self.linear.issue_state = status("Todo")
+            self.runner.retry(ISSUE)
+            self.assertEqual(self.runner.task(ISSUE)["phase"], "queued")
             self.runner.job = Mock()
-            await self.runner.dispatch(ISSUE, REPO, "", resume=True)
+            await self.runner.dispatch_queued()
             self.runner.job.call_args.args[0].close()
             self.assertEqual(self.runner.task(ISSUE)["attempts"], 2)
-            self.assertEqual(len(self.runner.rows("SELECT * FROM execution WHERE kind='attempt'")), 2)
 
             self.runner.worktree(ISSUE).mkdir(parents=True)
             with self.runner.db:
@@ -431,7 +433,7 @@ class RunnerExecutionTests(unittest.IsolatedAsyncioTestCase):
             self.runner.record_execution(ISSUE, "coordinator", started=1005, detail="Coordinator")
             with patch("symphony.runner.time.time", return_value=2000):
                 self.runner.recover()
-            self.assertEqual(self.runner.task(ISSUE)["phase"], "blocked")
+            self.assertEqual(self.runner.task(ISSUE)["phase"], "parked")
             self.assertEqual(self.runner.rows("SELECT * FROM execution WHERE ended IS NULL"), [])
             gap = self.runner.rows("SELECT * FROM execution WHERE kind='gap'")[0]
             self.assertEqual((gap["started"], gap["ended"]), (1010, 2000))
@@ -802,10 +804,14 @@ class ExecutionPayloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(execution["wallSeconds"], 10)
         self.assertEqual(execution["overlapSeconds"], 0)
 
-    async def test_real_approval_reports_known_zero_attempts_despite_approval_event(self):
-        issue = {**issue_row("Todo"), "description": "## Proposed Plan\n\nPlan"}
-        await self.runner.approve(issue, REPO)
-        self.assertTrue(self.runner.rows("SELECT 1 FROM execution WHERE kind='approval'"))
+    async def test_queued_todo_reports_known_zero_attempts(self):
+        snapshot = [{
+            "id": "project",
+            "repo": REPO,
+            "issues": [{"identifier": ISSUE, "title": "Fixture", "plan": "Plan",
+                        "priority": 2, "state": status("Todo")}],
+        }]
+        self.runner.sync_todo_issues(snapshot)
         payload = execution_payload(ISSUE, issue_row("Todo"), {
             "entries": [], "complete": False, "error": "Unavailable",
         }, self.runner, now=NOW)
@@ -815,7 +821,7 @@ class ExecutionPayloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(execution["breakdown"]["worker"], 0)
 
     def test_not_started_worker_has_zero_attempts_and_complete_categories(self):
-        insert_task(self.runner, phase="approved", attempts=0)
+        insert_task(self.runner, phase="queued", attempts=0)
         payload = execution_payload(ISSUE, issue_row("Todo"), {
             "entries": [], "complete": False, "error": "Unavailable",
         }, self.runner, now=NOW)

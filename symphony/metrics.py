@@ -7,11 +7,9 @@ import re
 
 
 KNOWN_PHASES = (
-    "approving",
-    "approved",
+    "queued",
     "working",
-    "review",
-    "blocked",
+    "parked",
     "publishing",
     "ci",
     "finishing",
@@ -96,7 +94,7 @@ def render_metrics(app):
                  "Whether Symphony is draining for a rollout (1) or accepting new dispatches (0).",
                  [((), int(bool(runner.draining)))])
     _emit_family(lines, "symphony_coordinator_signed_in", "gauge",
-                 "Whether the Codex coordinator is currently signed in (1) or signed out (0).",
+                 "Whether the Antigravity coordinator is currently signed in (1) or signed out (0).",
                  [((), int(bool(getattr(coordinator, "account", ""))))])
     busy = bool(app.busy or app.messages or (coordinator.any_turn() if hasattr(coordinator, "any_turn") else False))
     _emit_family(lines, "symphony_coordinator_busy", "gauge",
@@ -245,14 +243,25 @@ def render_metrics(app):
                  [((("source", row["source"]), ("repo", row["repo"]), ("model", row["model"])),
                    row["cost_usd"]) for row in cost_rows])
 
+    escalation_rows = runner.rows(
+        """SELECT repo, COALESCE(NULLIF(trigger, ''), 'unknown') AS trigger, COUNT(*) AS cnt
+           FROM tasks
+           WHERE escalated = 1
+           GROUP BY repo, COALESCE(NULLIF(trigger, ''), 'unknown')
+           ORDER BY repo, trigger"""
+    )
+    _emit_family(lines, "symphony_worker_escalations_total", "counter",
+                 "Tasks auto-escalated from Tier-1 Flash to Tier-2 Antigravity by repository and trigger.",
+                 [((("repo", row["repo"]), ("trigger", row["trigger"])), row["cnt"]) for row in escalation_rows])
+
     rate_limits = getattr(coordinator, "rate_limits", None) or {}
     limit_samples = []
     for window in ("5h", "weekly"):
         entry = rate_limits.get(window)
         if isinstance(entry, dict) and _finite_number(entry.get("left")):
             limit_samples.append(((("window", window),), entry["left"]))
-    _emit_family(lines, "symphony_codex_rate_limit_remaining_percent", "gauge",
-                 "Remaining Codex ChatGPT rate-limit percentage for reported quota windows.",
+    _emit_family(lines, "symphony_coordinator_rate_limit_remaining_percent", "gauge",
+                 "Remaining Antigravity coordinator rate-limit percentage for reported quota windows.",
                  limit_samples)
 
     push_rows = runner.rows(
@@ -311,7 +320,7 @@ def render_metrics(app):
         "worker_cost_usd": bool(runner.rows(
             "SELECT 1 FROM token_usage WHERE source = 'worker' AND cost_usd IS NOT NULL LIMIT 1"
         )),
-        "codex_rate_limits": bool(limit_samples),
+        "coordinator_rate_limits": bool(limit_samples),
         "deployments": bool(deploy_counts),
         "pvc_disk": pvc is not None,
     }

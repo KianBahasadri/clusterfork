@@ -26,13 +26,16 @@ const configOpenCodeKey = byId("config-opencode-key");
 const configOpenCodeSave = byId("config-opencode-save");
 const configOpenCodeClear = byId("config-opencode-clear");
 const configOpenCodeFeedback = byId("config-opencode-feedback");
-const configCodexStatus = byId("config-codex-status");
-const configCodexDetails = byId("config-codex-details");
-const configCodexLogin = byId("config-codex-login");
-const configCodexSignin = byId("config-codex-signin");
-const configCodexCancel = byId("config-codex-cancel");
-const configCodexSignout = byId("config-codex-signout");
-const configCodexFeedback = byId("config-codex-feedback");
+const configAntigravityStatus = byId("config-antigravity-status");
+const configAntigravityDetails = byId("config-antigravity-details");
+const configAntigravityLogin = byId("config-antigravity-login");
+const configAntigravityCodeForm = byId("config-antigravity-code-form");
+const configAntigravityCode = byId("config-antigravity-code");
+const configAntigravitySubmit = byId("config-antigravity-submit");
+const configAntigravitySignin = byId("config-antigravity-signin");
+const configAntigravityCancel = byId("config-antigravity-cancel");
+const configAntigravitySignout = byId("config-antigravity-signout");
+const configAntigravityFeedback = byId("config-antigravity-feedback");
 const configContent = byId("config-agents-content");
 const configStatus = byId("config-agents-status");
 let configRequest = 0;
@@ -87,7 +90,7 @@ let polling = false;
 let pollAgain = false;
 let pollStarted = false;
 let following = true;
-let codex = {};
+let coordinator = {};
 let canInterrupt = false;
 let compacting = "";
 let updateState = {updateAvailable: false, draining: false, update: null};
@@ -175,42 +178,50 @@ function renderConfigProviders() {
     configOpenCodeSave.disabled = disabled;
     configOpenCodeClear.disabled = disabled || (!openCode.configured && !openCode.malformed);
   }
-  const codexCfg = data?.codex;
-  if (!codexCfg) {
-    configCodexStatus.textContent = "Loading Codex account…";
-    configCodexDetails.hidden = true;
-    configCodexLogin.hidden = true;
-    configCodexSignin.hidden = false;
-    configCodexCancel.hidden = true;
-    configCodexSignout.hidden = true;
-    configCodexSignin.disabled = true;
+  const agyCfg = data?.antigravity;
+  if (!agyCfg) {
+    configAntigravityStatus.textContent = "Loading Antigravity account…";
+    configAntigravityDetails.hidden = true;
+    configAntigravityLogin.hidden = true;
+    configAntigravityCodeForm.hidden = true;
+    configAntigravitySignin.hidden = false;
+    configAntigravityCancel.hidden = true;
+    configAntigravitySignout.hidden = true;
+    configAntigravitySignin.disabled = true;
     return;
   }
-  const account = codexCfg.account || {};
-  const busy = Boolean(codexCfg.busy);
-  configCodexStatus.textContent = (codexCfg.signedIn ? "Signed in." : "Signed out.")
+  const account = agyCfg.account || {};
+  const busy = Boolean(agyCfg.busy);
+  configAntigravityStatus.textContent = (agyCfg.signedIn ? "Signed in." : "Signed out.")
     + (busy ? " Coordinator turn active; account changes wait until idle." : "");
-  const parts = [account.email, account.plan, account.workspace].filter(Boolean);
-  configCodexDetails.textContent = parts.join(" · ");
-  configCodexDetails.hidden = !parts.length;
-  if (codexCfg.login) {
-    const link = element("a", "Open device sign-in");
-    link.href = codexCfg.login.url;
+  const parts = [account.email, account.plan].filter(Boolean);
+  configAntigravityDetails.textContent = parts.join(" · ");
+  configAntigravityDetails.hidden = !parts.length;
+  if (agyCfg.login?.url) {
+    const link = element("a", "Open Google sign-in");
+    link.href = agyCfg.login.url;
     link.target = "_blank";
     link.rel = "noreferrer";
-    configCodexLogin.replaceChildren(link, document.createTextNode(" and enter " + codexCfg.login.code + "."));
-    configCodexLogin.hidden = false;
+    configAntigravityLogin.replaceChildren(
+      link,
+      document.createTextNode(" and paste the authorization code below."),
+    );
+    configAntigravityLogin.hidden = false;
+    configAntigravityCodeForm.hidden = false;
   } else {
-    configCodexLogin.replaceChildren();
-    configCodexLogin.hidden = true;
+    configAntigravityLogin.replaceChildren();
+    configAntigravityLogin.hidden = true;
+    configAntigravityCodeForm.hidden = true;
   }
-  const codexDisabled = configPending || busy;
-  configCodexSignin.hidden = Boolean(codexCfg.signedIn || codexCfg.login);
-  configCodexCancel.hidden = !codexCfg.login;
-  configCodexSignout.hidden = !codexCfg.signedIn;
-  configCodexSignin.disabled = codexDisabled;
-  configCodexCancel.disabled = codexDisabled;
-  configCodexSignout.disabled = codexDisabled;
+  const agyDisabled = configPending || busy;
+  configAntigravitySignin.hidden = Boolean(agyCfg.signedIn || agyCfg.login);
+  configAntigravityCancel.hidden = !agyCfg.login;
+  configAntigravitySignout.hidden = !agyCfg.signedIn;
+  configAntigravitySignin.disabled = agyDisabled;
+  configAntigravityCancel.disabled = agyDisabled;
+  configAntigravitySignout.disabled = agyDisabled;
+  configAntigravityCode.disabled = agyDisabled;
+  configAntigravitySubmit.disabled = agyDisabled;
 }
 
 async function loadConfigState() {
@@ -225,7 +236,7 @@ async function loadConfigState() {
     if (request !== configDataRequest || !configDialog.open) return;
     configOpenCodeStatus.textContent = "Could not load configuration: " + error.message;
     configOpenCodeStatus.dataset.error = "true";
-    configCodexStatus.textContent = "Could not load configuration: " + error.message;
+    configAntigravityStatus.textContent = "Could not load configuration: " + error.message;
   }
 }
 
@@ -242,7 +253,10 @@ async function mutateConfig(payload, feedbackNode, successText, clearInput = fal
       body: JSON.stringify(payload),
     });
     configData = result;
-    if (clearInput) configOpenCodeKey.value = "";
+    if (clearInput) {
+      configOpenCodeKey.value = "";
+      configAntigravityCode.value = "";
+    }
     feedbackNode.textContent = successText;
     feedbackNode.dataset.error = "";
     wakePoll();
@@ -279,8 +293,9 @@ function openConfig() {
   configOpenCodeKey.value = "";
   configOpenCodeFeedback.textContent = "";
   configOpenCodeFeedback.dataset.error = "";
-  configCodexFeedback.textContent = "";
-  configCodexFeedback.dataset.error = "";
+  configAntigravityCode.value = "";
+  configAntigravityFeedback.textContent = "";
+  configAntigravityFeedback.dataset.error = "";
   configData = null;
   if (!configDialog.open) configDialog.showModal();
   byId("config-close").focus();
@@ -337,7 +352,8 @@ function renderIssue(issue, today) {
 
   const task = tasks.find((item) => item.issue === issue.identifier);
   const stateName = (task?.phase || issue.state.name).replaceAll("_", " ");
-  const blocked = stateName.toLowerCase() === "blocked" || task?.phase === "finish_failed";
+  const blocked = ["parked", "blocked", "finish_failed"].includes(task?.phase || "")
+    || stateName.toLowerCase() === "blocked";
   const state = element("span", "", "issue-state");
   state.title = stateName;
   state.setAttribute("role", "img");
@@ -352,12 +368,6 @@ function renderIssue(issue, today) {
   if (issue.priority === 1) priority.dataset.tone = "danger";
   meta.append(priority, issueStagePill(issue));
   if (deadline) meta.append(deadline);
-  if (!task && issue.state.name === "Todo") {
-    const awaiting = issuePill("Awaiting approval",
-      "Approval must be recorded in coordinator chat before this issue can start.", "octagon-alert");
-    awaiting.dataset.tone = "caution";
-    meta.append(awaiting);
-  }
   if (issue.estimate != null) meta.append(issuePill(String(issue.estimate), "Estimate " + issue.estimate, "triangle"));
   for (const label of issue.labels) {
     const pill = issuePill(label.name, label.name);
@@ -367,7 +377,8 @@ function renderIssue(issue, today) {
     meta.append(pill);
   }
   if (task) {
-    const phase = issuePill(stateName, "Worker " + stateName);
+    const tierSuffix = task.tier ? " · " + task.tier : "";
+    const phase = issuePill(stateName + tierSuffix, "Worker " + stateName + tierSuffix);
     if (blocked) phase.dataset.tone = "danger";
     meta.append(phase);
   }
@@ -415,9 +426,7 @@ function renderIssue(issue, today) {
         actions.append(accept, err);
         plan.append(actions);
       }
-      plan.append(element("p", issue.state.name === "Todo"
-        ? "This issue is awaiting plan approval in chat and will not run."
-        : "Tell the coordinator in chat when you approve this plan.", "muted"));
+      plan.append(element("p", "Click Accept or move this issue to Todo to dispatch it automatically.", "muted"));
     }
     row.append(plan);
   }
@@ -1168,15 +1177,49 @@ function imagePayload(image) {
 function showLogin(state) {
   const login = byId("login");
   login.hidden = state.signedIn;
-  if (state.signedIn) return;
-  if (state.login) {
-    const link = element("a", "Open device sign-in");
+  if (state.signedIn) {
+    login.dataset.loginUrl = "";
+    return;
+  }
+  if (state.login?.url) {
+    if (login.dataset.loginUrl === state.login.url) return;
+    login.dataset.loginUrl = state.login.url;
+    const link = element("a", "Open Google sign-in");
     link.href = state.login.url;
     link.target = "_blank";
     link.rel = "noreferrer";
-    login.replaceChildren(link, document.createTextNode(" and enter " + state.login.code + "."));
-  } else if (!login.querySelector("button")) {
-    const button = element("button", "Sign in to Codex");
+    const form = element("form", "", "config-controls");
+    const input = element("input");
+    input.type = "text";
+    input.placeholder = "Paste authorization code";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    const done = element("button", "Complete sign-in");
+    done.type = "submit";
+    const feedback = element("span", "", "muted");
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      done.disabled = true;
+      feedback.textContent = "Completing sign-in…";
+      try {
+        await api("/api/config", {
+          method: "POST",
+          headers: {"Content-Type": "application/json", "X-Symphony": "1"},
+          body: JSON.stringify({action: "antigravity_complete_login", code: input.value}),
+        });
+        input.value = "";
+        feedback.textContent = "";
+        wakePoll();
+      } catch (error) {
+        feedback.textContent = error.message;
+        done.disabled = false;
+      }
+    });
+    form.append(input, done, feedback);
+    login.replaceChildren(link, document.createTextNode(" and paste the code: "), form);
+  } else if (!login.querySelector("button") || login.dataset.loginUrl) {
+    login.dataset.loginUrl = "";
+    const button = element("button", "Sign in to Antigravity");
     button.type = "button";
     button.addEventListener("click", () => submit("/login"));
     login.replaceChildren(button);
@@ -1276,14 +1319,14 @@ function formatTurnDuration(seconds) {
   return [hours && hours + "h", minutes && minutes + "m", seconds % 60 + "s"].filter(Boolean).join(" ");
 }
 
-function showCodexStatus() {
-  byId("status-model").textContent = [codex.model || "Codex", codex.effort].filter(Boolean).join(" ");
+function showCoordinatorStatus() {
+  byId("status-model").textContent = [coordinator.model || "Antigravity", coordinator.effort].filter(Boolean).join(" ");
   const context = byId("status-context");
-  context.hidden = codex.contextUsed == null;
-  if (!context.hidden) context.textContent = "Context " + codex.contextUsed + "% used";
+  context.hidden = coordinator.contextUsed == null;
+  if (!context.hidden) context.textContent = "Context " + coordinator.contextUsed + "% used";
   for (const label of ["5h", "weekly"]) {
     const part = byId("status-" + label);
-    const limit = codex.rateLimits?.[label];
+    const limit = coordinator.rateLimits?.[label];
     part.hidden = !limit;
     if (!limit) continue;
     part.textContent = label + " " + limit.left + "% left";
@@ -1291,7 +1334,7 @@ function showCodexStatus() {
     part.title = limit.resetsAt ? "Resets " + formatResetTime(limit.resetsAt) : "";
   }
   const timing = byId("turn-timing");
-  const {startedAt, completedAt, durationMs} = codex.turnTiming || {};
+  const {startedAt, completedAt, durationMs} = coordinator.turnTiming || {};
   const working = Boolean(canInterrupt && startedAt);
   const compactTiming = compacting === "running" && startedAt && completedAt == null && durationMs == null;
   const elapsedSeconds = working || compactTiming
@@ -1479,9 +1522,10 @@ async function poll() {
       stream = state.stream;
       queueStream(stream, state.streamHtml);
     }
+    const nextCoordinator = state.coordinator || {};
     const tasksChanged = JSON.stringify(tasks) !== JSON.stringify(state.tasks);
-    const choicesChanged = JSON.stringify([codex.models, codex.efforts])
-      !== JSON.stringify([state.codex.models, state.codex.efforts]);
+    const choicesChanged = JSON.stringify([coordinator.models, coordinator.efforts])
+      !== JSON.stringify([nextCoordinator.models, nextCoordinator.efforts]);
     const today = new Date().toDateString();
     const redrawIssues = tasksChanged || today !== issueDay;
     issueDay = today;
@@ -1500,7 +1544,7 @@ async function poll() {
     const notice = byId("project-error");
     if (notice.textContent !== state.issueError) notice.textContent = state.issueError;
     notice.hidden = !state.issueError;
-    codex = state.codex;
+    coordinator = nextCoordinator;
     canInterrupt = state.canInterrupt;
     compacting = typeof state.compacting === "string" ? state.compacting : "";
     updateState = {
@@ -1509,7 +1553,7 @@ async function poll() {
       update: state.update || null,
     };
     if (choicesChanged || tasksChanged) renderCommands();
-    showCodexStatus();
+    showCoordinatorStatus();
     renderUpdateNotice();
     renderUsageAlert(state.usageAlert || null);
     checkServerVersion(state.version);
@@ -1517,7 +1561,7 @@ async function poll() {
     byId("paused").hidden = !state.paused;
     byId("paused").textContent = state.paused ? "Dispatch paused. " + state.paused : "";
     showLogin(state);
-    const nextAuthKey = JSON.stringify([Boolean(state.signedIn), state.login?.url || "", state.login?.code || ""]);
+    const nextAuthKey = JSON.stringify([Boolean(state.signedIn), state.login?.url || ""]);
     if (nextAuthKey !== configAuthKey) {
       configAuthKey = nextAuthKey;
       if (configDialog.open) loadConfigState();
@@ -1577,16 +1621,17 @@ repos.addEventListener("keydown", (event) => {
   tabs[index].click();
 });
 const commands = [
-  ["/model ", "Choose the Codex model"],
-  ["/effort ", "Set reasoning effort"],
+  ["/run ", "Queue an ad-hoc Flash worker task"],
+  ["/stats", "Show Flash vs. Hydrogen escalation stats"],
+  ["/model ", "Choose the Antigravity model"],
   ["/new", "Start a fresh session for this repository"],
   ["/compact", "Compact the conversation context"],
-  ["/status", "Show Codex usage and approved work"],
+  ["/status", "Show Antigravity usage and active work"],
   ["/mcp", "Show all coordinator and MCP tools"],
-  ["/interrupt", "Stop the current Codex turn"],
-  ["/login", "Sign in to Codex"],
+  ["/interrupt", "Stop the current Antigravity turn"],
+  ["/login", "Sign in to Antigravity"],
   ["/continue", "Resume worker dispatch"],
-  ["/retry ", "Retry a parked issue"],
+  ["/retry ", "Re-queue a parked task"],
 ];
 const history = [];
 let historyIndex = 0;
@@ -1602,10 +1647,9 @@ function matchingCommands() {
   const [, command, prefix] = match;
   if (prefix === undefined) return commands.filter(([value]) => value.startsWith(command));
   let options = [];
-  if (command === "/model") options = Object.entries(codex.models || {});
-  if (command === "/effort") options = (codex.efforts || []).map((effort) => [effort, ""]);
+  if (command === "/model") options = Object.entries(coordinator.models || {});
   if (command === "/retry") {
-    options = tasks.filter((task) => ["approving", "blocked", "finish_failed"].includes(task.phase))
+    options = tasks.filter((task) => ["parked", "blocked", "finish_failed"].includes(task.phase))
       .map((task) => [task.issue, task.phase.replaceAll("_", " ")]);
   }
   return options.filter(([value]) => value.toLowerCase().startsWith(prefix))
@@ -1804,14 +1848,23 @@ configOpenCodeForm.addEventListener("submit", (event) => {
 configOpenCodeClear.addEventListener("click", () => {
   mutateConfig({action: "clear_opencode_key"}, configOpenCodeFeedback, "OpenCode Go API key removed.", true);
 });
-configCodexSignin.addEventListener("click", () => {
-  mutateConfig({action: "codex_login"}, configCodexFeedback, "Device sign-in ready.");
+configAntigravitySignin.addEventListener("click", () => {
+  mutateConfig({action: "antigravity_login"}, configAntigravityFeedback, "Open Google sign-in and paste the code below.");
 });
-configCodexCancel.addEventListener("click", () => {
-  mutateConfig({action: "codex_cancel_login"}, configCodexFeedback, "Device sign-in canceled.");
+configAntigravityCodeForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  mutateConfig(
+    {action: "antigravity_complete_login", code: configAntigravityCode.value},
+    configAntigravityFeedback,
+    "Signed in to Antigravity.",
+    true,
+  );
 });
-configCodexSignout.addEventListener("click", () => {
-  mutateConfig({action: "codex_logout"}, configCodexFeedback, "Signed out of Codex.");
+configAntigravityCancel.addEventListener("click", () => {
+  mutateConfig({action: "antigravity_cancel_login"}, configAntigravityFeedback, "Antigravity sign-in canceled.", true);
+});
+configAntigravitySignout.addEventListener("click", () => {
+  mutateConfig({action: "antigravity_logout"}, configAntigravityFeedback, "Signed out of Antigravity.", true);
 });
 configDialog.addEventListener("keydown", (event) => {
   if (event.key !== "Tab" || event.ctrlKey || event.altKey || event.metaKey) return;
@@ -1833,6 +1886,7 @@ configDialog.addEventListener("close", () => {
   configRequest++;
   configDataRequest++;
   configOpenCodeKey.value = "";
+  configAntigravityCode.value = "";
   configButton.setAttribute("aria-expanded", "false");
   configButton.focus({preventScroll: true});
   maybeAutoReload();

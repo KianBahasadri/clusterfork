@@ -122,7 +122,7 @@ class ChatBrowserTests(unittest.TestCase):
     def stub_config_fetch(page, agents=None, error="", config=None):
         cfg = config or {
             "opencodeGo": {"configured": False, "malformed": False, "busy": False},
-            "codex": {"signedIn": True, "account": {"type": "chatgpt"}, "login": None, "busy": False},
+            "antigravity": {"signedIn": True, "account": {"type": "antigravity"}, "login": None, "busy": False},
         }
         page.evaluate("""({agents, html, error, cfg}) => {
           window.fetch = async (path, options) => {
@@ -140,7 +140,7 @@ class ChatBrowserTests(unittest.TestCase):
             return {ok: true, json: async () => ({
               messages: [], busy: false, canInterrupt: false, stream: "", streamHtml: "",
               tasks: [], signedIn: true, login: null, paused: "", view: "",
-              codex: {}, issueError: "", updateAvailable: false, draining: false,
+              coordinator: {}, issueError: "", updateAvailable: false, draining: false,
             })};
           };
         }""", {"agents": agents, "html": markdown(agents or "") if agents else "", "error": error, "cfg": cfg})
@@ -430,7 +430,7 @@ class ChatBrowserTests(unittest.TestCase):
           };
           const state = (messages) => ({
             messages, busy: false, canInterrupt: false, stream: "", streamHtml: "",
-            tasks: [], codex: {models: {}, efforts: []}, projects: null, issueError: "",
+            tasks: [], coordinator: {models: {}, efforts: []}, projects: null, issueError: "",
             updateAvailable: false, draining: false, paused: "", view: "", signedIn: true,
             login: null,
           });
@@ -502,7 +502,7 @@ class ChatBrowserTests(unittest.TestCase):
           pollTimer = 0;
           const state = {
             messages: [], busy: true, canInterrupt: false, stream: "", streamHtml: "",
-            tasks: [], codex: {models: {}, efforts: []}, projects: null, issueError: "",
+            tasks: [], coordinator: {models: {}, efforts: []}, projects: null, issueError: "",
             updateAvailable: false, draining: false, paused: "", view: "", signedIn: true,
             login: null,
           };
@@ -1676,7 +1676,7 @@ class ChatBrowserTests(unittest.TestCase):
             return Promise.resolve({ok: true, json: async () => ({
               messages: [], busy: false, canInterrupt: false, stream: "", streamHtml: "",
               tasks: [], signedIn: true, login: null, paused: "", view: "",
-              codex: {}, issueError: "", updateAvailable: false, draining: false,
+              coordinator: {}, issueError: "", updateAvailable: false, draining: false,
             })});
           };
         }""")
@@ -1827,7 +1827,7 @@ class ChatBrowserTests(unittest.TestCase):
                 elif path == "/api/config":
                     self.respond(json.dumps({
                         "opencodeGo": {"configured": False, "malformed": False, "busy": False},
-                        "codex": {"signedIn": True, "account": {"type": "chatgpt"}, "login": None, "busy": False},
+                        "antigravity": {"signedIn": True, "account": {"type": "antigravity"}, "login": None, "busy": False},
                     }).encode(), "application/json; charset=utf-8")
                 elif path == "/api/agents":
                     if type(self).mode == "error":
@@ -1842,7 +1842,7 @@ class ChatBrowserTests(unittest.TestCase):
                     self.respond(json.dumps({
                         "messages": [], "busy": False, "canInterrupt": False,
                         "stream": "", "streamHtml": "", "tasks": [], "signedIn": True,
-                        "login": None, "paused": "", "view": "", "codex": {},
+                        "login": None, "paused": "", "view": "", "coordinator": {},
                         "issueError": "", "updateAvailable": False, "draining": False,
                     }).encode(), "application/json; charset=utf-8")
                 else:
@@ -1984,12 +1984,12 @@ class ChatBrowserTests(unittest.TestCase):
         finally:
             coarse.close()
 
-    def test_config_dialog_manages_opencode_go_and_codex_accounts(self):
+    def test_config_dialog_manages_opencode_go_and_antigravity_accounts(self):
         self.page.fill("#message", "Keep composer draft")
         self.page.evaluate("""() => {
           window.__cfg = {
             opencodeGo: {configured: false, malformed: false, busy: false},
-            codex: {signedIn: false, account: {}, login: null, busy: false},
+            antigravity: {signedIn: false, account: {}, login: null, busy: false},
           };
           window.__cfgPosts = [];
           window.__failNextKey = true;
@@ -2007,13 +2007,17 @@ class ChatBrowserTests(unittest.TestCase):
                   window.__cfg.opencodeGo.configured = true;
                 } else if (body.action === "clear_opencode_key") {
                   window.__cfg.opencodeGo.configured = false;
-                } else if (body.action === "codex_login") {
-                  window.__cfg.codex.login = {url: "https://example.test/code", code: "DEV-1234"};
-                } else if (body.action === "codex_cancel_login") {
-                  window.__cfg.codex.login = null;
-                } else if (body.action === "codex_logout") {
-                  window.__cfg.codex.signedIn = false;
-                  window.__cfg.codex.account = {};
+                } else if (body.action === "antigravity_login") {
+                  window.__cfg.antigravity.login = {url: "https://accounts.google.com/o/oauth2/auth?fixture=1"};
+                } else if (body.action === "antigravity_complete_login") {
+                  window.__cfg.antigravity.login = null;
+                  window.__cfg.antigravity.signedIn = true;
+                  window.__cfg.antigravity.account = {type: "antigravity"};
+                } else if (body.action === "antigravity_cancel_login") {
+                  window.__cfg.antigravity.login = null;
+                } else if (body.action === "antigravity_logout") {
+                  window.__cfg.antigravity.signedIn = false;
+                  window.__cfg.antigravity.account = {};
                 }
                 return {ok: true, json: async () => window.__cfg};
               }
@@ -2021,8 +2025,8 @@ class ChatBrowserTests(unittest.TestCase):
             }
             return {ok: true, json: async () => ({
               messages: [], busy: false, canInterrupt: false, stream: "", streamHtml: "",
-              tasks: [], signedIn: window.__cfg.codex.signedIn, login: window.__cfg.codex.login,
-              paused: "", view: "", codex: {}, issueError: "", updateAvailable: false, draining: false,
+              tasks: [], signedIn: window.__cfg.antigravity.signedIn, login: window.__cfg.antigravity.login,
+              paused: "", view: "", coordinator: {}, issueError: "", updateAvailable: false, draining: false,
             })};
           };
         }""")
@@ -2039,12 +2043,12 @@ class ChatBrowserTests(unittest.TestCase):
         self.page.wait_for_function(
             "document.getElementById('config-opencode-status').textContent.includes('API key configured on PVC.')")
         self.assertEqual(self.page.input_value("#config-opencode-key"), "")
-        self.page.locator("#config-codex-signin").click()
+        self.page.locator("#config-antigravity-signin").click()
         self.page.wait_for_function(
-            "document.getElementById('config-codex-login').textContent.includes('DEV-1234')")
-        self.page.locator("#config-codex-cancel").click()
+            "document.getElementById('config-antigravity-login').hidden === false")
+        self.page.locator("#config-antigravity-cancel").click()
         self.page.wait_for_function(
-            "document.getElementById('config-codex-login').hidden === true")
+            "document.getElementById('config-antigravity-login').hidden === true")
         self.page.keyboard.press("Escape")
         self.assertEqual(self.page.input_value("#message"), "Keep composer draft")
 
@@ -2072,7 +2076,7 @@ class ChatBrowserTests(unittest.TestCase):
             return {ok: true, json: async () => ({
               messages: msgs, busy: false, canInterrupt: false, stream: "", streamHtml: "",
               tasks: [], signedIn: true, login: null, paused: "", view: "proj-a",
-              repo, repoActivity: {...window.__repoActivity}, codex: {}, issueError: "",
+              repo, repoActivity: {...window.__repoActivity}, coordinator: {}, issueError: "",
               updateAvailable: false, draining: false, projects, issueRevision: "rev1",
             })};
           };
@@ -2115,7 +2119,7 @@ class ChatBrowserTests(unittest.TestCase):
           commands: (messageField.value = "/", matchingCommands().map(c => c[0])),
         })"""), {
             "unreadA": False, "scrollTop": 120,
-            "commands": ["/model ", "/effort ", "/new", "/compact", "/status", "/mcp",
+            "commands": ["/run ", "/stats", "/model ", "/new", "/compact", "/status", "/mcp",
                          "/interrupt", "/login", "/continue", "/retry "],
         })
 
@@ -2153,7 +2157,7 @@ class ChatBrowserTests(unittest.TestCase):
               ],
               busy: false, canInterrupt: false, stream: "", streamHtml: "", tasks: [],
               signedIn: true, login: null, paused: "", view: "proj-a", repo: "owner/a",
-              repoActivity: {"owner/a": 2}, codex: {}, issueError: "",
+              repoActivity: {"owner/a": 2}, coordinator: {}, issueError: "",
               updateAvailable: false, draining: false, projects, issueRevision: "rev-approve",
             })};
           };
@@ -2200,7 +2204,7 @@ class ChatBrowserTests(unittest.TestCase):
               messages: [], busy: false, canInterrupt: false, stream: "", streamHtml: "",
               tasks: [], signedIn: true, login: null, paused: "", view: "proj-a",
               repo, repoActivity: {}, buttons: buttonsByRepo[repo] || [],
-              codex: {}, issueError: "", updateAvailable: false, draining: false,
+              coordinator: {}, issueError: "", updateAvailable: false, draining: false,
               projects, issueRevision: "rev-btn",
             })};
           };
@@ -2235,7 +2239,7 @@ class ChatBrowserTests(unittest.TestCase):
             busy: false, canInterrupt: false, stream: "", streamHtml: "",
             tasks: [], signedIn: true, login: null, paused: "", view: "proj-a",
             repo: "owner/a", repoActivity: {"owner/a": 1}, diagram: window.__diagram,
-            codex: {}, issueError: "", updateAvailable: false, draining: false,
+            coordinator: {}, issueError: "", updateAvailable: false, draining: false,
             projects: [{id: "proj-a", name: "Repo A", icon: "", repo: "owner/a", issues: []}],
             issueRevision: "rev-diag",
           })});

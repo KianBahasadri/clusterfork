@@ -53,7 +53,7 @@ jobs:
           docker run --rm -e EXPECTED_COMMIT="$TARGET_SHA" --entrypoint sh "$IMAGE:$TARGET_SHA" -ec '
             test "$(id -u)" = 10001
             test "$SYMPHONY_COMMIT" = "$EXPECTED_COMMIT"
-            for name in git gh python uv node pnpm lua shellcheck terraform opencode codex jq rg sqlite3 tmux gawk patch file zip; do
+            for name in git gh python uv node pnpm lua shellcheck terraform opencode agy jq rg sqlite3 tmux gawk patch file zip; do
               command -v "$name"
             done
             test -s /app/symphony/web/mermaid.min.js

@@ -54,7 +54,7 @@ class MetricsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('symphony_metric_available{metric="coordinator_cost_usd"} 0\n', text)
         self.assertIn('symphony_metric_available{metric="worker_tokens"} 0\n', text)
         self.assertIn('symphony_metric_available{metric="worker_cost_usd"} 0\n', text)
-        self.assertIn('symphony_metric_available{metric="codex_rate_limits"} 0\n', text)
+        self.assertIn('symphony_metric_available{metric="coordinator_rate_limits"} 0\n', text)
         self.assertIn('symphony_metric_available{metric="deployments"} 0\n', text)
         self.assertIn('symphony_metric_available{metric="pvc_disk"} 1\n', text)
         self.assertIn("symphony_pvc_bytes_total 4096000\n", text)
@@ -62,7 +62,7 @@ class MetricsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("symphony_pvc_bytes_used 1024000\n", text)
         self.assertNotIn("symphony_tokens_total", text)
         self.assertNotIn("symphony_estimated_spend_usd_total", text)
-        self.assertNotIn("symphony_codex_rate_limit_remaining_percent", text)
+        self.assertNotIn("symphony_coordinator_rate_limit_remaining_percent", text)
 
         with patch("symphony.metrics.os.statvfs", side_effect=OSError("unavailable")):
             no_disk = render_metrics(self.app)
@@ -118,23 +118,12 @@ class MetricsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('symphony_metric_available{metric="worker_cost_usd"} 1\n', text)
 
     async def test_coordinator_respond_records_latency_status_and_tokens_without_cost(self):
-        self.app.coordinator.set_thread(REPO, "thr_1")
-        self.app.coordinator.model = "gpt-5.4"
+        self.runner.save_setting("model", "gemini-4-neon-high")
 
-        async def fake_respond(repo, text, cwd):
-            self.app.coordinator.notification("turn/started", {
-                "threadId": "thr_1", "turn": {"id": "t1", "startedAt": 100},
-            })
-            self.app.coordinator.notification("thread/tokenUsage/updated", {
-                "threadId": "thr_1",
-                "tokenUsage": {
-                    "modelContextWindow": 112000,
-                    "last": {"inputTokens": 400, "outputTokens": 75, "totalTokens": 475},
-                },
-            })
-            self.app.coordinator.notification("turn/completed", {
-                "threadId": "thr_1", "turn": {"id": "t1", "status": "completed"},
-            })
+        async def fake_respond(repo, text, cwd, attachments=()):
+            self.app.coordinator.turn_token_usage[repo] = {
+                "input_tokens": 400, "output_tokens": 75, "total_tokens": 475,
+            }
             return "completed"
 
         with patch.object(self.app, "context", AsyncMock(return_value=(self.root, ""))), \
@@ -149,8 +138,8 @@ class MetricsTests(unittest.IsolatedAsyncioTestCase):
 
         turns = self.runner.rows("SELECT repo, model, status FROM coordinator_turns ORDER BY id")
         self.assertEqual(turns, [
-            {"repo": REPO, "model": "gpt-5.4", "status": "completed"},
-            {"repo": REPO, "model": "gpt-5.4", "status": "failed"},
+            {"repo": REPO, "model": "gemini-4-neon-high", "status": "completed"},
+            {"repo": REPO, "model": "gemini-4-neon-high", "status": "failed"},
         ])
         usage = self.runner.rows("SELECT * FROM token_usage")
         self.assertEqual(len(usage), 1)
@@ -159,23 +148,27 @@ class MetricsTests(unittest.IsolatedAsyncioTestCase):
 
         text = render_metrics(self.app)
         self.assertIn(
-            f'symphony_coordinator_turn_duration_seconds_count{{repo="{REPO}",model="gpt-5.4",status="completed"}} 1\n',
+            f'symphony_coordinator_turn_duration_seconds_count{{repo="{REPO}",model="gemini-4-neon-high",status="completed"}} 1\n',
             text,
         )
         self.assertIn(
-            f'symphony_coordinator_turn_duration_seconds_count{{repo="{REPO}",model="gpt-5.4",status="failed"}} 1\n',
+            f'symphony_coordinator_turn_duration_seconds_count{{repo="{REPO}",model="gemini-4-neon-high",status="failed"}} 1\n',
             text,
         )
         self.assertIn(
-            f'symphony_tokens_total{{source="coordinator",repo="{REPO}",model="gpt-5.4",direction="input"}} 400\n',
+            f'symphony_tokens_total{{source="coordinator",repo="{REPO}",model="gemini-4-neon-high",direction="input"}} 400\n',
             text,
         )
-        self.assertNotIn('source="coordinator",repo="' + REPO + '",model="gpt-5.4"}\n', text)
+        self.assertNotIn('source="coordinator",repo="' + REPO + '",model="gemini-4-neon-high"}\n', text)
         self.assertIn('symphony_metric_available{metric="coordinator_tokens"} 1\n', text)
         self.assertIn('symphony_metric_available{metric="coordinator_cost_usd"} 0\n', text)
 
-    def test_renders_rework_ci_deployments_pushes_rate_limits_and_escaped_labels(self):
+    def test_renders_rework_escalations_ci_deployments_pushes_rate_limits_and_escaped_labels(self):
         self._insert_task("KIAN-1", repo=REPO, phase="done", attempts=2)
+        with self.runner.db:
+            self.runner.db.execute(
+                "UPDATE tasks SET escalated=1, trigger='timeout' WHERE issue='KIAN-1'"
+            )
         self._insert_task("KIAN-2", repo=REPO, phase="working", attempts=1)
         self.runner.record_execution("KIAN-1", "attempt", started=1, ended=2)
         self.runner.record_execution("KIAN-1", "attempt", started=3, ended=4)
@@ -205,6 +198,7 @@ class MetricsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(f'symphony_tasks_reworked_total{{repo="{REPO}"}} 1\n', text)
         self.assertIn(f'symphony_rework_attempts_total{{repo="{REPO}"}} 1\n', text)
         self.assertIn(f'symphony_worker_attempts_total{{repo="{REPO}"}} 3\n', text)
+        self.assertIn(f'symphony_worker_escalations_total{{repo="{REPO}",trigger="timeout"}} 1\n', text)
         self.assertIn(f'symphony_execution_duration_seconds_sum{{repo="{REPO}",kind="worker"}} 15.5\n', text)
         self.assertIn(f'symphony_execution_duration_seconds_count{{repo="{REPO}",kind="worker"}} 1\n', text)
         self.assertIn(f'symphony_pushes_total{{repo="{REPO}"}} 1\n', text)
@@ -214,9 +208,9 @@ class MetricsTests(unittest.IsolatedAsyncioTestCase):
             f'symphony_deployments_total{{repo="{REPO}",workflow="Deploy \\"prod\\"\\\\main\\nv2",conclusion="success"}} 1\n',
             text,
         )
-        self.assertIn('symphony_codex_rate_limit_remaining_percent{window="5h"} 88\n', text)
+        self.assertIn('symphony_coordinator_rate_limit_remaining_percent{window="5h"} 88\n', text)
         self.assertIn('symphony_metric_available{metric="deployments"} 1\n', text)
-        self.assertIn('symphony_metric_available{metric="codex_rate_limits"} 1\n', text)
+        self.assertIn('symphony_metric_available{metric="coordinator_rate_limits"} 1\n', text)
 
     async def test_idle_http_handler_serves_prometheus_metrics_on_loop_thread(self):
         loop = asyncio.get_running_loop()

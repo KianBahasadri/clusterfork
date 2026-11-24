@@ -1,4 +1,4 @@
-"""One SQLite ledger, one worktree at a time per repository."""
+"""One SQLite ledger, sequential per-repo queue, and 2-tier Flash -> Antigravity auto-escalation."""
 
 import asyncio
 from contextlib import suppress
@@ -15,16 +15,17 @@ from uuid import uuid4
 
 from .execution import redact
 from .services import (
-    CLOSED_STATES, ci_jobs, ci_runs, ci_workflows, command, git, proposed_plan, stop_process,
+    CLOSED_STATES, ISSUE_ID, ci_jobs, ci_runs, ci_workflows, git, proposed_plan, stop_process,
 )
 
 
 WORKER_LIMIT = 3
-WORKER_SECONDS = 3600
-ATTEMPT_LIMIT = 3
+FLASH_TIMEOUT_SECONDS = 900
+ESCALATION_TIMEOUT_SECONDS = 1200
 NOTES_LINES = 120
 NOTES_BYTES = 24000
 WORKER_MODEL = "opencode-go/deepseek-v4.1-flash#max"
+ESCALATION_MODEL = "gemini-4-hydrogen-xhigh"
 WORKER_CONFIG = {
     "permissions": [
         {"action": "shell", "resource": "git push *", "effect": "deny"},
@@ -50,10 +51,14 @@ WORKER_CONFIG = {
 CI_DISCOVERY_SECONDS = 480
 AGENTS_BYTES = 32000
 SHARED_AGENTS = Path(__file__).resolve().parents[1] / "agents" / "AGENTS.md"
+ACTIVE_LOCK_PHASES = ("working", "publishing", "ci", "finishing")
+TASK_ID_RE = re.compile(r"(?:[A-Z][A-Z0-9]*-[0-9]+|ADHOC-[0-9]+)\Z")
 
 
 class BusyError(RuntimeError):
     pass
+
+
 SESSION_ID = re.compile(r"ses_[A-Za-z0-9]+\Z")
 CHAT_IMAGE_NAME = re.compile(r"[0-9a-f]{32}\.(?:png|jpg|webp)\Z")
 
@@ -64,10 +69,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     title TEXT NOT NULL, plan TEXT NOT NULL, phase TEXT NOT NULL,
     attempts INTEGER NOT NULL DEFAULT 0, session TEXT, pid INTEGER,
     base TEXT, tree TEXT, audit TEXT, check_exit INTEGER, detail TEXT,
-    revision TEXT, workflows TEXT, updated REAL NOT NULL
+    revision TEXT, workflows TEXT, updated REAL NOT NULL,
+    tier TEXT NOT NULL DEFAULT '', escalated INTEGER NOT NULL DEFAULT 0,
+    trigger TEXT NOT NULL DEFAULT '', branch TEXT NOT NULL DEFAULT '',
+    priority INTEGER NOT NULL DEFAULT 2
 );
-CREATE UNIQUE INDEX IF NOT EXISTS repository_owner ON tasks(repo)
-    WHERE phase NOT IN ('approving', 'approved', 'done');
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY, issue TEXT NOT NULL, detail TEXT NOT NULL,
     delivered INTEGER NOT NULL DEFAULT 0, phase TEXT NOT NULL DEFAULT ''
@@ -176,36 +182,33 @@ def _cli_model(args, default=""):
     return default
 
 
-def worker_prompt(row, artifacts, instruction):
-    return f"""Implement {row['issue']} in this Git worktree. Read and follow the repository's AGENTS.md.
-Keep changes scoped to the approved plan below and leave all code changes in the worktree.
-The coordinator owns publication. Do not push, change Linear, or open a pull request.
-Keep verification fast and strictly scoped to the changed area: write only
-narrowly targeted checks for the exact files, classes, or tests you touched
-(such as syntax checks plus the specific test class or method, targeting under
-30 seconds) to {artifacts / 'checks.sh'}, joined with && where needed. Do NOT
-run or put repo-wide `unittest discover`, full test suites, or unrelated browser
-tests in checks.sh—GitHub Actions CI runs the full suite after push. The runner
-will execute checks.sh after you exit to record the exit status.
-Write {artifacts / 'notes.md'} (at most 120 lines, updating in place) only if
-there are non-obvious assumptions, blockers, workarounds, or risks; omit it
-otherwise. Do not include checks run or open questions.
-If blocked by missing dependencies, build environments, tools, credentials, or
-anything outside the repository code, stop immediately, write the concrete blocker
-to {artifacts / 'blocked.txt'}, and report back to the coordinator—never try to
-install missing system tooling or work around environment blockers on your own.
+def worker_prompt(row, artifacts, instruction=""):
+    extra = f"\n\nAdditional direction:\n{instruction}" if instruction else ""
+    return f"""Implement {row['issue']} ({row['title']}) in this Git worktree. Read and follow the repository's AGENTS.md.
+Keep changes scoped, clean, and leave all code changes in the worktree.
+Symphony owns publication. Do not push, change Linear, or open a pull request.
+If the repository has tests or linters covering what you changed, run narrowly targeted checks for the changed area (targeting under 30 seconds—never repo-wide suites, which CI owns) and write that exact shell command to {artifacts / 'checks.sh'} (joined with && where needed). If no local checks apply, you may omit checks.sh.
+Write {artifacts / 'notes.md'} (at most 120 lines) only if there are non-obvious assumptions, workarounds, or risks; omit it otherwise.
+If blocked by missing dependencies, build environments, tools, credentials, or anything outside the repository code, stop immediately and write the concrete blocker to {artifacts / 'blocked.txt'}—never try to install missing system tooling.
 Use the configured Context7 and Exa MCP tools for library docs and web search.
-For browser checks, use the preinstalled Playwright package from
-`/opt/symphony/bin/python`; its managed Chromium is under
-`/opt/playwright-browsers` via `PLAYWRIGHT_BROWSERS_PATH`. Launch Chromium
-headless with `--no-sandbox`, `--disable-dev-shm-usage`, and `--disable-gpu`
-rather than downloading browsers.
+For browser checks, use the preinstalled Playwright package from `/opt/symphony/bin/python` with `--no-sandbox`, `--disable-dev-shm-usage`, and `--disable-gpu`.
 
-Approved plan:
+Task:
+{row['plan']}{extra}
+"""
+
+
+def escalation_prompt(row, artifacts, receipt):
+    return f"""Implement {row['issue']} ({row['title']}) in this clean Git worktree reset to origin/main.
+Read and follow the repository's AGENTS.md. Do not push, change Linear, or open a pull request.
+If the repository has targeted checks/tests for the changed area (under 30 seconds), run them and save the command to {artifacts / 'checks.sh'}.
+If genuinely blocked by missing system tooling or credentials outside the repo, write the blocker to {artifacts / 'blocked.txt'} and stop.
+
+Task:
 {row['plan']}
 
-Coordinator direction:
-{instruction or 'Implement the approved plan.'}
+Prior Tier-1 (DeepSeek-V4.1-Flash) failure receipt (worktree has been reset cleanly to origin/main):
+{receipt}
 """
 
 
@@ -249,22 +252,21 @@ def rules_state(cwd):
 def install_agent_instructions(directory):
     source = SHARED_AGENTS.resolve()
     shared_agents()
-    for relative in (Path("codex") / "AGENTS.md",
-                     Path("worker-config") / "opencode" / "AGENTS.md"):
-        path = directory / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.is_symlink():
-            if path.resolve() == source:
-                continue
-            path.unlink()
-        elif path.exists():
-            if not path.is_file():
-                raise RuntimeError(f"{relative} must be a regular file or symlink.")
-            path.unlink()
-        try:
-            path.symlink_to(source)
-        except OSError as error:
-            raise RuntimeError(f"Cannot link global AGENTS.md at {relative}: {error}") from None
+    relative = Path("worker-config") / "opencode" / "AGENTS.md"
+    path = directory / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        if path.resolve() == source:
+            return
+        path.unlink()
+    elif path.exists():
+        if not path.is_file():
+            raise RuntimeError(f"{relative} must be a regular file or symlink.")
+        path.unlink()
+    try:
+        path.symlink_to(source)
+    except OSError as error:
+        raise RuntimeError(f"Cannot link global AGENTS.md at {relative}: {error}") from None
 
 
 def bounded_snapshot(text, limit):
@@ -276,52 +278,20 @@ def bounded_snapshot(text, limit):
     return text, truncated
 
 
-def dispatch_problem(live, row, resume):
-    if (live["project"] or {}).get("id") != row["project"]:
-        return f"{row['issue']} must still be in its approved Linear project."
-    expected = {"name": "In Progress", "type": "started"} if resume else {
-        "name": "Todo", "type": "unstarted"}
-    if live["state"] != expected:
-        return f"{row['issue']} is {live['state']['name']}, not {expected['name']}."
-    return ""
-
-
-def current_event(row):
-    phase = row["phase"]
-    if phase == "review":
-        if row["check_exit"] is None:
-            return "Worker finished. Ready to audit and ship."
-        return f"Worker finished. Verification exited {row['check_exit']}. Ready to audit and ship."
-    if phase == "blocked":
-        detail = (row["detail"] or "Interrupted.").strip()
-        return detail if detail.startswith("Blocked. ") else f"Blocked. {detail}"
-    if phase == "finish_failed":
-        return row["detail"] or "Publication verified. Cannot mark Linear Done."
-    if phase == "done":
-        detail = (row["detail"] or "").strip()
-        return detail if detail and detail != "Done." else None
-    return None
+def is_linear_task(row):
+    return bool(row.get("project")) and bool(ISSUE_ID.fullmatch(row.get("issue") or ""))
 
 
 class Runner:
-    def __init__(self, directory, linear):
+    def __init__(self, directory, linear, *, escalator=None):
         self.directory = directory
         self.linear = linear
+        self.escalator = escalator
         install_agent_instructions(directory)
         self.db = sqlite3.connect(directory / "symphony.sqlite3")
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
-        with self.db:
-            if "phase" not in {row["name"] for row in self.db.execute("PRAGMA table_info(events)")}:
-                self.db.execute("ALTER TABLE events ADD COLUMN phase TEXT NOT NULL DEFAULT ''")
-            chat_columns = {row["name"] for row in self.db.execute("PRAGMA table_info(chat)")}
-            if "attachments" not in chat_columns:
-                self.db.execute("ALTER TABLE chat ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'")
-            if "repo" not in chat_columns:
-                self.db.execute("ALTER TABLE chat ADD COLUMN repo TEXT NOT NULL DEFAULT ''")
-            if "meta" not in chat_columns:
-                self.db.execute("ALTER TABLE chat ADD COLUMN meta TEXT NOT NULL DEFAULT '{}'")
-        self.migrate_unphased_events()
+        self._migrate_schema()
         self.jobs = set()
         self.cloning = {}
         self.config_lock = asyncio.Lock()
@@ -329,6 +299,36 @@ class Runner:
         self.issue_refresh = asyncio.Event()
         self.projects_changed = False
         self.draining = False
+
+    def _migrate_schema(self):
+        with self.db:
+            self.db.execute("DROP INDEX IF EXISTS repository_owner")
+            self.db.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS repo_active_lock ON tasks(repo)
+                   WHERE phase IN ('working', 'publishing', 'ci', 'finishing')"""
+            )
+            task_cols = {row["name"] for row in self.db.execute("PRAGMA table_info(tasks)")}
+            for col, ddl in (
+                ("tier", "TEXT NOT NULL DEFAULT ''"),
+                ("escalated", "INTEGER NOT NULL DEFAULT 0"),
+                ("trigger", "TEXT NOT NULL DEFAULT ''"),
+                ("branch", "TEXT NOT NULL DEFAULT ''"),
+                ("priority", "INTEGER NOT NULL DEFAULT 2"),
+            ):
+                if col not in task_cols:
+                    self.db.execute(f"ALTER TABLE tasks ADD COLUMN {col} {ddl}")
+            if "phase" not in {row["name"] for row in self.db.execute("PRAGMA table_info(events)")}:
+                self.db.execute("ALTER TABLE events ADD COLUMN phase TEXT NOT NULL DEFAULT ''")
+            chat_cols = {row["name"] for row in self.db.execute("PRAGMA table_info(chat)")}
+            if "attachments" not in chat_cols:
+                self.db.execute("ALTER TABLE chat ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'")
+            if "repo" not in chat_cols:
+                self.db.execute("ALTER TABLE chat ADD COLUMN repo TEXT NOT NULL DEFAULT ''")
+            if "meta" not in chat_cols:
+                self.db.execute("ALTER TABLE chat ADD COLUMN meta TEXT NOT NULL DEFAULT '{}'")
+            # Cleanly migrate legacy phases from previous PVC databases.
+            self.db.execute("UPDATE tasks SET phase='queued' WHERE phase IN ('approving', 'approved')")
+            self.db.execute("UPDATE tasks SET phase='parked' WHERE phase IN ('review', 'blocked')")
 
     def request_issue_refresh(self, projects=False):
         if projects:
@@ -424,7 +424,8 @@ class Runner:
     def opencode_auth_env(self):
         env = {key: value for key, value in os.environ.items()
                if key not in {"GITHUB_TOKEN", "GH_TOKEN", "LINEAR_API_KEY", "OPENAI_API_KEY",
-                              "CODEX_HOME", "OPENCODE_GO_API_KEY", "LINEAR_WEBHOOK_SECRET"}}
+                              "CODEX_HOME", "OPENCODE_GO_API_KEY", "LINEAR_WEBHOOK_SECRET",
+                              "SYMPHONY_INTERNAL_TOKEN", "SYMPHONY_INTERNAL_URL"}}
         env["XDG_DATA_HOME"] = str(self.directory / "worker-data")
         env["XDG_CONFIG_HOME"] = str(self.directory / "worker-config")
         env["XDG_STATE_HOME"] = str(self.directory / "worker-state")
@@ -670,7 +671,7 @@ class Runner:
     def task(self, issue):
         rows = self.rows("SELECT * FROM tasks WHERE issue=?", (issue,))
         if not rows:
-            raise ValueError(f"No approved plan for {issue}.")
+            raise ValueError(f"Unknown task {issue}.")
         return rows[0]
 
     def record_execution(self, issue, kind, *, started=None, ended=None, detail="", data=None):
@@ -724,7 +725,6 @@ class Runner:
         return rows[0]["repo"] if rows else ""
 
     def record_coordinator_turn(self, repo, model, *, started, ended, status):
-        """Record one coordinator turn duration and outcome for metrics."""
         duration = max(0.0, float(ended) - float(started))
         with self.db:
             self.db.execute(
@@ -735,7 +735,6 @@ class Runner:
 
     def record_token_usage(self, source, repo, model, *, input_tokens=None, output_tokens=None,
                            total_tokens=None, cost_usd=None, recorded=None):
-        """Record observed token counts and/or USD cost when non-null numeric telemetry exists."""
         inp = _optional_int(input_tokens)
         out = _optional_int(output_tokens)
         total = _optional_int(total_tokens)
@@ -831,10 +830,40 @@ class Runner:
             self.finish_attempt(issue, rows[0]["id"], ended=ended)
 
     def status(self):
-        return self.rows("""SELECT issue, repo, phase, attempts, session, check_exit, detail, revision
-                            FROM tasks WHERE phase != 'done' ORDER BY updated DESC""")
+        return self.rows(
+            """SELECT issue, repo, title, phase, tier, escalated, trigger, branch,
+                      attempts, session, check_exit, detail, revision
+               FROM tasks WHERE phase != 'done' ORDER BY updated DESC"""
+        )
 
-    def change(self, issue, event=None, *, supersede=False, notify=True, **fields):
+    def stats(self, limit=30):
+        rows = self.rows(
+            """SELECT issue, phase, tier, escalated, trigger
+               FROM tasks WHERE phase IN ('done', 'parked')
+               ORDER BY updated DESC LIMIT ?""",
+            (limit,),
+        )
+        if not rows:
+            return "No completed or parked tasks recorded yet."
+        flash_pass = sum(1 for r in rows if r["phase"] == "done" and not r["escalated"])
+        agy_pass = sum(1 for r in rows if r["phase"] == "done" and r["escalated"])
+        parked = sum(1 for r in rows if r["phase"] == "parked")
+        triggers = {}
+        for r in rows:
+            if r["trigger"]:
+                triggers[r["trigger"]] = triggers.get(r["trigger"], 0) + 1
+        trigger_text = ", ".join(f"{k}: {v}" for k, v in sorted(triggers.items()))
+        total = len(rows)
+        lines = [
+            f"Last {total} finished tasks: {flash_pass} passed on Flash ({int(100 * flash_pass / total)}%), "
+            f"{agy_pass} auto-escalated & passed on Hydrogen ({int(100 * agy_pass / total)}%), "
+            f"{parked} parked ({int(100 * parked / total)}%)."
+        ]
+        if trigger_text:
+            lines.append(f"Escalation triggers: {trigger_text}.")
+        return "\n".join(lines)
+
+    def change(self, issue, event=None, *, supersede=False, notify=False, **fields):
         fields["updated"] = time.time()
         assignments = ", ".join(f"{field}=?" for field in fields)
         with self.db:
@@ -860,29 +889,6 @@ class Runner:
         with self.db:
             self.db.execute("UPDATE events SET delivered=1 WHERE issue=? AND delivered=0", (issue,))
 
-    def migrate_unphased_events(self):
-        rows = self.rows("""SELECT events.id, events.issue, tasks.phase, tasks.detail,
-                                   tasks.check_exit,
-                                   EXISTS(SELECT 1 FROM events AS pending
-                                          WHERE pending.issue=events.issue
-                                            AND pending.delivered=0
-                                            AND pending.phase = tasks.phase) AS current
-                            FROM events LEFT JOIN tasks ON tasks.issue=events.issue
-                            WHERE events.delivered=0 AND events.phase=''
-                            ORDER BY events.id""")
-        issues = {}
-        for row in rows:
-            issues.setdefault(row["issue"], []).append(row)
-        with self.db:
-            for issue, events in issues.items():
-                self.db.execute("""UPDATE events SET delivered=1
-                                   WHERE issue=? AND delivered=0 AND phase=''""", (issue,))
-                row = events[-1]
-                detail = None if row["current"] else current_event(row)
-                if detail:
-                    self.db.execute("INSERT INTO events(issue,detail,phase) VALUES (?,?,?)",
-                                    (issue, detail, row["phase"]))
-
     def discard_stale_events(self, issue=None):
         query = """UPDATE events SET delivered=1
                    WHERE delivered=0
@@ -898,14 +904,6 @@ class Runner:
         task = asyncio.create_task(coroutine)
         self.jobs.add(task)
         task.add_done_callback(self.jobs.discard)
-
-    def block(self, issue, detail):
-        detail = detail.strip() or "Interrupted."
-        self.finish_open_attempt(issue)
-        self.close_open_execution(issue)
-        self.record_execution(issue, "failure", started=time.time(), ended=time.time(), detail=detail)
-        self.change(issue, event=f"Blocked. {detail}", phase="blocked", pid=None, detail=detail,
-                    supersede=True)
 
     def repo_dir(self, repo):
         return self.directory / "repos" / repo
@@ -929,191 +927,199 @@ class Runner:
                 await git(path, "reset", "--hard", "origin/main")
         return path
 
-    async def approve(self, issue, repo):
-        identifier = issue["identifier"]
-        plan = proposed_plan(issue["description"])
-        if not plan or len(plan) > 24000:
-            raise ValueError("The proposed plan must contain between 1 and 24,000 characters.")
-        if issue["state"]["type"] in CLOSED_STATES:
-            raise ValueError(f"{identifier} is already {issue['state']['name']}.")
+    def enqueue_adhoc(self, repo, prompt, title=""):
+        clean_repo = (repo or "").strip().lower()
+        clean_prompt = (prompt or "").strip()
+        if not clean_repo:
+            raise ValueError("Repository is required.")
+        if not clean_prompt or len(clean_prompt) > 24000:
+            raise ValueError("Task prompt must contain between 1 and 24,000 characters.")
+        clean_title = (title or clean_prompt.splitlines()[0]).strip()[:120]
         with self.db:
-            inserted = self.db.execute("""INSERT INTO tasks(issue,project,repo,title,plan,phase,updated)
-                                          VALUES (?,?,?,?,?,'approving',?)
-                                          ON CONFLICT(issue) DO NOTHING""",
-                                       (identifier, issue["project"]["id"], repo, issue["title"], plan, time.time()))
-            if not inserted.rowcount:
-                raise ValueError(f"{identifier} already has a recorded approval.")
-        self.record_execution(identifier, "approval", started=time.time(), ended=time.time(),
-                              detail="Plan approved and queued in Todo.")
-        await self.activate(identifier)
+            existing = [
+                int(row["issue"].split("-", 1)[1])
+                for row in self.db.execute("SELECT issue FROM tasks WHERE issue LIKE 'ADHOC-%'")
+                if row["issue"].split("-", 1)[1].isdigit()
+            ]
+            task_id = f"ADHOC-{(max(existing) + 1) if existing else 1}"
+            self.db.execute(
+                """INSERT INTO tasks(issue, project, repo, title, plan, phase, priority, updated)
+                   VALUES (?,?,?,?,?,'queued',2,?)""",
+                (task_id, "", clean_repo, clean_title, clean_prompt, time.time()),
+            )
+            self.db.execute(
+                "INSERT INTO chat(role,text,repo) VALUES ('worker',?,?)",
+                (f"{task_id} · Queued for Flash worker: {clean_title}", clean_repo),
+            )
+        self.wake.set()
+        return {"issue": task_id, "repo": clean_repo, "title": clean_title, "phase": "queued"}
 
-    async def activate(self, issue, *, notify=False):
-        await self.linear.set_state(issue, "Todo", "unstarted")
-        self.request_issue_refresh()
-        event = "Plan approved. Queued in Todo." if notify else None
-        self.change(issue, phase="approved", event=event, supersede=bool(event))
+    def sync_todo_issues(self, snapshot):
+        """Auto-queue every Linear Todo issue directly—zero approval ceremony."""
+        if not snapshot:
+            return []
+        live_todos = {}
+        for project in snapshot:
+            repo = project.get("repo") or ""
+            project_id = project.get("id") or ""
+            if not repo or not project_id:
+                continue
+            for issue in project.get("issues") or []:
+                state = issue.get("state") or {}
+                if state.get("name") == "Todo" and state.get("type") == "unstarted":
+                    identifier = issue["identifier"]
+                    title = (issue.get("title") or identifier).strip()
+                    plan = (issue.get("plan") or "").strip()
+                    if not plan:
+                        plan = title
+                    priority = issue.get("priority") or 4
+                    live_todos[identifier] = (project_id, repo, title, plan, priority)
+        queued_new = []
+        now = time.time()
+        with self.db:
+            existing = {
+                row["issue"]: row
+                for row in self.db.execute("SELECT issue, project, phase FROM tasks")
+            }
+            for identifier, (project_id, repo, title, plan, priority) in live_todos.items():
+                current = existing.get(identifier)
+                if current is None:
+                    self.db.execute(
+                        """INSERT INTO tasks(issue, project, repo, title, plan, phase, priority, updated)
+                           VALUES (?,?,?,?,?,'queued',?,?)""",
+                        (identifier, project_id, repo, title, plan, priority, now),
+                    )
+                    queued_new.append(identifier)
+                elif current["phase"] == "done":
+                    # Reopened in Linear -> re-queue cleanly.
+                    self.db.execute(
+                        """UPDATE tasks
+                           SET project=?, repo=?, title=?, plan=?, phase='queued',
+                               tier='', escalated=0, trigger='', branch='', detail=NULL,
+                               priority=?, updated=?
+                           WHERE issue=?""",
+                        (project_id, repo, title, plan, priority, now, identifier),
+                    )
+                    queued_new.append(identifier)
+                elif current["phase"] == "queued":
+                    self.db.execute(
+                        "UPDATE tasks SET project=?, repo=?, title=?, priority=? WHERE issue=?",
+                        (project_id, repo, title, priority, identifier),
+                    )
+            # Remove queued Linear issues that moved out of Todo before starting.
+            for identifier, row in existing.items():
+                if row["phase"] == "queued" and row["project"] and identifier not in live_todos:
+                    self.db.execute("DELETE FROM tasks WHERE issue=?", (identifier,))
+        if queued_new:
+            self.wake.set()
+        return queued_new
 
-    def dispatch_busy(self, issue, repo):
-        if len(self.rows("SELECT 1 FROM tasks WHERE phase='working'")) >= WORKER_LIMIT:
-            return True
-        return bool(self.rows("""SELECT issue FROM tasks WHERE repo=? AND issue != ?
-                                 AND phase NOT IN ('approving','approved','done')""", (repo, issue)))
+    def retry(self, issue):
+        task_id = (issue or "").strip().upper()
+        if not TASK_ID_RE.fullmatch(task_id):
+            raise ValueError("Enter a valid task ID (e.g. KIAN-123 or ADHOC-1).")
+        row = self.task(task_id)
+        if row["phase"] == "finish_failed":
+            self.change(task_id, phase="finishing", detail=None)
+            self.job(self.finish(task_id))
+            return {"issue": task_id, "phase": "finishing"}
+        if row["phase"] not in {"parked", "blocked"}:
+            raise ValueError(f"{task_id} is {row['phase']}, not parked.")
+        self.change(
+            task_id,
+            event="Re-queued for Flash worker.",
+            phase="queued",
+            tier="",
+            escalated=0,
+            trigger="",
+            branch="",
+            detail=None,
+            check_exit=None,
+            supersede=True,
+        )
+        return {"issue": task_id, "phase": "queued"}
 
-    def check_reserved(self, issue, repo, previous):
-        row = self.task(issue)
-        if row["phase"] != "working" or row["attempts"] != previous["attempts"] + 1:
-            raise ValueError(f"{issue} dispatch was superseded.")
-        if self.setting("paused"):
-            self.change(issue, **previous)
-            raise ValueError(f"Dispatch is paused. {self.setting('paused')}")
-        if len(self.rows("SELECT 1 FROM tasks WHERE phase='working'")) > WORKER_LIMIT:
-            self.change(issue, **previous)
-            raise ValueError("The worker limit is reached. Try when a worker finishes.")
-        owner = self.rows("""SELECT issue FROM tasks WHERE repo=? AND issue != ?
-                             AND phase NOT IN ('approving','approved','done')""", (repo, issue))
-        if owner:
-            self.change(issue, **previous)
-            raise ValueError(f"{repo} is reserved by {owner[0]['issue']}.")
+    def _repo_busy(self, repo):
+        placeholders = ", ".join("?" for _ in ACTIVE_LOCK_PHASES)
+        return bool(self.rows(
+            f"SELECT 1 FROM tasks WHERE repo=? AND phase IN ({placeholders}) LIMIT 1",
+            (repo, *ACTIVE_LOCK_PHASES),
+        ))
 
-    def report_dispatch_error(self, issue, detail):
-        row = self.task(issue)
-        if row["detail"] == detail:
-            return
-        self.change(issue, detail=detail, event=detail)
+    def _workers_running(self):
+        return len(self.rows("SELECT 1 FROM tasks WHERE phase='working'"))
 
-    async def dispatch(self, issue, repo, instruction, *, resume=False):
-        async with self.config_lock:
-            row = self.task(issue)
-            if row["repo"] != repo:
-                raise ValueError(f"{issue} is approved for {row['repo']}.")
-            allowed = {"review", "blocked"} if resume else {"approved"}
-            if row["phase"] not in allowed:
-                raise ValueError(f"{issue} is {row['phase']}.")
-            if not self.has_opencode_go_key():
-                raise ValueError("OpenCode Go API key is not configured. Open Config to add it.")
-            if self.setting("paused"):
-                raise ValueError(f"Dispatch is paused. {self.setting('paused')}")
-            if self.draining and not resume:
-                raise ValueError("Symphony is draining for an update. Cancel draining to resume dispatch.")
-            if row["attempts"] >= ATTEMPT_LIMIT:
-                raise ValueError(f"{issue} reached its rework limit. Park it and ask the operator to /retry {issue}.")
-            if len(self.rows("SELECT 1 FROM tasks WHERE phase='working'")) >= WORKER_LIMIT:
-                raise ValueError("The worker limit is reached. Try when a worker finishes.")
-            owner = self.rows("""SELECT issue FROM tasks WHERE repo=? AND issue != ?
-                                 AND phase NOT IN ('approving','approved','done')""", (repo, issue))
-            if owner:
-                raise ValueError(f"{repo} is reserved by {owner[0]['issue']}.")
-            dispatch_started = time.time()
-            previous = {key: row[key] for key in ("phase", "attempts", "check_exit", "tree", "audit", "detail")}
-            self.change(issue, phase="working", check_exit=None, tree=None, audit=None, detail=None,
-                        attempts=row["attempts"] + 1)
-        try:
-            try:
-                live = await self.linear.issue(issue)
-            except ValueError as error:
-                self.change(issue, **previous)
-                raise RuntimeError(f"Could not read {issue} from Linear: {error}") from None
-            problem = dispatch_problem(live, row, resume)
-            if problem:
-                self.change(issue, **previous)
-                raise ValueError(problem)
-            self.check_reserved(issue, repo, previous)
-            if not resume:
+    async def dispatch_queued(self):
+        if self.setting("paused") or self.draining or not self.has_opencode_go_key():
+            return []
+        candidates = self.rows(
+            "SELECT * FROM tasks WHERE phase='queued' ORDER BY priority ASC, updated ASC, issue ASC"
+        )
+        dispatched = []
+        for row in candidates:
+            issue = row["issue"]
+            repo = row["repo"]
+            if self._workers_running() >= WORKER_LIMIT:
+                break
+            if self._repo_busy(repo):
+                continue
+            full_plan = row["plan"]
+            if is_linear_task(row):
+                try:
+                    live = await self.linear.issue(issue)
+                except (OSError, RuntimeError, TimeoutError, ValueError) as error:
+                    self.change(issue, detail=f"Could not read Linear: {error}")
+                    continue
+                live_state = live.get("state") or {}
+                if ((live.get("project") or {}).get("id") != row["project"]
+                        or live_state.get("name") != "Todo"
+                        or live_state.get("type") != "unstarted"):
+                    # No longer Todo -> drop from queue cleanly.
+                    with self.db:
+                        self.db.execute("DELETE FROM tasks WHERE issue=? AND phase='queued'", (issue,))
+                    continue
+                desc = (live.get("description") or "").strip()
+                plan_section = proposed_plan(desc)
+                full_plan = plan_section or (f"{live.get('title') or row['title']}\n\n{desc}".strip())
                 try:
                     await self.linear.set_state(issue, "In Progress", "started")
                     self.request_issue_refresh()
                 except (OSError, RuntimeError, TimeoutError, ValueError) as error:
-                    try:
-                        confirmed = await self.linear.issue(issue)
-                    except (OSError, RuntimeError, TimeoutError, ValueError):
-                        confirmed = None
-                    if confirmed and not dispatch_problem(
-                            confirmed, row, True):
-                        self.request_issue_refresh()
-                        try:
-                            self.check_reserved(issue, repo, previous)
-                        except ValueError as check_error:
-                            if self.task(issue)["phase"] == previous["phase"]:
-                                detail = f"{issue} is In Progress but dispatch could not start: {check_error}"
-                                self.change(issue, phase="blocked", detail=detail)
-                                raise RuntimeError(detail) from None
-                            raise
-                    elif confirmed:
-                        self.change(issue, **previous)
-                        raise RuntimeError(f"Could not move {issue} to In Progress: {error}") from None
-                    else:
-                        detail = f"{issue} dispatch status is uncertain after Linear error: {error}"
-                        self.change(issue, **previous)
-                        self.change(issue, detail=detail)
-                        raise RuntimeError(detail) from None
-        except (OSError, RuntimeError, TimeoutError, ValueError):
-            if self.task(issue)["phase"] == "working":
-                self.change(issue, **previous)
-            raise
-        self.acknowledge_events(issue)
-        attempt = row["attempts"] + 1
-        attempt_id = self.record_execution(
-            issue, "attempt", detail=f"Attempt {attempt} started.",
-            data={"attempt": attempt, "notesReady": False},
-        )
-        self.open_execution(issue, "startup", started=dispatch_started,
-                            detail=f"Attempt {attempt} startup started.",
-                            data={"attempt": attempt, "attemptId": attempt_id})
-        self.job(self.run_worker(issue, instruction, attempt_id))
-        return {"issue": issue, "phase": "working"}
-
-    async def dispatch_approved(self):
-        if self.setting("paused") or self.draining or not self.has_opencode_go_key():
-            return []
-        ready = []
-        for row in self.rows("SELECT * FROM tasks WHERE phase='approved'"):
-            if row["attempts"] >= ATTEMPT_LIMIT:
-                continue
-            try:
-                live = await self.linear.issue(row["issue"])
-            except (OSError, RuntimeError, TimeoutError, ValueError) as error:
-                self.report_dispatch_error(
-                    row["issue"], f"Automatic dispatch could not read Linear: {error}")
-                continue
-            if self.dispatch_busy(row["issue"], row["repo"]):
-                continue
-            if row["detail"] and row["detail"].startswith(
-                    "Automatic dispatch could not read Linear:"):
-                self.change(row["issue"], detail=None)
-            if ((live["project"] or {}).get("id") == row["project"]
-                    and live["state"] == {"name": "In Progress", "type": "started"}):
-                detail = (f"{row['issue']} is In Progress without a reserved worker. "
-                          f"Verify Linear and use /retry {row['issue']}.")
-                self.change(row["issue"], phase="blocked", detail=detail, event=detail,
-                            supersede=True)
-                continue
-            if dispatch_problem(live, row, False):
-                continue
-            ready.append((live.get("priority") or 5, row["issue"], row))
-        ready.sort(key=lambda item: (item[0], item[1]))
-        dispatched = []
-        for _, _, row in ready:
-            try:
-                await self.dispatch(row["issue"], row["repo"], "")
-            except ValueError:
-                continue
-            except (OSError, RuntimeError, TimeoutError) as error:
-                self.report_dispatch_error(
-                    row["issue"], f"Automatic dispatch failed: {error}")
-                continue
-            dispatched.append(row["issue"])
+                    self.change(issue, detail=f"Could not move {issue} to In Progress: {error}")
+                    continue
+            async with self.config_lock:
+                if self._workers_running() >= WORKER_LIMIT or self._repo_busy(repo):
+                    continue
+                current = self.task(issue)
+                if current["phase"] != "queued":
+                    continue
+                attempt = current["attempts"] + 1
+                self.change(
+                    issue,
+                    event="Started Tier-1 worker (deepseek-v4.1-flash).",
+                    phase="working",
+                    tier="flash",
+                    escalated=0,
+                    trigger="",
+                    branch="",
+                    plan=full_plan,
+                    attempts=attempt,
+                    check_exit=None,
+                    tree=None,
+                    detail=None,
+                    supersede=True,
+                )
+            self.job(self.run_worker(issue))
+            dispatched.append(issue)
         return dispatched
 
-    async def require_in_progress(self, row):
-        live = await self.linear.issue(row["issue"])
-        if ((live["project"] or {}).get("id") != row["project"]
-                or live["state"] != {"name": "In Progress", "type": "started"}):
-            raise RuntimeError(f"{row['issue']} must still be In Progress in its approved Linear project.")
-
-    async def _run_checks(self, issue, worktree, artifacts, env, log, attempt_id=None):
-        checks = read_small(artifacts / "checks.sh", 16000).strip()
+    async def _run_optional_checks(self, issue, worktree, artifacts, env, log, attempt_id=None):
+        checks_path = artifacts / "checks.sh"
+        if not checks_path.exists():
+            return 0
+        checks = read_small(checks_path, 16000).strip()
         if not checks:
-            raise RuntimeError("The worker supplied no verification command in checks.sh.")
+            return 0
         log.write(f"\n--- verification ---\n{checks}\n".encode())
         log.flush()
         data = {"command": checks[:4000]}
@@ -1132,106 +1138,216 @@ class Runner:
         self.close_execution_kind(issue, "verification", detail=f"Verification exited {status}.")
         return status
 
-    async def run_worker(self, issue, instruction, attempt_id=None):
+    async def _failure_receipt(self, worktree, base, log_path, trigger, reason):
+        diff_stat = ""
+        with suppress(RuntimeError, OSError):
+            await git(worktree, "add", "-A")
+            diff_stat = (await git(worktree, "diff", "--cached", "--stat", base)).strip()
+        log_tail = ""
+        if log_path.is_file():
+            with suppress(OSError):
+                raw = log_path.read_bytes()[-6000:]
+                log_tail = redact(raw.decode("utf-8", errors="replace")).strip()[-3500:]
+        parts = [f"Trigger: {trigger}", f"Reason: {reason}"]
+        if diff_stat:
+            parts.append(f"Files touched by Flash:\n{diff_stat}")
+        if log_tail:
+            parts.append(f"Tail of worker.log:\n{log_tail}")
+        return "\n\n".join(parts)
+
+    async def _reset_worktree_clean(self, repo_path, worktree, issue):
+        await git(repo_path, "fetch", "origin", "refs/heads/main:refs/remotes/origin/main")
+        base = await git(repo_path, "rev-parse", "origin/main")
+        if not worktree.exists():
+            worktree.parent.mkdir(parents=True, exist_ok=True)
+            branch = f"symphony/{issue}"
+            if await git(repo_path, "branch", "--list", branch):
+                await git(repo_path, "branch", "-D", branch)
+            await git(repo_path, "worktree", "add", "-b", branch, str(worktree), base)
+        else:
+            await git(worktree, "reset", "--hard", base)
+            await git(worktree, "clean", "-fdx")
+        return base
+
+    async def park(self, issue, detail, *, trigger=None):
+        """Push any WIP diff to a parked branch, mark parked, and release the repo queue."""
+        detail = (detail or "Stopped.").strip()
+        row = self.task(issue)
+        worktree = self.worktree(issue)
+        branch = ""
+        pushed_branch = False
+        if worktree.is_dir() and row.get("base") and not row.get("revision"):
+            with suppress(RuntimeError, OSError, TimeoutError):
+                await git(worktree, "add", "-A")
+                tree = await git(worktree, "write-tree")
+                base_tree = await git(worktree, "rev-parse", f"{row['base']}^{{tree}}")
+                if tree != base_tree:
+                    wip_rev = await git(
+                        worktree,
+                        "-c", "user.name=Symphony",
+                        "-c", "user.email=symphony@users.noreply.github.com",
+                        "commit-tree", tree, "-p", row["base"],
+                        "-m", f"WIP {issue} {row['title']}",
+                    )
+                    branch = f"symphony/parked-{issue}"
+                    await git(worktree, "push", "-f", "origin", f"{wip_rev}:refs/heads/{branch}")
+                    pushed_branch = True
+        if pushed_branch and worktree.exists():
+            with suppress(RuntimeError, OSError):
+                repo = self.repo_dir(row["repo"])
+                await git(repo, "worktree", "remove", "--force", str(worktree))
+                local_branch = f"symphony/{issue}"
+                if await git(repo, "branch", "--list", local_branch):
+                    await git(repo, "branch", "-D", local_branch)
+        self.finish_open_attempt(issue)
+        self.close_open_execution(issue)
+        self.record_execution(issue, "failure", started=time.time(), ended=time.time(), detail=detail)
+        suffix = f" WIP pushed to branch {branch}." if pushed_branch else ""
+        fields = {"phase": "parked", "pid": None, "detail": detail, "branch": branch}
+        if trigger is not None:
+            fields["trigger"] = trigger
+        self.change(issue, event=f"Parked. {detail}{suffix}", supersede=True, **fields)
+
+    async def run_worker(self, issue):
         row = self.task(issue)
         worktree, artifacts = self.worktree(issue), self.artifacts(issue)
+        log_path = artifacts / "worker.log"
+        attempt_id = self.record_execution(
+            issue, "attempt", detail="Tier-1 Flash attempt started.",
+            data={"attempt": row["attempts"], "tier": "flash", "notesReady": False},
+        )
+        self.open_execution(issue, "startup", detail="Setting up worktree.",
+                            data={"attempt": row["attempts"], "attemptId": attempt_id})
         try:
             artifacts.mkdir(parents=True, exist_ok=True)
             for name in ("checks.sh", "blocked.txt", "notes.md"):
                 (artifacts / name).unlink(missing_ok=True)
             self.mark_attempt_notes_ready(issue, attempt_id)
-            await self.require_in_progress(row)
-            repo = await self.checkout(row["repo"])
-            await git(repo, "fetch", "origin", "refs/heads/main:refs/remotes/origin/main")
-            base = await git(repo, "rev-parse", "origin/main")
-            if not worktree.exists():
-                worktree.parent.mkdir(parents=True, exist_ok=True)
-                await git(repo, "worktree", "add", "-b", f"symphony/{issue}", str(worktree), base)
-            elif row["revision"] == base and row["base"] != base:
-                await git(worktree, "reset", "--mixed", base)
+            repo_path = await self.checkout(row["repo"])
+            base = await self._reset_worktree_clean(repo_path, worktree, issue)
             self.change(issue, base=base, revision=None, workflows=None)
-            env = self.opencode_auth_env()
-            env["OPENCODE_CONFIG_CONTENT"] = json.dumps(WORKER_CONFIG)
-            args = ["opencode", "run", "--standalone", "--auto", "--format", "json",
-                    "--model", os.environ.get("SYMPHONY_WORKER_MODEL", WORKER_MODEL)]
-            if row["session"]:
-                args += ["--session", row["session"]]
-            self.close_execution_kind(issue, "startup", detail="Worker started.")
-            self.open_execution(issue, "worker", detail="OpenCode worker started.",
-                                data={"attempt": row["attempts"], "attemptId": attempt_id})
-            with (artifacts / "worker.log").open("ab") as log:
-                log.write(f"\n--- attempt {row['attempts']} ---\n".encode())
-                async with asyncio.timeout(WORKER_SECONDS):
-                    await self.run_opencode(issue, args + [worker_prompt(row, artifacts, instruction)], worktree, env, log)
-                    self.close_execution_kind(issue, "worker", detail="OpenCode worker exited.")
-                    if (artifacts / "blocked.txt").exists():
-                        raise RuntimeError(read_small(artifacts / "blocked.txt", 4000))
-                    status = await self._run_checks(issue, worktree, artifacts, env, log, attempt_id)
-            try:
-                await git(worktree, "merge-base", "--is-ancestor", base, "HEAD")
-            except RuntimeError:
-                raise RuntimeError("Rebase the worktree onto origin/main and repeat verification.") from None
-            await git(worktree, "add", "-A")
-            tree = await git(worktree, "write-tree")
-            self.finish_attempt(
-                issue, attempt_id,
-                detail=f"Attempt finished. Verification exited {status}.")
-            self.change(issue, event=f"Worker finished. Verification exited {status}. Ready to audit and ship.",
-                        phase="review", pid=None, check_exit=status, tree=tree, supersede=True)
-        except TimeoutError:
-            self.block(issue, "The worker exceeded its one-hour safety timeout.")
-        except (RuntimeError, OSError, ValueError) as error:
-            self.block(issue, str(error))
+        except (RuntimeError, OSError, ValueError, TimeoutError) as error:
+            await self.park(issue, str(error))
+            return
 
-    async def verify(self, issue):
-        row = self.task(issue)
-        if row["phase"] not in {"review", "blocked"}:
-            raise ValueError(f"{issue} is {row['phase']}; wait until the worker or publication has stopped.")
-        worktree, artifacts = self.worktree(issue), self.artifacts(issue)
-        if not worktree.is_dir():
-            raise ValueError(f"{issue} has no worktree to verify.")
-        if not row["base"]:
-            raise ValueError(f"{issue} has no recorded base commit.")
-        await self.require_in_progress(row)
-        try:
-            await git(worktree, "merge-base", "--is-ancestor", row["base"], "HEAD")
-        except RuntimeError:
-            raise RuntimeError("Rebase the worktree onto origin/main and repeat verification.") from None
-        artifacts.mkdir(parents=True, exist_ok=True)
-        log_path = artifacts / "worker.log"
-        start_offset = log_path.stat().st_size if log_path.is_file() else 0
+        # --- Tier 1: DeepSeek-V4.1-Flash (OpenCode Go, 15m cap) ---
         env = self.opencode_auth_env()
+        env["OPENCODE_CONFIG_CONTENT"] = json.dumps(WORKER_CONFIG)
+        flash_model = os.environ.get("SYMPHONY_WORKER_MODEL", WORKER_MODEL)
+        args = ["opencode", "run", "--standalone", "--auto", "--format", "json", "--model", flash_model]
+        self.close_execution_kind(issue, "startup", detail="Flash worker started.")
+        self.open_execution(issue, "worker", detail="Tier-1 Flash worker started.",
+                            data={"attempt": row["attempts"], "attemptId": attempt_id, "tier": "flash"})
+        trigger = ""
+        reason = ""
+        provider_paused = False
         try:
             with log_path.open("ab") as log:
-                async with asyncio.timeout(WORKER_SECONDS):
-                    status = await self._run_checks(issue, worktree, artifacts, env, log)
+                log.write(f"\n--- tier 1 flash (attempt {row['attempts']}) ---\n".encode())
+                async with asyncio.timeout(FLASH_TIMEOUT_SECONDS):
+                    await self.run_opencode(issue, args + [worker_prompt(row, artifacts)], worktree, env, log)
+                    self.close_execution_kind(issue, "worker", detail="Tier-1 Flash worker exited.")
+                    if (artifacts / "blocked.txt").exists():
+                        trigger = "blocked"
+                        reason = read_small(artifacts / "blocked.txt", 4000).strip() or "Worker reported a blocker."
+                    else:
+                        status = await self._run_optional_checks(issue, worktree, artifacts, env, log, attempt_id)
+                        self.change(issue, check_exit=status)
+                        if status != 0:
+                            trigger = "check_failed"
+                            reason = f"Verification exited {status}."
         except TimeoutError:
-            self.close_execution_kind(issue, "verification", detail="Verification timed out.")
-            self.change(issue, pid=None)
-            raise RuntimeError("Verification exceeded its one-hour safety timeout.") from None
-        except BaseException:
-            self.close_execution_kind(issue, "verification", detail="Verification interrupted.")
-            self.change(issue, pid=None)
-            raise
-        await git(worktree, "add", "-A")
-        tree = await git(worktree, "write-tree")
-        updates = {"check_exit": status, "tree": tree, "pid": None}
-        if status == 0:
-            updates["phase"] = "review"
-            updates["detail"] = None
-        self.change(issue, supersede=(row["phase"] == "blocked" and status == 0), **updates)
-        output = ""
-        if log_path.is_file():
-            with log_path.open("rb") as stream:
-                stream.seek(start_offset)
-                raw = stream.read()
-            output = redact(raw[-8000:].decode(errors="replace")).strip()
-        return {
-            "issue": issue,
-            "phase": self.task(issue)["phase"],
-            "check_exit": status,
-            "output": output[-4000:],
-        }
+            self.close_execution_kind(issue, "worker", detail="Tier-1 Flash timed out.")
+            trigger = "timeout"
+            reason = f"Flash worker exceeded its {FLASH_TIMEOUT_SECONDS // 60}-minute timeout."
+        except (RuntimeError, OSError, ValueError) as error:
+            self.close_execution_kind(issue, "worker", detail=str(error))
+            provider_paused = bool(self.setting("paused"))
+            trigger = "worker_error"
+            reason = str(error)
+
+        self.finish_attempt(
+            issue, attempt_id,
+            detail=("Tier-1 Flash passed." if not trigger else f"Tier-1 Flash failed ({trigger}): {reason}"),
+        )
+
+        if not trigger:
+            await self.publish(issue)
+            return
+
+        if provider_paused:
+            await self.park(issue, f"Paused on OpenCode Go provider error: {reason}", trigger=trigger)
+            return
+
+        # --- Tier 2: Auto-Escalation to Antigravity (gemini-4-hydrogen-xhigh, 20m cap) ---
+        if self.escalator is None:
+            await self.park(issue, f"Flash failed ({trigger}): {reason}", trigger=trigger)
+            return
+
+        allowed, quota_reason = self.escalator.can_auto_escalate()
+        if not allowed:
+            await self.park(
+                issue,
+                f"Flash failed ({trigger}: {reason}). Auto-escalation skipped: {quota_reason}",
+                trigger=trigger,
+            )
+            return
+
+        receipt = await self._failure_receipt(worktree, base, log_path, trigger, reason)
+        esc_attempt = self.task(issue)["attempts"] + 1
+        esc_attempt_id = self.record_execution(
+            issue, "attempt", detail=f"Tier-2 Antigravity escalation started ({trigger}).",
+            data={"attempt": esc_attempt, "tier": "agy", "trigger": trigger, "notesReady": False},
+        )
+        self.change(
+            issue,
+            event=f"Flash failed ({trigger}). Auto-escalating to {ESCALATION_MODEL}.",
+            tier="agy",
+            escalated=1,
+            trigger=trigger,
+            attempts=esc_attempt,
+            check_exit=None,
+        )
+        try:
+            for name in ("checks.sh", "blocked.txt", "notes.md"):
+                (artifacts / name).unlink(missing_ok=True)
+            self.mark_attempt_notes_ready(issue, esc_attempt_id)
+            repo_path = await self.checkout(row["repo"])
+            base = await self._reset_worktree_clean(repo_path, worktree, issue)
+            self.change(issue, base=base)
+            self.open_execution(issue, "worker", detail=f"Tier-2 escalation ({ESCALATION_MODEL}) started.",
+                                data={"attempt": esc_attempt, "attemptId": esc_attempt_id, "tier": "agy"})
+            with log_path.open("ab") as log:
+                log.write(f"\n--- tier 2 escalation ({ESCALATION_MODEL}) ---\n".encode())
+                await self.escalator.run_escalation_worker(
+                    issue, row["repo"],
+                    escalation_prompt(self.task(issue), artifacts, receipt),
+                    worktree, log, timeout=ESCALATION_TIMEOUT_SECONDS,
+                )
+                self.close_execution_kind(issue, "worker", detail="Tier-2 escalation exited.")
+                if (artifacts / "blocked.txt").exists():
+                    raise RuntimeError(read_small(artifacts / "blocked.txt", 4000).strip() or "Escalation reported a blocker.")
+                status = await self._run_optional_checks(issue, worktree, artifacts, env, log, esc_attempt_id)
+                self.change(issue, check_exit=status)
+                if status != 0:
+                    raise RuntimeError(f"Verification exited {status} after escalation.")
+        except TimeoutError:
+            self.close_execution_kind(issue, "worker", detail="Tier-2 escalation timed out.")
+            self.finish_attempt(issue, esc_attempt_id, detail="Tier-2 escalation timed out.")
+            await self.park(
+                issue,
+                f"Escalation ({ESCALATION_MODEL}) exceeded its {ESCALATION_TIMEOUT_SECONDS // 60}-minute timeout.",
+                trigger=trigger,
+            )
+            return
+        except (RuntimeError, OSError, ValueError) as error:
+            self.close_execution_kind(issue, "worker", detail=str(error))
+            self.finish_attempt(issue, esc_attempt_id, detail=str(error))
+            await self.park(issue, f"Escalation failed: {error}", trigger=trigger)
+            return
+
+        self.finish_attempt(issue, esc_attempt_id, detail="Tier-2 escalation passed.")
+        await self.publish(issue)
 
     async def run_opencode(self, issue, args, cwd, env, log):
         repo = self._issue_repo(issue)
@@ -1280,48 +1396,54 @@ class Runner:
                 self.save_setting("paused", f"OpenCode Go: {error[:1000]}")
             raise RuntimeError((error[:1000] or f"OpenCode exited {status}.") + " See worker.log.")
 
-    def read_notes(self, issue):
-        row = self.task(issue)
-        plan = (row["plan"] or "").strip()
-        snapshot = self.notes_snapshot(issue)
-        notes = snapshot["text"].rstrip() if snapshot["available"] else (snapshot["detail"] or "None")
-        return f"--- Approved plan ---\n{plan}\n\n{notes}\n"
-
-    async def read_diff(self, issue):
-        row = self.task(issue)
-        return (await git(self.worktree(issue), "diff", "--no-ext-diff", row["base"], "--"))[:48000]
-
-    def ship(self, issue):
-        row = self.task(issue)
-        if row["phase"] != "review" or row["check_exit"] != 0:
-            raise ValueError(f"{issue} needs a completed worker with passing verification.")
-        self.change(issue, phase="publishing", supersede=True)
-        self.job(self.publish(issue))
-        return {"issue": issue, "phase": "publishing"}
-
     async def publish(self, issue):
         row = self.task(issue)
+        self.change(issue, phase="publishing", pid=None, supersede=True)
         publication = self.open_execution(issue, "publication", detail="Publication started.")
         try:
-            await self.require_in_progress(row)
             cwd = self.worktree(issue)
+            artifacts = self.artifacts(issue)
+            base = row["base"]
             await git(cwd, "add", "-A")
             tree = await git(cwd, "write-tree")
-            if tree != row["tree"]:
-                raise RuntimeError("The worktree changed after verification. Repeat checks before shipping.")
-            await git(cwd, "fetch", "origin", "refs/heads/main:refs/remotes/origin/main")
-            if row["base"] != await git(cwd, "rev-parse", "origin/main"):
-                raise RuntimeError("origin/main moved after verification. Rebase and run checks again.")
-            if tree == await git(cwd, "rev-parse", f"{row['base']}^{{tree}}"):
+            if tree == await git(cwd, "rev-parse", f"{base}^{{tree}}"):
                 self.close_execution(publication, detail="No repository changes to publish.")
                 self.change(issue, phase="finishing")
                 return await self.finish(issue)
+
+            await git(cwd, "fetch", "origin", "refs/heads/main:refs/remotes/origin/main")
+            remote_main = await git(cwd, "rev-parse", "origin/main")
+            if remote_main != base:
+                # Auto-rebase cleanly onto updated origin/main.
+                await git(
+                    cwd,
+                    "-c", "user.name=Symphony",
+                    "-c", "user.email=symphony@users.noreply.github.com",
+                    "commit", "-m", f"WIP {issue}",
+                )
+                try:
+                    await git(cwd, "rebase", remote_main)
+                except RuntimeError:
+                    with suppress(RuntimeError):
+                        await git(cwd, "rebase", "--abort")
+                    with suppress(RuntimeError):
+                        await git(cwd, "reset", "--mixed", "HEAD~1")
+                    raise RuntimeError("Auto-rebase onto origin/main hit a merge conflict.") from None
+                base = remote_main
+                self.change(issue, base=base)
+                with (artifacts / "worker.log").open("ab") as log:
+                    status = await self._run_optional_checks(issue, cwd, artifacts, self.opencode_auth_env(), log)
+                if status != 0:
+                    raise RuntimeError(f"Checks exited {status} after auto-rebasing onto origin/main.")
+                await git(cwd, "add", "-A")
+                tree = await git(cwd, "write-tree")
+
             revision = await git(
                 cwd, "-c", "user.name=Symphony", "-c", "user.email=symphony@users.noreply.github.com",
-                "commit-tree", tree, "-p", row["base"], "-m", f"{issue} {row['title']}",
+                "commit-tree", tree, "-p", base, "-m", f"{issue} {row['title']}",
             )
-            workflows = await ci_workflows(cwd, row["base"], revision)
-            self.change(issue, revision=revision, workflows=json.dumps(workflows))
+            workflows = await ci_workflows(cwd, base, revision)
+            self.change(issue, revision=revision, tree=tree, workflows=json.dumps(workflows))
             try:
                 await git(cwd, "push", "origin", f"{revision}:refs/heads/main")
             except (RuntimeError, TimeoutError) as push_error:
@@ -1333,10 +1455,10 @@ class Runner:
             self.close_execution(publication, detail=f"Pushed {revision} to main.")
             await self.after_push(issue)
         except (RuntimeError, OSError, ValueError, TimeoutError) as error:
-            self.block(issue, str(error) or "GitHub operation timed out. Verify origin/main before retrying.")
+            await self.park(issue, str(error) or "GitHub operation timed out.")
 
     async def after_push(self, issue):
-        workflows = json.loads(self.task(issue)["workflows"])
+        workflows = json.loads(self.task(issue)["workflows"] or "[]")
         if workflows:
             self.change(issue, phase="ci", event="Pushed to main. Waiting for GitHub Actions.",
                         supersede=True, notify=False)
@@ -1347,7 +1469,7 @@ class Runner:
 
     async def watch_ci(self, issue):
         row = self.task(issue)
-        expected = set(json.loads(row["workflows"]))
+        expected = set(json.loads(row["workflows"] or "[]"))
         self.open_execution(issue, "ci_wait", detail="Waiting for GitHub Actions.")
         self.open_execution(issue, "ci_discovery", detail="Waiting for push CI to appear.")
         discovered = False
@@ -1376,7 +1498,7 @@ class Runner:
                     missing = ", ".join(sorted(expected - by_path.keys()))
                     raise ValueError(f"No push CI started for {row['revision']}: {missing}")
             except (RuntimeError, ValueError) as error:
-                self.block(issue, str(error))
+                await self.park(issue, str(error))
                 return
             await asyncio.sleep(20)
 
@@ -1458,8 +1580,6 @@ class Runner:
 
     async def cleanup(self, issue):
         row = self.task(issue)
-        if row["phase"] not in {"done", "finishing"}:
-            raise ValueError("Clean up only after verified publication.")
         self.discard_stale_events(issue)
         repo = self.repo_dir(row["repo"])
         path = self.worktree(issue)
@@ -1470,27 +1590,27 @@ class Runner:
             await git(repo, "branch", "-D", branch)
 
     async def finish(self, issue):
-        try:
-            await self.linear.set_state(issue, "Done", "completed")
-            self.request_issue_refresh()
-        except (RuntimeError, ValueError) as error:
-            detail = f"Publication verified. Cannot mark Linear Done: {error}"
-            self.close_open_execution(issue)
-            self.record_execution(issue, "failure", started=time.time(), ended=time.time(), detail=detail)
-            self.change(issue, phase="finish_failed", detail=detail, event=detail, supersede=True)
-            return
-        detail = "Done."
-        cleanup_warning = False
+        row = self.task(issue)
+        if is_linear_task(row):
+            try:
+                await self.linear.set_state(issue, "Done", "completed")
+                self.request_issue_refresh()
+            except (RuntimeError, ValueError) as error:
+                detail = f"Publication verified. Cannot mark Linear Done: {error}"
+                self.close_open_execution(issue)
+                self.record_execution(issue, "failure", started=time.time(), ended=time.time(), detail=detail)
+                self.change(issue, phase="finish_failed", detail=detail, event=detail, supersede=True)
+                return
+        tier_label = "Hydrogen" if row.get("escalated") else "Flash"
+        detail = f"Done ({tier_label})."
         try:
             await self.cleanup(issue)
         except (RuntimeError, OSError, TimeoutError) as error:
-            detail = f"Done. Worktree cleanup needs attention: {error}"
-            cleanup_warning = True
+            detail = f"Done ({tier_label}). Worktree cleanup needs attention: {error}"
         self.close_open_execution(issue)
         if not self.rows("SELECT 1 FROM execution WHERE issue=? AND kind='completion'", (issue,)):
             self.record_execution(issue, "completion", started=time.time(), ended=time.time(), detail=detail)
-        self.change(issue, phase="done", detail=detail, event=detail,
-                    supersede=True, notify=cleanup_warning)
+        self.change(issue, phase="done", detail=detail, event=detail, supersede=True, notify=False)
 
     async def recover_publish(self, issue):
         row = self.task(issue)
@@ -1502,19 +1622,13 @@ class Runner:
             await git(cwd, "merge-base", "--is-ancestor", row["revision"], "origin/main")
             await self.after_push(issue)
         except (RuntimeError, OSError, ValueError, TimeoutError) as error:
-            self.block(issue, f"Publication interrupted. Verify origin/main: {error}")
-
-    async def recover_approval(self, issue):
-        try:
-            await self.activate(issue, notify=True)
-        except (RuntimeError, ValueError) as error:
-            self.change(issue, event=f"Approval saved. Linear activation failed: {error}", detail=str(error))
+            await self.park(issue, f"Publication interrupted. Verify origin/main: {error}")
 
     def recover(self):
         now = time.time()
         for row in self.status():
             issue = row["issue"]
-            opened = self.rows("""SELECT started FROM execution WHERE issue=? AND ended IS NULL""", (issue,))
+            opened = self.rows("SELECT started FROM execution WHERE issue=? AND ended IS NULL", (issue,))
             if opened:
                 observed = [self.task(issue)["updated"], *(item["started"] for item in opened)]
                 for query in (
@@ -1539,9 +1653,14 @@ class Runner:
                     detail="Recovered after a restart. Open intervals ended at the last recorded activity.",
                 )
             if row["phase"] == "working":
-                self.block(issue, "The pod restarted. Resume the saved worker in its existing worktree.")
-            elif row["phase"] == "approving":
-                self.job(self.recover_approval(issue))
+                self.change(
+                    issue,
+                    event="Pod restarted mid-run. Parked; use /retry to re-queue.",
+                    phase="parked",
+                    pid=None,
+                    detail="Pod restarted while worker was running.",
+                    supersede=True,
+                )
             elif row["phase"] == "publishing":
                 self.job(self.recover_publish(issue))
             elif row["phase"] == "ci":
