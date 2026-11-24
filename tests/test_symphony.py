@@ -246,6 +246,9 @@ with (fixture_root / "agy-calls.jsonl").open("a") as stream:
     }) + "\n")
 
 if not token_path.exists():
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print("Error: authentication required. Run 'agy' to log in, then retry.", flush=True)
+        sys.exit(1)
     print("Authentication required. Please visit the URL to log in:", flush=True)
     print("  https://accounts.google.com/o/oauth2/auth?client_id=fixture&state=abc123", flush=True)
     print("Or, paste the authorization code here and press Enter:", flush=True)
@@ -1715,6 +1718,13 @@ else:
                 CREATE UNIQUE INDEX repository_owner
                     ON tasks(repo)
                     WHERE phase IN ('working', 'review', 'blocked', 'publishing', 'ci', 'finishing', 'finish_failed');
+                CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                INSERT INTO settings(key, value) VALUES
+                    ('model', 'gpt-6.1-sol'),
+                    ('effort', 'high'),
+                    ('thread', 'old-codex-thread'),
+                    ('tools_hash', 'old-hash'),
+                    ('view', 'proj-keep');
                 INSERT INTO tasks(issue,project,repo,title,plan,phase,updated) VALUES
                     ('KIAN-1','p','owner/a','A','P','approved',1),
                     ('KIAN-2','p','owner/a','B','P','review',2),
@@ -1725,6 +1735,14 @@ else:
         self.assertEqual(migrated.task("KIAN-1")["phase"], "queued")
         self.assertEqual(migrated.task("KIAN-2")["phase"], "parked")
         self.assertEqual(migrated.task("KIAN-3")["phase"], "parked")
+        self.assertEqual(migrated.setting("model"), "")
+        self.assertEqual(migrated.setting("effort"), "")
+        self.assertEqual(migrated.setting("thread"), "")
+        self.assertEqual(migrated.setting("view"), "proj-keep")
+        agy = Antigravity(migrated, None, home_dir=self.home)
+        self.assertEqual(agy.current_model(), "gemini-4-neon-high")
+        migrated.save_setting("model", "gpt-5.4")
+        self.assertEqual(agy.current_model(), "gemini-4-neon-high")
         # Two parked tasks in the same repo are allowed now (repo_active_lock only guards active phases).
         with migrated.db:
             migrated.db.execute(
@@ -2318,6 +2336,10 @@ process.stdout.write(JSON.stringify({
         self.assertIn('"/run "', app)
         self.assertIn('"/stats"', app)
         self.assertNotIn("Awaiting approval", app)
+        self.assertNotIn("scrollIntoView", app)
+        css = (root / "style.css").read_text()
+        self.assertIn("html { height: 100%; overflow: clip;", css)
+        self.assertIn("position: fixed;", css)
 
 
 class SharedAgentsImageTests(unittest.TestCase):

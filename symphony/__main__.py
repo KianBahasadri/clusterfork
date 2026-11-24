@@ -666,6 +666,7 @@ class Symphony:
     def active_login(self):
         if (not self.login or self.coordinator.account
                 or not self.coordinator.login_pending
+                or (self.coordinator.login_process and self.coordinator.login_process.returncode is not None)
                 or time.monotonic() >= self.login["expires"]):
             self.login = None
             return None
@@ -681,7 +682,7 @@ class Symphony:
         result = await self.coordinator.login()
         self.login = {
             "url": result["url"],
-            "expires": time.monotonic() + 900,
+            "expires": time.monotonic() + 58,
         }
         return self.login
 

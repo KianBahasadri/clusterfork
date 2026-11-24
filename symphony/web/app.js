@@ -204,7 +204,7 @@ function renderConfigProviders() {
     link.rel = "noreferrer";
     configAntigravityLogin.replaceChildren(
       link,
-      document.createTextNode(" and paste the authorization code below."),
+      document.createTextNode(" and paste the authorization code below within 60 seconds."),
     );
     configAntigravityLogin.hidden = false;
     configAntigravityCodeForm.hidden = false;
@@ -667,7 +667,7 @@ async function handleRepoButtonClick(btn, activeRepo) {
     if (set.has(btn.label)) set.delete(btn.label);
     else set.add(btn.label);
     renderRepoButtons(repoButtons, activeRepo);
-    messageField.focus();
+    messageField.focus({preventScroll: true});
     return;
   }
   if (sending) return;
@@ -1617,7 +1617,7 @@ repos.addEventListener("keydown", (event) => {
   if (event.key === "Home") index = 0;
   if (event.key === "End") index = tabs.length - 1;
   event.preventDefault();
-  tabs[index].focus();
+  tabs[index].focus({preventScroll: true});
   tabs[index].click();
 });
 const commands = [
@@ -1668,7 +1668,12 @@ function highlightOption(index) {
   }
   const option = commandList.children[activeOption];
   messageField.setAttribute("aria-activedescendant", option.id);
-  option.scrollIntoView({block: "nearest"});
+  const top = option.offsetTop || 0;
+  const bottom = top + (option.offsetHeight || 0);
+  if (top < commandList.scrollTop) commandList.scrollTop = top;
+  else if (bottom > commandList.scrollTop + commandList.clientHeight) {
+    commandList.scrollTop = bottom - commandList.clientHeight;
+  }
 }
 
 function renderCommands() {
@@ -1707,7 +1712,7 @@ function writeDraft(value, suggest = false) {
 function chooseCommand(index, run) {
   const [value] = commandOptions[index];
   const needsArgument = value.endsWith(" ");
-  messageField.focus();
+  messageField.focus({preventScroll: true});
   writeDraft(value, needsArgument);
   if (run && !needsArgument) composer.requestSubmit();
 }

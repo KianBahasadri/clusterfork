@@ -3,14 +3,18 @@
 import asyncio
 from contextlib import suppress
 from datetime import datetime, timezone
+import fcntl
 from hashlib import sha256
 import json
 import math
 import os
 from pathlib import Path
+import pty
 import re
 from stat import S_ISREG
+import struct
 import sys
+import termios
 import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -126,7 +130,8 @@ def _build_tools():
 TOOLS = _build_tools()
 TOOLS_HASH = sha256(json.dumps(TOOLS, sort_keys=True).encode()).hexdigest()
 
-OAUTH_URL_RE = re.compile(r"https://accounts\.google\.com/o/oauth2/auth\S+")
+OAUTH_URL_RE = re.compile(r"(https://accounts\.google\.com/o/oauth2/auth\S+)(?=\s)")
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\r")
 MODEL_LINE_RE = re.compile(r"^([a-z0-9][a-z0-9._-]{1,63})\s+(.+?)\s*$")
 USAGE_ERROR_RE = re.compile(
     r"usage.limit|rate.limit|quota|out of usage|limit reached|too many requests|resource_exhausted|\b429\b",
@@ -296,6 +301,7 @@ class Antigravity:
         self.account_info = {}
         self.login_pending = False
         self.login_process = None
+        self.login_master_fd = None
         self.login_url = ""
         self.turns = {}
         self.active_procs = {}
@@ -414,7 +420,10 @@ class Antigravity:
         return next(iter(self.turns), "")
 
     def current_model(self):
-        return self.runner.setting("model") or DEFAULT_CHAT_MODEL
+        saved = self.runner.setting("model")
+        if saved and (saved.startswith("gemini-") or saved.startswith("claude-") or saved in self.models):
+            return saved
+        return DEFAULT_CHAT_MODEL
 
     def consume_turn_tokens(self, repo):
         return self.turn_token_usage.pop(repo, None)
@@ -513,36 +522,88 @@ class Antigravity:
         self.usage_error = None
         self._notified_usage_key = ""
 
+    def _close_login_fd(self):
+        fd = self.login_master_fd
+        self.login_master_fd = None
+        if fd is not None:
+            with suppress(OSError, ValueError):
+                asyncio.get_running_loop().remove_reader(fd)
+            with suppress(OSError):
+                os.close(fd)
+
+    @staticmethod
+    async def _read_pty_chunk(fd):
+        loop = asyncio.get_running_loop()
+        ready = loop.create_future()
+
+        def _on_readable():
+            if not ready.done():
+                ready.set_result(None)
+
+        loop.add_reader(fd, _on_readable)
+        try:
+            await ready
+        finally:
+            with suppress(OSError, ValueError):
+                loop.remove_reader(fd)
+        try:
+            data = os.read(fd, 4096)
+            return data if data else None
+        except BlockingIOError:
+            return b""
+        except OSError:
+            return None
+
     async def login(self):
         await self.cancel_login()
         self.home_dir.mkdir(parents=True, exist_ok=True)
         # Remove stale token so agy initiates a clean OAuth code-paste flow.
         with suppress(OSError):
             self.token_path.unlink(missing_ok=True)
-        process = await asyncio.create_subprocess_exec(
-            self.agy_bin, "--print", "reply with ok",
-            "--model", LOGIN_MODEL,
-            "--output-format", "json",
-            cwd=self.runner.directory,
-            env=self.agy_env(worker=True),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            start_new_session=True,
-        )
+        master_fd, slave_fd = pty.openpty()
+        with suppress(OSError):
+            fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 4096, 0, 0))
+        try:
+            process = await asyncio.create_subprocess_exec(
+                self.agy_bin, "--print", "reply with ok",
+                "--model", LOGIN_MODEL,
+                "--output-format", "json",
+                cwd=self.runner.directory,
+                env=self.agy_env(worker=True),
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                start_new_session=True,
+            )
+        except Exception:
+            with suppress(OSError):
+                os.close(master_fd)
+            raise
+        finally:
+            with suppress(OSError):
+                os.close(slave_fd)
+        os.set_blocking(master_fd, False)
         self.login_process = process
+        self.login_master_fd = master_fd
         self.login_pending = True
         self.login_url = ""
+        captured = bytearray()
         try:
             async with asyncio.timeout(20):
                 while True:
-                    line = await process.stdout.readline()
-                    if not line:
-                        raise RuntimeError("Antigravity exited before producing a sign-in URL.")
-                    decoded = line.decode("utf-8", errors="replace")
-                    match = OAUTH_URL_RE.search(decoded)
+                    chunk = await self._read_pty_chunk(master_fd)
+                    if chunk is None:
+                        tail = ANSI_RE.sub("", captured.decode("utf-8", errors="replace")).strip()[-240:]
+                        detail = f" ({tail})" if tail else ""
+                        raise RuntimeError(f"Antigravity exited before producing a sign-in URL.{detail}")
+                    if not chunk:
+                        continue
+                    if len(captured) < 32768:
+                        captured.extend(chunk)
+                    cleaned = ANSI_RE.sub("", captured.decode("utf-8", errors="replace"))
+                    match = OAUTH_URL_RE.search(cleaned)
                     if match:
-                        self.login_url = match.group(0)
+                        self.login_url = match.group(1)
                         return {"url": self.login_url}
         except (OSError, RuntimeError, TimeoutError):
             await self.cancel_login()
@@ -553,21 +614,29 @@ class Antigravity:
         if not cleaned or any(ch in cleaned for ch in "\r\n\x00"):
             raise ValueError("Paste the authorization code from Google sign-in.")
         process = self.login_process
-        if not process or process.returncode is not None:
-            self.login_pending = False
-            self.login_url = ""
-            self.login_process = None
+        master_fd = self.login_master_fd
+        if not process or master_fd is None or process.returncode is not None:
+            await self.cancel_login()
             raise ValueError("No active Antigravity sign-in session. Start sign-in again.")
         try:
-            process.stdin.write((cleaned + "\n").encode("utf-8"))
-            await process.stdin.drain()
-            process.stdin.close()
+            payload = (cleaned + "\n").encode("utf-8")
+            written = 0
+            while written < len(payload):
+                try:
+                    written += os.write(master_fd, payload[written:])
+                except BlockingIOError:
+                    await asyncio.sleep(0.01)
             async with asyncio.timeout(30):
+                while True:
+                    chunk = await self._read_pty_chunk(master_fd)
+                    if chunk is None:
+                        break
                 await process.wait()
         except (OSError, TimeoutError):
             await self.cancel_login()
             raise RuntimeError("Antigravity sign-in timed out. Start sign-in again.") from None
         finally:
+            self._close_login_fd()
             await stop_process(process)
             self.login_process = None
             self.login_pending = False
@@ -590,6 +659,7 @@ class Antigravity:
         self.login_process = None
         self.login_pending = False
         self.login_url = ""
+        self._close_login_fd()
         if process is not None:
             await stop_process(process)
 

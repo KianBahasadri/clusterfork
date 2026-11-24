@@ -326,9 +326,13 @@ class Runner:
                 self.db.execute("ALTER TABLE chat ADD COLUMN repo TEXT NOT NULL DEFAULT ''")
             if "meta" not in chat_cols:
                 self.db.execute("ALTER TABLE chat ADD COLUMN meta TEXT NOT NULL DEFAULT '{}'")
-            # Cleanly migrate legacy phases from previous PVC databases.
+            # Cleanly migrate legacy phases and stale Codex settings from previous PVC databases.
             self.db.execute("UPDATE tasks SET phase='queued' WHERE phase IN ('approving', 'approved')")
             self.db.execute("UPDATE tasks SET phase='parked' WHERE phase IN ('review', 'blocked')")
+            self.db.execute("DELETE FROM settings WHERE key IN ('effort', 'thread', 'tools_hash')")
+            self.db.execute(
+                "DELETE FROM settings WHERE key='model' AND value NOT LIKE 'gemini-%' AND value NOT LIKE 'claude-%'"
+            )
 
     def request_issue_refresh(self, projects=False):
         if projects:
