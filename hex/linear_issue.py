@@ -1,4 +1,4 @@
-"""Send Hex requests to Luna for execution through Linear's MCP tools."""
+"""Send Hex requests to the Linear assistant for execution through Linear's MCP tools."""
 
 import argparse
 import base64
@@ -37,7 +37,7 @@ allows it and the scope justifies it. Fill missing fields autonomously before
 implementation; missing metadata alone never requires human review.
 """
 
-MODEL = "opencode-go/gpt-6-luna#max"
+MODEL = "opencode-go/deepseek-v4.1-flash#max"
 AGENT = "linear-issue"
 PREVIEW_AGENT = "linear-issue-preview"
 IMAGE_QUESTION = "Copy an image for this request, then click Reply."

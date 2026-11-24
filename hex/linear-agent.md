@@ -1,7 +1,7 @@
 ---
 description: Manage Linear issues and projects captured through Hex.
 mode: primary
-model: opencode-go/gpt-6-luna#max
+model: opencode-go/deepseek-v4.1-flash#max
 steps: 60
 permissions:
   - {action: "*", resource: "*", effect: deny}

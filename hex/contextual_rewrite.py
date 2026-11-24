@@ -23,7 +23,6 @@ HEX_PATH = shutil.which("hex") or Path.home() / ".local/bin/hex"
 OPENCODE_PATH = shutil.which("opencode") or Path.home() / ".opencode/bin/opencode"
 VOCABULARY_LOG = SETTINGS_PATH.with_name("vocabulary-auto-added.jsonl")
 HISTORY_WORD_LIMIT = 2000
-LONG_DICTATION_WORDS = 100
 MAX_NEW_TERMS = 3
 MAX_RESPONSE_BYTES = 262144
 
@@ -310,24 +309,12 @@ def deadline_expired(_signum, _frame):
     raise TimeoutError("Rewrite deadline reached")
 
 
-def profile_for_dictation(profile, word_count):
-    """Give long Haiku rewrites reasoning without changing the saved profile."""
-    if (
-        profile.get("model") == "opencode-go/claude-haiku-5-5"
-        and profile.get("variant") == "none"
-        and word_count >= LONG_DICTATION_WORDS
-    ):
-        return {**profile, "variant": "medium"}
-    return profile
-
-
 def rewrite(text, context):
     if not text.strip() or not any(character.isalpha() for character in text):
         return text
     try:
         settings = json.loads(SETTINGS_PATH.read_text())
-        word_count = len(text.split())
-        profile = profile_for_dictation(settings["dictation_processing"]["default_mode"]["post_processing"], word_count)
+        profile = settings["dictation_processing"]["default_mode"]["post_processing"]
         budget = max(1, min(profile.get("deadline_seconds", 30), 27))
         deadline = time.monotonic() + budget
         signal.signal(signal.SIGALRM, deadline_expired)
@@ -337,11 +324,7 @@ def rewrite(text, context):
         generated = generate(build_prompt(text, context, history, settings), profile, deadline)
         output, _ = parse_rewrite(generated)
         history_words = sum(len(entry["text"].split()) for entry in history)
-        print(
-            f"contextual-rewrite: used {len(history)} earlier dictations ({history_words} words); "
-            f"current_words={word_count} variant={profile.get('variant') or 'default'}",
-            file=sys.stderr,
-        )
+        print(f"contextual-rewrite: used {len(history)} earlier dictations ({history_words} words)", file=sys.stderr)
         return output
     except Exception as error:
         print(f"contextual-rewrite: {type(error).__name__}; preserving input", file=sys.stderr)

@@ -49,10 +49,13 @@ systemctl --user enable --now hex-vocabulary-review.service
 
 New or changed transformation configurations require **Allow** in Hex's Output
 pane. The installer does not write Hex's approval state. Unchanged config
-bytes are not rewritten, preserving an existing approval. The template retains
-the old Luna description to preserve this machine's approved configuration;
-the actual model comes from `hex/rewrite.json`, which selects Haiku.
-Hex-owned `AGENTS.md`, `hex.d.ts`, and `tsconfig.json` are left alone. Run
+bytes are not rewritten, preserving an existing approval. The transformation
+template keeps its old Luna wording because changing its bytes would invalidate
+this machine's approved configuration; Luna is no longer the rewrite model.
+The actual model comes from `hex/rewrite.json`, which selects DeepSeek V4.1
+Flash. The helper still bounds its history excerpt to 2000 words, matching the
+template's total-word-limit description. Hex-owned `AGENTS.md`, `hex.d.ts`,
+and `tsconfig.json` are left alone. Run
 `hex commands init` if you want Hex to generate or refresh its editor typings.
 
 ## Dictating Linear issues
@@ -88,8 +91,8 @@ Keep recordings is enabled. A copy failure shows a notification pointing to
 History for recovery. Paste the transcript wherever you
 meant to send it if you pressed the slash shortcut by accident. Each completion
 notification shows the issue link and any confirmed dependency links.
-If you request an issue under a new project, Luna can create the project first
-when its name, team and purpose are clear.
+If you request an issue under a new project, the assistant can create the
+project first when its name, team and purpose are clear.
 
 Identify the issue by ID or by a clear name or description. You can edit its
 title, description, project, status, priority, estimate, due date, and labels,
@@ -108,8 +111,8 @@ Say **“Check the image in my clipboard”** to use a PNG, JPEG, or WebP image 
 drafting. Say **“Attach the image in my clipboard”** to also display it in
 Linear. When the service recognizes the instruction, it takes a copy before
 placing the transcript on the clipboard and keeps that image with the draft.
-Luna checks whether the image belongs with the issue. If the draft needs an
-image, copy the intended image and click **Reply** to resume the same request.
+The assistant checks whether the image belongs with the issue. If the draft
+needs an image, copy the intended image and click **Reply** to resume the same request.
 If the clipboard has no usable image, **Reply** opens a dialog. Copy the image,
 then select **Use Clipboard Image** in that dialog.
 
@@ -130,39 +133,40 @@ separate portal registration uses the same running Hex and selected
 transcription model. Capture uses `hex dictation start --raw`, followed on
 release by `hex dictation stop --print`. Hex owns History persistence and
 applies its Skip Long Pauses setting to the captured audio. Printing returns
-the raw transcript without pasting or running the Haiku rewrite. The service
+the raw transcript without pasting or running the rewrite. The service
 then sends it to OpenCode and the clipboard.
 
 The helper sends the verbatim transcript, foreground-window hint, local date,
-clipboard metadata and follow-up answers. OpenCode Go runs `gpt-6-luna#max`
-in an archived session with `hex/linear-agent.md` as its instructions. The
-workspace plugin removes the skill loader; this bot uses its supplied role
-and Linear MCP tools directly. Luna loads the current projects, summaries and
-descriptions through Linear MCP before choosing a project. A workspace plugin
-presents project rows with their
+clipboard metadata and follow-up answers. OpenCode Go runs
+`deepseek-v4.1-flash#max` in an archived session with `hex/linear-agent.md` as
+its instructions. The workspace plugin removes the skill loader; this bot uses
+its supplied role and Linear MCP tools directly. The assistant loads the
+current projects, summaries and descriptions through Linear MCP before choosing
+a project. A workspace plugin presents project rows with their
 names, statuses, teams, summaries, descriptions and URLs. Longer descriptions
-can be read through `linear_get_project`. Luna queries issues, labels, workflow
-states and other details as needed. Issue search results contain identifiers,
-titles, projects, statuses, labels, priorities, estimates and dates. Luna reads
-descriptions and relations for relevant issues, including older and cross-project
-prerequisites. An open analysis or plan is a blocker when the new work depends
-on its outcome.
+can be read through `linear_get_project`. The assistant queries issues, labels,
+workflow states and other details as needed. Issue search results contain
+identifiers, titles, projects, statuses, labels, priorities, estimates and
+dates. The assistant reads descriptions and relations for relevant issues,
+including older and cross-project prerequisites. An open analysis or plan is a
+blocker when the new work depends on its outcome.
 
-Luna performs project and issue creation, edits, assignments and dependency
-changes directly through MCP. Its instructions require preserving the dictated
-context, supplying priority and estimate, using Backlog for new issues unless
-requested otherwise, checking duplicates, verifying saved changes and correcting
-recoverable errors. After an uncertain save, it checks the result before retrying.
-These checks run in the agent. The Python helper runs the CLI and handles the
-desktop interaction. Each private OpenCode invocation has a twenty-minute limit.
+The assistant performs project and issue creation, edits, assignments and
+dependency changes directly through MCP. Its instructions require preserving
+the dictated context, supplying priority and estimate, using Backlog for new
+issues unless requested otherwise, checking duplicates, verifying saved changes
+and correcting recoverable errors. After an uncertain save, it checks the
+result before retrying. These checks run in the agent. The Python helper runs
+the CLI and handles the desktop interaction. Each private OpenCode invocation
+has a twenty-minute limit.
 
-Luna calls `hex_notify` with a verified issue or project URL to queue a GNOME
-notification. The Python service displays it with **Open in Linear** when the
-run finishes, including any completed results from an interrupted run. Clicking
-the notification itself also opens the link. The click handler stays active
-until the notification is opened or dismissed, and forwards GNOME's activation
-token when launching the browser. Browser-launch failures go to the service
-journal. Luna uses
+The assistant calls `hex_notify` with a verified issue or project URL to queue a
+GNOME notification. The Python service displays it with **Open in Linear** when
+the run finishes, including any completed results from an interrupted run.
+Clicking the notification itself also opens the link. The click handler stays
+active until the notification is opened or dismissed, and forwards GNOME's
+activation token when launching the browser. Browser-launch failures go to the
+service journal. The assistant uses
 `hex_reply` to request missing details or a replacement image. The final response
 is plain text. For image attachments, MCP prepares the signed upload request,
 `hex_upload_clipboard` sends the captured bytes with those headers, and MCP
@@ -218,18 +222,17 @@ uncertainty, quotations, identifiers, and intended numbers. Preserve unresolved
 contradictions instead of guessing. `@HOME@` is expanded during installation
 in the personal Guaranine repository reference.
 
-`hex/rewrite.json` selects Claude Haiku 5.5 on OpenCode Go, base variant `none`,
-with a 30-second deadline. The helper reads these values from the saved Global
-profile for each dictation. With that model and base variant, a current
-dictation of **100 words or more** requests `medium` reasoning for that rewrite;
-shorter dictations keep `none`. Only the current text counts toward the
-threshold, not history, vocabulary, or instructions. `LONG_DICTATION_WORDS` in
-the helper owns the threshold. The selection is per request: it does not write
-settings or change the background vocabulary worker's effort. Other models and
-explicit reasoning variants are preserved. The helper logs the current word
-count and selected variant. Reasoning shares the existing deadline and failure
-fallback. Built-in post-processing stays disabled because the
-`conversation-context` transformation performs the rewrite once.
+`hex/rewrite.json` selects DeepSeek V4.1 Flash on OpenCode Go, with explicit
+`low` reasoning and a 30-second deadline. The helper reads these values from the
+saved Global profile for each dictation and sends that explicit variant; it does
+not omit reasoning to accept a provider default. DeepSeek V4.1 Flash exposes
+`low`, `high`, and `max`, so `low` is the minimum supported setting and there is
+no `none` variant for this model. The saved model and variant are used for every
+dictation; the helper does not change the background vocabulary worker's effort,
+which continues to request its own explicit `low` reasoning. Other models and
+explicit reasoning variants are preserved. Reasoning shares the existing
+deadline and failure fallback. Built-in post-processing stays disabled because
+the `conversation-context` transformation performs the rewrite once.
 
 The helper includes up to 2000 whitespace-separated words from earlier
 nonempty dictations retained in Hex History. There is no age or message-count

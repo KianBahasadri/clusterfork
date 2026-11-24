@@ -84,7 +84,7 @@ class LinearDictationTests(unittest.TestCase):
         self.assertIn("--archived", command)
         self.assertNotIn("--standalone", command)
         self.assertEqual(command[command.index("--server") + 1], self.server.url)
-        self.assertEqual(command[command.index("--model") + 1], "opencode-go/gpt-6-luna#max")
+        self.assertEqual(command[command.index("--model") + 1], "opencode-go/deepseek-v4.1-flash#max")
         prompt = run.call_args.kwargs["input"].decode()
         self.assertEqual(run.call_args.kwargs["env"]["LINEAR_API_KEY"], "fixture-linear-key")
         self.assertEqual(run.call_args.kwargs["env"]["OPENCODE_PASSWORD"], self.server.password)
@@ -611,6 +611,11 @@ class LinearInstructionsTests(unittest.TestCase):
         instructions = (ROOT / "hex/linear-agent.md").read_text()
         self.assertRegex(instructions,
                          r"File new issues in Backlog unless the speaker requests\s+another status\.")
+
+    def test_agent_uses_the_same_explicitly_reasoned_model(self):
+        instructions = (ROOT / "hex/linear-agent.md").read_text()
+        self.assertIn(f"model: {issue.MODEL}\n", instructions)
+        self.assertTrue(issue.MODEL.endswith("#max"))
 
 
 if __name__ == "__main__":

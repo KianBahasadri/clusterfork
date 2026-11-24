@@ -15,7 +15,7 @@ import contextual_rewrite as rewrite
 def isolated_settings(test, directory):
     settings = Path(directory) / "settings.json"
     settings.write_text(json.dumps({"dictation_processing": {"default_mode": {"post_processing": {
-        "prompt": "Keep my voice.", "model": "opencode-go/claude-haiku-5-5", "variant": "none", "deadline_seconds": 30,
+        "prompt": "Keep my voice.", "model": "opencode-go/deepseek-v4.1-flash", "variant": "low", "deadline_seconds": 30,
     }}}, "vocabulary": []}))
     patcher = patch.object(rewrite, "SETTINGS_PATH", settings)
     patcher.start()
@@ -147,47 +147,26 @@ class RecentDictationTests(unittest.TestCase):
               patch.object(rewrite.subprocess, "Popen", side_effect=FileNotFoundError)):
             self.assertEqual(rewrite.rewrite(text, {}), text)
 
-    def test_generation_uses_selected_haiku_model_and_only_returns_generated_text(self):
-        profile = {"model": "opencode-go/claude-haiku-5-5", "variant": "none"}
+    def test_generation_uses_selected_model_and_only_returns_generated_text(self):
+        profile = {"model": "opencode-go/deepseek-v4.1-flash", "variant": "low"}
         responses = [(200, b'{}'), (200, b'{"data":{"text":"Only this text."}}')]
         with patch.object(rewrite, "service_registration", return_value=("127.0.0.1", 1, None)), patch.object(rewrite, "request", side_effect=responses) as request:
             self.assertEqual(rewrite.generate("prompt", profile, time.monotonic() + 3), "Only this text.")
             payload = request.call_args_list[1].args[5]
-            self.assertEqual(payload["model"], {"providerID": "opencode-go", "id": "claude-haiku-5-5", "variant": "none"})
+            self.assertEqual(payload["model"], {"providerID": "opencode-go", "id": "deepseek-v4.1-flash", "variant": "low"})
 
 
-class AdaptiveReasoningTests(unittest.TestCase):
+class ExplicitReasoningTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         isolated_settings(self, directory.name)
 
-    def test_word_threshold_switches_only_the_current_request(self):
-        saved = rewrite.SETTINGS_PATH.read_bytes()
-        for word_count, expected in ((99, "none"), (100, "medium"), (350, "medium")):
-            with self.subTest(words=word_count):
-                text = "\n\t".join(["word"] * word_count)
-                with patch.object(rewrite, "read_history", return_value=[]), patch.object(rewrite, "generate", return_value="Edited.") as generate:
-                    self.assertEqual(rewrite.rewrite(text, {}), "Edited.")
-                self.assertEqual(generate.call_args.args[1]["variant"], expected)
-                self.assertEqual(rewrite.SETTINGS_PATH.read_bytes(), saved)
-
-    def test_large_history_and_vocabulary_do_not_enable_reasoning_for_short_text(self):
-        settings = json.loads(rewrite.SETTINGS_PATH.read_text())
-        settings["vocabulary"] = [f"Product{index}" for index in range(200)]
-        rewrite.SETTINGS_PATH.write_text(json.dumps(settings))
-        history = [{"text": "older " * 2000}]
-        with patch.object(rewrite, "read_history", return_value=history), patch.object(rewrite, "generate", return_value="Check the logs.") as generate:
-            self.assertEqual(rewrite.rewrite("um check the logs", {}), "Check the logs.")
-        self.assertEqual(generate.call_args.args[1]["variant"], "none")
-        self.assertGreater(len(generate.call_args.args[0].split()), 2000)
-
-    def test_explicit_effort_and_other_models_are_preserved(self):
+    def test_saved_profile_is_passed_through_unchanged(self):
         cases = [
-            ("opencode-go/claude-haiku-5-5", "low"),
-            ("opencode-go/claude-haiku-5-5", "high"),
-            ("opencode-go/claude-haiku-5-5", None),
-            ("opencode-go/gpt-6-luna", "none"),
+            ("opencode-go/deepseek-v4.1-flash", "low"),
+            ("opencode-go/deepseek-v4.1-flash", "high"),
+            ("opencode-go/deepseek-v4.1-flash", "max"),
         ]
         for model, variant in cases:
             with self.subTest(model=model, variant=variant):
@@ -206,17 +185,9 @@ class AdaptiveReasoningTests(unittest.TestCase):
               patch.object(rewrite.subprocess, "Popen") as notify):
             self.assertEqual(rewrite.rewrite(text, {}), text)
         notify.assert_called_once()
-        self.assertEqual(generate.call_args.args[1]["variant"], "medium")
+        self.assertEqual(generate.call_args.args[1]["variant"], "low")
 
-    def test_long_generation_sends_medium_in_the_model_payload(self):
-        responses = [(200, b'{}'), (200, b'{"data":{"text":"Only the edited message."}}')]
-        with patch.object(rewrite, "read_history", return_value=[]), patch.object(rewrite, "service_registration", return_value=("127.0.0.1", 1, None)), patch.object(rewrite, "request", side_effect=responses) as request:
-            self.assertEqual(rewrite.rewrite("word " * 100, {}), "Only the edited message.")
-        self.assertEqual(request.call_args_list[1].args[5]["model"], {
-            "providerID": "opencode-go", "id": "claude-haiku-5-5", "variant": "medium",
-        })
-
-    def test_refused_connection_retries_with_new_registration_and_same_effort(self):
+    def test_refused_connection_retries_with_new_registration_and_same_variant(self):
         registrations = [("127.0.0.1", 1, None), ("127.0.0.1", 2, None)]
         responses = [ConnectionRefusedError(), (200, b'{}'), (200, b'{"data":{"text":"Edited."}}')]
         with (
@@ -236,7 +207,7 @@ class AdaptiveReasoningTests(unittest.TestCase):
         self.assertEqual([first[1], second[1], generation[1]], [1, 2, 2])
         self.assertEqual(first[-1], generation[-1])
         self.assertEqual(generation[5]["model"], {
-            "providerID": "opencode-go", "id": "claude-haiku-5-5", "variant": "medium",
+            "providerID": "opencode-go", "id": "deepseek-v4.1-flash", "variant": "low",
         })
 
     def test_missing_service_registration_starts_service(self):
@@ -342,7 +313,7 @@ class VocabularyLearningTests(unittest.TestCase):
     def test_live_cli_update_uses_no_aliases_and_records_only_the_added_name(self):
         reply = subprocess.CompletedProcess([], 0, '{"status":"done","changed":true}', '')
         with patch.object(rewrite.subprocess, "run", return_value=reply) as run:
-            added = rewrite.remember_terms([self.candidate("Syncthing")], "Use Syncthing.", "Use Syncthing.", [], {"model": "opencode-go/gpt-6-luna"}, time.monotonic() + 5, ["Use Syncthing."])
+            added = rewrite.remember_terms([self.candidate("Syncthing")], "Use Syncthing.", "Use Syncthing.", [], {"model": "opencode-go/deepseek-v4.1-flash"}, time.monotonic() + 5, ["Use Syncthing."])
         self.assertEqual(added, ["Syncthing"])
         self.assertEqual(run.call_args.args[0], [str(rewrite.HEX_PATH), "vocabulary", "add", "Syncthing", "--json"])
         self.assertNotIn("shell", run.call_args.kwargs)
