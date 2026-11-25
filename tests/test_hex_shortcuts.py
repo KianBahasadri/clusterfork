@@ -134,6 +134,24 @@ class ShortcutTests(unittest.TestCase):
             self.assertEqual(self.open_request.call_args.args[1], "release-token")
         self.run_shortcuts(scenario)
 
+    def test_typing_tab_opens_before_the_focus_extension_loads(self):
+        def scenario():
+            message = "Sign out and back in to load Hex Typing Focus."
+            with (patch.object(shortcut, "capture_destination", side_effect=shortcut.TypingError(message)),
+                  patch.object(shortcut, "focused_title", return_value="Editor")):
+                self.tap(1000, shortcut.TYPING_SHORTCUT)
+                self.tap(1150, shortcut.TYPING_SHORTCUT)
+                tab, _token, submit, close = self.open_request.call_args.args
+                self.assertEqual(tab, "typing")
+                self.assertEqual(self.open_request.call_args.kwargs["typing_error"], message)
+                self.tap(1300)
+                self.present.assert_called_once_with("linear", None)
+                close()
+                submit("linear", "Keep this draft.", ())
+                args, _thread = self.calls(shortcut.submit_linear)[0]
+                self.assertEqual(args[2:], ("Keep this draft.", "Editor", ()))
+        self.run_shortcuts(scenario)
+
     def test_taps_must_be_close_together_and_shorter_than_a_hold(self):
         for gap in (350, 351):
             with self.subTest(gap=gap):

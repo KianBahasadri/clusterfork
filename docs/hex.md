@@ -36,15 +36,15 @@ preserving existing terms, spellings, and additional aliases. A removed seed
 term is restored on reinstall; remove it from `hex/vocabulary.json` to make
 that removal persistent.
 
-The vocabulary worker is enabled in the matching systemd user session after
+The workers are enabled in the matching systemd user session after
 live settings are applied. Changed worker code restarts an active worker;
 unchanged reinstalls do not restart it. A disposable HOME cannot activate the
 host user's services. Without a matching user manager, enable the installed
-unit in the desktop session:
+units in the desktop session.
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now hex-vocabulary-review.service
+systemctl --user enable --now hex-vocabulary-review.service hex-linear-issue.service
 ```
 
 New or changed transformation configurations require **Allow** in Hex's Output
@@ -89,6 +89,8 @@ focus also cancels it, leaving any partial text in place.
 
 The installer enables the bundled **Hex Typing Focus** extension for GNOME
 Shell 51. The shell loads new or changed extension code at the next sign-in.
+The shared dialog and training work as soon as the worker starts. The Typing
+tab explains when the destination is unavailable and keeps the draft editable.
 The extension identifies and restores the destination window and guards key
 delivery inside Mutter. Field-level focus tracking uses AT-SPI when the target
 exposes its editor. The worker shares its Global Shortcuts registration with

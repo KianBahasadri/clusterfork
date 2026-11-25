@@ -161,10 +161,7 @@ def activate_workers(home, changes, extension_changed):
                 [binary, "--user", "enable", "--now", unit],
                 check=True, capture_output=True, timeout=10,
             )
-            # GNOME loads changed extension code on sign-in. That same
-            # session starts the matching shortcut worker.
-            pending_focus = gnome and extension_changed and unit == LINEAR_UNIT
-            if active and changed and not pending_focus:
+            if active and changed:
                 subprocess.run([binary, "--user", "restart", unit], check=True, capture_output=True, timeout=10)
         except (OSError, subprocess.SubprocessError):
             print(f"Hex: enable {unit} with systemctl --user enable --now {unit}", file=sys.stderr)

@@ -349,12 +349,14 @@ def listen(dry_run):
         try:
             from linear_reply import open_request
 
+            typing_error = None
             try:
                 destination = capture_destination()
                 title = destination.title
             except TypingError as error:
                 destination = error
                 title = focused_title()
+                typing_error = str(error)
 
             def finished():
                 nonlocal composing
@@ -367,7 +369,7 @@ def listen(dry_run):
                 else:
                     Thread(target=submit_linear, args=(jobs, stopping, text, title, images), daemon=True).start()
 
-            composing = open_request(tab, token, submit, finished)
+            composing = open_request(tab, token, submit, finished, typing_error=typing_error)
         except (ImportError, GLib.Error, RuntimeError, ValueError) as error:
             print(f"Could not open the Hex dictation dialog ({type(error).__name__}).")
             Thread(target=notify, args=("Hex dictation", "Could not open the dialog. Check that GTK 4 is installed."),

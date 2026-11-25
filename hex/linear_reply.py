@@ -15,7 +15,7 @@ from typing_profiles import PROFILES, load_profiles, save_profiles
 from typing_training import open_training
 
 
-def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None):
+def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None, typing_error=None):
     content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=14,
                       margin_bottom=14, margin_start=14, margin_end=14)
     window.set_child(content)
@@ -26,7 +26,7 @@ def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None
     else:
         tabs = Gtk.Stack(vhomogeneous=False)
         tabs.add_titled(linear, "linear", "Linear")
-        tabs.add_titled(typing_options(window), "typing", "Typing")
+        tabs.add_titled(typing_options(window, typing_error), "typing", "Typing")
         content.append(Gtk.StackSwitcher(stack=tabs, halign=Gtk.Align.CENTER))
         content.append(tabs)
     linear.append(Gtk.Label(label=question, xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR,
@@ -89,7 +89,8 @@ def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None
         submit_text(active, draft, attached)
 
     def update_send(*_args):
-        send.set_sensitive(bool(text()) and (typing() or not reading))
+        ready = typing_error is None if typing() else not reading
+        send.set_sensitive(ready and bool(text()))
 
     def tab_changed(*_args):
         send.set_label("Type text" if typing() else "Send request")
@@ -206,7 +207,7 @@ def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None
     return present
 
 
-def typing_options(window):
+def typing_options(window, typing_error):
     pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
     row = Gtk.Box(spacing=8)
     pane.append(row)
@@ -218,6 +219,10 @@ def typing_options(window):
     row.append(choice)
     row.append(train)
     row.append(warning)
+    if typing_error:
+        notice = Gtk.Label(label=typing_error, xalign=0, wrap=True, max_width_chars=48)
+        notice.add_css_class("warning")
+        pane.append(notice)
 
     placeholders = Gtk.Box(spacing=8, sensitive=False)
     placeholders.append(Gtk.Button(label="AI-writing estimate"))
@@ -279,10 +284,11 @@ def typing_options(window):
     return pane
 
 
-def open_request(tab, token, submit, closed):
+def open_request(tab, token, submit, closed, *, typing_error=None):
     Gtk.init()
     window = Gtk.Window(title="Hex Dictation", default_width=480)
-    present = build_dialog(window, "Describe the Linear issues to create or update.", submit, tab=tab, closed=closed)
+    present = build_dialog(window, "Describe the Linear issues to create or update.", submit,
+                           tab=tab, closed=closed, typing_error=typing_error)
     present(tab, token)
     return present
 

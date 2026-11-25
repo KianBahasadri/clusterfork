@@ -196,12 +196,12 @@ class HexInstallerTests(unittest.TestCase):
         self.assertFalse(any("enable" in command or "restart" in command or "daemon-reload" in command for command in self.processes))
         self.assertFalse(any(command[0] == "gsettings" for command in self.processes))
 
-    def test_enable_focus_extension_preserves_existing_gnome_extensions(self):
+    def test_new_focus_extension_keeps_existing_extensions_and_restarts_shortcuts(self):
         self.manager_desktop = "XDG_SESSION_TYPE=wayland\nXDG_CURRENT_DESKTOP=GNOME\n"
         installer.install(self.home)
         self.assertIn(["gsettings", "set", "org.gnome.shell", "enabled-extensions",
                        "['existing@example.org', 'hex-focus@clusterfork']"], self.processes)
-        self.assertNotIn(["/fake/systemctl", "--user", "restart", installer.LINEAR_UNIT], self.processes)
+        self.assertIn(["/fake/systemctl", "--user", "restart", installer.LINEAR_UNIT], self.processes)
 
     def test_microphone_rules_are_explicit_and_do_not_restart_audio(self):
         installer.install(self.home)
