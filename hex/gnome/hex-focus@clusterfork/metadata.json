@@ -1,0 +1,7 @@
+{
+  "uuid": "hex-focus@clusterfork",
+  "name": "Hex Typing Focus",
+  "description": "Restore Hex's typing destination and stop replay when the window loses focus.",
+  "shell-version": ["51"],
+  "version": 1
+}

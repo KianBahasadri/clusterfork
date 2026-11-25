@@ -58,27 +58,65 @@ template's total-word-limit description. Hex-owned `AGENTS.md`, `hex.d.ts`,
 and `tsconfig.json` are left alone. Run
 `hex commands init` if you want Hex to generate or refresh its editor typings.
 
-## Typing a dictation
+## Typing
 
-Hold **numpad `9`** to record, then release it to type the finished text into
-the focused field. This uses the same transcription model and Output steps as
-the regular Hex dictation shortcut, including the contextual rewrite. The
-shortcut service types the result one character at a time with varied delays
-and short sentence pauses. Newlines use Shift+Enter, tabs become spaces, and
-non-ASCII characters use GNOME's Ctrl+Shift+U Unicode input sequence.
-The complete processed text remains in Hex History as a **Printed** entry.
+Hold **numpad `9`** to dictate into the field you were using when recording
+began. On release, Hex transcribes and runs its Output steps, including the
+contextual rewrite. The finished text is saved in Hex History as a **Printed**
+entry. **Double-tap numpad `9`** to open the shared dialog on Typing, or
+**double-tap numpad `/`** to open it on Linear. Both numpad 9 gestures work
+with Num Lock on or off. Numpad minus runs Hex's regular paste action.
 
-The existing `hex-linear-issue.service` handles this binding alongside Linear
-dictation. Its portal action is **Hold to dictate and type the result**, with
-keypad Page Up (`KP_Prior`, the numpad `9` key) as the preferred trigger.
-On GNOME, this keypad binding works with Num Lock on or off. Typing uses
-GNOME Mutter's keyboard input API. Hex's separate Live Typing lab requires
-`zwp_input_method_manager_v2`, which GNOME does not provide.
+The tabs share one draft. Press either keypad shortcut while the dialog is
+open to select its tab in the same window. Enter adds a line. **Ctrl+Enter**
+closes the dialog and submits to the active tab. Typing restores the original
+window and field. The **Train BioCadence** button opens a dedicated training
+window for the selected profile. **Typing from thoughts** gives you a
+free-writing prompt. **Copy typing** displays a passage to transcribe.
+Each can be saved after at least 40 typed characters. Hex captures presses and
+releases inside the training field and saves the fitted statistics and
+selection in `~/.local/state/hex/typing/profiles.json` or under `XDG_STATE_HOME`.
+An untrained selection shows a warning before the draft field and uses default
+timing. The AI-writing estimate, focus-break control and speed slider are
+disabled.
+
+Both Typing routes use the selected profile's dwell, letter-pair timing,
+boundary pauses and correction rate. Replay sends only keyboard events.
+It uses Shift+Enter for line breaks, Tab for tabs and Ctrl+Shift+U with
+hexadecimal digits for Unicode entry. The target field controls which of
+these sequences it accepts. Press **numpad 9** again to stop replay. Losing
+focus also cancels it, leaving any partial text in place.
+
+The installer enables the bundled **Hex Typing Focus** extension for GNOME
+Shell 51. The shell loads new or changed extension code at the next sign-in.
+The extension identifies and restores the destination window and guards key
+delivery inside Mutter. Field-level focus tracking uses AT-SPI when the target
+exposes its editor. The worker shares its Global Shortcuts registration with
+Linear dictation and requests keypad Page Up (`KP_Prior`) for numpad 9.
 
 When changing saved GNOME portal bindings programmatically, apply them to the
 active session through `org.gnome.GlobalShortcutsRebind.RebindShortcuts` on
 `/org/gnome/globalshortcuts` at `org.freedesktop.impl.portal.desktop.gnome`.
 A dconf write alone leaves the active shortcuts unchanged.
+
+### Keystroke benchmark
+
+The offline benchmark uses the same draft with two synthetic training
+profiles and a fixed replay seed. Each trace had four backspaces, 21 two-letter
+bursts and 14 three-letter bursts within words at gaps of at most 100 ms.
+The median within-word gap was 88 ms for both. Word and sentence gaps were
+312 and 877 ms for thoughts, and 219 and 456 ms for copy typing.
+
+| Training profile | is-human-cadence v1.6.0 | HIDSentry 0.1.0 |
+|---|---|---|
+| Typing from thoughts | Unknown (0.663) | Human (0.006) |
+| Copy typing | Human (0.738) | Human (0.008) |
+
+is-human-cadence flagged all 246 keydowns in each trace as synthetic events.
+These scores describe the keystroke traces. A text-only estimator sees the
+same finished draft from either profile. The [benchmark script](../tests/hex_typing_benchmark.py)
+pins both detector revisions. The [BioCadence MIT notice](../hex/BIOCADENCE-LICENSE)
+is included with the adapted code.
 
 ## Dictating Linear issues
 
@@ -92,7 +130,7 @@ Clusterfork issue to add a relay health check, blocked by KIAN-123” or “Set
 KIAN-123 to High priority and add that it needs to cover timeouts.” Hold for
 at least a quarter second to start the microphone, then speak when Hex shows
 that it is recording. A single quick tap does nothing. **Double-tap numpad `/`**
-to open a text box instead: type the request and select **Send request**.
+to open the Linear tab instead. Type the request and select **Send request**.
 **Ctrl+Enter** also sends the request; Enter adds a new line.
 Both taps must be shorter than a quarter second, with at most 350 ms between
 them. This uses the same Linear agent without recording audio. Repeated

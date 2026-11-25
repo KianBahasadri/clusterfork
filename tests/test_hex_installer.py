@@ -39,6 +39,9 @@ class HexInstallerTests(unittest.TestCase):
             )
         }
         self.private.update({self.config / "hex.d.ts": b"Hex-owned types", self.config / "AGENTS.md": b"Hex-owned instructions"})
+        profile = self.home / ".local/state/hex/typing/profiles.json"
+        profile.parent.mkdir(parents=True)
+        self.private[profile] = b"locally trained profile"
         for path, content in self.private.items():
             path.write_bytes(content)
         self.mode = {
@@ -57,6 +60,7 @@ class HexInstallerTests(unittest.TestCase):
         self.commands = []
         self.processes = []
         self.manager_home = self.home
+        self.manager_desktop = ""
         for context in (
             patch.object(installer, "hex_command", side_effect=self.hex_command),
             patch.object(installer.subprocess, "run", side_effect=self.run_process),
@@ -96,7 +100,11 @@ class HexInstallerTests(unittest.TestCase):
 
     def run_process(self, arguments, **kwargs):
         self.processes.append(arguments)
-        output = f"HOME={self.manager_home}\n" if arguments[1:] == ["--user", "show-environment"] else ""
+        output = ""
+        if arguments[1:] == ["--user", "show-environment"]:
+            output = f"HOME={self.manager_home}\n{self.manager_desktop}"
+        if arguments == ["gsettings", "get", "org.gnome.shell", "enabled-extensions"]:
+            output = "['existing@example.org']\n"
         return subprocess.CompletedProcess(arguments, 0, stdout=output, stderr="")
 
     def test_install_merges_owned_keys_and_reinstall_has_no_writes_or_restart(self):
@@ -130,6 +138,11 @@ class HexInstallerTests(unittest.TestCase):
         plugin = workspace / ".opencode/plugins/linear-search.js"
         self.assertEqual(plugin.read_bytes(), (ROOT / "hex/linear-search.js").read_bytes())
         self.assertEqual((workspace / "linear_issue.py").read_bytes(), (ROOT / "hex/linear_issue.py").read_bytes())
+        for name in ("biocadence.py", "BIOCADENCE-LICENSE", "typing_profiles.py", "typing_replay.py", "typing_training.py"):
+            self.assertEqual((workspace / name).read_bytes(), (ROOT / "hex" / name).read_bytes())
+        extension = self.home / ".local/share/gnome-shell/extensions" / installer.FOCUS_EXTENSION
+        self.assertTrue((extension / "metadata.json").is_file())
+        self.assertTrue((extension / "extension.js").is_file())
         workspace_config = json.loads((workspace / "opencode.json").read_text())
         servers = workspace_config["mcp"]["servers"]
         self.assertEqual(servers["linear"]["url"], "https://mcp.linear.app/mcp")
@@ -178,8 +191,17 @@ class HexInstallerTests(unittest.TestCase):
 
     def test_other_home_cannot_activate_host_user_worker(self):
         self.manager_home = Path("/another/home")
+        self.manager_desktop = "XDG_SESSION_TYPE=wayland\nXDG_CURRENT_DESKTOP=GNOME\n"
         installer.install(self.home)
         self.assertFalse(any("enable" in command or "restart" in command or "daemon-reload" in command for command in self.processes))
+        self.assertFalse(any(command[0] == "gsettings" for command in self.processes))
+
+    def test_enable_focus_extension_preserves_existing_gnome_extensions(self):
+        self.manager_desktop = "XDG_SESSION_TYPE=wayland\nXDG_CURRENT_DESKTOP=GNOME\n"
+        installer.install(self.home)
+        self.assertIn(["gsettings", "set", "org.gnome.shell", "enabled-extensions",
+                       "['existing@example.org', 'hex-focus@clusterfork']"], self.processes)
+        self.assertNotIn(["/fake/systemctl", "--user", "restart", installer.LINEAR_UNIT], self.processes)
 
     def test_microphone_rules_are_explicit_and_do_not_restart_audio(self):
         installer.install(self.home)

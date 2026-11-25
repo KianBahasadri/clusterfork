@@ -5,7 +5,7 @@ from io import BytesIO
 import json
 from pathlib import Path
 from queue import SimpleQueue
-from subprocess import CompletedProcess, CalledProcessError
+from subprocess import CompletedProcess
 import sys
 from threading import Event
 from types import ModuleType, SimpleNamespace
@@ -29,6 +29,9 @@ def dialog_output(text, images=()):
 class ShortcutTests(unittest.TestCase):
     def run_shortcuts(self, scenario):
         self.handlers, self.timers, self.threads = {}, {}, []
+        self.present = Mock()
+        self.open_request = Mock(return_value=self.present)
+        self.destination = SimpleNamespace(title="Original editor")
         bus, loop = Mock(), Mock()
 
         def subscribe(_sender, interface, member, path, _arg, _flags, callback):
@@ -41,7 +44,8 @@ class ShortcutTests(unittest.TestCase):
             options = parameters.unpack()[-1]
             path = f"{shortcut.DESKTOP}/request/fixture/{options['handle_token'].unpack()}"
             result = {"session_handle": "/fixture/session"} if method == "CreateSession" else {
-                "shortcuts": [(shortcut.SHORTCUT, {"trigger_description": "KP_Divide"})]}
+                "shortcuts": [(shortcut.SHORTCUT, {"trigger_description": "KP_Divide"}),
+                              (shortcut.TYPING_SHORTCUT, {"trigger_description": "KP_Page_Up or KP_9"})]}
             self.handlers[path](None, None, None, None, None, variant(None, (0, result)))
 
         def schedule(_delay, callback):
@@ -64,7 +68,10 @@ class ShortcutTests(unittest.TestCase):
                                source_remove=Mock(side_effect=lambda source: self.timers.pop(source, None)),
                                SOURCE_REMOVE=False, PRIORITY_DEFAULT=0, Error=RuntimeError,
                                unix_signal_add=Mock(side_effect=lambda _priority, _signal, callback: setattr(self, "stop", callback)))
-        gio = SimpleNamespace(bus_get_sync=Mock(return_value=bus), BusType=SimpleNamespace(SESSION=0),
+        gio = SimpleNamespace(dbus_address_get_for_bus_sync=Mock(return_value="unix:path=/fixture"),
+                              DBusConnection=SimpleNamespace(new_for_address_sync=Mock(return_value=bus)),
+                              DBusConnectionFlags=SimpleNamespace(AUTHENTICATION_CLIENT=1, MESSAGE_BUS_CONNECTION=2),
+                              BusType=SimpleNamespace(SESSION=0),
                               DBusCallFlags=SimpleNamespace(NONE=0), DBusSignalFlags=SimpleNamespace(NONE=0))
         gi, repository = ModuleType("gi"), ModuleType("gi.repository")
         repository.Gio, repository.GLib = gio, glib
@@ -72,12 +79,15 @@ class ShortcutTests(unittest.TestCase):
         self.emit = lambda member, timestamp, name=shortcut.SHORTCUT, **options: self.handlers[member](
             None, None, None, None, member, variant(None, ("/fixture/session", name, timestamp, options)))
         loop.run.side_effect = scenario
-        with patch.dict(sys.modules, {"gi": gi, "gi.repository": repository}), patch.object(shortcut, "Thread", side_effect=thread):
+        with (patch.dict(sys.modules, {"gi": gi, "gi.repository": repository,
+                                       "linear_reply": SimpleNamespace(open_request=self.open_request)}),
+              patch.object(shortcut, "Thread", side_effect=thread),
+              patch.object(shortcut, "capture_destination", return_value=self.destination)):
             self.assertEqual(shortcut.listen(False), 0)
 
-    def tap(self, timestamp, **options):
-        self.emit("Activated", timestamp, **options)
-        self.emit("Deactivated", timestamp + 50)
+    def tap(self, timestamp, name=shortcut.SHORTCUT, **options):
+        self.emit("Activated", timestamp, name=name, **options)
+        self.emit("Deactivated", timestamp + 50, name=name)
 
     def hold(self):
         source = next(iter(self.timers))
@@ -96,22 +106,22 @@ class ShortcutTests(unittest.TestCase):
             self.tap(2000)
             self.assertFalse(self.timers)
             self.assertFalse(self.calls(shortcut.capture))
-            self.assertFalse(self.calls(shortcut.compose))
+            self.open_request.assert_not_called()
         self.run_shortcuts(scenario)
 
     def test_double_tap_opens_only_one_window_and_passes_the_activation_token(self):
         def scenario():
             self.tap(1000)
             self.tap(1150, activation_token="fixture-token")
-            args, composing = self.calls(shortcut.compose)[0]
-            self.assertEqual(args[2], "fixture-token")
-            self.tap(1300)
-            self.tap(1450)
-            self.assertEqual(len(self.calls(shortcut.compose)), 1)
-            composing.is_alive.return_value = False
+            tab, token, _submit, close = self.open_request.call_args.args
+            self.assertEqual((tab, token), ("linear", "fixture-token"))
+            self.tap(1300, shortcut.TYPING_SHORTCUT)
+            self.present.assert_called_once_with("typing", None)
+            self.open_request.assert_called_once()
+            close()
             self.tap(1600)
             self.tap(1750)
-            self.assertEqual(len(self.calls(shortcut.compose)), 2)
+            self.assertEqual(self.open_request.call_count, 2)
             self.assertFalse(self.calls(shortcut.capture))
             self.assertFalse(self.timers)
         self.run_shortcuts(scenario)
@@ -121,7 +131,7 @@ class ShortcutTests(unittest.TestCase):
             self.tap(1000)
             self.emit("Activated", 1150, activation_token="press-token")
             self.emit("Deactivated", 1200, activation_token="release-token")
-            self.assertEqual(self.calls(shortcut.compose)[0][0][2], "release-token")
+            self.assertEqual(self.open_request.call_args.args[1], "release-token")
         self.run_shortcuts(scenario)
 
     def test_taps_must_be_close_together_and_shorter_than_a_hold(self):
@@ -130,7 +140,7 @@ class ShortcutTests(unittest.TestCase):
                 def scenario():
                     self.tap(1000)
                     self.tap(1050 + gap)
-                    self.assertEqual(len(self.calls(shortcut.compose)), int(gap <= 350))
+                    self.assertEqual(self.open_request.call_count, int(gap <= 350))
                     self.assertFalse(self.calls(shortcut.capture))
                 self.run_shortcuts(scenario)
 
@@ -139,7 +149,7 @@ class ShortcutTests(unittest.TestCase):
             self.emit("Activated", 1150)
             self.emit("Deactivated", 1400)
             self.tap(1500)
-            self.assertFalse(self.calls(shortcut.compose))
+            self.open_request.assert_not_called()
             self.assertFalse(self.calls(shortcut.capture))
         self.run_shortcuts(delayed_timer)
 
@@ -156,7 +166,7 @@ class ShortcutTests(unittest.TestCase):
             self.assertTrue(released.is_set())
             self.assertFalse(stopping.is_set())
             self.tap(1900)
-            self.assertFalse(self.calls(shortcut.compose))
+            self.open_request.assert_not_called()
             recording.start.assert_called_once()
         self.run_shortcuts(scenario)
 
@@ -172,7 +182,7 @@ class ShortcutTests(unittest.TestCase):
             self.assertEqual(len(self.calls(shortcut.notify)), 1)
             self.tap(2400)
             self.tap(2550)
-            self.assertEqual(len(self.calls(shortcut.compose)), 1)
+            self.open_request.assert_called_once()
         self.run_shortcuts(scenario)
 
     def test_shutdown_removes_a_pending_hold_and_releases_an_active_capture(self):
@@ -197,21 +207,48 @@ class ShortcutTests(unittest.TestCase):
             self.emit("Activated", 1000, name=shortcut.TYPING_SHORTCUT)
             self.hold()
             (released, _stopping, _jobs, typed), _recording = self.calls(shortcut.capture)[0]
-            self.assertTrue(typed)
+            self.assertIsInstance(typed, shortcut.Playback)
             self.emit("Deactivated", 1200)
             self.assertFalse(released.is_set())
             self.emit("Deactivated", 1500, name=shortcut.TYPING_SHORTCUT)
             self.assertTrue(released.is_set())
         self.run_shortcuts(scenario)
 
-    def test_keypad9_taps_do_not_open_the_linear_text_box(self):
+    def test_each_double_tap_opens_its_tab_and_submission_uses_the_other_tab(self):
+        for binding, initial, final in (
+            (shortcut.SHORTCUT, "linear", "typing"), (shortcut.TYPING_SHORTCUT, "typing", "linear")
+        ):
+            with self.subTest(initial=initial):
+                def scenario():
+                    other = shortcut.TYPING_SHORTCUT if binding == shortcut.SHORTCUT else shortcut.SHORTCUT
+                    self.tap(1000, other)
+                    self.tap(1150, binding)
+                    self.open_request.assert_not_called()
+                    self.tap(1300, binding)
+                    start_tab, _token, submit, close = self.open_request.call_args.args
+                    self.assertEqual(start_tab, initial)
+                    self.tap(1450, other)
+                    self.present.assert_called_once_with(final, None)
+                    self.open_request.assert_called_once()
+                    close()
+                    submit(final, "Draft\n", ())
+                    if final == "typing":
+                        args, _thread = self.calls(shortcut.submit_typing)[0]
+                        self.assertEqual(args[2:], ("Draft\n", self.destination))
+                    else:
+                        args, _thread = self.calls(shortcut.submit_linear)[0]
+                        self.assertEqual(args[2:], ("Draft\n", "Original editor", ()))
+                    self.assertFalse(self.calls(shortcut.capture))
+                self.run_shortcuts(scenario)
+
+    def test_num9_stops_replay_and_holding_that_press_does_not_record(self):
         def scenario():
-            self.tap(1000)
-            for timestamp in (1150, 1300):
-                self.emit("Activated", timestamp, name=shortcut.TYPING_SHORTCUT)
-                self.emit("Deactivated", timestamp + 50, name=shortcut.TYPING_SHORTCUT)
-            self.tap(1450)
-            self.assertFalse(self.calls(shortcut.compose))
+            with patch.object(shortcut.Playback, "cancel", side_effect=[True, False]) as cancel:
+                self.emit("Activated", 1000, name=shortcut.TYPING_SHORTCUT)
+                self.emit("Activated", 1500, name=shortcut.TYPING_SHORTCUT)
+                self.emit("Deactivated", 1600, name=shortcut.TYPING_SHORTCUT)
+            cancel.assert_called_once()
+            self.assertFalse(self.timers)
             self.assertFalse(self.calls(shortcut.capture))
         self.run_shortcuts(scenario)
 
@@ -221,44 +258,42 @@ class TypedDictationTests(unittest.TestCase):
         released, stopping, jobs = Event(), Event(), SimpleQueue()
         released.set()
         text = "Processed café text.\nAnother line."
+        playback, destination = Mock(), object()
         with (patch.object(shortcut, "hex_command", side_effect=[
                 {"capture": {"state": "idle"}}, {}, {"text": text}]) as command,
-              patch.object(shortcut, "type_dictation") as type_text,
+              patch.object(shortcut, "capture_destination", return_value=destination),
               patch.object(shortcut, "copy_transcript") as copy):
-            shortcut.capture(released, stopping, jobs, typed=True)
+            shortcut.capture(released, stopping, jobs, playback)
         self.assertEqual([call.args for call in command.call_args_list],
                          [("status",), ("dictation", "start"), ("dictation", "stop", "--print")])
-        type_text.assert_called_once_with(text, stopping)
+        playback.type.assert_called_once_with(text, destination, restore=False)
         copy.assert_not_called()
         self.assertTrue(jobs.empty())
 
     def test_empty_dictation_does_not_open_a_typing_session(self):
         released = Event()
         released.set()
+        playback = Mock()
         with (patch.object(shortcut, "hex_command", side_effect=[
                 {"capture": {"state": "idle"}}, {}, {"text": ""}]),
-              patch.object(shortcut, "type_dictation") as type_text):
-            shortcut.capture(released, Event(), SimpleQueue(), typed=True)
-        type_text.assert_not_called()
+              patch.object(shortcut, "capture_destination")):
+            shortcut.capture(released, Event(), SimpleQueue(), playback)
+        playback.type.assert_not_called()
 
 
 class TypedRequestTests(unittest.TestCase):
     def test_typed_text_uses_the_same_queue_without_touching_the_microphone_or_clipboard(self):
         jobs = SimpleQueue()
         text = "Create two independent issues.\nKeep the café details.\n"
-        with (patch.object(shortcut.subprocess, "run", return_value=CompletedProcess("dialog", 0, stdout=dialog_output(text))) as run,
-              patch.object(shortcut, "focused_title", return_value="Project context"),
-              patch.object(shortcut, "hex_command") as hex_command,
+        with (patch.object(shortcut, "hex_command") as hex_command,
               patch.object(shortcut, "clipboard_image") as image,
               patch.object(shortcut, "copy_transcript") as copy):
-            shortcut.compose(jobs, Event(), "fixture-token")
+            shortcut.submit_linear(jobs, Event(), text, "Project context", ())
         request = jobs.get_nowait()
         self.assertEqual(request.transcript, text)
         self.assertEqual(request.title, "Project context")
         self.assertEqual(UUID(request.issue_id).version, 4)
         self.assertIsNone(request.session_id)
-        self.assertEqual(run.call_args.args[0][-1], "--new-request")
-        self.assertEqual(run.call_args.kwargs["env"]["XDG_ACTIVATION_TOKEN"], "fixture-token")
         hex_command.assert_not_called()
         image.assert_not_called()
         copy.assert_not_called()
@@ -267,10 +302,8 @@ class TypedRequestTests(unittest.TestCase):
     def test_a_typed_image_request_captures_the_image_and_uses_the_same_agent_input(self):
         jobs, image = SimpleQueue(), ("image/png", b"clipboard image")
         text = "Make an issue. Attach the image in my clipboard."
-        with (patch.object(shortcut.subprocess, "run", return_value=CompletedProcess("dialog", 0, stdout=dialog_output(text))),
-              patch.object(shortcut, "focused_title", return_value=None),
-              patch.object(shortcut, "clipboard_image", return_value=image)):
-            shortcut.compose(jobs, Event(), None)
+        with patch.object(shortcut, "clipboard_image", return_value=image):
+            shortcut.submit_linear(jobs, Event(), text, None, ())
         request = jobs.get_nowait()
         self.assertEqual(request.image_use, "attach")
         self.assertEqual(request.images, (image,))
@@ -282,9 +315,8 @@ class TypedRequestTests(unittest.TestCase):
                 jobs, stopping = SimpleQueue(), Event()
                 if stopped:
                     stopping.set()
-                with (patch.object(shortcut.subprocess, "run", return_value=CompletedProcess("dialog", 0, stdout=dialog_output(text))),
-                      patch.object(shortcut, "focused_title"), patch.object(shortcut, "request_from_text") as prepare):
-                    shortcut.compose(jobs, stopping, None)
+                with patch.object(shortcut, "request_from_text") as prepare:
+                    shortcut.submit_linear(jobs, stopping, text, None, ())
                 self.assertTrue(jobs.empty())
                 prepare.assert_not_called()
 
@@ -296,9 +328,8 @@ class TypedRequestTests(unittest.TestCase):
             Image.new("RGB", (2, 2), color).save(data, format="PNG")
             images.append(("image/png", data.getvalue()))
         text = "Create an issue with these two screenshots."
-        with (patch.object(shortcut.subprocess, "run", return_value=CompletedProcess("dialog", 0, stdout=dialog_output(text, images))),
-              patch.object(shortcut, "focused_title", return_value=None), patch.object(shortcut, "clipboard_image") as clipboard):
-            shortcut.compose(jobs, Event(), None)
+        with patch.object(shortcut, "clipboard_image") as clipboard:
+            shortcut.submit_linear(jobs, Event(), text, None, tuple(images))
         request = jobs.get_nowait()
         self.assertEqual(request.transcript, text)
         self.assertEqual(request.image_use, "attach")
@@ -333,11 +364,11 @@ class TypedRequestTests(unittest.TestCase):
         self.assertEqual(result.images, (*request.images, image))
         self.assertEqual(result.image_use, "attach")
 
-    def test_dialog_failure_notifies_without_submitting_anything(self):
+    def test_cannot_queue_after_request_preparation_fails(self):
         jobs = SimpleQueue()
-        with (patch.object(shortcut.subprocess, "run", side_effect=CalledProcessError(1, "dialog")),
-              patch.object(shortcut, "focused_title"), patch.object(shortcut, "notify") as notify):
-            shortcut.compose(jobs, Event(), None)
+        with (patch.object(shortcut, "request_from_text", side_effect=ValueError),
+              patch.object(shortcut, "notify") as notify):
+            shortcut.submit_linear(jobs, Event(), "Valid draft", None, ())
         self.assertTrue(jobs.empty())
         notify.assert_called_once()
 

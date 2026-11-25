@@ -1,6 +1,5 @@
-"""Collect a multiline Linear request or an answer to a dictation question."""
+"""Build the shared Linear and Typing dialog and the Linear reply window."""
 
-import argparse
 import base64
 import json
 import sys
@@ -12,22 +11,32 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango
 
 from linear_images import MAX_IMAGES, MAX_IMAGE_BYTES, MAX_PIXELS, MAX_SIDE, MAX_TOTAL_BYTES, ImageContextError, validate_image
+from typing_profiles import PROFILES, load_profiles, save_profiles
+from typing_training import open_training
 
 
-def activate(app, question, new_request=False):
-    window = Gtk.ApplicationWindow(application=app, title="Linear request" if new_request else "Reply to Linear dictation",
-                                   default_width=328)
+def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None):
     content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=14,
                       margin_bottom=14, margin_start=14, margin_end=14)
     window.set_child(content)
-    content.append(Gtk.Label(label=question, xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR,
-                             max_width_chars=34))
-    hint = Gtk.Label(label=("Type your request." if new_request else
+    linear = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    tabs = None
+    if tab is None:
+        content.append(linear)
+    else:
+        tabs = Gtk.Stack(vhomogeneous=False)
+        tabs.add_titled(linear, "linear", "Linear")
+        tabs.add_titled(typing_options(window), "typing", "Typing")
+        content.append(Gtk.StackSwitcher(stack=tabs, halign=Gtk.Align.CENTER))
+        content.append(tabs)
+    linear.append(Gtk.Label(label=question, xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR,
+                            max_width_chars=48))
+    hint = Gtk.Label(label=("Type your request." if tabs else
                            "Dictate with your regular Hex shortcut or type your answer.") +
                           " Paste images with Ctrl+V. Send with Ctrl+Enter.", xalign=0,
-                     wrap=True, max_width_chars=34)
+                     wrap=True, max_width_chars=48)
     hint.add_css_class("dim-label")
-    content.append(hint)
+    linear.append(hint)
 
     answer = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR, accepts_tab=False,
                           top_margin=8, bottom_margin=8, left_margin=8, right_margin=8)
@@ -49,7 +58,7 @@ def activate(app, question, new_request=False):
 
     buttons = Gtk.Box(spacing=8, halign=Gtk.Align.END)
     cancel = Gtk.Button(label="Cancel")
-    send = Gtk.Button(label="Send request" if new_request else "Send reply", sensitive=False)
+    send = Gtk.Button(label="Send request" if tabs else "Send reply", sensitive=False)
     send.add_css_class("suggested-action")
     buttons.append(cancel)
     buttons.append(send)
@@ -60,22 +69,43 @@ def activate(app, question, new_request=False):
     reading = submitted = False
     cancellable = Gio.Cancellable()
 
+    def typing():
+        return tabs is not None and tabs.get_visible_child_name() == "typing"
+
     def text():
         start, end = buffer.get_bounds()
-        return buffer.get_text(start, end, False).strip()
+        value = buffer.get_text(start, end, True)
+        return value if typing() else value.strip()
 
     def submit(_button):
         nonlocal submitted
         if submitted or not send.get_sensitive():
             return
         submitted = True
-        print(json.dumps({"text": text(), "images": [
-            {"mime_type": "image/png", "data": base64.b64encode(image).decode("ascii")} for image in images
-        ]}, ensure_ascii=False))
+        active = "typing" if typing() else "linear"
+        draft = text()
+        attached = () if typing() else tuple(("image/png", image) for image in images)
         window.close()
+        submit_text(active, draft, attached)
 
     def update_send(*_args):
-        send.set_sensitive(bool(text()) and not reading)
+        send.set_sensitive(bool(text()) and (typing() or not reading))
+
+    def tab_changed(*_args):
+        send.set_label("Type text" if typing() else "Send request")
+        paste.set_visible(not typing())
+        previews.set_visible(bool(images) and not typing())
+        error.set_visible(False)
+        update_send()
+        window.set_focus(answer)
+
+    def present(name, token=None):
+        if tabs is not None:
+            tabs.set_visible_child_name(name)
+        if token:
+            window.set_startup_id(token)
+        window.set_focus(answer)
+        window.present()
 
     def show_error(message):
         error.set_label(message)
@@ -113,12 +143,13 @@ def activate(app, question, new_request=False):
             row.append(remove)
             attachments.append(row)
             images.append(image)
-            previews.set_visible(True)
+            previews.set_visible(not typing())
         except GLib.Error:
-            if not cancellable.is_cancelled():
+            if not cancellable.is_cancelled() and not typing():
                 show_error("Could not read the clipboard image. Copy a PNG, JPEG, or WebP image and try again.")
         except ImageContextError as failure:
-            show_error(str(failure))
+            if not typing():
+                show_error(str(failure))
         finally:
             reading = False
             paste.set_sensitive(True)
@@ -135,6 +166,8 @@ def activate(app, question, new_request=False):
         answer.get_clipboard().read_texture_async(cancellable, image_ready)
 
     def paste_clipboard(view):
+        if typing():
+            return
         formats = view.get_clipboard().get_formats()
         if any(kind.is_a(Gdk.Texture) for kind in formats.get_gtypes()) or any(
                 mime.startswith("image/") for mime in formats.get_mime_types()):
@@ -159,15 +192,112 @@ def activate(app, question, new_request=False):
     keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
     keys.connect("key-pressed", key_pressed)
     window.add_controller(keys)
-    window.connect("close-request", lambda _: cancellable.cancel() or False)
-    window.set_focus(answer)
-    window.present()
 
+    def close(_window):
+        cancellable.cancel()
+        closed()
+        return False
+
+    window.connect("close-request", close)
+    if tabs is not None:
+        tabs.connect("notify::visible-child-name", tab_changed)
+        tabs.set_visible_child_name(tab)
+        tab_changed()
+    return present
+
+
+def typing_options(window):
+    pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    row = Gtk.Box(spacing=8)
+    pane.append(row)
+    profiles = list(PROFILES)
+    choice = Gtk.DropDown.new_from_strings(list(PROFILES.values()))
+    train = Gtk.Button(label="Train BioCadence")
+    warning = Gtk.Label(xalign=0, wrap=True, max_width_chars=27)
+    warning.add_css_class("warning")
+    row.append(choice)
+    row.append(train)
+    row.append(warning)
+
+    placeholders = Gtk.Box(spacing=8, sensitive=False)
+    placeholders.append(Gtk.Button(label="AI-writing estimate"))
+    placeholders.append(Gtk.CheckButton(label="Periodic focus breaks"))
+    pane.append(placeholders)
+    speed_row = Gtk.Box(spacing=8, sensitive=False)
+    speed_row.append(Gtk.Label(label="Speed"))
+    speed = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, -2, 2, 1)
+    speed.set_hexpand(True)
+    speed.set_value(0)
+    speed_row.append(speed)
+    speed_row.append(Gtk.Label(label="1×"))
+    speed_row.append(Gtk.Label(label="Duration —"))
+    pane.append(speed_row)
+
+    try:
+        state = load_profiles()
+    except (OSError, KeyError, TypeError, ValueError):
+        choice.set_sensitive(False)
+        train.set_sensitive(False)
+        warning.set_label("Hex could not read the saved profiles.")
+        return pane
+
+    def update_warning():
+        selected = state["selected"]
+        trained = selected in state["profiles"]
+        warning.set_label(f"{PROFILES[selected]} is untrained. Playback uses default timing.")
+        warning.set_visible(not trained)
+
+    def select(_choice, _property):
+        selected = profiles[choice.get_selected()]
+        if selected == state["selected"]:
+            return
+        try:
+            save_profiles({**state, "selected": selected})
+        except OSError:
+            choice.set_selected(profiles.index(state["selected"]))
+            warning.set_label("Hex could not save the selected profile.")
+            warning.set_visible(True)
+            return
+        state["selected"] = selected
+        update_warning()
+
+    def start_training(_button):
+        selected = state["selected"]
+
+        def save(model):
+            trained = {**state["profiles"], selected: model}
+            save_profiles({**state, "profiles": trained})
+            state["profiles"] = trained
+            update_warning()
+
+        open_training(window, selected, save)
+
+    choice.set_selected(profiles.index(state["selected"]))
+    choice.connect("notify::selected", select)
+    train.connect("clicked", start_training)
+    update_warning()
+    return pane
+
+
+def open_request(tab, token, submit, closed):
+    Gtk.init()
+    window = Gtk.Window(title="Hex Dictation", default_width=480)
+    present = build_dialog(window, "Describe the Linear issues to create or update.", submit, tab=tab, closed=closed)
+    present(tab, token)
+    return present
+
+
+def activate(app, question):
+    window = Gtk.ApplicationWindow(application=app, title="Reply to Linear dictation", default_width=328)
+
+    def reply(_tab, text, images):
+        print(json.dumps({"text": text, "images": [
+            {"mime_type": mime, "data": base64.b64encode(image).decode("ascii")} for mime, image in images
+        ]}, ensure_ascii=False))
+
+    build_dialog(window, question, reply)(None)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--new-request", action="store_true", help="Collect a new request instead of a reply")
-    args = parser.parse_args()
     app = Gtk.Application(flags=Gio.ApplicationFlags.NON_UNIQUE)
-    app.connect("activate", activate, sys.stdin.read(), args.new_request)
+    app.connect("activate", activate, sys.stdin.read())
     sys.exit(app.run([sys.argv[0]]))

@@ -8,7 +8,6 @@ import json
 import os
 from pathlib import Path
 from queue import SimpleQueue
-from random import uniform
 import re
 import signal
 import subprocess
@@ -21,6 +20,7 @@ from uuid import uuid4
 from linear_images import EXTENSIONS, MAX_IMAGES, MAX_IMAGE_BYTES, MAX_TOTAL_BYTES, ImageContextError, validate_image
 
 from linear_issue import Dictation, FilingError, ReplyNeeded, file_dictation
+from typing_replay import Playback, TypingError, capture_destination, on_main_thread
 
 
 APP = "io.github.KianBahasadri.Clusterfork.LinearDictation"
@@ -151,10 +151,8 @@ def reply_image(environment):
     return image
 
 
-def text_entry(question, environment, *, new_request=False):
+def text_entry(question, environment):
     command = [sys.executable, str(Path(__file__).with_name("linear_reply.py"))]
-    if new_request:
-        command.append("--new-request")
     entry = subprocess.run(command, input=question, env=environment, capture_output=True, text=True, check=True)
     if not entry.stdout.strip():
         return None
@@ -213,94 +211,47 @@ def request_from_text(transcript, title, request_id, images=()):
     return Dictation(transcript, title, request_id, image_use=image_use, images=images)
 
 
-def compose(jobs, stopping, token):
+def submit_linear(jobs, stopping, text, title, images):
     request_id = str(uuid4())
     try:
-        title = focused_title()
-        environment = {**os.environ, "XDG_ACTIVATION_TOKEN": token} if token else os.environ
-        print(f"Hex Linear request {request_id} opened the text box.")
-        entry = text_entry("Describe the Linear issues to create or update.", environment, new_request=True)
-        if entry and not stopping.is_set():
-            text, images = entry
+        if not stopping.is_set() and text.strip():
             jobs.put(request_from_text(text, title, request_id, images))
             print(f"Hex Linear request {request_id} typed and queued.")
     except FilingError as error:
         notify("Linear request", str(error))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
-        print(f"Could not open a Linear request ({type(error).__name__}).")
-        notify("Linear request", "Could not open the text box. Check that GTK 4 is installed.")
+        print(f"Could not queue a Linear request ({type(error).__name__}).")
+        notify("Linear request", "Could not queue the request.")
 
 
-def type_dictation(text, stopping):
-    from gi.repository import Gio, GLib
-
-    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-    server = "org.gnome.Mutter.RemoteDesktop"
+def submit_typing(playback, stopping, text, destination, *, restore):
+    if stopping.is_set():
+        return
     try:
-        path = bus.call_sync(server, "/org/gnome/Mutter/RemoteDesktop", server, "CreateSession", None,
-                             None, Gio.DBusCallFlags.NONE, 5000, None).unpack()[0]
-        session = Gio.DBusProxy.new_sync(bus, Gio.DBusProxyFlags.NONE, None, server, path,
-                                         f"{server}.Session", None)
-        session.Start()
-
-        def press_key(keysym):
-            session.NotifyKeyboardKeysym("(ub)", keysym, True)
-            time.sleep(0.01)
-            session.NotifyKeyboardKeysym("(ub)", keysym, False)
-            time.sleep(0.01)
-
-        try:
-            for character in text.replace("\r\n", "\n").replace("\r", "\n").expandtabs(4):
-                if stopping.is_set():
-                    return
-                if character == "\n":
-                    # Shift+Enter adds a line in browser message fields.
-                    session.NotifyKeyboardKeysym("(ub)", 0xFFE1, True)
-                    time.sleep(0.01)
-                    try:
-                        press_key(0xFF0D)
-                    finally:
-                        session.NotifyKeyboardKeysym("(ub)", 0xFFE1, False)
-                elif ord(character) >= 32 and character != "\x7f":
-                    if character.isascii():
-                        press_key(ord(character))
-                    else:
-                        # GNOME's Unicode input handles characters absent from the keyboard map.
-                        session.NotifyKeyboardKeysym("(ub)", 0xFFE3, True)
-                        session.NotifyKeyboardKeysym("(ub)", 0xFFE1, True)
-                        time.sleep(0.01)
-                        try:
-                            press_key(ord("u"))
-                        finally:
-                            session.NotifyKeyboardKeysym("(ub)", 0xFFE1, False)
-                            session.NotifyKeyboardKeysym("(ub)", 0xFFE3, False)
-                        time.sleep(0.01)
-                        for digit in f"{ord(character):x}":
-                            press_key(ord(digit))
-                        press_key(ord(" "))
-                delay = uniform(0.035, 0.095)
-                if character in ".!?\n":
-                    delay += uniform(0.15, 0.35)
-                if stopping.wait(delay):
-                    return
-        finally:
-            session.Stop()
-    except GLib.Error as error:
-        raise FilingError("GNOME could not finish typing. Recover the full text from Hex History.") from error
+        if isinstance(destination, TypingError):
+            raise destination
+        playback.type(text, destination, restore=restore)
+    except (FilingError, TypingError) as error:
+        notify("Hex typing", str(error))
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+        print(f"Hex typing failed ({type(error).__name__}).")
+        notify("Hex typing", "Could not replay the text. Check the Hex service journal.")
 
 
-def capture(released, stopping, jobs, typed=False):
+def capture(released, stopping, jobs, playback=None):
     dictation_id = str(uuid4())
+    typed = playback is not None
     label = "Typed dictation" if typed else "Linear dictation"
     try:
         status = hex_command("status")
         if status["capture"]["state"] not in {"idle", "transcribing"}:
             raise FilingError("Hex is already recording or is not ready. Release that shortcut and try again.")
+        destination = capture_destination() if typed else None
         hex_command("dictation", "start", *([] if typed else ["--raw"]))
         submitted = False
         try:
             print(f"Hex {label} {dictation_id} started recording.")
-            title = None if typed or released.is_set() else focused_title()
+            title = None if typed or released.is_set() else on_main_thread(focused_title)
             while not released.wait(0.25):
                 if stopping.is_set():
                     return
@@ -317,8 +268,8 @@ def capture(released, stopping, jobs, typed=False):
                     pass
         transcript = result["text"]
         if typed:
-            if transcript.strip():
-                type_dictation(transcript, stopping)
+            if transcript:
+                submit_typing(playback, stopping, transcript, destination, restore=False)
             print(f"Hex {label} {dictation_id} finished.")
             return
         if transcript.strip():
@@ -329,7 +280,7 @@ def capture(released, stopping, jobs, typed=False):
             jobs.put(dictation)
         else:
             print(f"Hex Linear dictation {dictation_id} was empty.")
-    except FilingError as error:
+    except (FilingError, TypingError) as error:
         print(f"Hex {label} {dictation_id} failed. {error}")
         notify(label, str(error))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
@@ -376,10 +327,15 @@ def process_jobs(jobs, dry_run):
 def listen(dry_run):
     from gi.repository import Gio, GLib
 
-    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    # Keep the host app registration on its own connection. GTK may use the
+    # process-wide session connection for unrelated portal calls.
+    address = Gio.dbus_address_get_for_bus_sync(Gio.BusType.SESSION, None)
+    flags = Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION
+    bus = Gio.DBusConnection.new_for_address_sync(address, flags, None, None)
     loop = GLib.MainLoop()
     jobs = SimpleQueue()
     stopping = Event()
+    playback = Playback()
     released = None
     active_shortcut = None
     recording = None
@@ -387,6 +343,35 @@ def listen(dry_run):
     hold_timer = None
     pressed_at = last_tap = activation_token = None
     closed = False
+
+    def show_dialog(tab, token):
+        nonlocal composing
+        try:
+            from linear_reply import open_request
+
+            try:
+                destination = capture_destination()
+                title = destination.title
+            except TypingError as error:
+                destination = error
+                title = focused_title()
+
+            def finished():
+                nonlocal composing
+                composing = None
+
+            def submit(active, text, images):
+                if active == "typing":
+                    Thread(target=submit_typing, args=(playback, stopping, text, destination),
+                           kwargs={"restore": True}, daemon=True).start()
+                else:
+                    Thread(target=submit_linear, args=(jobs, stopping, text, title, images), daemon=True).start()
+
+            composing = open_request(tab, token, submit, finished)
+        except (ImportError, GLib.Error, RuntimeError, ValueError) as error:
+            print(f"Could not open the Hex dictation dialog ({type(error).__name__}).")
+            Thread(target=notify, args=("Hex dictation", "Could not open the dialog. Check that GTK 4 is installed."),
+                   daemon=True).start()
 
     def call(interface, method, parameters, path=DESKTOP):
         return bus.call_sync(PORTAL, path, interface, method, parameters, None, Gio.DBusCallFlags.NONE, 5000, None)
@@ -433,22 +418,27 @@ def listen(dry_run):
         else:
             arguments = (released, stopping, jobs)
             if active_shortcut == TYPING_SHORTCUT:
-                arguments += (True,)
+                arguments += (playback,)
             recording = Thread(target=capture, args=arguments, daemon=True)
             recording.start()
         return GLib.SOURCE_REMOVE
 
     def shortcut(_bus, _sender, _path, _interface, member, parameters):
-        nonlocal released, active_shortcut, composing, hold_timer, pressed_at, last_tap, activation_token
+        nonlocal released, active_shortcut, hold_timer, pressed_at, last_tap, activation_token
         handle, name, timestamp, options = parameters.unpack()
         if handle != session or name not in (SHORTCUT, TYPING_SHORTCUT):
             return
         if member == "Activated" and released is None:
             released, pressed_at = Event(), timestamp
             active_shortcut = name
-            if name == TYPING_SHORTCUT:
-                last_tap = None
             activation_token = options.get("activation_token")
+            if name == TYPING_SHORTCUT and playback.cancel():
+                last_tap = None
+                return
+            if composing is not None:
+                composing("typing" if name == TYPING_SHORTCUT else "linear", activation_token)
+                last_tap = None
+                return
             hold_timer = GLib.timeout_add(HOLD_MS, begin_capture)
         if member == "Deactivated" and released is not None and name == active_shortcut:
             released.set()
@@ -458,22 +448,19 @@ def listen(dry_run):
                 return
             GLib.source_remove(hold_timer)
             hold_timer = None
-            if name == TYPING_SHORTCUT:
-                return
             if timestamp - pressed_at >= HOLD_MS:
                 last_tap = None
-            elif last_tap is not None and pressed_at - last_tap <= DOUBLE_TAP_MS:
+            elif last_tap is not None and last_tap[0] == name and pressed_at - last_tap[1] <= DOUBLE_TAP_MS:
                 last_tap = None
-                if composing is None or not composing.is_alive():
-                    token = options.get("activation_token") or activation_token
-                    composing = Thread(target=compose, args=(jobs, stopping, token), daemon=True)
-                    composing.start()
+                token = options.get("activation_token") or activation_token
+                show_dialog("typing" if name == TYPING_SHORTCUT else "linear", token)
             else:
-                last_tap = timestamp
+                last_tap = name, timestamp
 
     def stop(*_args):
         nonlocal hold_timer
         stopping.set()
+        playback.cancel()
         if hold_timer is not None:
             GLib.source_remove(hold_timer)
             hold_timer = None
@@ -495,12 +482,12 @@ def listen(dry_run):
         session = created["session_handle"]
         binding = [(SHORTCUT, {"description": GLib.Variant("s", "Hold to dictate a Linear request; double-tap to type"),
                                "preferred_trigger": GLib.Variant("s", "KP_Divide")}),
-                   (TYPING_SHORTCUT, {"description": GLib.Variant("s", "Hold to dictate and type the result"),
+                   (TYPING_SHORTCUT, {"description": GLib.Variant("s", "Hold to dictate and type; double-tap for Typing"),
                                       "preferred_trigger": GLib.Variant("s", "KP_Prior")})]
         bound = request("BindShortcuts", "(oa(sa{sv})sa{sv})", (session, binding, ""), {}, 300)
-        if not bound or not any(name == SHORTCUT and details.get("trigger_description")
-                                for name, details in bound.get("shortcuts", [])):
-            print("Linear dictation has no shortcut. Set it in the desktop's global shortcut settings and restart the service.")
+        triggers = {name: details.get("trigger_description") for name, details in (bound or {}).get("shortcuts", [])}
+        if not any(triggers.values()):
+            print("Hex dictation has no shortcuts. Set them in the desktop's global shortcut settings and restart the service.")
             return 0
         for member in ("Activated", "Deactivated"):
             bus.signal_subscribe(PORTAL, SHORTCUTS, member, DESKTOP, None, Gio.DBusSignalFlags.NONE, shortcut)
@@ -511,11 +498,8 @@ def listen(dry_run):
         for signum in (signal.SIGTERM, signal.SIGINT):
             GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signum, stop)
         Thread(target=process_jobs, args=(jobs, dry_run), daemon=True).start()
-        trigger = next(details["trigger_description"] for name, details in bound["shortcuts"] if name == SHORTCUT)
-        print(f"Linear dictation shortcut ready: {trigger}.")
-        for name, details in bound["shortcuts"]:
-            if name == TYPING_SHORTCUT:
-                print(f"Typed dictation shortcut ready: {details.get('trigger_description', 'unbound')}.")
+        for name, label in ((SHORTCUT, "Linear dictation"), (TYPING_SHORTCUT, "Typed dictation")):
+            print(f"{label} shortcut ready: {triggers.get(name) or 'unbound'}.")
         loop.run()
         if recording is not None and stopping.is_set():
             recording.join(timeout=5)

@@ -1,6 +1,7 @@
 """Install Clusterfork's optional Hex workspace and merge its live settings."""
 
 import argparse
+import ast
 from copy import deepcopy
 import json
 import os
@@ -14,6 +15,7 @@ import tempfile
 SOURCE = Path(__file__).resolve().parent
 LINEAR_DESKTOP = "io.github.KianBahasadri.Clusterfork.LinearDictation.desktop"
 LINEAR_UNIT = "hex-linear-issue.service"
+FOCUS_EXTENSION = "hex-focus@clusterfork"
 
 
 def write_changed(destination, content):
@@ -76,7 +78,9 @@ def apply_settings(binary, home, microphone):
 def install_linear_shortcut(home):
     workspace = home / ".config/hex/linear"
     files = [
-        (SOURCE / name, workspace / name) for name in ("linear_images.py", "linear_issue.py", "linear_reply.py", "linear_shortcut.py")
+        (SOURCE / name, workspace / name)
+        for name in ("linear_images.py", "linear_issue.py", "linear_reply.py", "linear_shortcut.py",
+                     "biocadence.py", "BIOCADENCE-LICENSE", "typing_profiles.py", "typing_replay.py", "typing_training.py")
     ] + [
         (SOURCE / "linear-workspace.json", workspace / "opencode.json"),
         (SOURCE / "linear-agent.md", workspace / ".opencode/agents/linear-issue.md"),
@@ -100,7 +104,34 @@ def install_linear_shortcut(home):
     return changed
 
 
-def activate_workers(home, changes):
+def install_focus_extension(home):
+    source = SOURCE / "gnome" / FOCUS_EXTENSION
+    data = os.environ.get("XDG_DATA_HOME") if home == Path.home() else None
+    target = Path(data or home / ".local/share") / "gnome-shell/extensions" / FOCUS_EXTENSION
+    changed = False
+    for name in ("metadata.json", "extension.js"):
+        changed = write_changed(target / name, (source / name).read_bytes()) or changed
+    return changed
+
+
+def enable_focus_extension(changed):
+    command = ["gsettings"]
+    key = ["org.gnome.shell", "enabled-extensions"]
+    try:
+        result = subprocess.run([*command, "get", *key], check=True, capture_output=True, text=True, timeout=5)
+        enabled = ast.literal_eval(result.stdout.strip().removeprefix("@as "))
+        if FOCUS_EXTENSION not in enabled:
+            subprocess.run([*command, "set", *key, repr([*enabled, FOCUS_EXTENSION])],
+                           check=True, capture_output=True, timeout=5)
+            changed = True
+    except (OSError, ValueError, SyntaxError, subprocess.SubprocessError):
+        print("Hex: enable Hex Typing Focus in GNOME Extensions after signing in again.", file=sys.stderr)
+        return
+    if changed:
+        print("Hex: GNOME will load the installed Hex Typing Focus extension at the next sign-in.")
+
+
+def activate_workers(home, changes, extension_changed):
     binary = shutil.which("systemctl")
     if not binary:
         return
@@ -109,12 +140,19 @@ def activate_workers(home, changes):
             [binary, "--user", "show-environment"], capture_output=True, text=True, timeout=5,
         )
         # A test HOME or container must never alter the host user's services.
-        if manager.returncode or f"HOME={home}" not in manager.stdout.splitlines():
+        environment = manager.stdout.splitlines()
+        if manager.returncode or f"HOME={home}" not in environment:
             return
         subprocess.run([binary, "--user", "daemon-reload"], check=True, capture_output=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         print("Hex: use systemctl --user daemon-reload to load the installed workers.", file=sys.stderr)
         return
+    gnome = "XDG_SESSION_TYPE=wayland" in environment and any(
+        line.startswith("XDG_CURRENT_DESKTOP=") and "GNOME" in line.partition("=")[2].split(":")
+        for line in environment
+    )
+    if gnome:
+        enable_focus_extension(extension_changed)
     for unit, changed in changes.items():
         try:
             active = subprocess.run([binary, "--user", "is-active", "--quiet", unit],
@@ -123,7 +161,10 @@ def activate_workers(home, changes):
                 [binary, "--user", "enable", "--now", unit],
                 check=True, capture_output=True, timeout=10,
             )
-            if active and changed:
+            # GNOME loads changed extension code on sign-in. That same
+            # session starts the matching shortcut worker.
+            pending_focus = gnome and extension_changed and unit == LINEAR_UNIT
+            if active and changed and not pending_focus:
                 subprocess.run([binary, "--user", "restart", unit], check=True, capture_output=True, timeout=10)
         except (OSError, subprocess.SubprocessError):
             print(f"Hex: enable {unit} with systemctl --user enable --now {unit}", file=sys.stderr)
@@ -149,6 +190,7 @@ def install(home, microphone=None):
         (SOURCE / "hex-vocabulary-review.service").read_bytes(),
     ) or changed
     linear_changed = install_linear_shortcut(home)
+    extension_changed = install_focus_extension(home)
     if microphone:
         source = SOURCE / "microphones" / microphone
         for name, destination in (
@@ -170,7 +212,7 @@ def install(home, microphone=None):
         print("Hex: workspace installed. Start Hex and rerun the installer to apply rewriting and vocabulary.")
         return
     apply_settings(binary, home, microphone)
-    activate_workers(home, {"hex-vocabulary-review.service": changed, LINEAR_UNIT: linear_changed})
+    activate_workers(home, {"hex-vocabulary-review.service": changed, LINEAR_UNIT: linear_changed}, extension_changed)
     print("Hex: workspace installed; rewrite settings and seed vocabulary merged.")
     if config_changed:
         print("Hex: transformation configuration changed; click Allow in Hex's Output pane to enable its Python helper.")

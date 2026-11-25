@@ -25,3 +25,4 @@ hex/**/local-api.json
 hex/**/transform-trust.json
 hex/**/vocabulary-review-state.json
 hex/**/vocabulary-auto-added.jsonl
+hex/**/typing/profiles.json
