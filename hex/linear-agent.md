@@ -100,8 +100,8 @@ unrelated, call hex_reply with copy_image true and finish this turn. Use a
 relevant image's details in the affected issue descriptions. For a reference
 image, read it as context. For an attachment, call linear_prepare_file_upload
 with the supplied filename, MIME type and exact byte length. Immediately call
-hex_upload_clipboard with the supplied local file and every signed uploadRequest
-header verbatim. Then embed the MCP-provided assetUrl in the affected issue
+hex_upload_clipboard with the supplied local file path. Then embed the asset URL
+returned by hex_upload_clipboard in the affected issue
 description through MCP. Prepare a fresh upload if the signed URL expires.
 Ask which issues should display the image if that is ambiguous.
 

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 
+const attachmentName = /^clipboard-[1-9]\d*\.(png|jpg|webp)$/;
 const isHex = (event) => ["linear-issue", "linear-issue-preview"].includes(event.agent);
 const day = (value) => value?.slice(0, 10);
 const issueColumns = [
@@ -53,6 +53,8 @@ function searchRows(output, field, columns) {
 export default {
   id: "hex-linear",
   async setup(ctx) {
+    const attachmentDirectory = process.env.HEX_LINEAR_ATTACHMENT_DIR;
+    const uploads = new Map();
     await ctx.tool.transform((editor) => {
       editor.remove("skill");
       editor.add({
@@ -92,37 +94,33 @@ export default {
       });
       editor.add({
         name: "hex_upload_clipboard",
-        description: "PUT a captured image file to the signed upload URL returned by Linear's prepare_file_upload MCP tool. Pass every uploadRequest header verbatim. Then use the MCP-provided assetUrl in the issue description.",
+        description: "Upload a captured image after calling linear_prepare_file_upload for its filename. Use the returned Linear asset URL in the issue description.",
         options: { codemode: false },
         input: {
           type: "object",
           properties: {
             file: { type: "string" },
-            url: { type: "string" },
-            headers: { type: "object", additionalProperties: { type: "string" } },
           },
-          required: ["file", "url", "headers"],
+          required: ["file"],
           additionalProperties: false,
         },
-        async execute(input) {
+        async execute(input, { agent, sessionID }) {
           const file = path.resolve(input.file);
-          const directory = path.dirname(file);
-          if (path.dirname(directory) !== tmpdir() || !path.basename(directory).startsWith("hex-linear-") ||
-              !/^clipboard-[1-9]\d*\.(png|jpg|webp)$/.test(path.basename(file))) {
-            throw new Error("Use a captured image file supplied in the Hex request.");
-          }
-          const url = new URL(input.url);
-          if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")) {
-            throw new Error("Use the HTTPS signed upload URL returned by Linear MCP.");
-          }
+          const filename = path.basename(file);
+          if (agent !== "linear-issue" || path.dirname(file) !== attachmentDirectory || !attachmentName.test(filename))
+            throw new Error("Use an attachment supplied in this Hex request.");
+          const upload = uploads.get(filename);
+          if (!upload || upload.sessionID !== sessionID)
+            throw new Error("Prepare the upload for this filename through Linear MCP first.");
+          uploads.delete(filename);
           const bytes = await readFile(file);
           if (bytes.length > 5 * 1024 * 1024) throw new Error("The clipboard image exceeds 5 MiB.");
-          const response = await fetch(url, {
-            method: "PUT", headers: input.headers, body: bytes,
+          const response = await fetch(upload.url, {
+            method: "PUT", headers: upload.headers, body: bytes,
             redirect: "error", signal: AbortSignal.timeout(20000),
           });
           if (!response.ok) throw new Error(`Clipboard upload failed with HTTP ${response.status}. Prepare a fresh upload through MCP before retrying.`);
-          return { content: "Clipboard bytes uploaded. Use the MCP-provided assetUrl when saving the issue." };
+          return { content: `Clipboard image uploaded. Use this Linear asset URL when saving the issue: ${upload.assetUrl}` };
         },
       });
     });
@@ -137,6 +135,23 @@ export default {
     });
     await ctx.tool.hook("execute.after", (event) => {
       if (!isHex(event) || event.status !== "completed") return;
+      if (event.tool === "linear_prepare_file_upload" && event.agent === "linear-issue" && attachmentDirectory) {
+        const filename = event.input?.filename;
+        if (typeof filename !== "string" || !attachmentName.test(filename)) return;
+        uploads.delete(filename);
+        try {
+          const output = event.result.output;
+          const { assetUrl, uploadRequest } = typeof output === "string" ? JSON.parse(output) : output;
+          const url = new URL(uploadRequest.url);
+          if (uploadRequest.method !== "PUT" || url.protocol !== "https:" || url.username || url.password || url.port ||
+              new URL(assetUrl).origin !== "https://uploads.linear.app") return;
+          uploads.set(filename, { sessionID: event.sessionID, url, headers: uploadRequest.headers, assetUrl });
+          event.result = { content: [{ type: "text", text: `Upload prepared for ${filename}. Call hex_upload_clipboard with its file path.` }] };
+        } catch (error) {
+          if (!(error instanceof SyntaxError || error instanceof TypeError)) throw error;
+        }
+        return;
+      }
       let text;
       if (event.tool === "linear_list_issues") text = searchRows(event.result.output, "issues", issueColumns);
       if (event.tool === "linear_list_projects") text = searchRows(event.result.output, "projects", projectColumns);

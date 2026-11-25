@@ -85,8 +85,9 @@ Both Typing routes use the selected profile's dwell, letter-pair timing,
 boundary pauses and correction rate. Replay sends only keyboard events.
 It uses Shift+Enter for line breaks, Tab for tabs and Ctrl+Shift+U with
 hexadecimal digits for Unicode entry. The target field controls which of
-these sequences it accepts. Press **numpad 9** again to stop replay. Losing
-focus also cancels it, leaving any partial text in place.
+these sequences it accepts. Press **numpad 9** again to stop replay. Playback
+also stops if the destination loses focus or an unexpected modifier key is
+held, leaving any partial text in place.
 
 The installer enables the bundled **Hex Typing Focus** extension for GNOME
 Shell 51. The shell loads new or changed extension code at the next sign-in.
@@ -94,10 +95,11 @@ The shared dialog and training work as soon as the worker starts. The Typing
 tab explains when the destination is unavailable and keeps the draft editable.
 The extension identifies and restores the destination window and guards key
 delivery inside Mutter. Its focus and key methods accept calls only from the main
-process of `hex-linear-issue.service`. Field-level focus tracking uses AT-SPI
-when the target exposes its editor. The worker shares its Global Shortcuts
-registration with Linear dictation and requests keypad Page Up (`KP_Prior`)
-for numpad 9.
+process of `hex-linear-issue.service`. Key events travel over the local session
+bus and are visible to processes with bus monitoring access. Field-level
+focus tracking uses AT-SPI when the target exposes its editor. The worker
+shares its Global Shortcuts registration with Linear dictation and requests
+keypad Page Up (`KP_Prior`) for numpad 9.
 
 When changing saved GNOME portal bindings programmatically, apply them to the
 active session through `org.gnome.GlobalShortcutsRebind.RebindShortcuts` on
@@ -233,9 +235,11 @@ active until the notification is opened or dismissed, and forwards GNOME's
 activation token when launching the browser. Browser-launch failures go to the
 service journal. The assistant uses
 `hex_reply` to request missing details or a replacement image. The final response
-is plain text. For image attachments, MCP prepares the signed upload request,
-`hex_upload_clipboard` sends the captured bytes with those headers, and MCP
-saves the image link in the description.
+is plain text. For an attachment, `hex_upload_clipboard` sends the current
+request's image using the signed URL and headers that Linear MCP returned for
+its filename in the same session. It returns the image link for the description.
+Hex grants access to the upload directory only for attachment requests that can
+write to Linear.
 
 The service journal records the same dictation ID from recording through the
 Linear save, alongside the OpenCode session ID and any created or updated

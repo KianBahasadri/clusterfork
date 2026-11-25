@@ -128,9 +128,14 @@ export default class HexFocus extends Extension {
 
     _ready() {
         const modifiers = Clutter.ModifierType;
-        const held = modifiers.SHIFT_MASK | modifiers.CONTROL_MASK | modifiers.MOD1_MASK |
-            modifiers.SUPER_MASK | modifiers.META_MASK;
-        return !(global.get_pointer()[2] & held);
+        let blocked = modifiers.SHIFT_MASK | modifiers.CONTROL_MASK | modifiers.MOD1_MASK |
+            modifiers.MOD3_MASK | modifiers.MOD4_MASK | modifiers.MOD5_MASK |
+            modifiers.SUPER_MASK | modifiers.HYPER_MASK | modifiers.META_MASK;
+        if (this._pressed.has(Clutter.KEY_Shift_L))
+            blocked &= ~modifiers.SHIFT_MASK;
+        if (this._pressed.has(Clutter.KEY_Control_L))
+            blocked &= ~modifiers.CONTROL_MASK;
+        return !(global.get_pointer()[2] & blocked);
     }
 
     _acceptsKeys() {
@@ -154,6 +159,10 @@ export default class HexFocus extends Extension {
                 Gio.BusNameWatcherFlags.NONE, null, () => this._release());
         }
         if (down) {
+            if (!this._ready()) {
+                this._release();
+                return false;
+            }
             let actual = sym;
             const letter = (sym >= Clutter.KEY_a && sym <= Clutter.KEY_z) ||
                 (sym >= Clutter.KEY_A && sym <= Clutter.KEY_Z);

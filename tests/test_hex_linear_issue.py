@@ -287,6 +287,8 @@ class LinearDictationTests(unittest.TestCase):
             image_path = Path(command[command.index("--file") + 1])
             self.assertEqual(image_path.read_bytes(), dictation.images[0][1])
             self.assertEqual(image_path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(kwargs["env"]["HEX_LINEAR_ATTACHMENT_DIR"], str(image_path.parent))
+            self.assertEqual(issue.private_server.call_args.args[1]["HEX_LINEAR_ATTACHMENT_DIR"], str(image_path.parent))
             prompt = kwargs["input"].decode()
             self.assertIn(f"Image 1 file: {image_path}", prompt)
             self.assertIn("Image 1 MIME type: image/png", prompt)
@@ -307,6 +309,18 @@ class LinearDictationTests(unittest.TestCase):
         self.assertEqual(command[command.index("--agent") + 1], issue.PREVIEW_AGENT)
         self.assertIn("Preview only: true", run.call_args.kwargs["input"].decode())
         self.assertNotIn("call hex_notify", run.call_args.kwargs["input"].decode())
+
+    def test_reference_and_preview_images_do_not_grant_upload_access(self):
+        complete = CompletedProcess("opencode", 0, stdout=response())
+        images = (("image/png", b"reference image"),)
+        with (patch.dict(issue.os.environ, {"HEX_LINEAR_ATTACHMENT_DIR": "/tmp/stale-request"}),
+              patch.object(issue.subprocess, "run", return_value=complete) as run):
+            for image_use, preview in (("reference", False), ("attach", True)):
+                with self.subTest(image_use=image_use, preview=preview):
+                    issue.run_opencode(replace(DICTATION, image_use=image_use, images=images), None, dry_run=preview)
+                    self.assertIn("--file", run.call_args.args[0])
+                    self.assertNotIn("HEX_LINEAR_ATTACHMENT_DIR", run.call_args.kwargs["env"])
+                    self.assertNotIn("HEX_LINEAR_ATTACHMENT_DIR", issue.private_server.call_args.args[1])
 
     def test_every_image_is_passed_to_opencode_with_exact_metadata_and_private_files(self):
         images = (("image/png", b"first image"), ("image/jpeg", b"second image"))
@@ -347,11 +361,15 @@ class LinearDictationTests(unittest.TestCase):
     def test_workspace_tools_keep_project_context_and_upload_signed_image_bytes(self):
         script = r'''
 import assert from "node:assert/strict";
-import { readFile, mkdtemp, writeFile, rm } from "node:fs/promises";
+import { readFile, mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 const source = await readFile(process.argv[2]);
 const plugin = (await import(`data:text/javascript;base64,${source.toString("base64")}`)).default;
+const fixture = await mkdtemp(path.join(tmpdir(), "hex-linear-"));
+const directory = path.join(fixture, "request");
+await mkdir(directory);
+process.env.HEX_LINEAR_ATTACHMENT_DIR = directory;
 const tools = new Map([["skill", {}], ["linear_list_projects", {}]]);
 const hooks = new Map();
 await plugin.setup({ tool: {
@@ -401,24 +419,42 @@ for (const agent of ["linear-issue", "linear-issue-preview"]) {
 const ordinary = { agent: "build", tool: "linear_list_projects", input: {} };
 hooks.get("execute.before")(ordinary);
 assert.deepEqual(ordinary.input, {});
-const directory = await mkdtemp(path.join(tmpdir(), "hex-linear-"));
 const file = path.join(directory, "clipboard-1.png");
 const bytes = Buffer.from([0, 255, 10, 34]);
 await writeFile(file, bytes, { mode: 0o600 });
-let uploaded;
-globalThis.fetch = async (url, request) => { uploaded = { url, request }; return { ok: true }; };
+const sent = [];
+globalThis.fetch = async (url, request) => { sent.push({ url, request }); return { ok: true }; };
 try {
+  const context = { agent: "linear-issue", sessionID: "ses_fixture" };
   const headers = { "Content-Type": "image/png", "X-Signed": "Exact Header Value" };
+  const url = "https://storage.googleapis.com/linear-uploads-fixture/image?signature=fixture";
+  const assetUrl = "https://uploads.linear.app/workspace/attachment";
   const upload = tools.get("hex_upload_clipboard");
-  await upload.execute({ file, url: "https://storage.example.org/image?signature=fixture", headers });
+  assert.deepEqual(Object.keys(upload.input.properties), ["file"]);
+  await assert.rejects(upload.execute({ file }, context), /through Linear MCP/);
+  const prepared = {
+    ...context, tool: "linear_prepare_file_upload", status: "completed", input: { filename: path.basename(file) },
+    result: { output: JSON.stringify({ assetUrl, uploadRequest: { method: "PUT", url, headers } }) },
+  };
+  hooks.get("execute.after")(prepared);
+  assert.match(prepared.result.content[0].text, /Upload prepared/);
+  assert.equal(prepared.result.output, undefined);
+  await assert.rejects(upload.execute({ file }, { ...context, sessionID: "ses_other" }), /through Linear MCP/);
+  await assert.rejects(upload.execute({ file }, { ...context, agent: "linear-issue-preview" }), /this Hex request/);
+  await assert.rejects(upload.execute({ file: path.join(fixture, "clipboard-1.png") }, context), /this Hex request/);
+  assert.equal(sent.length, 0);
+  const result = await upload.execute({ file }, context);
+  assert.match(result.content, /https:\/\/uploads\.linear\.app\/workspace\/attachment/);
+  await assert.rejects(upload.execute({ file }, context), /through Linear MCP/);
+  const [uploaded] = sent;
+  assert.equal(sent.length, 1);
+  assert.equal(uploaded.url.href, url);
   assert.deepEqual(uploaded.request.body, bytes);
   assert.deepEqual(uploaded.request.headers, headers);
   assert.equal(uploaded.request.method, "PUT");
   assert.equal(uploaded.request.redirect, "error");
-  await assert.rejects(upload.execute({ file, url: "http://storage.example.org/image", headers }));
-  await assert.rejects(upload.execute({ file: "/tmp/another.png", url: "https://storage.example.org/image", headers }));
 } finally {
-  await rm(directory, { recursive: true, force: true });
+  await rm(fixture, { recursive: true, force: true });
 }
 '''
         completed = subprocess.run(["node", "--input-type=module", "-", str(ROOT / "hex/linear-search.js")],

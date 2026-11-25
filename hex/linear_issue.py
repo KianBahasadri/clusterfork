@@ -332,6 +332,7 @@ def linear_api_key():
 def run_opencode(dictation, attempt, *, dry_run=False):
     binary = shutil.which("opencode") or Path.home() / ".opencode/bin/opencode"
     environment = {**os.environ, "PWD": str(WORKSPACE)}
+    environment.pop("HEX_LINEAR_ATTACHMENT_DIR", None)
     token = linear_api_key()
     if token:
         environment["LINEAR_API_KEY"] = token
@@ -343,6 +344,8 @@ def run_opencode(dictation, attempt, *, dry_run=False):
         image_paths = []
         if dictation.images:
             directory = files.enter_context(TemporaryDirectory(prefix="hex-linear-"))
+            if dictation.image_use == "attach" and not dry_run:
+                environment["HEX_LINEAR_ATTACHMENT_DIR"] = directory
             for number, (mime, image) in enumerate(dictation.images, 1):
                 image_path = Path(directory) / f"clipboard-{number}.{EXTENSIONS[mime]}"
                 with private_file(image_path) as file:

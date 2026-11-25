@@ -197,7 +197,7 @@ def play(text, model, destination, cancelled, *, restore=False):
         if not cancelled.is_set() and not bridge(
             "Key", "(uuub)", destination.window, revision, keysym, pressed
         )[0]:
-            raise TypingError(FOCUS_LOST)
+            raise TypingError("The original typing destination lost focus or an unexpected modifier key is held.")
 
     def unicode_keys(character):
         # IBus and GTK's simple input context accept Ctrl+Shift+U, hex digits and Space.
