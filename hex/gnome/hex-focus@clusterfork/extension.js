@@ -5,6 +5,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 const PATH = '/io/github/KianBahasadri/Clusterfork/HexFocus';
+const WORKER_UNIT = '/org/freedesktop/systemd1/unit/hex_2dlinear_2dissue_2eservice';
 const INTERFACE = `<node>
   <interface name="io.github.KianBahasadri.Clusterfork.HexFocus">
     <method name="Get">
@@ -21,6 +22,30 @@ const INTERFACE = `<node>
   </interface>
 </node>`;
 
+function readReply(connection, name, path, iface, method, parameters, replyType) {
+    return new Promise((resolve, reject) => {
+        connection.call(name, path, iface, method, parameters, new GLib.VariantType(replyType),
+            Gio.DBusCallFlags.NO_AUTO_START, 200, null, (bus, result) => {
+                try {
+                    resolve(bus.call_finish(result).deepUnpack()[0]);
+                } catch (error) {
+                    reject(error);
+                }
+            });
+    });
+}
+
+async function isHexWorker(connection, sender) {
+    const [caller, worker] = await Promise.all([
+        readReply(connection, 'org.freedesktop.DBus', '/org/freedesktop/DBus',
+            'org.freedesktop.DBus', 'GetConnectionUnixProcessID', new GLib.Variant('(s)', [sender]), '(u)'),
+        readReply(connection, 'org.freedesktop.systemd1', WORKER_UNIT,
+            'org.freedesktop.DBus.Properties', 'Get',
+            new GLib.Variant('(ss)', ['org.freedesktop.systemd1.Service', 'MainPID']), '(v)'),
+    ]);
+    return caller > 0 && caller === worker.deepUnpack();
+}
+
 export default class HexFocus extends Extension {
     enable() {
         this._revision = 0;
@@ -33,26 +58,66 @@ export default class HexFocus extends Extension {
             this._revision = (this._revision + 1) >>> 0;
             this._release();
         });
-        this._export = Gio.DBusExportedObject.wrapJSObject(INTERFACE, this);
-        this._export.export(Gio.DBus.session, PATH);
+        const info = Gio.DBusNodeInfo.new_for_xml(INTERFACE);
+        this._registration = Gio.DBus.session.register_object(PATH, info.interfaces[0],
+            (connection, sender, _path, _iface, method, parameters, invocation) => {
+                void this._handleCall(connection, sender, method, parameters, invocation);
+            }, null, null);
     }
 
     disable() {
-        this._export?.unexport();
+        if (this._registration)
+            Gio.DBus.session.unregister_object(this._registration);
+        this._registration = 0;
         if (this._focus)
             global.display.disconnect(this._focus);
         this._release();
-        this._keyboard = this._seat = this._export = null;
+        this._keyboard = this._seat = null;
         this._focus = 0;
     }
 
-    Get() {
+    async _handleCall(connection, sender, method, parameters, invocation) {
+        const registration = this._registration;
+        const allowed = await isHexWorker(connection, sender).catch(() => false);
+        if (!allowed || !registration || registration !== this._registration) {
+            invocation.return_dbus_error('org.freedesktop.DBus.Error.AccessDenied',
+                'Hex Typing Focus is available to the Hex shortcut service.');
+            return;
+        }
+
+        try {
+            switch (method) {
+            case 'Get':
+                invocation.return_value(new GLib.Variant('(uuis)', this._windowInfo()));
+                break;
+            case 'Activate':
+                invocation.return_value(new GLib.Variant('(b)', [this._activate(...parameters.deepUnpack())]));
+                break;
+            case 'Ready':
+                invocation.return_value(new GLib.Variant('(b)', [this._ready()]));
+                break;
+            case 'Key':
+                invocation.return_value(new GLib.Variant('(b)', [this._send(sender, ...parameters.deepUnpack())]));
+                break;
+            case 'End':
+                if (this._owner === sender)
+                    this._release();
+                invocation.return_value(null);
+                break;
+            }
+        } catch (error) {
+            logError(error, 'Hex Typing Focus');
+            invocation.return_dbus_error('org.freedesktop.DBus.Error.Failed', 'Hex Typing Focus could not handle the request.');
+        }
+    }
+
+    _windowInfo() {
         const window = this._acceptsKeys() ? global.display.focus_window : null;
         return [window?.get_stable_sequence() ?? 0, this._revision,
             window?.get_pid() ?? 0, window?.get_title() ?? ''];
     }
 
-    Activate(sequence) {
+    _activate(sequence) {
         const window = global.display.list_all_windows().find(item => item.get_stable_sequence() === sequence);
         if (!window || Main.sessionMode.isLocked)
             return false;
@@ -61,7 +126,7 @@ export default class HexFocus extends Extension {
         return true;
     }
 
-    Ready() {
+    _ready() {
         const modifiers = Clutter.ModifierType;
         const held = modifiers.SHIFT_MASK | modifiers.CONTROL_MASK | modifiers.MOD1_MASK |
             modifiers.SUPER_MASK | modifiers.META_MASK;
@@ -101,17 +166,6 @@ export default class HexFocus extends Extension {
             this._pressed.delete(sym);
         }
         return true;
-    }
-
-    KeyAsync(args, invocation) {
-        const accepted = this._send(invocation.get_sender(), ...args);
-        invocation.return_value(new GLib.Variant('(b)', [accepted]));
-    }
-
-    EndAsync(_args, invocation) {
-        if (this._owner === invocation.get_sender())
-            this._release();
-        invocation.return_value(null);
     }
 
     _release() {

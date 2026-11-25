@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from random import Random
 from statistics import median
+import subprocess
 import sys
 from tempfile import TemporaryDirectory
 from threading import Event
@@ -178,3 +179,64 @@ class ReplayTests(unittest.TestCase):
               self.assertRaisesRegex(typing_replay.TypingError, "lost focus")):
             typing_replay.play("a", {}, typing_replay.Destination(13, 21, ""), Event())
         self.assertEqual([call.args[0] for call in bridge.call_args_list], ["Ready", "Key", "End"])
+
+
+class FocusAuthorizationTests(unittest.TestCase):
+    def test_session_bus_methods_require_the_current_worker_pid(self):
+        script = r"""
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+
+class Variant {
+    constructor(_type, value) { this.value = value; }
+    deepUnpack() { return this.value; }
+}
+const Gio = {DBusCallFlags: {NO_AUTO_START: 1}};
+const GLib = {Variant, VariantType: class {}};
+const source = readFileSync(process.argv[2], 'utf8')
+    .replace(/^import .*;\n/gm, '')
+    .replace('export default class', 'return class');
+const Extension = new Function('Gio', 'GLib', 'Extension', source)(Gio, GLib, class {});
+const focus = new Extension();
+focus._registration = 1;
+focus._windowInfo = () => [5, 6, 7, 'Editor'];
+let worker = 32;
+const connection = {
+    call(name, _path, _iface, method, args, _type, _flags, _timeout, _cancel, done) {
+        const value = name === 'org.freedesktop.DBus'
+            ? (args.value[0] === ':1.32' ? 32 : 41)
+            : new Variant('u', worker);
+        assert.ok(['GetConnectionUnixProcessID', 'Get'].includes(method));
+        queueMicrotask(() => done(this, name === 'org.freedesktop.systemd1' && worker === null ? null : [value]));
+    },
+    call_finish(result) {
+        if (result === null)
+            throw new Error('The user manager did not answer');
+        return new Variant('tuple', result);
+    },
+};
+async function denied(sender, method) {
+    let error;
+    await focus._handleCall(connection, sender, method, null, {
+        return_value() { assert.fail('Unexpected authorized response'); },
+        return_dbus_error(name) { error = name; },
+    });
+    assert.equal(error, 'org.freedesktop.DBus.Error.AccessDenied');
+}
+for (const method of ['Get', 'Activate', 'Ready', 'Key', 'End'])
+    await denied(':1.41', method);
+let windowInfo;
+await focus._handleCall(connection, ':1.32', 'Get', null, {
+    return_value(value) { windowInfo = value.value; },
+    return_dbus_error() { assert.fail('The worker was denied'); },
+});
+assert.deepEqual(windowInfo, [5, 6, 7, 'Editor']);
+worker = 41;
+await denied(':1.32', 'Get');
+worker = null;
+await denied(':1.32', 'Get');
+"""
+        extension = Path(__file__).resolve().parents[1] / "hex/gnome/hex-focus@clusterfork/extension.js"
+        result = subprocess.run(["node", "--input-type=module", "-", str(extension)], input=script,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)

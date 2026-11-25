@@ -93,9 +93,11 @@ Shell 51. The shell loads new or changed extension code at the next sign-in.
 The shared dialog and training work as soon as the worker starts. The Typing
 tab explains when the destination is unavailable and keeps the draft editable.
 The extension identifies and restores the destination window and guards key
-delivery inside Mutter. Field-level focus tracking uses AT-SPI when the target
-exposes its editor. The worker shares its Global Shortcuts registration with
-Linear dictation and requests keypad Page Up (`KP_Prior`) for numpad 9.
+delivery inside Mutter. Its focus and key methods accept calls only from the main
+process of `hex-linear-issue.service`. Field-level focus tracking uses AT-SPI
+when the target exposes its editor. The worker shares its Global Shortcuts
+registration with Linear dictation and requests keypad Page Up (`KP_Prior`)
+for numpad 9.
 
 When changing saved GNOME portal bindings programmatically, apply them to the
 active session through `org.gnome.GlobalShortcutsRebind.RebindShortcuts` on
