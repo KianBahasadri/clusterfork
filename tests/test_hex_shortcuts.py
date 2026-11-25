@@ -69,8 +69,8 @@ class ShortcutTests(unittest.TestCase):
         gi, repository = ModuleType("gi"), ModuleType("gi.repository")
         repository.Gio, repository.GLib = gio, glib
         gi.repository = repository
-        self.emit = lambda member, timestamp, **options: self.handlers[member](
-            None, None, None, None, member, variant(None, ("/fixture/session", shortcut.SHORTCUT, timestamp, options)))
+        self.emit = lambda member, timestamp, name=shortcut.SHORTCUT, **options: self.handlers[member](
+            None, None, None, None, member, variant(None, ("/fixture/session", name, timestamp, options)))
         loop.run.side_effect = scenario
         with patch.dict(sys.modules, {"gi": gi, "gi.repository": repository}), patch.object(shortcut, "Thread", side_effect=thread):
             self.assertEqual(shortcut.listen(False), 0)
@@ -191,6 +191,55 @@ class ShortcutTests(unittest.TestCase):
                         self.assertTrue(released.is_set())
                         self.assertTrue(stopping.is_set())
                 self.run_shortcuts(scenario)
+
+    def test_keypad9_uses_processed_capture_and_ignores_another_shortcuts_release(self):
+        def scenario():
+            self.emit("Activated", 1000, name=shortcut.TYPING_SHORTCUT)
+            self.hold()
+            (released, _stopping, _jobs, typed), _recording = self.calls(shortcut.capture)[0]
+            self.assertTrue(typed)
+            self.emit("Deactivated", 1200)
+            self.assertFalse(released.is_set())
+            self.emit("Deactivated", 1500, name=shortcut.TYPING_SHORTCUT)
+            self.assertTrue(released.is_set())
+        self.run_shortcuts(scenario)
+
+    def test_keypad9_taps_do_not_open_the_linear_text_box(self):
+        def scenario():
+            self.tap(1000)
+            for timestamp in (1150, 1300):
+                self.emit("Activated", timestamp, name=shortcut.TYPING_SHORTCUT)
+                self.emit("Deactivated", timestamp + 50, name=shortcut.TYPING_SHORTCUT)
+            self.tap(1450)
+            self.assertFalse(self.calls(shortcut.compose))
+            self.assertFalse(self.calls(shortcut.capture))
+        self.run_shortcuts(scenario)
+
+
+class TypedDictationTests(unittest.TestCase):
+    def test_capture_types_the_processed_text_without_copying_or_filing_it(self):
+        released, stopping, jobs = Event(), Event(), SimpleQueue()
+        released.set()
+        text = "Processed café text.\nAnother line."
+        with (patch.object(shortcut, "hex_command", side_effect=[
+                {"capture": {"state": "idle"}}, {}, {"text": text}]) as command,
+              patch.object(shortcut, "type_dictation") as type_text,
+              patch.object(shortcut, "copy_transcript") as copy):
+            shortcut.capture(released, stopping, jobs, typed=True)
+        self.assertEqual([call.args for call in command.call_args_list],
+                         [("status",), ("dictation", "start"), ("dictation", "stop", "--print")])
+        type_text.assert_called_once_with(text, stopping)
+        copy.assert_not_called()
+        self.assertTrue(jobs.empty())
+
+    def test_empty_dictation_does_not_open_a_typing_session(self):
+        released = Event()
+        released.set()
+        with (patch.object(shortcut, "hex_command", side_effect=[
+                {"capture": {"state": "idle"}}, {}, {"text": ""}]),
+              patch.object(shortcut, "type_dictation") as type_text):
+            shortcut.capture(released, Event(), SimpleQueue(), typed=True)
+        type_text.assert_not_called()
 
 
 class TypedRequestTests(unittest.TestCase):

@@ -58,6 +58,28 @@ template's total-word-limit description. Hex-owned `AGENTS.md`, `hex.d.ts`,
 and `tsconfig.json` are left alone. Run
 `hex commands init` if you want Hex to generate or refresh its editor typings.
 
+## Typing a dictation
+
+Hold **numpad `9`** to record, then release it to type the finished text into
+the focused field. This uses the same transcription model and Output steps as
+the regular Hex dictation shortcut, including the contextual rewrite. The
+shortcut service types the result one character at a time with varied delays
+and short sentence pauses. Newlines use Shift+Enter, tabs become spaces, and
+non-ASCII characters use GNOME's Ctrl+Shift+U Unicode input sequence.
+The complete processed text remains in Hex History as a **Printed** entry.
+
+The existing `hex-linear-issue.service` handles this binding alongside Linear
+dictation. Its portal action is **Hold to dictate and type the result**, with
+keypad Page Up (`KP_Prior`, the numpad `9` key) as the preferred trigger.
+On GNOME, this keypad binding works with Num Lock on or off. Typing uses
+GNOME Mutter's keyboard input API. Hex's separate Live Typing lab requires
+`zwp_input_method_manager_v2`, which GNOME does not provide.
+
+When changing saved GNOME portal bindings programmatically, apply them to the
+active session through `org.gnome.GlobalShortcutsRebind.RebindShortcuts` on
+`/org/gnome/globalshortcuts` at `org.freedesktop.impl.portal.desktop.gnome`.
+A dconf write alone leaves the active shortcuts unchanged.
+
 ## Dictating Linear issues
 
 The Slash agent is a Linear MCP bot for capturing work as issues and managing

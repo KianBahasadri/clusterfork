@@ -1,5 +1,5 @@
 [Unit]
-Description=Dictate a Linear issue with keypad slash
+Description=Hex dictation shortcuts for Linear and typed text
 PartOf=graphical-session.target
 After=hex.service xdg-desktop-portal.service
 

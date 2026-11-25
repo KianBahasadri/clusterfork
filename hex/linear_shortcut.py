@@ -1,4 +1,4 @@
-"""Hold keypad slash to dictate a Linear request, or double-tap to type it."""
+"""Hold keypad slash for Linear requests, or keypad 9 to type a dictation."""
 
 import argparse
 import base64
@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 from queue import SimpleQueue
+from random import uniform
 import re
 import signal
 import subprocess
@@ -24,6 +25,7 @@ from linear_issue import Dictation, FilingError, ReplyNeeded, file_dictation
 
 APP = "io.github.KianBahasadri.Clusterfork.LinearDictation"
 SHORTCUT = "file-issue"
+TYPING_SHORTCUT = "type-dictation"
 PORTAL = "org.freedesktop.portal.Desktop"
 DESKTOP = "/org/freedesktop/portal/desktop"
 SHORTCUTS = "org.freedesktop.portal.GlobalShortcuts"
@@ -229,23 +231,82 @@ def compose(jobs, stopping, token):
         notify("Linear request", "Could not open the text box. Check that GTK 4 is installed.")
 
 
-def capture(released, stopping, jobs):
+def type_dictation(text, stopping):
+    from gi.repository import Gio, GLib
+
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    server = "org.gnome.Mutter.RemoteDesktop"
+    try:
+        path = bus.call_sync(server, "/org/gnome/Mutter/RemoteDesktop", server, "CreateSession", None,
+                             None, Gio.DBusCallFlags.NONE, 5000, None).unpack()[0]
+        session = Gio.DBusProxy.new_sync(bus, Gio.DBusProxyFlags.NONE, None, server, path,
+                                         f"{server}.Session", None)
+        session.Start()
+
+        def press_key(keysym):
+            session.NotifyKeyboardKeysym("(ub)", keysym, True)
+            time.sleep(0.01)
+            session.NotifyKeyboardKeysym("(ub)", keysym, False)
+            time.sleep(0.01)
+
+        try:
+            for character in text.replace("\r\n", "\n").replace("\r", "\n").expandtabs(4):
+                if stopping.is_set():
+                    return
+                if character == "\n":
+                    # Shift+Enter adds a line in browser message fields.
+                    session.NotifyKeyboardKeysym("(ub)", 0xFFE1, True)
+                    time.sleep(0.01)
+                    try:
+                        press_key(0xFF0D)
+                    finally:
+                        session.NotifyKeyboardKeysym("(ub)", 0xFFE1, False)
+                elif ord(character) >= 32 and character != "\x7f":
+                    if character.isascii():
+                        press_key(ord(character))
+                    else:
+                        # GNOME's Unicode input handles characters absent from the keyboard map.
+                        session.NotifyKeyboardKeysym("(ub)", 0xFFE3, True)
+                        session.NotifyKeyboardKeysym("(ub)", 0xFFE1, True)
+                        time.sleep(0.01)
+                        try:
+                            press_key(ord("u"))
+                        finally:
+                            session.NotifyKeyboardKeysym("(ub)", 0xFFE1, False)
+                            session.NotifyKeyboardKeysym("(ub)", 0xFFE3, False)
+                        time.sleep(0.01)
+                        for digit in f"{ord(character):x}":
+                            press_key(ord(digit))
+                        press_key(ord(" "))
+                delay = uniform(0.035, 0.095)
+                if character in ".!?\n":
+                    delay += uniform(0.15, 0.35)
+                if stopping.wait(delay):
+                    return
+        finally:
+            session.Stop()
+    except GLib.Error as error:
+        raise FilingError("GNOME could not finish typing. Recover the full text from Hex History.") from error
+
+
+def capture(released, stopping, jobs, typed=False):
     dictation_id = str(uuid4())
+    label = "Typed dictation" if typed else "Linear dictation"
     try:
         status = hex_command("status")
         if status["capture"]["state"] not in {"idle", "transcribing"}:
             raise FilingError("Hex is already recording or is not ready. Release that shortcut and try again.")
-        hex_command("dictation", "start", "--raw")
+        hex_command("dictation", "start", *([] if typed else ["--raw"]))
         submitted = False
         try:
-            print(f"Hex Linear dictation {dictation_id} started recording.")
-            title = None if released.is_set() else focused_title()
+            print(f"Hex {label} {dictation_id} started recording.")
+            title = None if typed or released.is_set() else focused_title()
             while not released.wait(0.25):
                 if stopping.is_set():
                     return
             if stopping.is_set():
                 return
-            print(f"Hex Linear dictation {dictation_id} requested transcription after release.")
+            print(f"Hex {label} {dictation_id} requested transcription after release.")
             submitted = True
             result = hex_command("dictation", "stop", "--print", timeout=75)
         finally:
@@ -255,6 +316,11 @@ def capture(released, stopping, jobs):
                 except (OSError, ValueError, subprocess.SubprocessError, FilingError):
                     pass
         transcript = result["text"]
+        if typed:
+            if transcript.strip():
+                type_dictation(transcript, stopping)
+            print(f"Hex {label} {dictation_id} finished.")
+            return
         if transcript.strip():
             dictation = request_from_text(transcript, title, dictation_id)
             if copy_transcript(transcript.strip()):
@@ -264,11 +330,11 @@ def capture(released, stopping, jobs):
         else:
             print(f"Hex Linear dictation {dictation_id} was empty.")
     except FilingError as error:
-        print(f"Hex Linear dictation {dictation_id} could not record. {error}")
-        notify("Linear dictation", str(error))
+        print(f"Hex {label} {dictation_id} failed. {error}")
+        notify(label, str(error))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
-        print(f"Hex Linear dictation {dictation_id} capture failed ({type(error).__name__}).")
-        notify("Linear dictation", "Could not capture or transcribe audio. Check that Hex is running.")
+        print(f"Hex {label} {dictation_id} capture failed ({type(error).__name__}).")
+        notify(label, "Could not capture or transcribe audio. Check that Hex is running.")
 
 
 def notify_saved_issue(saved, dictation_id):
@@ -315,6 +381,7 @@ def listen(dry_run):
     jobs = SimpleQueue()
     stopping = Event()
     released = None
+    active_shortcut = None
     recording = None
     composing = None
     hold_timer = None
@@ -360,29 +427,39 @@ def listen(dry_run):
         if released is None or stopping.is_set():
             return GLib.SOURCE_REMOVE
         if recording is not None and recording.is_alive():
-            Thread(target=notify, args=("Linear dictation", "Hex is still transcribing the previous recording."),
+            label = "Typed dictation" if active_shortcut == TYPING_SHORTCUT else "Linear dictation"
+            Thread(target=notify, args=(label, "Hex is still processing the previous recording."),
                    daemon=True).start()
         else:
-            recording = Thread(target=capture, args=(released, stopping, jobs), daemon=True)
+            arguments = (released, stopping, jobs)
+            if active_shortcut == TYPING_SHORTCUT:
+                arguments += (True,)
+            recording = Thread(target=capture, args=arguments, daemon=True)
             recording.start()
         return GLib.SOURCE_REMOVE
 
     def shortcut(_bus, _sender, _path, _interface, member, parameters):
-        nonlocal released, composing, hold_timer, pressed_at, last_tap, activation_token
+        nonlocal released, active_shortcut, composing, hold_timer, pressed_at, last_tap, activation_token
         handle, name, timestamp, options = parameters.unpack()
-        if handle != session or name != SHORTCUT:
+        if handle != session or name not in (SHORTCUT, TYPING_SHORTCUT):
             return
         if member == "Activated" and released is None:
             released, pressed_at = Event(), timestamp
+            active_shortcut = name
+            if name == TYPING_SHORTCUT:
+                last_tap = None
             activation_token = options.get("activation_token")
             hold_timer = GLib.timeout_add(HOLD_MS, begin_capture)
-        if member == "Deactivated" and released is not None:
+        if member == "Deactivated" and released is not None and name == active_shortcut:
             released.set()
             released = None
+            active_shortcut = None
             if hold_timer is None:
                 return
             GLib.source_remove(hold_timer)
             hold_timer = None
+            if name == TYPING_SHORTCUT:
+                return
             if timestamp - pressed_at >= HOLD_MS:
                 last_tap = None
             elif last_tap is not None and pressed_at - last_tap <= DOUBLE_TAP_MS:
@@ -417,7 +494,9 @@ def listen(dry_run):
             return 0
         session = created["session_handle"]
         binding = [(SHORTCUT, {"description": GLib.Variant("s", "Hold to dictate a Linear request; double-tap to type"),
-                               "preferred_trigger": GLib.Variant("s", "KP_Divide")})]
+                               "preferred_trigger": GLib.Variant("s", "KP_Divide")}),
+                   (TYPING_SHORTCUT, {"description": GLib.Variant("s", "Hold to dictate and type the result"),
+                                      "preferred_trigger": GLib.Variant("s", "KP_Prior")})]
         bound = request("BindShortcuts", "(oa(sa{sv})sa{sv})", (session, binding, ""), {}, 300)
         if not bound or not any(name == SHORTCUT and details.get("trigger_description")
                                 for name, details in bound.get("shortcuts", [])):
@@ -434,6 +513,9 @@ def listen(dry_run):
         Thread(target=process_jobs, args=(jobs, dry_run), daemon=True).start()
         trigger = next(details["trigger_description"] for name, details in bound["shortcuts"] if name == SHORTCUT)
         print(f"Linear dictation shortcut ready: {trigger}.")
+        for name, details in bound["shortcuts"]:
+            if name == TYPING_SHORTCUT:
+                print(f"Typed dictation shortcut ready: {details.get('trigger_description', 'unbound')}.")
         loop.run()
         if recording is not None and stopping.is_set():
             recording.join(timeout=5)
