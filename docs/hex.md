@@ -70,9 +70,10 @@ with Num Lock on or off. Numpad minus runs Hex's regular paste action.
 The tabs share one draft. Press either keypad shortcut while the dialog is
 open to select its tab in the same window. Enter adds a line. **Ctrl+Enter**
 closes the dialog and submits to the active tab. Typing restores the original
-window and field. The **Train BioCadence** button opens a dedicated training
-window for the selected profile. **Typing from thoughts** gives you a
-free-writing prompt. **Copy typing** displays a passage to transcribe.
+window and field. Use the two-option toggle to select a profile, then choose
+**Train BioCadence** to open its training window. **Thinking typing** rotates
+through 15 free-writing prompts, one per session. **Copy typing** shows the
+passage with inline feedback as you type.
 Each can be saved after at least 40 typed characters. Hex captures presses and
 releases inside the training field and saves the fitted statistics and
 selection in `~/.local/state/hex/typing/profiles.json` or under `XDG_STATE_HOME`.
@@ -111,7 +112,7 @@ The median within-word gap was 88 ms for both. Word and sentence gaps were
 
 | Training profile | is-human-cadence v1.6.0 | HIDSentry 0.1.0 |
 |---|---|---|
-| Typing from thoughts | Unknown (0.663) | Human (0.006) |
+| Thinking typing | Unknown (0.663) | Human (0.006) |
 | Copy typing | Human (0.738) | Human (0.008) |
 
 is-human-cadence flagged all 246 keydowns in each trace as synthetic events.

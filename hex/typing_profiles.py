@@ -8,7 +8,7 @@ import tempfile
 from biocadence import DEFAULT
 
 
-PROFILES = {"thoughts": "Typing from thoughts", "copy": "Copy typing"}
+PROFILES = {"thoughts": "Thinking typing", "copy": "Copy typing"}
 
 
 def profile_path():

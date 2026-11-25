@@ -1,6 +1,7 @@
 """Build the shared Linear and Typing dialog and the Linear reply window."""
 
 import base64
+from functools import cache
 import json
 import sys
 
@@ -15,54 +16,101 @@ from typing_profiles import PROFILES, load_profiles, save_profiles
 from typing_training import open_training
 
 
+@cache
+def style_tabs(display):
+    provider = Gtk.CssProvider()
+    provider.load_from_string("""
+        .hex-tabs > header.top {
+            background: alpha(@theme_fg_color, 0.045);
+            border: 0;
+            border-bottom: 1px solid alpha(@theme_fg_color, 0.20);
+            border-radius: 8px 8px 0 0;
+            padding: 4px 4px 0;
+            box-shadow: none;
+        }
+        .hex-tabs > header.top > tabs > tab {
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 7px 7px 0 0;
+            margin: 0 2px -1px;
+            min-height: 0;
+            min-width: 62px;
+            padding: 5px 14px;
+            box-shadow: none;
+            color: alpha(@theme_fg_color, 0.72);
+        }
+        .hex-tabs > header.top > tabs > tab:hover {
+            background: alpha(@theme_fg_color, 0.07);
+        }
+        .hex-tabs > header.top > tabs > tab:checked {
+            background: @theme_bg_color;
+            border-color: alpha(@theme_fg_color, 0.20);
+            border-bottom-color: @theme_bg_color;
+            color: @theme_fg_color;
+        }
+    """)
+    Gtk.StyleContext.add_provider_for_display(display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+
 def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None, typing_error=None):
     content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=14,
                       margin_bottom=14, margin_start=14, margin_end=14)
     window.set_child(content)
-    linear = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    linear = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
     tabs = None
     if tab is None:
         content.append(linear)
     else:
-        tabs = Gtk.Stack(vhomogeneous=False)
-        tabs.add_titled(linear, "linear", "Linear")
-        tabs.add_titled(typing_options(window, typing_error), "typing", "Typing")
-        content.append(Gtk.StackSwitcher(stack=tabs, halign=Gtk.Align.CENTER))
+        style_tabs(window.get_display())
+        tabs = Gtk.Notebook(show_border=False)
+        tabs.add_css_class("hex-tabs")
+        linear.set_margin_top(10)
+        tabs.append_page(linear, Gtk.Label(label="Linear"))
+        tabs.append_page(typing_options(window, typing_error), Gtk.Label(label="Typing"))
         content.append(tabs)
     linear.append(Gtk.Label(label=question, xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR,
                             max_width_chars=48))
-    hint = Gtk.Label(label=("Type your request." if tabs else
-                           "Dictate with your regular Hex shortcut or type your answer.") +
-                          " Paste images with Ctrl+V. Send with Ctrl+Enter.", xalign=0,
+    hint = Gtk.Label(label=("" if tabs else "Dictate or type your answer. ") +
+                           "Ctrl+V adds an image · Ctrl+Enter sends", xalign=0,
                      wrap=True, max_width_chars=48)
     hint.add_css_class("dim-label")
     linear.append(hint)
 
     answer = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR, accepts_tab=False,
                           top_margin=8, bottom_margin=8, left_margin=8, right_margin=8)
-    scroll = Gtk.ScrolledWindow(min_content_height=144, has_frame=True, vexpand=True,
+    scroll = Gtk.ScrolledWindow(min_content_height=160 if tabs else 144, has_frame=True, vexpand=True,
                                 hscrollbar_policy=Gtk.PolicyType.NEVER)
     scroll.set_child(answer)
     content.append(scroll)
+
+    placeholders = typing_placeholders() if tabs else None
+    if placeholders is not None:
+        content.append(placeholders)
 
     attachments = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
     previews = Gtk.ScrolledWindow(max_content_height=220, propagate_natural_height=True,
                                   hscrollbar_policy=Gtk.PolicyType.NEVER, visible=False)
     previews.set_child(attachments)
     content.append(previews)
-    paste = Gtk.Button(label="Paste image", halign=Gtk.Align.START)
-    content.append(paste)
     error = Gtk.Label(xalign=0, wrap=True, max_width_chars=34, visible=False)
     error.add_css_class("error")
     content.append(error)
 
-    buttons = Gtk.Box(spacing=8, halign=Gtk.Align.END)
+    footer = Gtk.Box(spacing=8)
+    paste = Gtk.Button(label="Paste image", halign=Gtk.Align.START)
+    footer.append(paste)
+    draft_hint = Gtk.Label(label="Enter a draft to enable Type text.", visible=False,
+                           xalign=0, wrap=True)
+    draft_hint.add_css_class("dim-label")
+    footer.append(draft_hint)
+    buttons = Gtk.Box(spacing=8, halign=Gtk.Align.END, hexpand=True)
     cancel = Gtk.Button(label="Cancel")
     send = Gtk.Button(label="Send request" if tabs else "Send reply", sensitive=False)
     send.add_css_class("suggested-action")
     buttons.append(cancel)
     buttons.append(send)
-    content.append(buttons)
+    footer.append(buttons)
+    content.append(footer)
 
     buffer = answer.get_buffer()
     images = []
@@ -70,7 +118,7 @@ def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None
     cancellable = Gio.Cancellable()
 
     def typing():
-        return tabs is not None and tabs.get_visible_child_name() == "typing"
+        return tabs is not None and tabs.get_current_page() == 1
 
     def text():
         start, end = buffer.get_bounds()
@@ -89,20 +137,24 @@ def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None
         submit_text(active, draft, attached)
 
     def update_send(*_args):
-        ready = typing_error is None if typing() else not reading
-        send.set_sensitive(ready and bool(text()))
+        on_typing = typing()
+        ready = typing_error is None if on_typing else not reading
+        has_text = bool(text())
+        send.set_sensitive(ready and has_text)
+        draft_hint.set_visible(on_typing and ready and not has_text)
 
     def tab_changed(*_args):
         send.set_label("Type text" if typing() else "Send request")
         paste.set_visible(not typing())
         previews.set_visible(bool(images) and not typing())
+        placeholders.set_visible(typing())
         error.set_visible(False)
         update_send()
         window.set_focus(answer)
 
     def present(name, token=None):
         if tabs is not None:
-            tabs.set_visible_child_name(name)
+            tabs.set_current_page(1 if name == "typing" else 0)
         if token:
             window.set_startup_id(token)
         window.set_focus(answer)
@@ -201,47 +253,37 @@ def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None
 
     window.connect("close-request", close)
     if tabs is not None:
-        tabs.connect("notify::visible-child-name", tab_changed)
-        tabs.set_visible_child_name(tab)
+        tabs.connect_after("switch-page", tab_changed)
         tab_changed()
     return present
 
 
 def typing_options(window, typing_error):
-    pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=10)
     row = Gtk.Box(spacing=8)
     pane.append(row)
-    profiles = list(PROFILES)
-    choice = Gtk.DropDown.new_from_strings(list(PROFILES.values()))
-    train = Gtk.Button(label="Train BioCadence")
-    warning = Gtk.Label(xalign=0, wrap=True, max_width_chars=27)
-    warning.add_css_class("warning")
-    row.append(choice)
+    toggle = Gtk.Box(valign=Gtk.Align.CENTER)
+    toggle.add_css_class("linked")
+    thinking = Gtk.ToggleButton(label=PROFILES["thoughts"])
+    copying = Gtk.ToggleButton(label=PROFILES["copy"], group=thinking)
+    toggle.append(thinking)
+    toggle.append(copying)
+    choices = {"thoughts": thinking, "copy": copying}
+    train = Gtk.Button(label="Train BioCadence", valign=Gtk.Align.CENTER, halign=Gtk.Align.END, hexpand=True)
+    row.append(toggle)
     row.append(train)
-    row.append(warning)
+    warning = Gtk.Label(xalign=0, wrap=True)
+    warning.add_css_class("warning")
+    pane.append(warning)
     if typing_error:
         notice = Gtk.Label(label=typing_error, xalign=0, wrap=True, max_width_chars=48)
         notice.add_css_class("warning")
         pane.append(notice)
 
-    placeholders = Gtk.Box(spacing=8, sensitive=False)
-    placeholders.append(Gtk.Button(label="AI-writing estimate"))
-    placeholders.append(Gtk.CheckButton(label="Periodic focus breaks"))
-    pane.append(placeholders)
-    speed_row = Gtk.Box(spacing=8, sensitive=False)
-    speed_row.append(Gtk.Label(label="Speed"))
-    speed = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, -2, 2, 1)
-    speed.set_hexpand(True)
-    speed.set_value(0)
-    speed_row.append(speed)
-    speed_row.append(Gtk.Label(label="1×"))
-    speed_row.append(Gtk.Label(label="Duration —"))
-    pane.append(speed_row)
-
     try:
         state = load_profiles()
     except (OSError, KeyError, TypeError, ValueError):
-        choice.set_sensitive(False)
+        toggle.set_sensitive(False)
         train.set_sensitive(False)
         warning.set_label("Hex could not read the saved profiles.")
         return pane
@@ -249,17 +291,16 @@ def typing_options(window, typing_error):
     def update_warning():
         selected = state["selected"]
         trained = selected in state["profiles"]
-        warning.set_label(f"{PROFILES[selected]} is untrained. Playback uses default timing.")
+        warning.set_label(f"{PROFILES[selected]} is untrained. Using default timing.")
         warning.set_visible(not trained)
 
-    def select(_choice, _property):
-        selected = profiles[choice.get_selected()]
-        if selected == state["selected"]:
+    def select(button, selected):
+        if not button.get_active() or selected == state["selected"]:
             return
         try:
             save_profiles({**state, "selected": selected})
         except OSError:
-            choice.set_selected(profiles.index(state["selected"]))
+            choices[state["selected"]].set_active(True)
             warning.set_label("Hex could not save the selected profile.")
             warning.set_visible(True)
             return
@@ -277,10 +318,31 @@ def typing_options(window, typing_error):
 
         open_training(window, selected, save)
 
-    choice.set_selected(profiles.index(state["selected"]))
-    choice.connect("notify::selected", select)
+    choices[state["selected"]].set_active(True)
+    for profile, button in choices.items():
+        button.connect("toggled", select, profile)
     train.connect("clicked", start_training)
     update_warning()
+    return pane
+
+
+def typing_placeholders():
+    pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, sensitive=False)
+    options = Gtk.Box(spacing=12)
+    estimate = Gtk.Button(label="AI-writing estimate")
+    estimate.add_css_class("flat")
+    options.append(estimate)
+    options.append(Gtk.CheckButton(label="Periodic focus breaks"))
+    pane.append(options)
+    speed_row = Gtk.Box(spacing=8)
+    speed_row.append(Gtk.Label(label="Speed"))
+    speed = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, -2, 2, 1)
+    speed.set_hexpand(True)
+    speed.set_value(0)
+    speed_row.append(speed)
+    speed_row.append(Gtk.Label(label="1×"))
+    speed_row.append(Gtk.Label(label="Duration —"))
+    pane.append(speed_row)
     return pane
 
 

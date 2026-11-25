@@ -55,7 +55,7 @@ def bridge(method, signature=None, *args):
         return bus.call_sync("org.gnome.Shell", PATH, INTERFACE, method, parameters,
                              None, Gio.DBusCallFlags.NO_AUTO_START, 500, None).unpack()
     except GLib.Error as error:
-        raise TypingError("Hex Typing Focus is unavailable. Sign out and back in to load it.") from error
+        raise TypingError("Sign out and back in to enable Hex typing.") from error
 
 
 def accessibility():
