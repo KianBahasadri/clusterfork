@@ -561,7 +561,10 @@ async def command(*args, cwd=None, env=None, timeout=120):
 
 
 def github_env():
-    env = {key: value for key, value in os.environ.items() if key != "LINEAR_WEBHOOK_SECRET"}
+    env = {
+        key: value for key, value in os.environ.items()
+        if key not in {"LINEAR_WEBHOOK_SECRET", "LINEAR_WEBHOOK_PATH_TOKEN"}
+    }
     return {**env, "GH_TOKEN": os.environ["GITHUB_TOKEN"], "GIT_TERMINAL_PROMPT": "0"}
 
 

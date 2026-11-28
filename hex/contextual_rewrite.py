@@ -25,7 +25,35 @@ VOCABULARY_LOG = SETTINGS_PATH.with_name("vocabulary-auto-added.jsonl")
 HISTORY_WORD_LIMIT = 2000
 LONG_DICTATION_WORDS = 100
 MAX_NEW_TERMS = 3
+MAX_VOCABULARY_TERMS = 80
 MAX_RESPONSE_BYTES = 262144
+
+LEADING_STOPWORDS = frozenset({
+    "a", "an", "the", "my", "our", "your", "his", "her", "its", "their",
+    "this", "that", "these", "those",
+})
+GENERIC_TRAILING_WORDS = frozenset({
+    "file", "files", "folder", "downloader", "app", "tool", "window", "page",
+    "site", "server", "service",
+})
+COMMON_TERMS = frozenset({
+    "adderall", "antigravity", "amazon", "amd", "android", "api", "apple",
+    "aws", "azure", "bash", "bios", "bluetooth", "ccp", "chatgpt", "chrome",
+    "chromium", "clara", "claude", "cli", "cloudflare", "codex", "cpu", "css",
+    "cuda", "debian", "dir", "discord", "dns", "docker", "email", "ethernet",
+    "facebook", "fedora", "firefox", "flash", "gemini", "git", "github",
+    "gmail", "golang", "google", "gpt", "gpu", "hdmi", "html", "http",
+    "https", "intel", "internet", "ios", "iphone", "java", "javascript",
+    "jpg", "json", "kubernetes", "laptop", "linear", "linux", "macos", "mao",
+    "markdown", "microsoft", "mp3", "mp4", "mysql", "netlify", "nginx",
+    "node", "nodejs", "npm", "nvidia", "openai", "openvpn", "opus", "pdf",
+    "playwright", "png", "postgres", "postgresql", "python", "ram",
+    "raspberrypi", "react", "reddit", "redis", "repo", "rust", "sdk",
+    "selfhosted", "shakespeare", "signal", "skype", "slack", "spotify", "sql",
+    "sqlite", "ssd", "ssh", "tcp", "terraform", "twitter", "typescript",
+    "ubuntu", "udp", "url", "usb", "user", "users", "vista", "vpn", "wifi",
+    "wikipedia", "windows", "wireguard", "xi", "yaml", "youtube",
+})
 
 INSTRUCTIONS = """Edit only current_transcript in the JSON below, following the profile instructions.
 Return only the replacement text for current_transcript, without JSON, metadata, or commentary.
@@ -87,7 +115,10 @@ def repeated_phrases(original, previous_originals):
 
 
 def eligible_terms(candidates, original, output, vocabulary, previous_originals=()):
-    """Require confidence and matching words in two separately dictated originals."""
+    """Require confidence, novelty, and uncommon naming across separate originals."""
+    if len(vocabulary) >= MAX_VOCABULARY_TERMS:
+        return []
+    limit = min(MAX_NEW_TERMS, MAX_VOCABULARY_TERMS - len(vocabulary))
     known = {term_key(item if isinstance(item, str) else item["term"]) for item in vocabulary}
     original_words = " " + normalized_words(original) + " "
     output_words = " " + normalized_words(output) + " "
@@ -108,7 +139,14 @@ def eligible_terms(candidates, original, output, vocabulary, previous_originals=
             continue
         if len(term.split()) > 8:
             continue
+        words = normalized_words(term).split()
+        if not words or words[0] in LEADING_STOPWORDS:
+            continue
+        if len(words) > 1 and words[-1] in GENERIC_TRAILING_WORDS:
+            continue
         key = term_key(term)
+        if len(key) < 2 or key in COMMON_TERMS:
+            continue
         phrase = " " + normalized_words(term) + " "
         if key in known or phrase not in original_words or phrase not in output_words:
             continue
@@ -116,7 +154,7 @@ def eligible_terms(candidates, original, output, vocabulary, previous_originals=
             continue
         known.add(key)
         terms.append(term)
-        if len(terms) == MAX_NEW_TERMS:
+        if len(terms) == limit:
             break
     return terms
 

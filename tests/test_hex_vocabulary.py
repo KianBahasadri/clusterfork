@@ -119,6 +119,22 @@ class BackgroundVocabularyTests(unittest.TestCase):
                 review.review_entry(entries[-1], entries)
             remember.assert_not_called()
 
+    def test_ordinary_terms_generic_phrases_and_vocab_cap_are_rejected(self):
+        blocked = [
+            {"term": "Python", "category": "technical", "confidence": "high"},
+            {"term": "Linux", "category": "technical", "confidence": "high"},
+            {"term": "Google", "category": "organization", "confidence": "high"},
+            {"term": "Shakespeare", "category": "person", "confidence": "high"},
+            {"term": "the opencode", "category": "product", "confidence": "high"},
+            {"term": "my kobo", "category": "product", "confidence": "high"},
+            {"term": "agents md file", "category": "technical", "confidence": "high"},
+            {"term": "Shelfmark", "category": "product", "confidence": "high"},
+        ]
+        text = "Python Linux Google Shakespeare the opencode my kobo agents md file Shelfmark"
+        self.assertEqual(rewrite.eligible_terms(blocked, text, text, ["Kobo"], [text]), ["Shelfmark"])
+        full = [f"Term{i}" for i in range(rewrite.MAX_VOCABULARY_TERMS)]
+        self.assertEqual(rewrite.eligible_terms([blocked[-1]], text, text, full, [text]), [])
+
 
 if __name__ == "__main__":
     unittest.main()

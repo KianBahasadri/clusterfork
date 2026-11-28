@@ -20,7 +20,7 @@ import secrets
 import shutil
 import signal
 import sqlite3
-from threading import Thread
+from threading import Lock, Thread
 import time
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
@@ -71,6 +71,10 @@ PROJECT_REFRESH_SECONDS = 60
 WEBHOOK_BODY_LIMIT = 256 * 1024
 WEBHOOK_READ_SECONDS = 10
 WEBHOOK_CLOCK_SKEW_MS = 60_000
+WEBHOOK_RATE_LIMIT = 60
+WEBHOOK_RATE_WINDOW_SECONDS = 60
+WEBHOOK_REPLAY_MAX = 2048
+WEBHOOK_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
 WEBHOOK_TYPES = {"Issue", "Project"}
 WEBHOOK_ACTIONS = {"create", "update", "remove"}
 HISTORY_CONCURRENCY = 3
@@ -145,6 +149,10 @@ def current_issue(row, cutoff):
         canceled = issue_timestamp(row.get("canceledAt"))
         return canceled is not None and canceled >= cutoff
     return kind not in CLOSED_STATES
+
+
+def _reject_json_constant(token):
+    raise ValueError(f"Invalid JSON constant: {token}")
 
 
 def valid_webhook(payload, now_ms=None):
@@ -247,6 +255,11 @@ class Symphony:
         self.history_cache = {}
         self.stream_cache = ("", "", "")
         self.webhook_secret = os.environ.get("LINEAR_WEBHOOK_SECRET", "")
+        raw_path_token = os.environ.get("LINEAR_WEBHOOK_PATH_TOKEN", "").strip()
+        self.webhook_path_token = raw_path_token if WEBHOOK_TOKEN_PATTERN.fullmatch(raw_path_token) else ""
+        self.webhook_lock = Lock()
+        self.webhook_hits = deque()
+        self.webhook_seen = {}
         self.updates = UpdateChecker()
         self.version = web_version()
 
@@ -1272,20 +1285,65 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
 
+    def is_valid_webhook_path(self):
+        app = self.server.app
+        if not app.webhook_secret or not app.webhook_path_token:
+            return False
+        expected = f"/webhooks/linear/{app.webhook_path_token}"
+        return hmac.compare_digest(urlsplit(self.path).path, expected)
+
+    def webhook_rate_limited(self):
+        app = self.server.app
+        now = time.monotonic()
+        cutoff = now - WEBHOOK_RATE_WINDOW_SECONDS
+        with app.webhook_lock:
+            while app.webhook_hits and app.webhook_hits[0] <= cutoff:
+                app.webhook_hits.popleft()
+            if len(app.webhook_hits) >= WEBHOOK_RATE_LIMIT:
+                return True
+            app.webhook_hits.append(now)
+            return False
+
+    def record_webhook_delivery(self, key):
+        app = self.server.app
+        now = time.monotonic()
+        cutoff = now - 2 * (WEBHOOK_CLOCK_SKEW_MS / 1000)
+        with app.webhook_lock:
+            stale = [item for item, seen in app.webhook_seen.items() if seen <= cutoff]
+            for item in stale:
+                del app.webhook_seen[item]
+            if key in app.webhook_seen:
+                return False
+            while len(app.webhook_seen) >= WEBHOOK_REPLAY_MAX:
+                oldest = next(iter(app.webhook_seen))
+                del app.webhook_seen[oldest]
+            app.webhook_seen[key] = now
+            return True
+
     def unsupported(self):
+        if not self.is_valid_webhook_path():
+            self.reply(404, "Not found.")
+            return
         self.reply(405, "Method not allowed.")
 
     do_GET = do_HEAD = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = unsupported
     do_TRACE = do_CONNECT = unsupported
 
     def do_POST(self):
-        if urlsplit(self.path).path != "/webhooks/linear":
+        if not self.is_valid_webhook_path():
             self.reply(404, "Not found.")
             return
-        app = self.server.app
-        if not app.webhook_secret:
-            self.reply(503, "Webhook signing is not configured.")
+        if self.webhook_rate_limited():
+            self.reply(429, "Too many requests.")
             return
+        if self.headers.get("Transfer-Encoding"):
+            self.reply(400, "Transfer-Encoding is not supported.")
+            return
+        content_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            self.reply(415, "Content-Type must be application/json.")
+            return
+        app = self.server.app
         try:
             length = int(self.headers["Content-Length"])
         except (KeyError, TypeError, ValueError):
@@ -1308,19 +1366,23 @@ class WebhookHandler(BaseHTTPRequestHandler):
         signature = (self.headers.get("Linear-Signature") or "").strip()
         expected = hmac.new(app.webhook_secret.encode(), body, hashlib.sha256).digest()
         try:
-            provided = bytes.fromhex(signature)
+            provided = bytes.fromhex(signature) if len(signature) == 64 else b""
         except ValueError:
             provided = b""
         if not provided or not hmac.compare_digest(provided, expected):
             self.reply(401, "Invalid webhook signature.")
             return
         try:
-            payload = json.loads(body)
+            payload = json.loads(body.decode("utf-8"), parse_constant=_reject_json_constant)
         except (UnicodeDecodeError, ValueError):
             self.reply(400, "Invalid webhook payload.")
             return
         if not valid_webhook(payload):
             self.reply(400, "Unsupported webhook payload.")
+            return
+        delivery = (self.headers.get("Linear-Delivery") or "").strip() or hashlib.sha256(body).hexdigest()
+        if not self.record_webhook_delivery(delivery):
+            self.reply(200, "duplicate")
             return
         self.server.loop.call_soon_threadsafe(
             app.request_issue_refresh, payload["type"] == "Project")

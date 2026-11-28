@@ -10,19 +10,6 @@ spec:
     requests:
       storage: 1Gi
 ---
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: symphony-webhook-serve
-  namespace: symphony
-data:
-  serve.json: |
-    {
-      "TCP": {"443": {"HTTPS": true}},
-      "Web": {"${TS_CERT_DOMAIN}:443": {"Handlers": {"/webhooks/linear": {"Proxy": "http://symphony.symphony.svc.cluster.local:8082"}}}},
-      "AllowFunnel": {"${TS_CERT_DOMAIN}:443": true}
-    }
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -80,6 +67,6 @@ spec:
         - name: data
           persistentVolumeClaim: {claimName: symphony-webhook}
         - name: serve
-          configMap: {name: symphony-webhook-serve}
+          secret: {secretName: symphony-webhook-serve, defaultMode: 0440}
         - name: tailscale-tmp
           emptyDir: {sizeLimit: 16Mi}

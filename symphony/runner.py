@@ -429,7 +429,8 @@ class Runner:
         env = {key: value for key, value in os.environ.items()
                if key not in {"GITHUB_TOKEN", "GH_TOKEN", "LINEAR_API_KEY", "OPENAI_API_KEY",
                               "CODEX_HOME", "OPENCODE_GO_API_KEY", "LINEAR_WEBHOOK_SECRET",
-                              "SYMPHONY_INTERNAL_TOKEN", "SYMPHONY_INTERNAL_URL"}}
+                              "LINEAR_WEBHOOK_PATH_TOKEN", "SYMPHONY_INTERNAL_TOKEN",
+                              "SYMPHONY_INTERNAL_URL"}}
         env["XDG_DATA_HOME"] = str(self.directory / "worker-data")
         env["XDG_CONFIG_HOME"] = str(self.directory / "worker-config")
         env["XDG_STATE_HOME"] = str(self.directory / "worker-state")

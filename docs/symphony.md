@@ -239,15 +239,17 @@ pod (`runAsNonRoot`, UID `10001`, `readOnlyRootFilesystem: true`) and an OpenEBS
 local PVC at `/data/symphony` (`HOME=/data/symphony/home`). A private Tailscale
 Serve sidecar proxies the app's loopback listener (`127.0.0.1:8080`) over
 tailnet HTTPS. A separate restricted userspace Tailscale gateway exposes only
-the Funnel route `/webhooks/linear` to the Symphony Service on port 8082.
+an opaque Funnel route (`/webhooks/linear/<LINEAR_WEBHOOK_PATH_TOKEN>`,
+stored in Kubernetes Secrets rather than manifests) to the Symphony Service on port 8082.
 
 Create the namespace and provide these Kubernetes secrets:
 
 | Secret | Required values |
 | --- | --- |
-| `symphony-api` | `LINEAR_API_KEY`, `GITHUB_TOKEN` with repository content and workflow write and Actions read access, and `LINEAR_WEBHOOK_SECRET` matching the Linear webhook signing secret |
+| `symphony-api` | `LINEAR_API_KEY`, `GITHUB_TOKEN` with repository content and workflow write and Actions read access, `LINEAR_WEBHOOK_SECRET` matching the Linear webhook signing secret, and `LINEAR_WEBHOOK_PATH_TOKEN` (32+ URL-safe chars) |
 | `symphony-tailnet` | Single-use, preauthorized auth key in `authkey` for `tag:guaranine-app-gateway` |
 | `symphony-webhook-tailnet` | Single-use, preauthorized auth key in `authkey` for `tag:guaranine-webhook-gateway` |
+| `symphony-webhook-serve` | Tailscale `serve.json` proxying only `/webhooks/linear/<LINEAR_WEBHOOK_PATH_TOKEN>` with Funnel enabled |
 
 Store input files outside this checkout with mode 0600. The Antigravity OAuth
 token (`home/.gemini/antigravity-cli/antigravity-oauth-token`), OpenCode Go
@@ -292,7 +294,11 @@ Symphony pod only DNS, public TCP 443 egress, port 8081 ingress from
 `symphony_worker_escalations_total{repo,trigger}`,
 `symphony_coordinator_rate_limit_remaining_percent{window}`, and explicit
 `symphony_metric_available` indicators), and port 8082 ingress from
-`symphony-webhook`. Linear webhooks verify `Linear-Signature` (HMAC-SHA256) and
-a 60-second timestamp window before waking the refresh loop.
+`symphony-webhook`. Linear webhooks require the opaque path token (returning
+uniform `404` for unconfigured or unknown routes), `Content-Type: application/json`
+without `Transfer-Encoding`, strict JSON constant parsing, `Linear-Signature`
+(64-hex HMAC-SHA256 verified before JSON parsing), a 60-second timestamp window,
+delivery replay deduplication, and sliding-window rate limiting (`60`/minute) before
+waking the refresh loop.
 [Deferred work](symphony-follow-ups.md) tracks ntfy alerts and hostname-level
 egress.

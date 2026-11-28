@@ -177,6 +177,7 @@ with (workspace / "worker-envs.jsonl").open("a") as stream:
         "openai": "OPENAI_API_KEY" in os.environ,
         "api_key": "OPENCODE_GO_API_KEY" in os.environ,
         "webhook": "LINEAR_WEBHOOK_SECRET" in os.environ,
+        "webhook_path": "LINEAR_WEBHOOK_PATH_TOKEN" in os.environ,
         "internal": "SYMPHONY_INTERNAL_TOKEN" in os.environ,
         "agents": agents,
     }) + "\n")
@@ -1584,6 +1585,7 @@ else:
                  "OPENAI_API_KEY": "oa-secret",
                  "OPENCODE_GO_API_KEY": "go-secret",
                  "LINEAR_WEBHOOK_SECRET": "webhook-secret",
+                 "LINEAR_WEBHOOK_PATH_TOKEN": "webhook-path-token-0123456789abcdef0123",
                  "SYMPHONY_INTERNAL_TOKEN": "internal-secret",
              }), \
              patch("symphony.runner.ci_runs", AsyncMock(return_value=[
@@ -1593,7 +1595,7 @@ else:
             await self.phase("done")
 
         record = json.loads((self.runner.artifacts(ISSUE) / "worker-envs.jsonl").read_text().splitlines()[0])
-        for key in ("github", "gh", "linear", "openai", "api_key", "webhook", "internal"):
+        for key in ("github", "gh", "linear", "openai", "api_key", "webhook", "webhook_path", "internal"):
             self.assertFalse(record[key], key)
         self.assertIn("GLOBAL-WORKER-RULE", record["agents"])
         permissions = record["config"]["permissions"]
@@ -2312,6 +2314,20 @@ class ServeStartupTests(unittest.IsolatedAsyncioTestCase):
 
 class WebhookTests(unittest.TestCase):
     secret = "fixture-webhook-secret"
+    token = "a_valid_opaque_webhook_path_token_0123456789"
+    route = f"/webhooks/linear/{token}"
+
+    def make_app(self, *, secret=None, token=None):
+        from collections import deque
+        from threading import Lock
+        return SimpleNamespace(
+            webhook_secret=self.secret if secret is None else secret,
+            webhook_path_token=self.token if token is None else token,
+            webhook_lock=Lock(),
+            webhook_hits=deque(),
+            webhook_seen={},
+            request_issue_refresh=Mock(),
+        )
 
     def payload(self, **changes):
         payload = {
@@ -2326,11 +2342,16 @@ class WebhookTests(unittest.TestCase):
         return hmac.new(self.secret.encode(), raw, hashlib.sha256).hexdigest()
 
     def send(self, raw, *, signature="missing", length=None, reader=None,
-             path="/webhooks/linear", method="POST", app=None):
-        app = app or SimpleNamespace(webhook_secret=self.secret, request_issue_refresh=Mock())
+             path=None, method="POST", app=None, content_type="application/json",
+             headers=None):
+        app = app or self.make_app()
         handler = object.__new__(WebhookHandler)
-        handler.path = path
+        handler.path = self.route if path is None else path
         handler.headers = Message()
+        if content_type is not None:
+            handler.headers["Content-Type"] = content_type
+        for name, value in (headers or {}).items():
+            handler.headers[name] = value
         handler.headers["Content-Length"] = str(len(raw) if length is None else length)
         if signature != "missing":
             handler.headers["Linear-Signature"] = signature
@@ -2347,12 +2368,17 @@ class WebhookTests(unittest.TestCase):
             handler.do_GET()
         return handler, handler.send_response.call_args.args[0], app
 
-    def test_valid_issue_and_project_webhooks_signal_refresh(self):
+    def test_valid_issue_and_project_webhooks_signal_refresh_and_dedupe_replays(self):
         for kind, projects in (("Issue", False), ("Project", True)):
             with self.subTest(kind=kind):
+                app = self.make_app()
                 raw = json.dumps(self.payload(type=kind)).encode()
-                handler, status, app = self.send(raw, signature=self.signature(raw))
+                sig = self.signature(raw)
+                _, status, app = self.send(raw, signature=sig, app=app, headers={"Linear-Delivery": f"del-{kind}"})
                 self.assertEqual(status, 200)
+                app.request_issue_refresh.assert_called_once_with(projects)
+                _, dup_status, app = self.send(raw, signature=sig, app=app, headers={"Linear-Delivery": f"del-{kind}"})
+                self.assertEqual(dup_status, 200)
                 app.request_issue_refresh.assert_called_once_with(projects)
 
     def test_rejected_webhooks_never_signal_refresh(self):
@@ -2361,11 +2387,15 @@ class WebhookTests(unittest.TestCase):
         cases = [
             ("missing signature", valid, "missing", {}, 401),
             ("invalid signature", valid, "0" * 64, {}, 401),
+            ("short signature", valid, "00", {}, 401),
             ("stale timestamp", json.dumps(self.payload(webhookTimestamp=now - 61_000)).encode(), None, {}, 400),
             ("future timestamp", json.dumps(self.payload(webhookTimestamp=now + 61_000)).encode(), None, {}, 400),
             ("malformed json", b"{", None, {}, 400),
+            ("nan constant", b'{"type":"Issue","action":"update","data":{"id":"x"},"webhookTimestamp":NaN}', None, {}, 400),
             ("unsupported type", json.dumps(self.payload(type="Comment")).encode(), None, {}, 400),
             ("oversized body", b"{}", "missing", {"length": WEBHOOK_BODY_LIMIT + 1}, 413),
+            ("wrong content type", valid, None, {"content_type": "text/plain"}, 415),
+            ("transfer encoding", valid, None, {"headers": {"Transfer-Encoding": "chunked"}}, 400),
         ]
         for name, raw, signature, options, expected in cases:
             with self.subTest(name=name):
@@ -2374,16 +2404,28 @@ class WebhookTests(unittest.TestCase):
                 self.assertEqual(status, expected)
                 app.request_issue_refresh.assert_not_called()
 
-    def test_wrong_route_method_and_missing_secret_are_rejected(self):
+    def test_wrong_route_method_rate_limit_and_missing_config_are_rejected(self):
         raw = json.dumps(self.payload()).encode()
-        for method, path, status in (("POST", "/other", 404), ("GET", "/webhooks/linear", 405)):
+        for method, path, status in (
+            ("POST", "/webhooks/linear", 404),
+            ("POST", "/webhooks/linear/wrong", 404),
+            ("POST", "/other", 404),
+            ("GET", "/webhooks/linear", 404),
+            ("GET", self.route, 405),
+        ):
             with self.subTest(method=method, path=path):
                 _, observed, app = self.send(raw, signature=self.signature(raw), path=path, method=method)
                 self.assertEqual(observed, status)
                 app.request_issue_refresh.assert_not_called()
-        app = SimpleNamespace(webhook_secret="", request_issue_refresh=Mock())
-        _, status, app = self.send(raw, app=app)
-        self.assertEqual(status, 503)
+        for secret, token in (("", self.token), (self.secret, ""), (self.secret, "too-short")):
+            app = self.make_app(secret=secret, token=token)
+            _, status, app = self.send(raw, signature=self.signature(raw), app=app)
+            self.assertEqual(status, 404)
+        app = self.make_app()
+        app.webhook_hits.extend([time.monotonic()] * 60)
+        _, limited_status, app = self.send(raw, signature=self.signature(raw), app=app)
+        self.assertEqual(limited_status, 429)
+        app.request_issue_refresh.assert_not_called()
 
 
 class PaneTests(unittest.TestCase):

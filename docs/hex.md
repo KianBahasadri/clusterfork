@@ -346,8 +346,11 @@ The separate vocabulary worker polls saved History once per second, after Hex
 has delivered the text. It requests `low` reasoning from the selected rewrite
 model. A new name must appear in both the current original and
 rewritten text and in an earlier, separate original dictation. Repeating a
-word within one message does not qualify. Only high-confidence names or
-technical terms qualify; at most three are added, without phonetic aliases.
+word within one message does not qualify. Only high-confidence uncommon, custom,
+or easily-misheard proper names and technical terms qualify (everyday English
+words, mainstream tech/brand terms, and determiner or generic phrases are
+excluded); at most three are added per dictation, without phonetic aliases, and
+automatic additions stop once live vocabulary reaches 80 entries.
 Typed, printed, and raw dictations do not learn vocabulary.
 
 The worker starts after existing history on its first launch. Its private
