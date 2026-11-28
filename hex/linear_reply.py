@@ -261,7 +261,9 @@ def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None
         entries = [(None, Gtk.ToggleButton(label="Auto"))]
         auto_btn = entries[0][1]
         for item in items:
-            entries.append((item["name"], Gtk.ToggleButton(label=item["name"], group=auto_btn)))
+            name, icon = item["name"], item["icon"]
+            label = f"{icon} {name}" if icon else name
+            entries.append((name, Gtk.ToggleButton(label=label, group=auto_btn)))
         names = {name for name, _btn in entries if name is not None}
         if selected_project not in names:
             selected_project = None

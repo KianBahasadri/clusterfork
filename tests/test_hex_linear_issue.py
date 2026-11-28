@@ -289,25 +289,33 @@ class LinearDictationTests(unittest.TestCase):
                     "nodes": [
                         {"id": "p-arch", "name": "Archived", "archivedAt": "2026-01-01T00:00:00Z", "status": {"name": "Started", "type": "started"}},
                         {"id": "p-done", "name": "DoneProj", "archivedAt": None, "status": {"name": "Completed", "type": "completed"}},
-                        {"id": "p-plan", "name": "AlphaPlanned", "archivedAt": None, "status": {"name": "Planned", "type": "planned"}},
-                        {"id": "p-start", "name": "ZetaStarted", "archivedAt": None, "status": {"name": "Started", "type": "started"}},
+                        {"id": "p-plan", "name": "AlphaPlanned", "icon": "🌱", "status": {"name": "Planned", "type": "planned"}},
+                        {"id": "p-start", "name": "ZetaStarted", "icon": ":thumbsup:", "status": {"name": "Started", "type": "started"}},
+                        {"id": "p-other", "name": "BetaPlanned", "icon": "Folder", "status": {"name": "Planned", "type": "planned"}},
                     ],
                     "pageInfo": {"endCursor": None, "hasNextPage": False},
                 }
             }
         }
+        cache = issue.state_dir() / "projects_cache.json"
+        cache.parent.mkdir(parents=True)
+        cache.write_text('[{"id": "p-old", "name": "Cached project"}]')
+        self.assertEqual(issue.load_cached_projects()[0]["icon"], "")
+
         fake_response = MagicContext(BytesIO(json.dumps(payload).encode("utf-8")))
         with patch.object(issue.urllib.request, "urlopen", return_value=fake_response) as urlopen:
             projects = issue.fetch_linear_projects(timeout=5)
-        self.assertEqual([p["name"] for p in projects], ["ZetaStarted", "AlphaPlanned"])
+        self.assertEqual([(p["name"], p["icon"]) for p in projects],
+                         [("ZetaStarted", "👍"), ("AlphaPlanned", "🌱"), ("BetaPlanned", "")])
         urlopen.assert_called_once()
-        cache = issue.state_dir() / "projects_cache.json"
+        query = json.loads(urlopen.call_args.args[0].data)["query"]
+        self.assertRegex(query, r"\bicon\b")
         self.assertEqual(cache.stat().st_mode & 0o777, 0o600)
-        self.assertEqual([p["name"] for p in issue.load_cached_projects()], ["ZetaStarted", "AlphaPlanned"])
+        self.assertEqual(issue.load_cached_projects(), projects)
 
         with patch.object(issue.urllib.request, "urlopen", side_effect=urllib.error.URLError("offline")):
             fallback = issue.fetch_linear_projects(timeout=5)
-        self.assertEqual([p["name"] for p in fallback], ["ZetaStarted", "AlphaPlanned"])
+        self.assertEqual(fallback, projects)
 
     def test_history_persistence_dedupes_evicts_and_prunes_orphaned_screenshots(self):
         shot_a = ("image/png", b"png-a")

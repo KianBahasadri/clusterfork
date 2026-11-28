@@ -138,6 +138,7 @@ class HexInstallerTests(unittest.TestCase):
         plugin = workspace / ".opencode/plugins/linear-search.js"
         self.assertEqual(plugin.read_bytes(), (ROOT / "hex/linear-search.js").read_bytes())
         self.assertEqual((workspace / "linear_issue.py").read_bytes(), (ROOT / "hex/linear_issue.py").read_bytes())
+        self.assertEqual((workspace / "linear-emoji.json").read_bytes(), (ROOT / "hex/linear-emoji.json").read_bytes())
         for name in ("biocadence.py", "BIOCADENCE-LICENSE", "typing_profiles.py", "typing_replay.py", "typing_training.py"):
             self.assertEqual((workspace / name).read_bytes(), (ROOT / "hex" / name).read_bytes())
         extension = self.home / ".local/share/gnome-shell/extensions" / installer.FOCUS_EXTENSION

@@ -80,6 +80,7 @@ def install_linear_shortcut(home):
     files = [
         (SOURCE / name, workspace / name)
         for name in ("linear_images.py", "linear_issue.py", "linear_reply.py", "linear_shortcut.py",
+                     "linear-emoji.json", "EMOJI-LICENSE",
                      "biocadence.py", "BIOCADENCE-LICENSE", "typing_profiles.py", "typing_replay.py", "typing_training.py")
     ] + [
         (SOURCE / "linear-workspace.json", workspace / "opencode.json"),

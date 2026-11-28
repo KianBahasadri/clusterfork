@@ -5,6 +5,7 @@ import base64
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
+from functools import cache
 import json
 import os
 from pathlib import Path
@@ -50,7 +51,7 @@ RECENT_CONTEXT_AGE_SECONDS = 3600
 RECENT_CONTEXT_MAX_CHARS = 1500
 PROJECTS_QUERY = """query($after: String) {
     projects(first: 50, after: $after) {
-        nodes { id name archivedAt status { name type } }
+        nodes { id name icon archivedAt status { name type } }
         pageInfo { endCursor hasNextPage }
     }
 }"""
@@ -112,6 +113,20 @@ def _write_private_json(path, payload):
     temp_path.replace(path)
 
 
+@cache
+def _project_emoji():
+    glyphs = json.loads((WORKSPACE / "linear-emoji.json").read_text(encoding="utf-8"))
+    shortcodes = {name: glyph for glyph, names in glyphs.items() for name in names}
+    return glyphs, shortcodes
+
+
+def _project_icon(value):
+    if not isinstance(value, str) or not value:
+        return ""
+    glyphs, shortcodes = _project_emoji()
+    return shortcodes.get(value, value if value in glyphs else "")
+
+
 def _normalize_projects(items):
     cleaned = []
     seen = set()
@@ -128,6 +143,7 @@ def _normalize_projects(items):
         cleaned.append({
             "id": pid,
             "name": name.strip(),
+            "icon": _project_icon(item.get("icon")),
             "status": str(status.get("name") or item.get("status") or ""),
             "type": str(status.get("type") or item.get("type") or ""),
         })
@@ -173,6 +189,7 @@ def fetch_linear_projects(timeout=5):
                 projects.append({
                     "id": str(node.get("id") or ""),
                     "name": str(node.get("name") or "").strip(),
+                    "icon": node.get("icon"),
                     "status": str(status.get("name") or ""),
                     "type": stype,
                 })

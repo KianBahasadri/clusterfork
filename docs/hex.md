@@ -152,6 +152,10 @@ The text entry grows as you write up to a scrollable height cap. Select the
 top-right **`?`** button to open a separate keyboard-shortcuts window. **Auto**
 project selection lets the assistant pick the project from Linear, while
 selecting a project chip passes it as a non-binding hint (`Suggested project`).
+Chips display Linear's project emoji when available. Hex ships a local emoji
+table derived from `emoji` 2.16.0, the version used by Symphony.
+It groups English names and aliases from `EMOJI_DATA` by the glyph returned by
+`emojize(name, language="alias")` and retains all glyphs for Unicode validation.
 Cached projects load immediately from
 `~/.local/state/hex/linear/projects_cache.json` and refresh in the background
 from Linear's GraphQL API.
