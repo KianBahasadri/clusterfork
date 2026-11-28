@@ -751,6 +751,7 @@ class SharedStoreBackendTests(unittest.TestCase):
             text=True,
             env={**os.environ},
             cwd=str(REPO_ROOT),
+            timeout=15,
         )
         self.assertEqual(proc.returncode, 0)
         self.assertIn("saved profiles", proc.stdout)

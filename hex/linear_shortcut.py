@@ -1,4 +1,4 @@
-"""Hold keypad slash for Linear requests, or keypad 9 to type a dictation."""
+"""Double-tap keypad slash for Linear requests, or hold/double-tap keypad 9 to type."""
 
 import argparse
 import base64
@@ -8,7 +8,6 @@ import json
 import os
 from pathlib import Path
 from queue import SimpleQueue
-import re
 import signal
 import subprocess
 import sys
@@ -17,9 +16,9 @@ from threading import Event, Thread
 import time
 from uuid import uuid4
 
-from linear_images import EXTENSIONS, MAX_IMAGES, MAX_IMAGE_BYTES, MAX_TOTAL_BYTES, ImageContextError, validate_image
+from linear_images import MAX_IMAGES, MAX_TOTAL_BYTES, ImageContextError, validate_image
 
-from linear_issue import Dictation, FilingError, ReplyNeeded, file_dictation
+from linear_issue import Dictation, FilingError, ReplyNeeded, file_dictation, record_history
 from typing_replay import Playback, TypingError, capture_destination, on_main_thread
 
 
@@ -29,17 +28,10 @@ TYPING_SHORTCUT = "type-dictation"
 PORTAL = "org.freedesktop.portal.Desktop"
 DESKTOP = "/org/freedesktop/portal/desktop"
 SHORTCUTS = "org.freedesktop.portal.GlobalShortcuts"
-NOTIFY = ["notify-send", "--app-name", "Linear Dictation", "--icon", "accessories-text-editor"]
+NOTIFY = ["notify-send", "--app-name", "Linear Dictation", "--icon", "accessories-text-editor",
+          f"--hint=string:desktop-entry:{APP}"]
 HOLD_MS = 250
 DOUBLE_TAP_MS = 350
-IMAGE_REQUEST = re.compile(
-    r"(?:^|[.!?,;]\s*|\band\s+)(?:(?:can|could|would) you\s+)?(?:please\s+)?"
-    r"(?:(?P<attach>attach|include|copy|add|use|embed|paste)|check|read|inspect|look\s+at)\s+"
-    r"(?:(?:the|my|this|an?)\s+)?"
-    r"(?:clipboard\s+(?:image|screenshot|picture|photo)|(?:current\s+)?(?:image|screenshot|picture|photo)\s+"
-    r"(?:(?:that is|that’s|that's)\s+)?(?:currently\s+)?(?:in|on|from|of)\s+(?:(?:my|the)\s+)?clipboard)\b",
-    re.IGNORECASE | re.MULTILINE,
-)
 
 
 def hex_command(*arguments, timeout=15):
@@ -91,8 +83,9 @@ def notify(title, message, url=None):
             token_fd = token_file.fileno()
             actions = ["--expire-time=0", "--action=default=Open in Linear", "--action=open=Open in Linear",
                        f"--activation-token-fd={token_fd}"] if url else []
-            result = subprocess.run([*NOTIFY, *actions, "--", title, escape(message)], text=True, capture_output=True,
-                                    pass_fds=(token_fd,) if url else (), timeout=None if url else 5, check=True)
+            result = subprocess.run([*NOTIFY, *actions, "--", title, escape(message, quote=False)], text=True,
+                                    capture_output=True, pass_fds=(token_fd,) if url else (),
+                                    timeout=None if url else 5, check=True)
             if url and result.stdout.strip() in {"default", "open"}:
                 token_file.seek(0)
                 token = token_file.read(4096).decode().strip()
@@ -100,55 +93,6 @@ def notify(title, message, url=None):
                 subprocess.run(["xdg-open", url], env=environment, capture_output=True, timeout=15, check=True)
     except (OSError, subprocess.SubprocessError) as error:
         print(f"Linear notification or link failed ({type(error).__name__}).")
-
-
-def copy_transcript(transcript):
-    try:
-        expected = transcript.encode("utf-8")
-        subprocess.run(["wl-copy", "--type", "text/plain;charset=utf-8"], input=expected,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=5)
-        copied = subprocess.run(["wl-paste", "--no-newline", "--type", "text/plain;charset=utf-8"],
-                                capture_output=True, check=True, timeout=5).stdout
-        if copied != expected:
-            raise FilingError("The clipboard did not retain the transcript.")
-    except (OSError, subprocess.SubprocessError, FilingError) as error:
-        print(f"Hex Linear clipboard copy failed ({type(error).__name__}).")
-        notify("Linear dictation", "Could not verify the clipboard copy. Recover the transcript from Hex History.")
-        return False
-    return True
-
-
-def clipboard_image():
-    try:
-        types = subprocess.run(["wl-paste", "--list-types"], capture_output=True, text=True,
-                               check=True, timeout=3).stdout.splitlines()
-        mime = next((value for value in EXTENSIONS if value in types), None)
-        if mime is None:
-            return None
-        with TemporaryFile() as file:
-            subprocess.run(["wl-paste", "--no-newline", "--type", mime], stdout=file, stderr=subprocess.DEVNULL,
-                           check=True, timeout=5)
-            file.seek(0)
-            data = file.read(MAX_IMAGE_BYTES + 1)
-        validate_image(data, mime)
-        return mime, data
-    except (ImportError, OSError, subprocess.SubprocessError, ImageContextError) as error:
-        print(f"Could not read a supported clipboard image ({type(error).__name__}).")
-        return None
-
-
-def reply_image(environment):
-    image = clipboard_image()
-    while image is None:
-        dialog = subprocess.run(["zenity", "--question", "--title=Add a clipboard image", "--width=440",
-                                 "--ok-label=Use Clipboard Image", "--text",
-                                 "No image could be read from the clipboard. Copy the screenshot, "
-                                 "then select Use Clipboard Image."], env=environment, capture_output=True)
-        if dialog.returncode == 1:
-            return None
-        dialog.check_returncode()
-        image = clipboard_image()
-    return image
 
 
 def text_entry(question, environment):
@@ -165,7 +109,7 @@ def text_entry(question, environment):
             validate_image(data, mime)
     except ImageContextError as error:
         raise FilingError(str(error)) from None
-    return (result["text"], images) if result["text"].strip() else None
+    return (result["text"], images) if (result["text"].strip() or images) else None
 
 
 def offer_reply(jobs, dictation, error):
@@ -178,44 +122,36 @@ def offer_reply(jobs, dictation, error):
             token_fd = token_file.fileno()
             click = subprocess.run([*NOTIFY, "--expire-time=0", "--action=default=Reply", "--action=reply=Reply",
                                     f"--activation-token-fd={token_fd}", "--", "Linear dictation needs a reply",
-                                    escape(f"{question}\n\n{excerpt}")], capture_output=True, text=True,
+                                    escape(f"{question}\n\n{excerpt}", quote=False)], capture_output=True, text=True,
                                    pass_fds=(token_fd,), check=True)
             if click.stdout.strip() not in {"default", "reply"}:
                 return
             token_file.seek(0)
             token = token_file.read(4096).decode().strip()
         environment = {**os.environ, "XDG_ACTIVATION_TOKEN": token} if token else os.environ
-        if error.copy_image:
-            image = reply_image(environment)
-            if image is not None:
-                jobs.put(replace(dictation, image_use=dictation.image_use or "reference", images=(image,)))
-            return
         if entry := text_entry(question, environment):
             answer, images = entry
-            jobs.put(replace(dictation, answers=(*dictation.answers, (question, answer)),
-                             images=(*dictation.images, *images), image_use="attach" if images else dictation.image_use))
+            answers = (*dictation.answers, (question, answer)) if answer.strip() else dictation.answers
+            jobs.put(replace(dictation, answers=answers,
+                             images=(*dictation.images, *images), image_use="attach" if (images or dictation.images) else dictation.image_use))
     except FilingError as failure:
         notify("Linear dictation", str(failure))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as failure:
         print(f"Could not open a Linear dictation reply ({type(failure).__name__}).")
-        notify("Linear dictation", "Could not open the reply. Check that notify-send, GTK 4 and Zenity are installed.")
+        notify("Linear dictation", "Could not open the reply. Check that notify-send and GTK 4 are installed.")
 
 
-def request_from_text(transcript, title, request_id, images=()):
+def request_from_text(transcript, title, request_id, images=(), suggested_project=None):
     image_use = "attach" if images else None
-    if instruction := IMAGE_REQUEST.search(transcript):
-        image_use = "attach" if instruction["attach"] else "reference"
-        if not images:
-            image = clipboard_image()
-            images = (image,) if image else ()
-    return Dictation(transcript, title, request_id, image_use=image_use, images=images)
+    return Dictation(transcript, title, request_id, image_use=image_use, images=images,
+                     suggested_project=suggested_project)
 
 
-def submit_linear(jobs, stopping, text, title, images):
+def submit_linear(jobs, stopping, text, title, images, suggested_project=None):
     request_id = str(uuid4())
     try:
         if not stopping.is_set() and text.strip():
-            jobs.put(request_from_text(text, title, request_id, images))
+            jobs.put(request_from_text(text, title, request_id, images, suggested_project=suggested_project))
             print(f"Hex Linear request {request_id} typed and queued.")
     except FilingError as error:
         notify("Linear request", str(error))
@@ -238,20 +174,18 @@ def submit_typing(playback, stopping, text, destination, *, restore):
         notify("Hex typing", "Could not replay the text. Check the Hex service journal.")
 
 
-def capture(released, stopping, jobs, playback=None):
+def capture(released, stopping, playback):
     dictation_id = str(uuid4())
-    typed = playback is not None
-    label = "Typed dictation" if typed else "Linear dictation"
+    label = "Typed dictation"
     try:
         status = hex_command("status")
         if status["capture"]["state"] not in {"idle", "transcribing"}:
             raise FilingError("Hex is already recording or is not ready. Release that shortcut and try again.")
-        destination = capture_destination() if typed else None
-        hex_command("dictation", "start", *([] if typed else ["--raw"]))
+        destination = capture_destination()
+        hex_command("dictation", "start")
         submitted = False
         try:
             print(f"Hex {label} {dictation_id} started recording.")
-            title = None if typed or released.is_set() else on_main_thread(focused_title)
             while not released.wait(0.25):
                 if stopping.is_set():
                     return
@@ -267,19 +201,9 @@ def capture(released, stopping, jobs, playback=None):
                 except (OSError, ValueError, subprocess.SubprocessError, FilingError):
                     pass
         transcript = result["text"]
-        if typed:
-            if transcript:
-                submit_typing(playback, stopping, transcript, destination, restore=False)
-            print(f"Hex {label} {dictation_id} finished.")
-            return
-        if transcript.strip():
-            dictation = request_from_text(transcript, title, dictation_id)
-            if copy_transcript(transcript.strip()):
-                print(f"Hex Linear dictation {dictation_id} clipboard copy verified.")
-            print(f"Hex Linear dictation {dictation_id} transcribed and queued.")
-            jobs.put(dictation)
-        else:
-            print(f"Hex Linear dictation {dictation_id} was empty.")
+        if transcript:
+            submit_typing(playback, stopping, transcript, destination, restore=False)
+        print(f"Hex {label} {dictation_id} finished.")
     except (FilingError, TypingError) as error:
         print(f"Hex {label} {dictation_id} failed. {error}")
         notify(label, str(error))
@@ -309,6 +233,8 @@ def process_jobs(jobs, dry_run):
             print(f"Hex Linear dictation {dictation.issue_id} could not be confirmed ({type(error).__name__}).")
             notify("Linear dictation", "Could not confirm the requested issue changes. Check Linear and the service journal.")
         else:
+            if not dry_run and saved.notifications:
+                record_history(dictation, saved.notifications)
             if not dry_run:
                 for item in saved.notifications:
                     notify_saved_issue(item, dictation.issue_id)
@@ -362,12 +288,13 @@ def listen(dry_run):
                 nonlocal composing
                 composing = None
 
-            def submit(active, text, images):
+            def submit(active, text, images, suggested_project=None):
                 if active == "typing":
                     Thread(target=submit_typing, args=(playback, stopping, text, destination),
                            kwargs={"restore": True}, daemon=True).start()
                 else:
-                    Thread(target=submit_linear, args=(jobs, stopping, text, title, images), daemon=True).start()
+                    Thread(target=submit_linear, args=(jobs, stopping, text, title, images, suggested_project),
+                           daemon=True).start()
 
             composing = open_request(tab, token, submit, finished, typing_error=typing_error)
         except (ImportError, GLib.Error, RuntimeError, ValueError) as error:
@@ -414,14 +341,10 @@ def listen(dry_run):
         if released is None or stopping.is_set():
             return GLib.SOURCE_REMOVE
         if recording is not None and recording.is_alive():
-            label = "Typed dictation" if active_shortcut == TYPING_SHORTCUT else "Linear dictation"
-            Thread(target=notify, args=(label, "Hex is still processing the previous recording."),
+            Thread(target=notify, args=("Typed dictation", "Hex is still processing the previous recording."),
                    daemon=True).start()
         else:
-            arguments = (released, stopping, jobs)
-            if active_shortcut == TYPING_SHORTCUT:
-                arguments += (playback,)
-            recording = Thread(target=capture, args=arguments, daemon=True)
+            recording = Thread(target=capture, args=(released, stopping, playback), daemon=True)
             recording.start()
         return GLib.SOURCE_REMOVE
 
@@ -441,15 +364,17 @@ def listen(dry_run):
                 composing("typing" if name == TYPING_SHORTCUT else "linear", activation_token)
                 last_tap = None
                 return
-            hold_timer = GLib.timeout_add(HOLD_MS, begin_capture)
+            if name == TYPING_SHORTCUT:
+                hold_timer = GLib.timeout_add(HOLD_MS, begin_capture)
         if member == "Deactivated" and released is not None and name == active_shortcut:
             released.set()
             released = None
             active_shortcut = None
-            if hold_timer is None:
+            if hold_timer is not None:
+                GLib.source_remove(hold_timer)
+                hold_timer = None
+            elif name == TYPING_SHORTCUT:
                 return
-            GLib.source_remove(hold_timer)
-            hold_timer = None
             if timestamp - pressed_at >= HOLD_MS:
                 last_tap = None
             elif last_tap is not None and last_tap[0] == name and pressed_at - last_tap[1] <= DOUBLE_TAP_MS:
@@ -482,7 +407,7 @@ def listen(dry_run):
         if created is None:
             return 0
         session = created["session_handle"]
-        binding = [(SHORTCUT, {"description": GLib.Variant("s", "Hold to dictate a Linear request; double-tap to type"),
+        binding = [(SHORTCUT, {"description": GLib.Variant("s", "Double-tap to open the Linear request window"),
                                "preferred_trigger": GLib.Variant("s", "KP_Divide")}),
                    (TYPING_SHORTCUT, {"description": GLib.Variant("s", "Hold to dictate and type; double-tap for Typing"),
                                       "preferred_trigger": GLib.Variant("s", "KP_Prior")})]

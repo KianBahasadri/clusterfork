@@ -132,61 +132,65 @@ Linear projects and issue fields. Actual task execution happens outside this
 bot. The underlying draft or implementation details are unnecessary when the
 request already supplies enough context to record the task.
 
-Hold **numpad `/`**, say what to create or update, and release. Say “Make a
-Clusterfork issue to add a relay health check, blocked by KIAN-123” or “Set
-KIAN-123 to High priority and add that it needs to cover timeouts.” Hold for
-at least a quarter second to start the microphone, then speak when Hex shows
-that it is recording. A single quick tap does nothing. **Double-tap numpad `/`**
-to open the Linear tab instead. Type the request and select **Send request**.
-**Ctrl+Enter** also sends the request; Enter adds a new line.
-Both taps must be shorter than a quarter second, with at most 350 ms between
-them. This uses the same Linear agent without recording audio. Repeated
-double-taps while the text box is open do not create additional windows.
-Cancel, Escape, or closing the box discards an unsent request.
+**Double-tap numpad `/`** to open the Linear tab. Hold **numpad `/`** or do a single
+quick tap does nothing. Inside the Linear tab, type or use **Typing** (e.g.
+numpad `9`) to dictate the request, choose an optional project suggestion chip
+(**Auto** by default), and select **Send request**. **Ctrl+Enter** also sends
+the request; Enter adds a new line. Both taps must be shorter than a quarter
+second, with at most 350 ms between them. Repeated double-taps while the
+window is open bring the existing window forward on the Linear tab without
+creating additional windows. Cancel, Escape, or closing the box discards an
+unsent request.
 
-Paste screenshots or images with **Ctrl+V** or **Paste image**. Each image has a
-preview and a remove button. You can paste up to six images at a time, at most
-5 MiB each and 12 MiB combined. Images are captured when pasted and stay with
-the request even if the clipboard changes. Pasted images are attached to the
-resulting issues unless you ask to use them only as reference.
+The text entry grows as you write up to a scrollable height cap. Select the
+top-right **`?`** button to open a separate keyboard-shortcuts window. **Auto**
+project selection lets the assistant pick the project from Linear, while
+selecting a project chip passes it as a non-binding hint (`Suggested project`).
+Cached projects load immediately from
+`~/.local/state/hex/linear/projects_cache.json` and refresh in the background
+from Linear's GraphQL API.
 
-One recording can contain several independent issue requests. The service copies
-the transcript to the clipboard as soon as Hex transcribes it and verifies the
-copy by reading it back, then saves the issues in the background. Hex History
-retains the raw transcript as a **Printed** entry, with its recording when
-Keep recordings is enabled. A copy failure shows a notification pointing to
-History for recovery. Paste the transcript wherever you
-meant to send it if you pressed the slash shortcut by accident. Each completion
+Paste screenshots or images with **Ctrl+V**, **Ctrl+Shift+V**, or **Paste
+image**. Each image has a preview and a remove button. You can paste up to six
+images at a time, at most 5 MiB each and 12 MiB combined. Images are captured
+when pasted and stay with the request even if the clipboard changes. Pasted
+images are attached to the resulting issues unless you ask to use them only as
+reference.
+
+Select **History** on the Linear tab to browse recent Linear requests, their
+timestamps, original transcripts, direct Linear links, and attached screenshots
+saved under `~/.local/state/hex/linear/history.json` and `history-images/` (up
+to 50 entries, pruning orphaned screenshots on eviction). The helper also passes
+up to five non-expired prior requests (under 1 hour old, bounded to 1500
+characters) as reference-only background context when drafting new requests.
+
+One request can contain several independent issue requests. Each completion
 notification shows the issue link and any confirmed dependency links.
 If you request an issue under a new project, the assistant can create the
 project first when its name, team and purpose are clear.
 
 Identify the issue by ID or by a clear name or description. You can edit its
 title, description, project, status, priority, estimate, due date, and labels,
-or add a blocker or clipboard image. Adding context appends to the description.
+or add a blocker or attached image. Adding context appends to the description.
 The service asks for a reply when it cannot identify the issue confidently.
 
 If you get a clarification question, click that notification or its **Reply**
-button to open the multiline answer box. Use your regular Hex shortcut to
-dictate into the box, or type, then select **Send reply**. The answer goes to
-that specific request. You can paste images into text replies and send with
-**Ctrl+Enter** too. A separate numpad `/` recording starts a fresh request.
-Pending replies are kept in memory while the service runs. A reply resumes
-the same OpenCode session, preserving lookups and any completed changes.
+button to open the GTK 4 reply box. Use your regular Hex shortcut to dictate
+into the box, type, or paste one or more images (including image-only replies
+with no text), then select **Send reply**. The answer goes to that specific
+request. Ctrl+Enter also sends replies. Another Linear request starts a fresh
+OpenCode session; replies resume the pending session in memory, preserving
+lookups and any completed changes.
 
-Say **“Check the image in my clipboard”** to use a PNG, JPEG, or WebP image when
-drafting. Say **“Attach the image in my clipboard”** to also display it in
-Linear. When the service recognizes the instruction, it takes a copy before
-placing the transcript on the clipboard and keeps that image with the draft.
-The assistant checks whether the image belongs with the issue. If the draft
-needs an image, copy the intended image and click **Reply** to resume the same request.
-If the clipboard has no usable image, **Reply** opens a dialog. Copy the image,
-then select **Use Clipboard Image** in that dialog.
+Notifications pass `--hint=string:desktop-entry:io.github.KianBahasadri.Clusterfork.LinearDictation`
+so GNOME Shell groups them under **Linear Dictation**, and escape only `&`,
+`<`, and `>` (`html.escape(..., quote=False)`) so apostrophes and quotes render
+literally instead of entity codes.
 
 The integration uses the Global Shortcuts portal and its host app registry. On
 GNOME, approve **Linear Dictation** and its numpad slash binding if the desktop
 prompts. The installed `hex-linear-issue.service` runs in the graphical user
-session and uses system Python with Gio, `notify-send`, `wl-clipboard`, and
+session and uses system Python with Gio, `notify-send`, GTK 4, Pillow, and
 OpenCode Go and Linear credentials. For each request the helper reads the shared
 Linear credential from `~/.config/clusterfork/.env`, honoring an environment
 override, and starts a short-lived private OpenCode server with it. Before
@@ -194,21 +198,19 @@ submitting the prompt, the helper waits up to 45 seconds for that server's
 `/api/mcp` status to report Linear connected with its tools loaded. A missing,
 failed, unauthenticated or disabled Linear server produces a specific
 notification and attempt diagnostic instead of sending the request. The private
-server is stopped after success, failure or timeout. Text replies use GTK 4.
-Clipboard image replies use Zenity, and image validation uses Pillow. The
-separate portal registration uses the same running Hex and selected
-transcription model. Capture uses `hex dictation start --raw`, followed on
-release by `hex dictation stop --print`. Hex owns History persistence and
-applies its Skip Long Pauses setting to the captured audio. Printing returns
-the raw transcript without pasting or running the rewrite. The service
-then sends it to OpenCode and the clipboard.
+server is stopped after success, failure or timeout. Text and image replies use
+GTK 4 (`hex/linear_reply.py`). The separate portal registration for Typing
+uses the same running Hex and selected transcription model (`hex dictation
+start`, followed on release by `hex dictation stop --print`), while Linear
+requests are submitted directly through the GTK 4 dialog.
 
-The helper sends the verbatim transcript, foreground-window hint, local date,
-clipboard metadata and follow-up answers. OpenCode Go runs
+The helper sends the request text, foreground-window hint, local date,
+optional project hint, image metadata, bounded recent requests, and follow-up
+answers. OpenCode Go runs
 `deepseek-v4.1-flash#max` in an archived session with `hex/linear-agent.md` as
 its instructions. The workspace plugin removes the skill loader; this bot uses
 its supplied role and Linear MCP tools directly. The assistant loads the
-current projects, summaries and descriptions through Linear MCP before choosing
+current projects, their summaries and descriptions through Linear MCP before choosing
 a project. A workspace plugin presents project rows with their
 names, statuses, teams, summaries, descriptions and URLs. Longer descriptions
 can be read through `linear_get_project`. The assistant queries issues, labels,
@@ -234,20 +236,18 @@ Clicking the notification itself also opens the link. The click handler stays
 active until the notification is opened or dismissed, and forwards GNOME's
 activation token when launching the browser. Browser-launch failures go to the
 service journal. The assistant uses
-`hex_reply` to request missing details or a replacement image. The final response
+`hex_reply` to ask for missing details or clarification. The final response
 is plain text. For an attachment, `hex_upload_clipboard` sends the current
 request's image using the signed URL and headers that Linear MCP returned for
 its filename in the same session. It returns the image link for the description.
 Hex grants access to the upload directory only for attachment requests that can
 write to Linear.
 
-The service journal records the same dictation ID from recording through the
+The service journal records the same request ID from submission through the
 Linear save, alongside the OpenCode session ID and any created or updated
 issue IDs. The `attempt=` entry points to a private directory under
 `~/.local/state/hex/linear/runs/`, or the equivalent under `XDG_STATE_HOME`.
-Each reply keeps the dictation ID and gets a new attempt directory.
-Typed requests use the same attempt logs and agent flow, but leave the
-clipboard untouched and are not added to Hex History.
+Each reply keeps the request ID and gets a new attempt directory.
 
 `transcript.txt` holds the verbatim Hex transcript or typed request and is saved
 before the Linear catalog is loaded. `prompt.txt` holds the exact bytes supplied on

@@ -16,7 +16,7 @@ from codeview import ci  # noqa: E402
 
 def git(cmd, cwd):
     return subprocess.run(["git", "-C", str(cwd), *cmd],
-                          capture_output=True, text=True, check=True).stdout
+                          capture_output=True, text=True, check=True, timeout=30).stdout
 
 
 class GithubSlugTests(unittest.TestCase):

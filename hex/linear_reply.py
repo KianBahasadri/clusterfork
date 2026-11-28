@@ -1,9 +1,12 @@
 """Build the shared Linear and Typing dialog and the Linear reply window."""
 
 import base64
+from datetime import datetime
 from functools import cache
 import json
+from pathlib import Path
 import sys
+from threading import Thread
 
 import gi
 
@@ -12,8 +15,27 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango
 
 from linear_images import MAX_IMAGES, MAX_IMAGE_BYTES, MAX_PIXELS, MAX_SIDE, MAX_TOTAL_BYTES, ImageContextError, validate_image
+from linear_issue import fetch_linear_projects, load_cached_projects, load_history
 from typing_profiles import PROFILES, load_profiles, save_profiles
 from typing_training import open_training
+
+
+TABBED_SHORTCUTS = (
+    ("Ctrl+Enter", "Send request / Type text"),
+    ("Enter", "New line"),
+    ("Ctrl+V / Ctrl+Shift+V", "Paste text or image (Linear tab)"),
+    ("Double-tap numpad /", "Open or switch to Linear tab"),
+    ("Hold numpad 9", "Dictate and type"),
+    ("Double-tap numpad 9", "Open or switch to Typing tab"),
+    ("Escape", "Back / Close"),
+)
+
+REPLY_SHORTCUTS = (
+    ("Ctrl+Enter", "Send reply"),
+    ("Enter", "New line"),
+    ("Ctrl+V / Ctrl+Shift+V", "Paste text or image"),
+    ("Escape", "Close"),
+)
 
 
 @cache
@@ -48,37 +70,110 @@ def style_tabs(display):
             border-bottom-color: @theme_bg_color;
             color: @theme_fg_color;
         }
+        .hex-help-button {
+            min-width: 26px;
+            min-height: 26px;
+            padding: 0;
+            border-radius: 999px;
+            font-weight: 600;
+            color: alpha(@theme_fg_color, 0.72);
+            border: 1px solid alpha(@theme_fg_color, 0.22);
+        }
+        .hex-project-chip {
+            min-height: 0;
+            padding: 3px 10px;
+            border-radius: 999px;
+            font-size: 0.9em;
+        }
+        .hex-history-card {
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid alpha(@theme_fg_color, 0.16);
+            background: alpha(@theme_fg_color, 0.03);
+        }
     """)
     Gtk.StyleContext.add_provider_for_display(display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
 
+def clipboard_has_image(clipboard):
+    formats = clipboard.get_formats()
+    return any(kind.is_a(Gdk.Texture) for kind in formats.get_gtypes()) or any(
+        mime.startswith("image/") for mime in formats.get_mime_types())
+
+
+def format_timestamp(raw_time):
+    if not isinstance(raw_time, str) or not raw_time:
+        return ""
+    try:
+        moment = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+        return moment.astimezone().strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return raw_time
+
+
 def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None, typing_error=None):
+    style_tabs(window.get_display())
     content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=14,
                       margin_bottom=14, margin_start=14, margin_end=14)
-    window.set_child(content)
-    linear = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-    tabs = None
+    linear = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    tabs = stack = history_list = None
+    selected_project = None
+    window_closed = False
+    help_window = None
+
+    help_btn = Gtk.Button(label="?", tooltip_text="Keyboard shortcuts", valign=Gtk.Align.CENTER)
+    help_btn.add_css_class("flat")
+    help_btn.add_css_class("hex-help-button")
+    question_label = Gtk.Label(label=question, xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR,
+                               max_width_chars=48)
+
     if tab is None:
+        header = Gtk.Box(spacing=8)
+        question_label.set_hexpand(True)
+        help_btn.set_valign(Gtk.Align.START)
+        help_btn.set_halign(Gtk.Align.END)
+        header.append(question_label)
+        header.append(help_btn)
+        linear.append(header)
         content.append(linear)
+        window.set_child(content)
     else:
-        style_tabs(window.get_display())
         tabs = Gtk.Notebook(show_border=False)
         tabs.add_css_class("hex-tabs")
+        tabs.set_action_widget(help_btn, Gtk.PackType.END)
         linear.set_margin_top(10)
+        linear.append(question_label)
+        project_bar = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, column_spacing=6, row_spacing=6,
+                                  max_children_per_line=12, homogeneous=False)
+        linear.append(project_bar)
         tabs.append_page(linear, Gtk.Label(label="Linear"))
         tabs.append_page(typing_options(window, typing_error), Gtk.Label(label="Typing"))
         content.append(tabs)
-    linear.append(Gtk.Label(label=question, xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR,
-                            max_width_chars=48))
-    hint = Gtk.Label(label=("" if tabs else "Dictate or type your answer. ") +
-                           "Ctrl+V adds an image · Ctrl+Enter sends", xalign=0,
-                     wrap=True, max_width_chars=48)
-    hint.add_css_class("dim-label")
-    linear.append(hint)
+
+        stack = Gtk.Stack()
+        stack.add_named(content, "compose")
+
+        history_pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=14,
+                               margin_bottom=14, margin_start=14, margin_end=14)
+        history_header = Gtk.Box(spacing=8)
+        back_btn = Gtk.Button(label="Back")
+        history_title = Gtk.Label(xalign=0, hexpand=True)
+        history_title.set_markup("<b>Recent Linear issues</b>")
+        history_header.append(back_btn)
+        history_header.append(history_title)
+        history_pane.append(history_header)
+        history_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        history_scroll = Gtk.ScrolledWindow(vexpand=True, min_content_height=340, max_content_height=520,
+                                            propagate_natural_height=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        history_scroll.set_child(history_list)
+        history_pane.append(history_scroll)
+        stack.add_named(history_pane, "history")
+        window.set_child(stack)
 
     answer = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR, accepts_tab=False,
                           top_margin=8, bottom_margin=8, left_margin=8, right_margin=8)
-    scroll = Gtk.ScrolledWindow(min_content_height=160 if tabs else 144, has_frame=True, vexpand=True,
+    scroll = Gtk.ScrolledWindow(min_content_height=160 if tabs else 144, max_content_height=420,
+                                propagate_natural_height=True, has_frame=True, vexpand=True,
                                 hscrollbar_policy=Gtk.PolicyType.NEVER)
     scroll.set_child(answer)
     content.append(scroll)
@@ -99,6 +194,10 @@ def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None
     footer = Gtk.Box(spacing=8)
     paste = Gtk.Button(label="Paste image", halign=Gtk.Align.START)
     footer.append(paste)
+    history_btn = None
+    if tabs is not None:
+        history_btn = Gtk.Button(label="History", halign=Gtk.Align.START)
+        footer.append(history_btn)
     draft_hint = Gtk.Label(label="Enter a draft to enable Type text.", visible=False,
                            xalign=0, wrap=True)
     draft_hint.add_css_class("dim-label")
@@ -125,6 +224,123 @@ def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None
         value = buffer.get_text(start, end, True)
         return value if typing() else value.strip()
 
+    def select_project(button, name):
+        nonlocal selected_project
+        if button.get_active():
+            selected_project = name
+
+    def populate_projects(items):
+        nonlocal selected_project
+        while (child := project_bar.get_first_child()) is not None:
+            project_bar.remove(child)
+        entries = [(None, Gtk.ToggleButton(label="Auto"))]
+        auto_btn = entries[0][1]
+        for item in items:
+            entries.append((item["name"], Gtk.ToggleButton(label=item["name"], group=auto_btn)))
+        names = {name for name, _btn in entries if name is not None}
+        if selected_project not in names:
+            selected_project = None
+        for name, btn in entries:
+            btn.add_css_class("hex-project-chip")
+            if name == selected_project:
+                btn.set_active(True)
+            btn.connect("toggled", select_project, name)
+            project_bar.append(Gtk.FlowBoxChild(child=btn, can_focus=False))
+
+    def apply_projects(items):
+        if not window_closed:
+            populate_projects(items)
+        return GLib.SOURCE_REMOVE
+
+    def load_projects():
+        fetched = fetch_linear_projects()
+        GLib.idle_add(apply_projects, fetched)
+
+    if tabs is not None:
+        populate_projects(load_cached_projects())
+        Thread(target=load_projects, daemon=True).start()
+
+    def refresh_history():
+        while (child := history_list.get_first_child()) is not None:
+            history_list.remove(child)
+        entries = load_history()
+        if not entries:
+            empty = Gtk.Label(label="No Linear issues created yet.", xalign=0)
+            empty.add_css_class("dim-label")
+            history_list.append(empty)
+            return
+        for entry in entries:
+            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            card.add_css_class("hex-history-card")
+            stamp = format_timestamp(entry.get("created_at"))
+            if stamp:
+                time_label = Gtk.Label(label=stamp, xalign=0)
+                time_label.add_css_class("dim-label")
+                card.append(time_label)
+            transcript = str(entry.get("transcript") or "")
+            if transcript:
+                card.append(Gtk.Label(label=transcript, selectable=True, xalign=0, wrap=True,
+                                      wrap_mode=Pango.WrapMode.WORD_CHAR, max_width_chars=48))
+            for item in entry.get("issues") or ():
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url") or "")
+                label = str(item.get("title") or url)
+                if url.startswith("https://"):
+                    card.append(Gtk.LinkButton(uri=url, label=label, halign=Gtk.Align.START))
+                elif label:
+                    card.append(Gtk.Label(label=label, xalign=0, wrap=True, max_width_chars=48))
+            for shot_path in entry.get("screenshots") or ():
+                if not isinstance(shot_path, str) or not Path(shot_path).is_file():
+                    continue
+                try:
+                    texture = Gdk.Texture.new_from_filename(shot_path)
+                except GLib.Error:
+                    continue
+                card.append(Gtk.Picture(paintable=texture, height_request=96, hexpand=True,
+                                        can_shrink=True, content_fit=Gtk.ContentFit.CONTAIN))
+            history_list.append(card)
+
+    def open_shortcuts(_button):
+        nonlocal help_window
+        if help_window is not None:
+            help_window.present()
+            return
+        dialog = Gtk.Window(title="Keyboard shortcuts", transient_for=window,
+                            destroy_with_parent=True, resizable=False)
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=16,
+                       margin_bottom=16, margin_start=16, margin_end=16)
+        grid = Gtk.Grid(column_spacing=16, row_spacing=8)
+        rows = TABBED_SHORTCUTS if tabs is not None else REPLY_SHORTCUTS
+        for index, (keys_text, description) in enumerate(rows):
+            key_label = Gtk.Label(xalign=0)
+            key_label.set_markup(f"<b>{GLib.markup_escape_text(keys_text)}</b>")
+            grid.attach(key_label, 0, index, 1, 1)
+            grid.attach(Gtk.Label(label=description, xalign=0, wrap=True), 1, index, 1, 1)
+        body.append(grid)
+        close_btn = Gtk.Button(label="Close", halign=Gtk.Align.END)
+        close_btn.connect("clicked", lambda _: dialog.close())
+        body.append(close_btn)
+        dialog.set_child(body)
+
+        def help_key(_controller, keyval, _keycode, _state):
+            if keyval == Gdk.KEY_Escape:
+                dialog.close()
+                return True
+            return False
+
+        def help_close(_win):
+            nonlocal help_window
+            help_window = None
+            return False
+
+        help_keys = Gtk.EventControllerKey()
+        help_keys.connect("key-pressed", help_key)
+        dialog.add_controller(help_keys)
+        dialog.connect("close-request", help_close)
+        help_window = dialog
+        dialog.present()
+
     def submit(_button):
         nonlocal submitted
         if submitted or not send.get_sensitive():
@@ -133,19 +349,23 @@ def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None
         active = "typing" if typing() else "linear"
         draft = text()
         attached = () if typing() else tuple(("image/png", image) for image in images)
+        project = None if typing() else selected_project
         window.close()
-        submit_text(active, draft, attached)
+        submit_text(active, draft, attached, project)
 
     def update_send(*_args):
         on_typing = typing()
         ready = typing_error is None if on_typing else not reading
         has_text = bool(text())
-        send.set_sensitive(ready and has_text)
+        can_send = ready and (has_text or (tabs is None and bool(images)))
+        send.set_sensitive(can_send)
         draft_hint.set_visible(on_typing and ready and not has_text)
 
     def tab_changed(*_args):
         send.set_label("Type text" if typing() else "Send request")
         paste.set_visible(not typing())
+        if history_btn is not None:
+            history_btn.set_visible(not typing())
         previews.set_visible(bool(images) and not typing())
         placeholders.set_visible(typing())
         error.set_visible(False)
@@ -153,6 +373,8 @@ def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None
         window.set_focus(answer)
 
     def present(name, token=None):
+        if stack is not None:
+            stack.set_visible_child_name("compose")
         if tabs is not None:
             tabs.set_current_page(1 if name == "typing" else 0)
         if token:
@@ -190,6 +412,7 @@ def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None
                 images.remove(image)
                 attachments.remove(row)
                 previews.set_visible(bool(images))
+                update_send()
 
             remove.connect("clicked", remove_image)
             row.append(picture)
@@ -221,13 +444,26 @@ def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None
     def paste_clipboard(view):
         if typing():
             return
-        formats = view.get_clipboard().get_formats()
-        if any(kind.is_a(Gdk.Texture) for kind in formats.get_gtypes()) or any(
-                mime.startswith("image/") for mime in formats.get_mime_types()):
+        if clipboard_has_image(view.get_clipboard()):
             view.stop_emission_by_name("paste-clipboard")
             paste_image()
 
     def key_pressed(_controller, keyval, _keycode, state):
+        if stack is not None and stack.get_visible_child_name() == "history":
+            if keyval == Gdk.KEY_Escape:
+                stack.set_visible_child_name("compose")
+                window.set_focus(answer)
+                return True
+            if keyval in {Gdk.KEY_Return, Gdk.KEY_KP_Enter} and state & Gdk.ModifierType.CONTROL_MASK:
+                return True
+            return False
+        mods = state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK | Gdk.ModifierType.ALT_MASK)
+        if keyval in {Gdk.KEY_v, Gdk.KEY_V} and mods == (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK):
+            if not typing() and clipboard_has_image(answer.get_clipboard()):
+                paste_image()
+            else:
+                answer.emit("paste-clipboard")
+            return True
         if keyval in {Gdk.KEY_Return, Gdk.KEY_KP_Enter} and state & Gdk.ModifierType.CONTROL_MASK:
             submit(send)
             return True
@@ -236,9 +472,13 @@ def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None
         window.close()
         return True
 
+    help_btn.connect("clicked", open_shortcuts)
     buffer.connect("changed", update_send)
     answer.connect("paste-clipboard", paste_clipboard)
     paste.connect("clicked", paste_image)
+    if history_btn is not None:
+        history_btn.connect("clicked", lambda _: (refresh_history(), stack.set_visible_child_name("history")))
+        back_btn.connect("clicked", lambda _: (stack.set_visible_child_name("compose"), window.set_focus(answer)))
     send.connect("clicked", submit)
     cancel.connect("clicked", lambda _: window.close())
     keys = Gtk.EventControllerKey()
@@ -247,6 +487,10 @@ def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None
     window.add_controller(keys)
 
     def close(_window):
+        nonlocal window_closed
+        window_closed = True
+        if help_window is not None:
+            help_window.close()
         cancellable.cancel()
         closed()
         return False
@@ -358,7 +602,7 @@ def open_request(tab, token, submit, closed, *, typing_error=None):
 def activate(app, question):
     window = Gtk.ApplicationWindow(application=app, title="Reply to Linear dictation", default_width=328)
 
-    def reply(_tab, text, images):
+    def reply(_tab, text, images, _project=None):
         print(json.dumps({"text": text, "images": [
             {"mime_type": mime, "data": base64.b64encode(image).decode("ascii")} for mime, image in images
         ]}, ensure_ascii=False))

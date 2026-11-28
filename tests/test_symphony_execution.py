@@ -1049,7 +1049,7 @@ process.stdout.write(JSON.stringify({
 }));
 """
         run = subprocess.run(["node", "-e", script, str(root / "panes.js")],
-                             text=True, capture_output=True, check=True)
+                             text=True, capture_output=True, check=True, timeout=15)
         result = json.loads(run.stdout)
         self.assertEqual({key: result[key] for key in (
             "zero", "subMinute", "minute", "hour", "day", "missing", "seconds",
@@ -1347,7 +1347,7 @@ process.stdout.write(JSON.stringify({initial, refreshed, missing, shape}));
 """
         run = subprocess.run(
             ["node", "-e", script, str(root / "panes.js"), str(root / "issue.js")],
-            text=True, capture_output=True, check=True)
+            text=True, capture_output=True, check=True, timeout=15)
         result = json.loads(run.stdout)
         self.assertEqual(result["initial"], {
             "timelineSummary": "Timeline · 1",

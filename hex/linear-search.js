@@ -77,15 +77,14 @@ export default {
       });
       editor.add({
         name: "hex_reply",
-        description: "Ask for an essential missing detail through Hex's clickable Reply notification. Set copy_image when a missing or unrelated clipboard image must be replaced. Finish this turn after calling.",
+        description: "Ask for an essential missing detail or image through Hex's clickable Reply notification. Finish this turn after calling.",
         options: { codemode: false },
         input: {
           type: "object",
           properties: {
             question: { type: "string", minLength: 1 },
-            copy_image: { type: "boolean" },
           },
-          required: ["question", "copy_image"],
+          required: ["question"],
           additionalProperties: false,
         },
         async execute() {

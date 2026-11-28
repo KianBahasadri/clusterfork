@@ -2431,7 +2431,7 @@ process.stdout.write(JSON.stringify({
 """
         panes = Path(__file__).resolve().parents[1] / "symphony/web/panes.js"
         run = subprocess.run(["node", "-e", script, str(panes)], input=json.dumps(rows),
-                             text=True, capture_output=True, check=True)
+                             text=True, capture_output=True, check=True, timeout=15)
         result = json.loads(run.stdout)
         self.assertEqual([group["name"] for group in result["panes"]["backlogGroups"]], ["Unsure", "Backlog"])
         self.assertEqual([group["name"] for group in result["panes"]["groups"]],
@@ -2461,7 +2461,7 @@ process.stdout.write(JSON.stringify({
 }));
 """
         order_run = subprocess.run(["node", "-e", order_script, str(panes)],
-                                   text=True, capture_output=True, check=True)
+                                   text=True, capture_output=True, check=True, timeout=15)
         order_res = json.loads(order_run.stdout)
         self.assertEqual(order_res["pausedFlags"], [False, True, False, False, True])
         self.assertEqual([p["id"] for p in order_res["ordered"]["active"]], ["b", "a", "c"])

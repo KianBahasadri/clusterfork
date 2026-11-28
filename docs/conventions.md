@@ -28,6 +28,8 @@ persistent environment is needed, create it with `uv venv` and install with
 
 Unset `NO_COLOR` because it overrides the notification tests' forced ANSI output.
 Tests use temporary repositories/homes, fake credentials and mocked services.
+Always pass an explicit `timeout=` to `subprocess.run` calls in tests so Node or
+CLI fixtures fail fast instead of hanging.
 Manual install checks need a disposable checkout/home and fixture `.env`:
 installation writes configs and repairs auth links.
 

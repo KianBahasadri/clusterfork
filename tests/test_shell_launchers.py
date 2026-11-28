@@ -502,7 +502,7 @@ class MockTmuxTests(unittest.TestCase):
     def test_git_repo_session_name_includes_branch(self):
         repo_dir = self.tmp_path / "my-repo"
         repo_dir.mkdir()
-        subprocess.run(["git", "init", "-b", "feature-x", str(repo_dir)], check=True, capture_output=True)
+        subprocess.run(["git", "init", "-b", "feature-x", str(repo_dir)], check=True, capture_output=True, timeout=15)
         self.log.unlink(missing_ok=True)
         self._script_run(f"'source bash_profile.sh; PWD={repo_dir} oc --help'")
         log = self._log()
@@ -512,7 +512,7 @@ class MockTmuxTests(unittest.TestCase):
     def test_git_repo_session_name_sanitizes_branch_dots(self):
         repo_dir = self.tmp_path / "dotted-repo"
         repo_dir.mkdir()
-        subprocess.run(["git", "init", "-b", "release.1.0", str(repo_dir)], check=True, capture_output=True)
+        subprocess.run(["git", "init", "-b", "release.1.0", str(repo_dir)], check=True, capture_output=True, timeout=15)
         self.log.unlink(missing_ok=True)
         self._script_run(f"'source bash_profile.sh; PWD={repo_dir} oc --help'")
         log = self._log()
@@ -521,7 +521,7 @@ class MockTmuxTests(unittest.TestCase):
     def test_git_repo_collision_increments_suffix(self):
         repo_dir = self.tmp_path / "colliding-repo"
         repo_dir.mkdir()
-        subprocess.run(["git", "init", "-b", "main", str(repo_dir)], check=True, capture_output=True)
+        subprocess.run(["git", "init", "-b", "main", str(repo_dir)], check=True, capture_output=True, timeout=15)
         self.log.unlink(missing_ok=True)
         env = {**self.base_env, "MOCK_TMUX_EXISTING_SESSIONS": "colliding-repo - main|other"}
         self._script_run(f"'source bash_profile.sh; PWD={repo_dir} oc --help'", env=env)
@@ -837,6 +837,7 @@ class MockTmuxTests(unittest.TestCase):
             ["python3", "-S", str(REPO_ROOT / "bin/clusterfork-tmux-label"), "codex"],
             capture_output=True, text=True,
             env={**self.base_env, "CODEX_HOME": str(codex_home)},
+            timeout=15,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.strip(), "codex - ida")

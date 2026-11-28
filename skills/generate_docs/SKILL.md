@@ -43,10 +43,10 @@ accurate to the implementation.
    instructions for using docs. Keep **domain** content minimal; do not paste
    topic detail from `docs/` into AGENTS.md.
 
-   Use the structure below. Always put the KISS rule and all its subrules
-   verbatim first under `## Rules` and give them priority over the other repo
-   rules. Adapt the project one-liner and the remaining rules. Keep the
-   Documentation section wording stable across regenerations.
+   Use the structure below. Always put the KISS and fail-fast rules and all
+   their subrules verbatim first under `## Rules` and give them priority over
+   the other repo rules. Adapt the project one-liner and the remaining rules.
+   Keep the Documentation section wording stable across regenerations.
 
    ```markdown
    # AGENTS.md
@@ -61,6 +61,10 @@ accurate to the implementation.
      - **Prefer stdlib and existing dependencies:** Do not introduce a new package for something solvable in under 50 lines of straightforward code.
      - **Flat and explicit over clever:** Use plain functions, direct control flow, and concrete types. Do not create wrappers, factories, or interfaces that only have one implementation.
      - **No speculative extensibility:** Do not add config flags, plugin hooks, or abstraction layers for hypothetical future use cases.
+   - **Fail fast—never ship time-wasting hangs, silent stalls, or unbounded waits.**
+     - **Bound every external call and test:** Always set explicit timeouts on subprocesses, HTTP/network calls, locks, and test runners so broken code fails in seconds instead of hanging silently.
+     - **Clean up background timers and loops:** In tests, stubs, and app code, stop or mock polling loops, intervals, child processes, and servers so nothing keeps a process alive past completion.
+     - **Surface stalls early:** Never wait indefinitely on a background command or job without a timeout or progress check; if something takes far longer than expected, inspect and kill it rather than letting it burn time.
    - <repository-specific working policy>
 
    ## Documentation (read/write)

@@ -19,7 +19,7 @@ from codeview import metrics, scan  # noqa: E402
 
 def run(cmd, cwd):
     return subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True,
-                          check=True).stdout
+                          check=True, timeout=15).stdout
 
 
 class TempRepoTestCase(unittest.TestCase):

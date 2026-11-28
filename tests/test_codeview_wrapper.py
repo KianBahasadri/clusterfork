@@ -36,14 +36,14 @@ class DaemonCLITests(unittest.TestCase):
         repo = Path(cls.tmp.name) / "myproject"
         repo.mkdir()
         subprocess.run(["git", "init", "-q"], cwd=repo,
-                       capture_output=True, check=True)
+                       capture_output=True, check=True, timeout=15)
         (repo / "app.py").write_text("print('hi')\n")
         subprocess.run(["git", "add", "-A"], cwd=repo, check=True,
-                       capture_output=True)
+                       capture_output=True, timeout=15)
         subprocess.run(
             ["git", "-c", "user.email=t@t", "-c", "user.name=t",
              "commit", "-qm", "c1"], cwd=repo, capture_output=True,
-            check=True)
+            check=True, timeout=15)
         cls.repo = repo
         cls.env = {
             k: v for k, v in os.environ.items() if k != "TMUX"

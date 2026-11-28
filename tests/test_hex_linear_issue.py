@@ -2,7 +2,8 @@
 
 from contextlib import nullcontext, redirect_stderr
 from dataclasses import replace
-from io import StringIO
+from datetime import datetime, timedelta, timezone
+from io import BytesIO, StringIO
 import json
 from pathlib import Path
 from queue import SimpleQueue
@@ -13,6 +14,7 @@ from tempfile import TemporaryDirectory
 from threading import Event
 import unittest
 from unittest.mock import Mock, patch
+import urllib.error
 from uuid import UUID
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -259,25 +261,92 @@ class LinearDictationTests(unittest.TestCase):
         run.assert_not_called()
         process.terminate.assert_called_once()
 
-    def test_missing_clipboard_image_waits_before_starting_opencode(self):
-        dictation = replace(DICTATION, image_use="attach")
-        with patch.object(issue, "run_opencode") as run:
-            with self.assertRaises(issue.ReplyNeeded) as missing:
-                issue.file_dictation(dictation)
-        self.assertTrue(missing.exception.copy_image)
-        run.assert_not_called()
-        attempt, = self.attempts.iterdir()
-        self.assertEqual({path.name: path.read_text() for path in attempt.iterdir()},
-                         {"transcript.txt": dictation.transcript})
+    def test_mcp_agent_can_request_a_reply(self):
+        result = issue.parse_response(response(tool_event("hex_reply", {
+            "question": "Please supply the missing detail."})))
+        self.assertEqual(str(result.reply), "Please supply the missing detail.")
+        self.assertEqual(result.session_id, "ses_fixture123")
 
-    def test_mcp_agent_can_request_a_new_image_or_an_ordinary_reply(self):
-        for copy_image in (True, False):
-            with self.subTest(copy_image=copy_image):
-                result = issue.parse_response(response(tool_event("hex_reply", {
-                    "question": "Please supply the missing detail.", "copy_image": copy_image})))
-                self.assertEqual(str(result.reply), "Please supply the missing detail.")
-                self.assertEqual(result.reply.copy_image, copy_image)
-                self.assertEqual(result.session_id, "ses_fixture123")
+    def test_prompt_includes_project_hint_and_recent_context_only_when_present(self):
+        without_hint = issue.prompt_for(DICTATION, recent="")
+        self.assertNotIn("Suggested project", without_hint)
+        self.assertNotIn("Recent prior Hex requests", without_hint)
+
+        with_hint = issue.prompt_for(
+            replace(DICTATION, suggested_project="Clusterfork"),
+            recent="- Older dictation [-> KIAN-9 (https://linear.app/w/issue/KIAN-9)]",
+        )
+        self.assertIn("Suggested project (non-binding hint): Clusterfork", with_hint)
+        self.assertIn("Recent prior Hex requests (background reference context only;", with_hint)
+        self.assertIn("- Older dictation [-> KIAN-9 (https://linear.app/w/issue/KIAN-9)]", with_hint)
+
+    def test_fetch_linear_projects_filters_sorts_caches_and_falls_back(self):
+        payload = {
+            "data": {
+                "projects": {
+                    "nodes": [
+                        {"id": "p-arch", "name": "Archived", "archivedAt": "2026-01-01T00:00:00Z", "status": {"name": "Started", "type": "started"}},
+                        {"id": "p-done", "name": "DoneProj", "archivedAt": None, "status": {"name": "Completed", "type": "completed"}},
+                        {"id": "p-plan", "name": "AlphaPlanned", "archivedAt": None, "status": {"name": "Planned", "type": "planned"}},
+                        {"id": "p-start", "name": "ZetaStarted", "archivedAt": None, "status": {"name": "Started", "type": "started"}},
+                    ],
+                    "pageInfo": {"endCursor": None, "hasNextPage": False},
+                }
+            }
+        }
+        fake_response = MagicContext(BytesIO(json.dumps(payload).encode("utf-8")))
+        with patch.object(issue.urllib.request, "urlopen", return_value=fake_response) as urlopen:
+            projects = issue.fetch_linear_projects(timeout=5)
+        self.assertEqual([p["name"] for p in projects], ["ZetaStarted", "AlphaPlanned"])
+        urlopen.assert_called_once()
+        cache = issue.state_dir() / "projects_cache.json"
+        self.assertEqual(cache.stat().st_mode & 0o777, 0o600)
+        self.assertEqual([p["name"] for p in issue.load_cached_projects()], ["ZetaStarted", "AlphaPlanned"])
+
+        with patch.object(issue.urllib.request, "urlopen", side_effect=urllib.error.URLError("offline")):
+            fallback = issue.fetch_linear_projects(timeout=5)
+        self.assertEqual([p["name"] for p in fallback], ["ZetaStarted", "AlphaPlanned"])
+
+    def test_history_persistence_dedupes_evicts_and_prunes_orphaned_screenshots(self):
+        shot_a = ("image/png", b"png-a")
+        first = replace(DICTATION, issue_id="req-old", transcript="First", images=(shot_a,))
+        with patch.object(issue, "HISTORY_LIMIT", 2):
+            issue.record_history(first, (NOTICE,))
+            old_shots = issue.load_history()[0]["screenshots"]
+            self.assertEqual(len(old_shots), 1)
+            old_shot_path = Path(old_shots[0])
+            self.assertEqual(old_shot_path.read_bytes(), b"png-a")
+            self.assertEqual(old_shot_path.stat().st_mode & 0o777, 0o600)
+
+            # Re-recording same request ID moves it to front without duplicating.
+            issue.record_history(replace(first, transcript="First updated"), (NOTICE,))
+            self.assertEqual(len(issue.load_history()), 1)
+            self.assertEqual(issue.load_history()[0]["transcript"], "First updated")
+
+            issue.record_history(replace(DICTATION, issue_id="req-2", transcript="Second"), ())
+            issue.record_history(replace(DICTATION, issue_id="req-3", transcript="Third"), ())
+            kept = issue.load_history()
+            self.assertEqual([entry["id"] for entry in kept], ["req-3", "req-2"])
+            self.assertFalse(old_shot_path.exists())
+
+    def test_recent_context_bounds_age_count_and_characters_oldest_first(self):
+        now = datetime(2026, 11, 28, 12, 0, tzinfo=timezone.utc)
+        entries = [
+            {"id": "cur", "created_at": (now - timedelta(minutes=1)).isoformat(), "transcript": "Current", "issues": []},
+            {"id": "e1", "created_at": (now - timedelta(minutes=5)).isoformat(), "transcript": "Newest", "issues": [NOTICE]},
+            {"id": "e2", "created_at": (now - timedelta(minutes=20)).isoformat(), "transcript": "Older", "issues": []},
+            {"id": "old", "created_at": (now - timedelta(hours=2)).isoformat(), "transcript": "Too old", "issues": []},
+        ]
+        issue._write_private_json(issue.state_dir() / "history.json", entries)
+        rendered = issue.recent_context(exclude_id="cur", now=now)
+        self.assertEqual(rendered, "\n".join([
+            "- Older",
+            f"- Newest [-> Created KIAN-3 ({URL})]",
+        ]))
+        with patch.object(issue, "RECENT_CONTEXT_COUNT", 1):
+            self.assertEqual(issue.recent_context(exclude_id="cur", now=now), f"- Newest [-> Created KIAN-3 ({URL})]")
+        with patch.object(issue, "RECENT_CONTEXT_MAX_CHARS", 10):
+            self.assertEqual(issue.recent_context(exclude_id="cur", now=now), "- Older")
 
     def test_image_bytes_are_private_and_the_reply_uses_the_same_session(self):
         dictation = replace(DICTATION, image_use="attach", images=(("image/png", b"clipboard bytes"),),
@@ -384,7 +453,8 @@ const notice = { title: "Created KIAN-3", message: "Saved", url: "https://linear
 const notification = await tools.get("hex_notify").execute(notice);
 assert.equal(notification.output, undefined);
 assert.match(notification.content, /queued/);
-const reply = { question: "Which project?", copy_image: false };
+const reply = { question: "Which project?" };
+assert.equal(Object.hasOwn(tools.get("hex_reply").input.properties, "copy_image"), false);
 const question = await tools.get("hex_reply").execute(reply);
 assert.equal(question.output, undefined);
 assert.match(question.content, /resume this session/);
@@ -458,113 +528,8 @@ try {
 }
 '''
         completed = subprocess.run(["node", "--input-type=module", "-", str(ROOT / "hex/linear-search.js")],
-                                   input=script, text=True, capture_output=True)
+                                   input=script, text=True, capture_output=True, timeout=15)
         self.assertEqual(completed.returncode, 0, completed.stderr)
-
-    def test_capture_uses_raw_hex_printing_and_copies_on_release(self):
-        released, stopping, jobs = Event(), Event(), SimpleQueue()
-
-        def command(*arguments, **kwargs):
-            if arguments == ("status",):
-                return {"capture": {"state": "idle"}}
-            if arguments == ("dictation", "start", "--raw"):
-                return {"status": "done", "changed": True}
-            if arguments == ("dictation", "stop", "--print"):
-                self.assertTrue(released.is_set())
-                self.assertEqual(kwargs["timeout"], 75)
-                return {"status": "transcript", "text": " File an issue "}
-            self.fail(f"Unexpected Hex command {arguments}")
-
-        def release(_delay):
-            released.set()
-            return True
-
-        with (patch.object(shortcut, "hex_command", side_effect=command) as request,
-              patch.object(shortcut, "focused_title", return_value="Clusterfork"),
-              patch.object(shortcut, "copy_transcript") as copy, patch.object(shortcut, "clipboard_image") as image,
-              patch.object(released, "wait", side_effect=release)):
-            shortcut.capture(released, stopping, jobs)
-        self.assertEqual([call.args for call in request.call_args_list],
-                         [("status",), ("dictation", "start", "--raw"), ("dictation", "stop", "--print")])
-        dictation = jobs.get_nowait()
-        self.assertEqual((dictation.transcript, dictation.title), (" File an issue ", "Clusterfork"))
-        self.assertEqual(UUID(dictation.issue_id).version, 4)
-        copy.assert_called_once_with("File an issue")
-        image.assert_not_called()
-        self.assertTrue(jobs.empty())
-
-    def test_capture_snapshots_an_explicit_image_before_copying_the_transcript(self):
-        released, stopping, jobs = Event(), Event(), SimpleQueue()
-        released.set()
-        for transcript, image_use in (
-            ("File an issue and copy the image currently in my clipboard.", "attach"),
-            ("File an issue. Check the image of my clipboard.", "reference"),
-        ):
-            with self.subTest(transcript=transcript):
-                sequence = []
-                with (patch.object(shortcut, "hex_command", side_effect=[
-                        {"capture": {"state": "idle"}}, {"status": "done"}, {"status": "transcript", "text": transcript}]),
-                      patch.object(shortcut, "clipboard_image", side_effect=lambda: sequence.append("image") or ("image/png", b"image")),
-                      patch.object(shortcut, "copy_transcript", side_effect=lambda text: sequence.append(text))):
-                    shortcut.capture(released, stopping, jobs)
-                self.assertEqual(sequence, ["image", transcript])
-                dictation = jobs.get_nowait()
-                self.assertEqual(dictation.image_use, image_use)
-                self.assertEqual(dictation.images, (("image/png", b"image"),))
-        self.assertIsNone(shortcut.IMAGE_REQUEST.search("Add a feature to copy the image in my clipboard."))
-        self.assertIsNone(shortcut.IMAGE_REQUEST.search("Add a feature to check the image of my clipboard."))
-        self.assertIsNone(shortcut.IMAGE_REQUEST.search("Do not attach the image in my clipboard."))
-
-    def test_clipboard_uses_utf8_input_and_treats_copy_failure_as_nonfatal(self):
-        with patch.object(shortcut.subprocess, "run", side_effect=[
-                CompletedProcess("wl-copy", 0), CompletedProcess("wl-paste", 0, stdout=b"First line\nCaf\xc3\xa9"),
-        ]) as run, patch.object(shortcut, "notify") as notice:
-            self.assertTrue(shortcut.copy_transcript("First line\nCafé"))
-            self.assertEqual(run.call_args_list[0].args[0], ["wl-copy", "--type", "text/plain;charset=utf-8"])
-            self.assertEqual(run.call_args_list[0].kwargs["input"], b"First line\nCaf\xc3\xa9")
-            self.assertEqual(run.call_args_list[1].args[0],
-                             ["wl-paste", "--no-newline", "--type", "text/plain;charset=utf-8"])
-            notice.assert_not_called()
-            run.side_effect = TimeoutExpired("wl-copy", 5)
-            self.assertFalse(shortcut.copy_transcript("Still file this"))
-            notice.assert_called_once()
-
-    def test_clipboard_readback_detects_missing_or_replaced_contents(self):
-        for readback in [CompletedProcess("wl-paste", 0, stdout=b"previous clipboard"), TimeoutExpired("wl-paste", 5)]:
-            with (self.subTest(readback=readback), patch.object(shortcut.subprocess, "run", side_effect=[
-                    CompletedProcess("wl-copy", 0), readback]), patch.object(shortcut, "notify") as notice):
-                self.assertFalse(shortcut.copy_transcript("Keep this dictation"))
-                self.assertIn("Hex History", notice.call_args.args[1])
-
-    def test_capture_does_not_stop_an_existing_recording_and_cancels_on_shutdown(self):
-        released, stopping, jobs = Event(), Event(), SimpleQueue()
-        with (patch.object(shortcut, "hex_command", return_value={"capture": {"state": "recording"}}) as command,
-              patch.object(shortcut, "notify") as notice):
-            shortcut.capture(released, stopping, jobs)
-        self.assertEqual([call.args for call in command.call_args_list], [("status",)])
-        notice.assert_called_once()
-        self.assertTrue(jobs.empty())
-        stopping.set()
-        with patch.object(shortcut, "hex_command", side_effect=[
-                {"capture": {"state": "idle"}}, {"status": "done"}, {"status": "done"},
-        ]) as command, patch.object(shortcut, "focused_title"):
-            shortcut.capture(released, stopping, jobs)
-        self.assertEqual(command.call_args.args, ("dictation", "cancel"))
-        self.assertTrue(jobs.empty())
-
-    def test_copy_failure_still_queues_the_transcript_and_a_failed_finish_does_not_cancel_new_recordings(self):
-        released, stopping, jobs = Event(), Event(), SimpleQueue()
-        released.set()
-        for finish in ({"status": "transcript", "text": "Keep this"}, issue.FilingError("Transcription failed")):
-            with (self.subTest(finish=finish), patch.object(shortcut, "hex_command", side_effect=[
-                    {"capture": {"state": "idle"}}, {"status": "done"}, finish,
-            ]) as command, patch.object(shortcut, "copy_transcript", return_value=False),
-                  patch.object(shortcut, "notify")):
-                shortcut.capture(released, stopping, jobs)
-            self.assertEqual([call.args[1] for call in command.call_args_list[1:]], ["start", "stop"])
-            if isinstance(finish, dict):
-                self.assertEqual(jobs.get_nowait().transcript, "Keep this")
-            self.assertTrue(jobs.empty())
 
     def test_hex_control_keeps_no_speech_separate_from_errors(self):
         with patch.object(shortcut.subprocess, "run", return_value=CompletedProcess("hex", 4, stdout=json.dumps({
@@ -576,7 +541,7 @@ try {
                 "status": "error", "code": "busy", "message": "Another recording is active",
         }))):
             with self.assertRaisesRegex(issue.FilingError, "Another recording is active"):
-                shortcut.hex_command("dictation", "start", "--raw")
+                shortcut.hex_command("dictation", "start")
 
     def test_notification_body_and_button_keep_waiting_and_pass_activation_to_the_browser(self):
         for action in ("default", "open", ""):
@@ -613,33 +578,15 @@ try {
         self.assertEqual(run.call_args_list[1].kwargs["input"], "Which project?")
         self.assertEqual(jobs.get_nowait(), replace(dictation, answers=(("Which project?", answer),)))
 
-    def test_image_reply_reads_the_new_clipboard_and_keeps_prior_answers(self):
-        jobs = SimpleQueue()
-        image = ("image/jpeg", b"replacement")
-        for image_use, expected in (("attach", "attach"), (None, "reference")):
-            with self.subTest(image_use=image_use):
-                dictation = replace(DICTATION, image_use=image_use, answers=(("Which project?", "Clusterfork"),))
-                with (patch.object(shortcut.subprocess, "run", return_value=CompletedProcess("notify-send", 0, stdout="reply\n")) as run,
-                      patch.object(shortcut, "clipboard_image", return_value=image)):
-                    shortcut.offer_reply(jobs, dictation, issue.ReplyNeeded("Copy a new image.", copy_image=True))
-                self.assertEqual(jobs.get_nowait(), replace(dictation, image_use=expected, images=(image,)))
-                self.assertIn("--action=default=Reply", run.call_args.args[0])
-                run.assert_called_once()
+class MagicContext:
+    def __init__(self, payload):
+        self.payload = payload
 
-    def test_image_reply_opens_a_dialog_until_an_image_can_be_read(self):
-        jobs = SimpleQueue()
-        image = ("image/png", b"copied while the dialog was open")
-        with (patch.object(shortcut.subprocess, "run", side_effect=[
-            CompletedProcess("notify-send", 0, stdout="reply\n"),
-            CompletedProcess("zenity", 0),
-            CompletedProcess("zenity", 0),
-        ]) as run, patch.object(shortcut, "clipboard_image", side_effect=[None, None, image])):
-            shortcut.offer_reply(jobs, DICTATION, issue.ReplyNeeded(issue.IMAGE_QUESTION, copy_image=True))
-        for call in run.call_args_list[1:]:
-            self.assertEqual(call.args[0][0], "zenity")
-            self.assertIn("--ok-label=Use Clipboard Image", call.args[0])
-        self.assertEqual(jobs.get_nowait(), replace(DICTATION, image_use="reference", images=(image,)))
-        self.assertTrue(jobs.empty())
+    def __enter__(self):
+        return self.payload
+
+    def __exit__(self, *_args):
+        return False
 
 
 class LinearInstructionsTests(unittest.TestCase):

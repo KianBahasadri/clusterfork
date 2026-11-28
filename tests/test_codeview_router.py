@@ -21,7 +21,7 @@ from codeview import cachestore  # noqa: E402
 def git(cmd, cwd):
     import subprocess
     return subprocess.run(["git", "-C", str(cwd), *cmd],
-                          capture_output=True, text=True, check=True).stdout
+                          capture_output=True, text=True, check=True, timeout=15).stdout
 
 
 def get(url):

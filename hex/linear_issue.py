@@ -4,7 +4,7 @@ import argparse
 import base64
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import date, datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -15,7 +15,7 @@ import shutil
 import socket
 import subprocess
 import sys
-from tempfile import TemporaryDirectory, mkdtemp
+from tempfile import NamedTemporaryFile, TemporaryDirectory, mkdtemp
 import time
 from typing import Literal
 import urllib.error
@@ -40,11 +40,20 @@ implementation; missing metadata alone never requires human review.
 MODEL = "opencode-go/deepseek-v4.1-flash#max"
 AGENT = "linear-issue"
 PREVIEW_AGENT = "linear-issue-preview"
-IMAGE_QUESTION = "Copy an image for this request, then click Reply."
 MCP_SERVER = "linear"
 MCP_STARTUP_SECONDS = 45
 MCP_POLL_SECONDS = 0.25
 SERVER_STOP_SECONDS = 5
+HISTORY_LIMIT = 50
+RECENT_CONTEXT_COUNT = 5
+RECENT_CONTEXT_AGE_SECONDS = 3600
+RECENT_CONTEXT_MAX_CHARS = 1500
+PROJECTS_QUERY = """query($after: String) {
+    projects(first: 50, after: $after) {
+        nodes { id name archivedAt status { name type } }
+        pageInfo { endCursor hasNextPage }
+    }
+}"""
 
 
 class FilingError(ValueError):
@@ -52,9 +61,7 @@ class FilingError(ValueError):
 
 
 class ReplyNeeded(FilingError):
-    def __init__(self, question, *, copy_image=False):
-        super().__init__(question)
-        self.copy_image = copy_image
+    pass
 
 
 @dataclass(frozen=True)
@@ -66,6 +73,7 @@ class Dictation:
     image_use: Literal["attach", "reference"] | None = None
     images: tuple[tuple[str, bytes], ...] = ()
     session_id: str | None = None
+    suggested_project: str | None = None
 
 
 @dataclass(frozen=True)
@@ -84,14 +92,227 @@ class OpenCodeServer:
     process: subprocess.Popen
 
 
-def prompt_for(dictation, *, dry_run=False, image_paths=()):
+def state_dir():
+    base = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
+    return base / "hex" / "linear"
+
+
+def _write_private_json(path, payload):
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with NamedTemporaryFile("w", encoding="utf-8", prefix=f".{path.name}-",
+                             dir=path.parent, delete=False) as temp:
+        temp_path = Path(temp.name)
+        try:
+            os.chmod(temp_path, 0o600)
+            json.dump(payload, temp, ensure_ascii=False, indent=2)
+            temp.write("\n")
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
+    temp_path.replace(path)
+
+
+def _normalize_projects(items):
+    cleaned = []
+    seen = set()
+    for item in items if isinstance(items, list) else ():
+        if not isinstance(item, dict):
+            continue
+        pid, name = item.get("id"), item.get("name")
+        if not isinstance(pid, str) or not pid or not isinstance(name, str) or not name.strip():
+            continue
+        if pid in seen:
+            continue
+        seen.add(pid)
+        status = item.get("status") if isinstance(item.get("status"), dict) else {}
+        cleaned.append({
+            "id": pid,
+            "name": name.strip(),
+            "status": str(status.get("name") or item.get("status") or ""),
+            "type": str(status.get("type") or item.get("type") or ""),
+        })
+    return cleaned
+
+
+def load_cached_projects():
+    path = state_dir() / "projects_cache.json"
+    try:
+        return _normalize_projects(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return []
+
+
+def fetch_linear_projects(timeout=5):
+    try:
+        token = linear_api_key()
+    except ValueError:
+        return load_cached_projects()
+    if not token:
+        return load_cached_projects()
+    projects = []
+    cursor = None
+    try:
+        while True:
+            request = urllib.request.Request(
+                "https://api.linear.app/graphql",
+                headers={"Authorization": token, "Content-Type": "application/json"},
+                data=json.dumps({"query": PROJECTS_QUERY, "variables": {"after": cursor}}).encode("utf-8"),
+            )
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                payload = json.load(response)
+            if payload.get("errors"):
+                return load_cached_projects()
+            connection = ((payload.get("data") or {}).get("projects") or {})
+            for node in connection.get("nodes") or ():
+                if not isinstance(node, dict) or node.get("archivedAt"):
+                    continue
+                status = node.get("status") if isinstance(node.get("status"), dict) else {}
+                stype = str(status.get("type") or "").lower()
+                if stype in {"completed", "canceled"}:
+                    continue
+                projects.append({
+                    "id": str(node.get("id") or ""),
+                    "name": str(node.get("name") or "").strip(),
+                    "status": str(status.get("name") or ""),
+                    "type": stype,
+                })
+            page = connection.get("pageInfo") or {}
+            if not page.get("hasNextPage") or not page.get("endCursor"):
+                break
+            cursor = page["endCursor"]
+    except (OSError, ValueError, urllib.error.URLError):
+        return load_cached_projects()
+    normalized = _normalize_projects(projects)
+    normalized.sort(key=lambda item: (0 if item["type"] == "started" else 1, item["name"].casefold()))
+    try:
+        _write_private_json(state_dir() / "projects_cache.json", normalized)
+    except OSError:
+        pass
+    return normalized
+
+
+def load_history(limit=HISTORY_LIMIT):
+    path = state_dir() / "history.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [entry for entry in data[:limit] if isinstance(entry, dict)]
+
+
+def record_history(dictation, notifications):
+    root = state_dir()
+    images_dir = root / "history-images"
+    saved_screenshots = []
+    if dictation.images:
+        try:
+            images_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            for number, (mime, image) in enumerate(dictation.images, 1):
+                ext = EXTENSIONS.get(mime)
+                if not ext:
+                    continue
+                target = images_dir / f"{dictation.issue_id}-{number}.{ext}"
+                if not target.exists():
+                    with private_file(target) as stream:
+                        stream.write(image)
+                saved_screenshots.append(str(target))
+        except OSError as error:
+            print(f"Hex Linear dictation {dictation.issue_id} could not save history screenshot "
+                  f"({type(error).__name__}).", file=sys.stderr)
+    issues = [
+        {"title": str(item.get("title") or ""), "message": str(item.get("message") or ""), "url": str(item.get("url") or "")}
+        for item in notifications if isinstance(item, dict)
+    ]
+    entry = {
+        "id": dictation.issue_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "transcript": dictation.transcript,
+        "suggested_project": dictation.suggested_project,
+        "issues": issues,
+        "screenshots": saved_screenshots,
+    }
+    existing = [item for item in load_history(HISTORY_LIMIT) if item.get("id") != dictation.issue_id]
+    updated = [entry, *existing]
+    kept, dropped = updated[:HISTORY_LIMIT], updated[HISTORY_LIMIT:]
+    retained_paths = {path for item in kept for path in (item.get("screenshots") or ())}
+    for item in dropped:
+        for path_str in item.get("screenshots") or ():
+            if path_str in retained_paths:
+                continue
+            try:
+                candidate = Path(path_str).resolve()
+                if candidate.is_relative_to(images_dir.resolve()):
+                    candidate.unlink(missing_ok=True)
+            except OSError:
+                pass
+    try:
+        _write_private_json(root / "history.json", kept)
+    except OSError as error:
+        print(f"Hex Linear dictation {dictation.issue_id} could not write history ({type(error).__name__}).",
+              file=sys.stderr)
+
+
+def recent_context(exclude_id="", now=None):
+    current = now or datetime.now(timezone.utc)
+    selected = []
+    for entry in load_history(HISTORY_LIMIT):
+        if exclude_id and entry.get("id") == exclude_id:
+            continue
+        raw_time = entry.get("created_at")
+        if not isinstance(raw_time, str):
+            continue
+        try:
+            moment = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        age = (current - moment).total_seconds()
+        if age < -60 or age > RECENT_CONTEXT_AGE_SECONDS:
+            continue
+        excerpt = " ".join(str(entry.get("transcript") or "").split())
+        if not excerpt:
+            continue
+        if len(excerpt) > 220:
+            excerpt = excerpt[:217] + "..."
+        issues = [
+            f"{item.get('title') or ''} ({item.get('url') or ''})".strip()
+            for item in (entry.get("issues") or ())
+            if isinstance(item, dict) and (item.get("title") or item.get("url"))
+        ]
+        line = f"- {excerpt}" + (f" [-> {', '.join(issues)}]" if issues else "")
+        selected.append(line)
+        if len(selected) >= RECENT_CONTEXT_COUNT:
+            break
+    lines = []
+    total = 0
+    for line in reversed(selected):
+        if total + len(line) + 1 > RECENT_CONTEXT_MAX_CHARS:
+            continue
+        lines.append(line)
+        total += len(line) + 1
+    return "\n".join(lines)
+
+
+def prompt_for(dictation, *, dry_run=False, image_paths=(), recent=None):
     lines = [ISSUE_METADATA_POLICY, f"Local date: {date.today().isoformat()}",
              f"Hex request: {dictation.issue_id}", f"Preview only: {str(dry_run).lower()}",
              f"Foreground window: {' '.join((dictation.title or 'unknown').split())}",
              f"Image use: {dictation.image_use or 'none'}"]
+    if dictation.suggested_project:
+        lines.append(f"Suggested project (non-binding hint): {dictation.suggested_project}")
     for number, (image_path, (mime, image)) in enumerate(zip(image_paths, dictation.images), 1):
         lines += [f"Image {number} file: {image_path}", f"Image {number} MIME type: {mime}",
                   f"Image {number} byte length: {len(image)}"]
+    recent_lines = recent_context(exclude_id=dictation.issue_id) if recent is None else recent
+    if recent_lines:
+        lines += [
+            "\nRecent prior Hex requests (background reference context only; "
+            "do not re-create or re-edit them unless explicitly asked):",
+            recent_lines,
+        ]
     lines += ["\nLoad the current projects, their summaries and descriptions through Linear MCP before choosing a project.",
               "Use the project catalog already in this session when continuing a reply, refreshing it if needed.",
               "\nVerbatim transcript", dictation.transcript]
@@ -111,8 +332,7 @@ def private_file(path):
 
 
 def start_attempt_log(dictation):
-    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
-    directory = state / "hex" / "linear" / "runs"
+    directory = state_dir() / "runs"
     try:
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         attempt = Path(mkdtemp(prefix=f"{dictation.issue_id}-", dir=directory))
@@ -303,7 +523,7 @@ def parse_response(output, *, error=None):
         calls.add(call_id)
         arguments = state["input"]
         if part["tool"] == "hex_reply":
-            reply = ReplyNeeded(arguments["question"], copy_image=arguments["copy_image"])
+            reply = ReplyNeeded(arguments["question"])
         elif linear_url(arguments.get("url")):
             notifications.append(arguments)
         else:
@@ -400,8 +620,6 @@ def run_opencode(dictation, attempt, *, dry_run=False):
 
 def file_dictation(dictation, *, dry_run=False):
     attempt = start_attempt_log(dictation)
-    if dictation.image_use and not dictation.images:
-        raise ReplyNeeded(IMAGE_QUESTION, copy_image=True)
     result = run_opencode(dictation, attempt, dry_run=dry_run)
     if not dry_run and not (result.error or result.reply or result.notifications):
         result = replace(result, error="OpenCode finished without confirming a result. See the Hex service journal.")

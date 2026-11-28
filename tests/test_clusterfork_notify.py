@@ -26,7 +26,7 @@ class NotifyFixture(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.repo = self.root / "sample-repo"
         subprocess.run(
-            ["git", "init", "--quiet", "--template=", str(self.repo)], check=True
+            ["git", "init", "--quiet", "--template=", str(self.repo)], check=True, timeout=15
         )
         self.cf_dir = self.root / "clusterfork"
         self.cf_dir.mkdir()
@@ -160,7 +160,7 @@ class NotifierTests(NotifyFixture):
         nested = self.repo / "nested"
         nested.mkdir()
         separate = nested / "other-repo"
-        subprocess.run(["git", "init", "--quiet", "--template=", str(separate)], check=True)
+        subprocess.run(["git", "init", "--quiet", "--template=", str(separate)], check=True, timeout=15)
         unrelated = self.root / "unrelated" / self.repo.name
         unrelated.mkdir(parents=True)
         self._write_mock(

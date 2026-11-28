@@ -98,11 +98,11 @@ class ShortcutTests(unittest.TestCase):
 
     def test_single_taps_and_repeated_keydown_do_not_record_or_submit(self):
         def scenario():
-            self.emit("Deactivated", 900)
-            self.emit("Activated", 1000)
-            self.emit("Activated", 1020)
+            self.emit("Deactivated", 900, name=shortcut.TYPING_SHORTCUT)
+            self.emit("Activated", 1000, name=shortcut.TYPING_SHORTCUT)
+            self.emit("Activated", 1020, name=shortcut.TYPING_SHORTCUT)
             self.assertEqual(len(self.timers), 1)
-            self.emit("Deactivated", 1050)
+            self.emit("Deactivated", 1050, name=shortcut.TYPING_SHORTCUT)
             self.tap(2000)
             self.assertFalse(self.timers)
             self.assertFalse(self.calls(shortcut.capture))
@@ -149,7 +149,7 @@ class ShortcutTests(unittest.TestCase):
                 close()
                 submit("linear", "Keep this draft.", ())
                 args, _thread = self.calls(shortcut.submit_linear)[0]
-                self.assertEqual(args[2:], ("Keep this draft.", "Editor", ()))
+                self.assertEqual(args[2:], ("Keep this draft.", "Editor", (), None))
         self.run_shortcuts(scenario)
 
     def test_taps_must_be_close_together_and_shorter_than_a_hold(self):
@@ -171,31 +171,42 @@ class ShortcutTests(unittest.TestCase):
             self.assertFalse(self.calls(shortcut.capture))
         self.run_shortcuts(delayed_timer)
 
+    def test_holding_linear_shortcut_does_not_schedule_or_record(self):
+        def scenario():
+            self.emit("Activated", 1000)
+            self.assertFalse(self.timers)
+            self.emit("Deactivated", 1300)
+            self.tap(1400)
+            self.assertFalse(self.calls(shortcut.capture))
+            self.open_request.assert_not_called()
+        self.run_shortcuts(scenario)
+
     def test_hold_after_a_tap_records_once_and_release_ends_that_recording(self):
         def scenario():
-            self.tap(1000)
-            self.emit("Activated", 1150)
+            self.tap(1000, shortcut.TYPING_SHORTCUT)
+            self.emit("Activated", 1150, name=shortcut.TYPING_SHORTCUT)
             self.hold()
-            (released, stopping, _jobs), recording = self.calls(shortcut.capture)[0]
+            (released, stopping, playback), recording = self.calls(shortcut.capture)[0]
+            self.assertIsInstance(playback, shortcut.Playback)
             self.assertFalse(released.is_set())
-            self.emit("Activated", 1600)
+            self.emit("Activated", 1600, name=shortcut.TYPING_SHORTCUT)
             self.assertEqual(len(self.calls(shortcut.capture)), 1)
-            self.emit("Deactivated", 1800)
+            self.emit("Deactivated", 1800, name=shortcut.TYPING_SHORTCUT)
             self.assertTrue(released.is_set())
             self.assertFalse(stopping.is_set())
-            self.tap(1900)
+            self.tap(1900, shortcut.TYPING_SHORTCUT)
             self.open_request.assert_not_called()
             recording.start.assert_called_once()
         self.run_shortcuts(scenario)
 
     def test_transcription_blocks_another_recording_but_allows_a_text_request(self):
         def scenario():
-            self.emit("Activated", 1000)
+            self.emit("Activated", 1000, name=shortcut.TYPING_SHORTCUT)
             self.hold()
-            self.emit("Deactivated", 1500)
-            self.emit("Activated", 1700)
+            self.emit("Deactivated", 1500, name=shortcut.TYPING_SHORTCUT)
+            self.emit("Activated", 1700, name=shortcut.TYPING_SHORTCUT)
             self.hold()
-            self.emit("Deactivated", 2200)
+            self.emit("Deactivated", 2200, name=shortcut.TYPING_SHORTCUT)
             self.assertEqual(len(self.calls(shortcut.capture)), 1)
             self.assertEqual(len(self.calls(shortcut.notify)), 1)
             self.tap(2400)
@@ -207,7 +218,7 @@ class ShortcutTests(unittest.TestCase):
         for pending in (True, False):
             with self.subTest(pending=pending):
                 def scenario():
-                    self.emit("Activated", 1000)
+                    self.emit("Activated", 1000, name=shortcut.TYPING_SHORTCUT)
                     if not pending:
                         self.hold()
                     self.stop()
@@ -215,7 +226,7 @@ class ShortcutTests(unittest.TestCase):
                     if pending:
                         self.assertFalse(self.calls(shortcut.capture))
                     else:
-                        (released, stopping, _jobs), _thread = self.calls(shortcut.capture)[0]
+                        (released, stopping, _playback), _thread = self.calls(shortcut.capture)[0]
                         self.assertTrue(released.is_set())
                         self.assertTrue(stopping.is_set())
                 self.run_shortcuts(scenario)
@@ -224,7 +235,7 @@ class ShortcutTests(unittest.TestCase):
         def scenario():
             self.emit("Activated", 1000, name=shortcut.TYPING_SHORTCUT)
             self.hold()
-            (released, _stopping, _jobs, typed), _recording = self.calls(shortcut.capture)[0]
+            (released, _stopping, typed), _recording = self.calls(shortcut.capture)[0]
             self.assertIsInstance(typed, shortcut.Playback)
             self.emit("Deactivated", 1200)
             self.assertFalse(released.is_set())
@@ -249,13 +260,13 @@ class ShortcutTests(unittest.TestCase):
                     self.present.assert_called_once_with(final, None)
                     self.open_request.assert_called_once()
                     close()
-                    submit(final, "Draft\n", ())
+                    submit(final, "Draft\n", (), "Relay" if final == "linear" else None)
                     if final == "typing":
                         args, _thread = self.calls(shortcut.submit_typing)[0]
                         self.assertEqual(args[2:], ("Draft\n", self.destination))
                     else:
                         args, _thread = self.calls(shortcut.submit_linear)[0]
-                        self.assertEqual(args[2:], ("Draft\n", "Original editor", ()))
+                        self.assertEqual(args[2:], ("Draft\n", "Original editor", (), "Relay"))
                     self.assertFalse(self.calls(shortcut.capture))
                 self.run_shortcuts(scenario)
 
@@ -273,20 +284,17 @@ class ShortcutTests(unittest.TestCase):
 
 class TypedDictationTests(unittest.TestCase):
     def test_capture_types_the_processed_text_without_copying_or_filing_it(self):
-        released, stopping, jobs = Event(), Event(), SimpleQueue()
+        released, stopping = Event(), Event()
         released.set()
         text = "Processed café text.\nAnother line."
         playback, destination = Mock(), object()
         with (patch.object(shortcut, "hex_command", side_effect=[
                 {"capture": {"state": "idle"}}, {}, {"text": text}]) as command,
-              patch.object(shortcut, "capture_destination", return_value=destination),
-              patch.object(shortcut, "copy_transcript") as copy):
-            shortcut.capture(released, stopping, jobs, playback)
+              patch.object(shortcut, "capture_destination", return_value=destination)):
+            shortcut.capture(released, stopping, playback)
         self.assertEqual([call.args for call in command.call_args_list],
                          [("status",), ("dictation", "start"), ("dictation", "stop", "--print")])
         playback.type.assert_called_once_with(text, destination, restore=False)
-        copy.assert_not_called()
-        self.assertTrue(jobs.empty())
 
     def test_empty_dictation_does_not_open_a_typing_session(self):
         released = Event()
@@ -295,37 +303,24 @@ class TypedDictationTests(unittest.TestCase):
         with (patch.object(shortcut, "hex_command", side_effect=[
                 {"capture": {"state": "idle"}}, {}, {"text": ""}]),
               patch.object(shortcut, "capture_destination")):
-            shortcut.capture(released, Event(), SimpleQueue(), playback)
+            shortcut.capture(released, Event(), playback)
         playback.type.assert_not_called()
 
 
 class TypedRequestTests(unittest.TestCase):
-    def test_typed_text_uses_the_same_queue_without_touching_the_microphone_or_clipboard(self):
+    def test_typed_text_uses_the_same_queue_without_touching_the_microphone(self):
         jobs = SimpleQueue()
         text = "Create two independent issues.\nKeep the café details.\n"
-        with (patch.object(shortcut, "hex_command") as hex_command,
-              patch.object(shortcut, "clipboard_image") as image,
-              patch.object(shortcut, "copy_transcript") as copy):
-            shortcut.submit_linear(jobs, Event(), text, "Project context", ())
+        with patch.object(shortcut, "hex_command") as hex_command:
+            shortcut.submit_linear(jobs, Event(), text, "Project context", (), suggested_project="Clusterfork")
         request = jobs.get_nowait()
         self.assertEqual(request.transcript, text)
         self.assertEqual(request.title, "Project context")
+        self.assertEqual(request.suggested_project, "Clusterfork")
         self.assertEqual(UUID(request.issue_id).version, 4)
         self.assertIsNone(request.session_id)
         hex_command.assert_not_called()
-        image.assert_not_called()
-        copy.assert_not_called()
         self.assertTrue(jobs.empty())
-
-    def test_a_typed_image_request_captures_the_image_and_uses_the_same_agent_input(self):
-        jobs, image = SimpleQueue(), ("image/png", b"clipboard image")
-        text = "Make an issue. Attach the image in my clipboard."
-        with patch.object(shortcut, "clipboard_image", return_value=image):
-            shortcut.submit_linear(jobs, Event(), text, None, ())
-        request = jobs.get_nowait()
-        self.assertEqual(request.image_use, "attach")
-        self.assertEqual(request.images, (image,))
-        self.assertEqual(request.transcript, text)
 
     def test_cancelling_empty_text_or_shutdown_never_queues_a_request(self):
         for text, stopped in (("", False), ("  \n", False), ("Do not send after shutdown", True)):
@@ -338,7 +333,7 @@ class TypedRequestTests(unittest.TestCase):
                 self.assertTrue(jobs.empty())
                 prepare.assert_not_called()
 
-    def test_pasted_images_reach_the_queue_without_reading_a_changed_clipboard(self):
+    def test_pasted_images_reach_the_queue_as_attach_requests(self):
         jobs = SimpleQueue()
         images = []
         for color in ("red", "blue"):
@@ -346,13 +341,11 @@ class TypedRequestTests(unittest.TestCase):
             Image.new("RGB", (2, 2), color).save(data, format="PNG")
             images.append(("image/png", data.getvalue()))
         text = "Create an issue with these two screenshots."
-        with patch.object(shortcut, "clipboard_image") as clipboard:
-            shortcut.submit_linear(jobs, Event(), text, None, tuple(images))
+        shortcut.submit_linear(jobs, Event(), text, None, tuple(images))
         request = jobs.get_nowait()
         self.assertEqual(request.transcript, text)
         self.assertEqual(request.image_use, "attach")
         self.assertEqual(request.images, tuple(images))
-        clipboard.assert_not_called()
 
     def test_corrupt_or_excessive_dialog_images_are_not_submitted(self):
         for images in ([('image/png', b'corrupt')], [('image/png', b'x')] * 7):
@@ -381,6 +374,41 @@ class TypedRequestTests(unittest.TestCase):
         self.assertEqual(result.answers, (*request.answers, ("What should it look like?", "Use this screenshot too.")))
         self.assertEqual(result.images, (*request.images, image))
         self.assertEqual(result.image_use, "attach")
+
+    def test_image_only_reply_submits_images_without_empty_answer(self):
+        jobs = SimpleQueue()
+        data = BytesIO()
+        Image.new("RGB", (2, 2), "green").save(data, format="PNG")
+        image = ("image/png", data.getvalue())
+        request = shortcut.Dictation("Original request", "Project", "fixture-request",
+                                     answers=(("Which project?", "Clusterfork"),),
+                                     session_id="ses_fixture")
+        with patch.object(shortcut.subprocess, "run", side_effect=[
+                CompletedProcess("notify-send", 0, stdout="reply\n"),
+                CompletedProcess("dialog", 0, stdout=dialog_output("  \n", (image,))),
+        ]):
+            shortcut.offer_reply(jobs, request, shortcut.ReplyNeeded("Attach screenshot"))
+        result = jobs.get_nowait()
+        self.assertEqual(result.answers, request.answers)
+        self.assertEqual(result.images, (image,))
+        self.assertEqual(result.image_use, "attach")
+
+    def test_notifications_group_by_desktop_entry_and_keep_quotes_literal(self):
+        with patch.object(shortcut.subprocess, "run",
+                          return_value=CompletedProcess("notify-send", 0, stdout="")) as run:
+            shortcut.notify("Linear dictation", "Hex's \"quote\" & <b>bold</b>")
+        command = run.call_args.args[0]
+        self.assertIn(f"--hint=string:desktop-entry:{shortcut.APP}", command)
+        self.assertEqual(command[-1], "Hex's \"quote\" &amp; &lt;b&gt;bold&lt;/b&gt;")
+
+        jobs = SimpleQueue()
+        request = shortcut.Dictation("It's broken", "Window", "fixture-request")
+        with patch.object(shortcut.subprocess, "run",
+                          return_value=CompletedProcess("notify-send", 0, stdout="")) as run:
+            shortcut.offer_reply(jobs, request, shortcut.ReplyNeeded("What's next <tag>?"))
+        reply_cmd = run.call_args.args[0]
+        self.assertIn(f"--hint=string:desktop-entry:{shortcut.APP}", reply_cmd)
+        self.assertEqual(reply_cmd[-1], "What's next &lt;tag&gt;?\n\nIt's broken")
 
     def test_cannot_queue_after_request_preparation_fails(self):
         jobs = SimpleQueue()

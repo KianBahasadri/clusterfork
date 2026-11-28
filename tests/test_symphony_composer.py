@@ -252,7 +252,7 @@ class ComposerWebTests(unittest.TestCase):
     def test_delayed_encoding_preserves_destination_edits_and_retries(self):
         app = Path(__file__).resolve().parents[1] / "symphony/web/app.js"
         run = subprocess.run(["node", "-e", SCRIPT, str(app)], text=True,
-                             capture_output=True, check=False)
+                             capture_output=True, check=False, timeout=15)
         self.assertEqual(run.returncode, 0, run.stderr)
         result = json.loads(run.stdout)
 
@@ -334,7 +334,7 @@ vm.runInContext('coordinator = {model: "gemini-4-neon-high", contextUsed: 0, rat
 const el = doc.getElementById("status-context");
 console.log(JSON.stringify({hidden: el.hidden, text: el.textContent}));
 """
-        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False)
+        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False, timeout=15)
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(json.loads(run.stdout), {"hidden": False, "text": "Context 0% used"})
 
@@ -379,7 +379,7 @@ const results = {
 };
 console.log(JSON.stringify(results));
 """
-        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False)
+        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False, timeout=15)
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(json.loads(run.stdout), {
             "queuedIdle": {"hidden": False, "text": "Compaction queued"},
@@ -473,7 +473,7 @@ vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
   console.log(JSON.stringify({posts, afterError, afterSave, afterClose, afterClear}));
 })();
 """
-        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False)
+        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False, timeout=15)
         self.assertEqual(run.returncode, 0, run.stderr)
         result = json.loads(run.stdout)
         self.assertEqual(result["afterError"], {"value": "canary-bad-key", "feedback": "Rejected key."})
@@ -565,7 +565,7 @@ vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), ctx);
 })();
 """
         panes = Path(__file__).resolve().parents[1] / "symphony/web/panes.js"
-        run = subprocess.run(["node", "-e", probe, str(panes), str(app)], text=True, capture_output=True, check=False)
+        run = subprocess.run(["node", "-e", probe, str(panes), str(app)], text=True, capture_output=True, check=False, timeout=15)
         self.assertEqual(run.returncode, 0, run.stderr)
         res = json.loads(run.stdout)
         self.assertEqual(res["before"], [
@@ -649,7 +649,7 @@ vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
   console.log(JSON.stringify({visibleLabels, armedAttr, disarmedAttr, toggledOffAttr, sent}));
 })();
 """
-        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False)
+        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False, timeout=15)
         self.assertEqual(run.returncode, 0, run.stderr)
         res = json.loads(run.stdout)
         self.assertEqual(res["visibleLabels"], ["Idle note", "Ship now"])
@@ -734,7 +734,7 @@ vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
   console.log(JSON.stringify({okSnap, errSnap, closedHidden, stillHidden, reopenedSnap, revoked}));
 })();
 """
-        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False)
+        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False, timeout=15)
         self.assertEqual(run.returncode, 0, run.stderr)
         res = json.loads(run.stdout)
         self.assertEqual(res["okSnap"], {"hidden": False, "imgSrc": "blob:svg-1", "errHidden": True})
@@ -803,7 +803,7 @@ console.log(JSON.stringify({
   turnTimingText: doc.getElementById("turn-timing").textContent,
 }));
 """
-        run = subprocess.run(["node", "-e", probe, str(panes), str(app)], text=True, capture_output=True, check=False)
+        run = subprocess.run(["node", "-e", probe, str(panes), str(app)], text=True, capture_output=True, check=False, timeout=15)
         self.assertEqual(run.returncode, 0, run.stderr)
         res = json.loads(run.stdout)
         self.assertEqual(res["fmtMs"], "1m")
@@ -895,7 +895,7 @@ const beforePerm = {
   }));
 })();
 """
-        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False)
+        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False, timeout=15)
         self.assertEqual(run.returncode, 0, run.stderr)
         res = json.loads(run.stdout)
         self.assertFalse(res["beforePerm"]["hidden"])
@@ -973,7 +973,7 @@ const multi = {
 run(`updateState = {updateAvailable: false, draining: false, update: null}; renderUpdateNotice();`);
 console.log(JSON.stringify({unsafeHidden, single, multi, clearedHidden: details.hidden}));
 """
-        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False)
+        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False, timeout=15)
         self.assertEqual(run.returncode, 0, run.stderr)
         res = json.loads(run.stdout)
         self.assertTrue(res["unsafeHidden"])
@@ -1116,7 +1116,7 @@ function boot(opts = {}) {
   }));
 })();
 """
-        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False)
+        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False, timeout=15)
         self.assertEqual(run.returncode, 0, run.stderr)
         res = json.loads(run.stdout)
         self.assertEqual(res["unchanged"], 0)
@@ -1238,7 +1238,7 @@ console.log(JSON.stringify({
   queuedAnim, compactingClears, afterCompactingIdleStillStarted,
 }));
 """
-        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False)
+        run = subprocess.run(["node", "-e", probe, str(app)], text=True, capture_output=True, check=False, timeout=15)
         self.assertEqual(run.returncode, 0, run.stderr)
         res = json.loads(run.stdout)
         self.assertEqual(res["t1Start"]["anim"], "rainbow")
