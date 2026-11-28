@@ -65,6 +65,7 @@ class ChatBrowserTests(unittest.TestCase):
         page.add_style_tag(path=str(ROOT / "style.css"))
         page.add_script_tag(path=str(ROOT / "panes.js"))
         page.add_script_tag(path=str(ROOT / "app.js"))
+        page.add_script_tag(path=str(ROOT / "issue.js"))
 
     def issue(self, identifier, state="Backlog", project="project-a", **extra):
         state_type = {"Backlog": "backlog", "Todo": "unstarted",
@@ -2163,7 +2164,7 @@ class ChatBrowserTests(unittest.TestCase):
           };
         }""", {"hash1": hash1, "hash2": hash2})
         self.page.evaluate("async () => { await poll(); flushChat(); }")
-        self.page.locator("#backlog summary + *").wait_for(state="attached")
+        self.page.locator("#backlog .plan-accept-button").wait_for(state="attached", timeout=2000)
         # Inline error retains active Accept button; clicking again succeeds and marks Approved.
         latest_btn = self.page.locator("#messages .plan-accept-button").nth(1)
         latest_btn.click()
@@ -2257,7 +2258,7 @@ class ChatBrowserTests(unittest.TestCase):
         self.assertFalse(self.page.locator("#diagram-error").is_hidden())
         self.assertEqual(self.page.locator("#diagram-canvas .diagram-svg").count(), 0)
 
-    def test_all_repositories_status_dots_paused_section_and_image_modal(self):
+    def test_all_repositories_status_symbols_paused_section_and_image_modal(self):
         self.page.evaluate("""() => {
           const projects = [
             {id: "proj-a", name: "Repo A", icon: "", repo: "owner/a", status: {name: "In Progress", type: "started", color: "#f2c94c"}, issues: [
@@ -2265,6 +2266,7 @@ class ChatBrowserTests(unittest.TestCase):
             ]},
             {id: "proj-paused", name: "Sleeping", icon: "", repo: "owner/p", status: {name: "Paused", type: "backlog", color: "#888"}, issues: []},
           ];
+          window.chipWork = {};
           window.fetch = async (path) => {
             const url = new URL(path, "https://example.test");
             const proj = url.searchParams.get("project");
@@ -2275,16 +2277,25 @@ class ChatBrowserTests(unittest.TestCase):
               busy: false, canInterrupt: false, stream: "", streamHtml: "", tasks: [],
               signedIn: true, login: null, paused: "", view: "proj-a", repo, repoActivity: {},
               coordinator: {}, issueError: "", updateAvailable: false, draining: false,
-              projects, issueRevision: "rev-chips",
+              projects, issueRevision: "rev-chips", workByRepo: window.chipWork,
             })};
           };
         }""")
         self.page.evaluate("async () => { await poll(); flushChat(); }")
         self.assertEqual(self.page.locator("#project-tab-all").count(), 1)
-        self.assertEqual(self.page.locator(".project-status-dot").count(), 2)
+        indicator = self.page.locator('[data-project="proj-a"] .project-status')
+        self.assertEqual(indicator.text_content(), "Zzz")
+        self.page.evaluate('async () => { window.chipWork = {"owner/a": "working"}; await poll(); }')
+        self.assertEqual(indicator.get_attribute("data-status"), "working")
+        self.assertEqual(indicator.evaluate('el => getComputedStyle(el, "::before").animationName'),
+                         "symphony-turn-spin")
+        self.page.emulate_media(reduced_motion="reduce")
+        self.assertEqual(indicator.evaluate('el => getComputedStyle(el, "::before").animationName'), "none")
         self.assertTrue(self.page.locator("#paused-projects-list").is_hidden())
         self.page.locator("#paused-projects-toggle").click()
         self.assertFalse(self.page.locator("#paused-projects-list").is_hidden())
+        self.assertEqual(self.page.locator('#paused-projects-list .project-status use').get_attribute('href'),
+                         "#lucide-octagon-alert")
         self.page.locator("#project-tab-all").click()
         self.page.wait_for_function("selected === ''")
         self.assertGreaterEqual(self.page.locator("#backlog .issue-project").count(), 1)
@@ -2306,6 +2317,53 @@ class ChatBrowserTests(unittest.TestCase):
         self.page.keyboard.press("Escape")
         self.assertFalse(self.page.evaluate("() => document.getElementById('image-dialog').open"))
         self.assertTrue(self.page.evaluate("() => document.activeElement.classList.contains('message-image')"))
+
+    def test_project_chip_drag_moves_neighbors_before_drop_and_cancels_cleanly(self):
+        self.page.evaluate("""() => {
+          const storage = new Map();
+          Object.defineProperty(window, "localStorage", {value: {
+            getItem: key => storage.get(key) || null,
+            setItem: (key, value) => storage.set(key, value),
+          }});
+          updateProjects(["alpha", "beta", "gamma"].map(id => ({id, name: id, repo: "owner/" + id, issues: []})), true);
+        }""")
+        alpha = self.page.locator('[data-project="alpha"]')
+        beta = self.page.locator('[data-project="beta"]')
+        origin = alpha.bounding_box(timeout=2000)
+        neighbor = beta.bounding_box(timeout=2000)
+        x, y = origin["x"] + origin["width"] / 2, origin["y"] + origin["height"] / 2
+        destination = neighbor["x"] + neighbor["width"] * .75
+
+        def drag_over_neighbor():
+            self.page.mouse.move(x, y)
+            self.page.mouse.down()
+            self.page.mouse.move(destination, y, steps=12)
+            self.page.mouse.move(destination + 1, y)
+            self.page.wait_for_function(
+                "document.querySelector('[data-project=beta]').style.order === '1'", timeout=2000)
+
+        drag_over_neighbor()
+        self.assertIsNone(self.page.evaluate('localStorage.getItem("symphony.projectOrder")'))
+        self.page.wait_for_function(
+            "x => Math.abs(document.querySelector('[data-project=beta]').getBoundingClientRect().left - x) < 1",
+            arg=origin["x"], timeout=2000)
+        self.page.keyboard.press("Escape")
+        self.page.mouse.up()
+        self.page.wait_for_function("projectDrag === null", timeout=2000)
+        self.assertEqual(beta.evaluate("el => el.style.order"), "")
+        self.assertIsNone(self.page.evaluate('localStorage.getItem("symphony.projectOrder")'))
+
+        drag_over_neighbor()
+        self.page.mouse.up()
+        self.assertEqual(self.page.evaluate('JSON.parse(localStorage.getItem("symphony.projectOrder"))'),
+                         ["beta", "alpha", "gamma"])
+        self.assertEqual(self.page.locator('#repos .project-chip').evaluate_all('tabs => tabs.map(t => t.dataset.project)'),
+                         ["", "beta", "alpha", "gamma"])
+        alpha.focus(timeout=2000)
+        alpha.press("Shift+ArrowLeft", timeout=2000)
+        self.assertEqual(self.page.evaluate('JSON.parse(localStorage.getItem("symphony.projectOrder"))'),
+                         ["alpha", "beta", "gamma"])
+        self.assertTrue(alpha.evaluate('el => document.activeElement === el'))
 
 
 if __name__ == "__main__":

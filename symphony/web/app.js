@@ -60,8 +60,7 @@ let projectCache = new Map();
 let projectRepos = new Map();
 let currentProjects = [];
 let pausedProjectsOpen = false;
-let draggedProjectId = "";
-let draggedPaused = false;
+let projectDrag = null;
 let suppressProjectClick = false;
 const PROJECT_ORDER_KEY = "symphony.projectOrder";
 let repoButtons = [];
@@ -78,6 +77,7 @@ let selected = "";
 let selectedRepo = null;
 let lastMessage = 0;
 let tasks = [];
+let workByRepo = {};
 let projectsKey = "";
 let issueDay = new Date().toDateString();
 let stream = "";
@@ -648,10 +648,24 @@ function renderPanes() {
   if (focused) byId(focused)?.focus({preventScroll: true});
 }
 
-function renderUnreadChips() {
+function renderProjectIndicators() {
   let pausedHasUnread = false;
   for (const tab of projectTabs()) {
     const repo = tab.dataset.repo || "";
+    const project = projectCache.get(tab.dataset.project);
+    if (project) {
+      const work = workByRepo[repo];
+      const status = work === "working" ? "working"
+        : work === "stopped" || tab.dataset.paused === "true" ? "stopped" : "idle";
+      const indicator = tab.querySelector(".project-status");
+      if (indicator.dataset.status !== status) {
+        indicator.dataset.status = status;
+        indicator.textContent = status === "idle" ? "Zzz" : "";
+        if (status === "stopped") indicator.append(icon("octagon-alert"));
+        const description = {working: "Working", idle: "Idle", stopped: "Work stopped"}[status];
+        tab.title = [...new Set([project.name, project.status?.name, description].filter(Boolean))].join(" · ");
+      }
+    }
     const unread = Boolean(repo && repo !== selectedRepo && unreadRepos.has(repo));
     tab.toggleAttribute("data-unread", unread);
     tab.setAttribute("aria-label", unread ? tab.title + " (unread activity)" : tab.title);
@@ -817,14 +831,17 @@ async function renderDiagramPanel(diagram, activeRepo = selectedRepo || "") {
 }
 
 function updateRepoActivity(activity, activeRepo) {
-  if (!activity || typeof activity !== "object") return;
+  if (!activity || typeof activity !== "object") {
+    renderProjectIndicators();
+    return;
+  }
   if (!repoActivityInitialized) {
     repoActivityInitialized = true;
     for (const [repo, id] of Object.entries(activity)) {
       seenRepoMessage.set(repo, Number(id) || 0);
     }
     unreadRepos.delete(activeRepo);
-    renderUnreadChips();
+    renderProjectIndicators();
     return;
   }
   for (const [repo, raw] of Object.entries(activity)) {
@@ -836,7 +853,7 @@ function updateRepoActivity(activity, activeRepo) {
     }
   }
   unreadRepos.delete(activeRepo);
-  renderUnreadChips();
+  renderProjectIndicators();
 }
 
 function resetChatView(repo) {
@@ -890,41 +907,107 @@ function buildAllRepositoriesTab() {
   return tab;
 }
 
-function reorderChipList(projects, sourceId, targetId, position) {
-  const ids = projects.map((project) => project.id);
-  const from = ids.indexOf(sourceId);
-  const to = ids.indexOf(targetId);
-  if (from < 0 || to < 0 || from === to) return ids;
-  const next = ids.filter((id) => id !== sourceId);
-  const targetIndex = next.indexOf(targetId);
-  next.splice(position === "after" ? targetIndex + 1 : targetIndex, 0, sourceId);
-  return next;
+function projectChipGroup(tab) {
+  return projectTabs().filter((chip) => chip.dataset.project && chip.dataset.paused === tab.dataset.paused);
 }
 
-function clearChipDropIndicators() {
-  for (const node of projectTabs()) {
-    delete node.dataset.drop;
-    delete node.dataset.dragging;
+function orderWithChipAt(tabs, source, index) {
+  const order = tabs.filter((tab) => tab !== source);
+  order.splice(index, 0, source);
+  return order;
+}
+
+function saveChipOrder(tabs, source, index) {
+  const order = orderWithChipAt(tabs, source, index);
+  const other = projectTabs().filter((tab) => tab.dataset.project && tab.dataset.paused !== source.dataset.paused);
+  saveProjectOrder((source.dataset.paused ? [...other, ...order] : [...order, ...other])
+    .map((tab) => tab.dataset.project));
+  renderProjectChips();
+  syncProjectTabSelection();
+  renderProjectIndicators();
+}
+
+function startProjectDrag(event, source) {
+  endProjectDrag();
+  const tabs = projectChipGroup(source);
+  for (const tab of tabs) tab.getAnimations?.().forEach((animation) => animation.cancel());
+  const bounds = repos.getBoundingClientRect();
+  const sourceBounds = source.getBoundingClientRect();
+  const originalIndex = tabs.indexOf(source);
+  projectDrag = {
+    source, tabs, originalIndex, index: originalIndex,
+    xOffset: event.clientX - (sourceBounds.left + sourceBounds.width / 2),
+    // Use the original slots so a shifting neighbor cannot reverse its own swap.
+    slots: tabs.filter((tab) => tab !== source).map((tab) => {
+      const box = tab.getBoundingClientRect();
+      return {middle: box.left - bounds.left + repos.scrollLeft + box.width / 2,
+        top: box.top - bounds.top, bottom: box.bottom - bounds.top};
+    }),
+  };
+  suppressProjectClick = true;
+  repos.dataset.dragGroup = source.dataset.paused ? "paused" : "active";
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", source.dataset.project);
   }
 }
 
-function buildProjectTab(project, index, paused, allActive, allPaused) {
+function previewChipOrder(drag, index) {
+  if (drag.index === index) return;
+  drag.index = index;
+  const animate = !globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const before = animate ? drag.tabs.map((tab) => tab.getBoundingClientRect()) : [];
+  for (const tab of drag.tabs) tab.getAnimations?.().forEach((animation) => animation.cancel());
+  orderWithChipAt(drag.tabs, drag.source, index).forEach((tab, i) => { tab.style.order = i + 1; });
+  if (!animate) return;
+  const after = drag.tabs.map((tab) => tab.getBoundingClientRect());
+  drag.tabs.forEach((tab, i) => {
+    if (tab === drag.source) return;
+    const x = before[i].left - after[i].left;
+    const y = before[i].top - after[i].top;
+    if (x || y) tab.animate?.([{transform: `translate(${x}px, ${y}px)`}, {transform: "none"}],
+      {duration: 150, easing: "cubic-bezier(.2, .8, .2, 1)"});
+  });
+}
+
+function projectDropIndex(event, drag) {
+  const target = event.target.closest?.(".project-chip");
+  if (target ? !drag.tabs.includes(target) : event.target !== drag.source.parentNode) return null;
+  const bounds = repos.getBoundingClientRect();
+  const x = event.clientX - bounds.left + repos.scrollLeft - drag.xOffset;
+  const y = event.clientY - bounds.top;
+  const next = drag.slots.findIndex((slot, index) => y < slot.top - 4
+    || (y <= slot.bottom + 4 && x < slot.middle + (index < drag.index ? -4 : 4)));
+  return next < 0 ? drag.slots.length : next;
+}
+
+function endProjectDrag(commit = false) {
+  const drag = projectDrag;
+  if (!drag) return;
+  projectDrag = null;
+  delete repos.dataset.dragGroup;
+  delete drag.source.dataset.dragging;
+  setTimeout(() => { if (!projectDrag) suppressProjectClick = false; }, 0);
+  if (commit && drag.index !== drag.originalIndex) {
+    saveChipOrder(drag.tabs, drag.source, drag.index);
+  } else {
+    previewChipOrder(drag, drag.originalIndex);
+    for (const tab of drag.tabs) tab.style.order = "";
+  }
+}
+
+function buildProjectTab(project, index, paused) {
   const tab = element("button", "", "project-chip");
   const label = projectLabel(project);
-  if (project.status && (project.status.color || project.status.name)) {
-    const dot = element("span", "", "project-status-dot");
-    dot.setAttribute("aria-hidden", "true");
-    if (project.status.color) dot.style.backgroundColor = project.status.color;
-    if (project.status.name) dot.dataset.status = project.status.name.toLowerCase();
-    label.append(dot);
-  }
+  const indicator = element("span", "", "project-status");
+  indicator.setAttribute("aria-hidden", "true");
+  label.append(indicator);
   tab.append(label);
-  tab.title = project.status?.name ? project.name + " · " + project.status.name : project.name;
-  tab.setAttribute("aria-label", tab.title);
   tab.id = "project-tab-" + index;
   tab.type = "button";
   tab.setAttribute("role", "tab");
   tab.setAttribute("aria-controls", "backlog status-issues");
+  tab.setAttribute("aria-keyshortcuts", "Shift+ArrowLeft Shift+ArrowRight");
   tab.dataset.project = project.id;
   tab.dataset.repo = project.repo || "";
   if (paused) tab.dataset.paused = "true";
@@ -933,57 +1016,13 @@ function buildProjectTab(project, index, paused, allActive, allPaused) {
     if (suppressProjectClick) return;
     selectProject(project.id);
   });
-  tab.addEventListener("dragstart", (event) => {
-    draggedProjectId = project.id;
-    draggedPaused = paused;
-    suppressProjectClick = true;
-    tab.dataset.dragging = "true";
-    if (event.dataTransfer) {
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/plain", project.id);
-    }
-  });
-  tab.addEventListener("dragover", (event) => {
-    if (!draggedProjectId || draggedProjectId === project.id || draggedPaused !== paused) return;
-    event.preventDefault();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-    const box = tab.getBoundingClientRect();
-    const pos = event.clientX > box.left + box.width / 2 ? "after" : "before";
-    for (const other of projectTabs()) {
-      if (other !== tab) delete other.dataset.drop;
-    }
-    tab.dataset.drop = pos;
-  });
-  tab.addEventListener("dragleave", () => {
-    delete tab.dataset.drop;
-  });
-  tab.addEventListener("drop", (event) => {
-    if (!draggedProjectId || draggedProjectId === project.id || draggedPaused !== paused) return;
-    event.preventDefault();
-    const box = tab.getBoundingClientRect();
-    const pos = tab.dataset.drop || (event.clientX > box.left + box.width / 2 ? "after" : "before");
-    const sourceId = draggedProjectId;
-    draggedProjectId = "";
-    clearChipDropIndicators();
-    const group = paused ? allPaused : allActive;
-    const reorderedGroup = reorderChipList(group, sourceId, project.id, pos);
-    const fullOrder = paused
-      ? [...allActive.map((item) => item.id), ...reorderedGroup]
-      : [...reorderedGroup, ...allPaused.map((item) => item.id)];
-    saveProjectOrder(fullOrder);
-    renderProjectChips();
-    syncProjectTabSelection();
-    renderUnreadChips();
-  });
-  tab.addEventListener("dragend", () => {
-    draggedProjectId = "";
-    clearChipDropIndicators();
-    setTimeout(() => { suppressProjectClick = false; }, 0);
-  });
+  tab.addEventListener("dragstart", (event) => startProjectDrag(event, tab));
+  tab.addEventListener("dragend", () => endProjectDrag());
   return tab;
 }
 
 function renderProjectChips() {
+  endProjectDrag();
   const focusedProject = repos.contains(document.activeElement)
     ? document.activeElement?.dataset?.project : null;
   const focusedPausedToggle = document.activeElement?.id === "paused-projects-toggle";
@@ -994,9 +1033,10 @@ function renderProjectChips() {
   if (paused.some((project) => project.id === selected)) pausedProjectsOpen = true;
   const nodes = [buildAllRepositoriesTab()];
   let index = 0;
-  for (const project of active) nodes.push(buildProjectTab(project, index++, false, active, paused));
+  for (const project of active) nodes.push(buildProjectTab(project, index++, false));
   if (paused.length) {
     const section = element("div", "", "paused-projects-section");
+    section.style.order = active.length + 1;
     const toggle = element("button", "", "paused-projects-toggle");
     toggle.id = "paused-projects-toggle";
     toggle.type = "button";
@@ -1007,13 +1047,13 @@ function renderProjectChips() {
     const list = element("div", "", "paused-projects-list");
     list.id = "paused-projects-list";
     list.hidden = !pausedProjectsOpen;
-    for (const project of paused) list.append(buildProjectTab(project, index++, true, active, paused));
+    for (const project of paused) list.append(buildProjectTab(project, index++, true));
     toggle.addEventListener("click", () => {
       pausedProjectsOpen = !pausedProjectsOpen;
       toggle.setAttribute("aria-expanded", String(pausedProjectsOpen));
       toggle.title = pausedProjectsOpen ? "Hide paused projects" : "Show paused projects";
       list.hidden = !pausedProjectsOpen;
-      renderUnreadChips();
+      renderProjectIndicators();
     });
     section.append(toggle, list);
     nodes.push(section);
@@ -1036,7 +1076,7 @@ function updateProjects(projects, redraw) {
   preloadIssueDetails(issueCache.get(""));
   const key = JSON.stringify(projects.map((project) => [
     project.id, project.repo, project.name, project.icon,
-    project.status?.name || "", project.status?.type || "", project.status?.color || "",
+    project.status?.name || "", project.status?.type || "",
   ]));
   if (key === projectsKey) {
     if (redraw || JSON.stringify(previous) !== JSON.stringify(issueCache.get(selected))) renderPanes();
@@ -1073,7 +1113,7 @@ function selectProject(project) {
     if (list) list.hidden = false;
   }
   syncProjectTabSelection();
-  renderUnreadChips();
+  renderProjectIndicators();
   renderRepoButtons(repoButtons, selectedRepo || "");
   renderPanes();
   restorePaneScroll(project);
@@ -1763,6 +1803,7 @@ async function poll() {
     const redrawIssues = tasksChanged || today !== issueDay;
     issueDay = today;
     tasks = state.tasks;
+    workByRepo = state.workByRepo || {};
     syncApproveButtons();
     if (state.projects) {
       if (!issueRevision) selected = state.view;
@@ -1844,6 +1885,30 @@ async function interruptTurn() {
   }
 }
 
+document.addEventListener("dragover", (event) => {
+  const drag = projectDrag;
+  if (!drag) return;
+  const index = projectDropIndex(event, drag);
+  if (index === null) {
+    previewChipOrder(drag, drag.originalIndex);
+    return;
+  }
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  drag.source.dataset.dragging = "true";
+  previewChipOrder(drag, index);
+});
+
+repos.addEventListener("drop", (event) => {
+  const drag = projectDrag;
+  if (!drag) return;
+  const index = projectDropIndex(event, drag);
+  if (index === null) return;
+  event.preventDefault();
+  previewChipOrder(drag, index);
+  endProjectDrag(true);
+});
+
 repos.addEventListener("keydown", (event) => {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
   const tabs = visibleProjectTabs();
@@ -1851,6 +1916,16 @@ repos.addEventListener("keydown", (event) => {
   const current = tabs.indexOf(event.target);
   if (current < 0) return;
   const offset = event.key === "ArrowLeft" ? -1 : 1;
+  if (event.shiftKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+    const source = event.target;
+    const group = projectChipGroup(source);
+    const from = group.indexOf(source);
+    const to = from + offset;
+    if (from < 0) return;
+    event.preventDefault();
+    if (to >= 0 && to < group.length) saveChipOrder(group, source, to);
+    return;
+  }
   let index = (current + offset + tabs.length) % tabs.length;
   if (event.key === "Home") index = 0;
   if (event.key === "End") index = tabs.length - 1;

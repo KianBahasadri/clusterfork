@@ -17,8 +17,11 @@ chat transcript.
 
 Open Symphony on the tailnet and sign in to Antigravity in **Config** (or via
 `/login`) if prompted. Choose **All repositories** or a project chip in the
-page header. Project chips show a color-coded Linear status dot, can be dragged to
-reorder (persisted in browser storage), and group any **Paused** projects into a
+page header. Project chips show a spinner during worker or coordinator activity,
+**Zzz** when idle, or a red alert for paused projects or stopped work. The tooltip
+also shows the project's Linear status. When you drag a chip, its neighbors move
+aside as you cross their midpoints. The order saves in browser storage on drop.
+**Shift+Left/Right** also reorders the focused chip. **Paused** projects stay in a
 dimmed, horizontally collapsible **Paused** section at the end. **All
 repositories** uses the global cross-repository session (`repo=""`), combines
 issues across enrolled projects with per-card project pills, and hides per-repo
@@ -134,10 +137,11 @@ Assistant Markdown renders incrementally in place with raw HTML escaped and
 unsafe URL schemes blocked; user and worker messages remain plain text. Use
 **Interrupt** (or `/interrupt`) to terminate an active coordinator subprocess cleanly.
 
-The composer status line shows the active Antigravity model, 5-hour and weekly
-quota windows (polled from Code Assist `loadCodeAssist` /
-`retrieveUserQuotaSummary`), and turn timing (with pure-CSS animations disabled
-under reduced motion). When Antigravity quota reaches `0%` or a turn fails with
+The composer status line shows the active Antigravity model, its model group's
+5-hour and weekly quota (polled from Code Assist `loadCodeAssist` /
+`retrieveUserQuotaSummary`), and turn timing. Claude and GPT share their own
+quota group. Animations stop under reduced motion. When the active group's
+quota reaches `0%` or a turn fails with
 a quota/rate-limit error, Symphony displays an alert banner with the reset
 time, posts a one-shot chat notice, highlights `document.title`, optionally
 fires one background browser `Notification`, and clears the alert automatically

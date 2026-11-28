@@ -81,6 +81,7 @@ HISTORY_CONCURRENCY = 3
 RECENT_DONE = timedelta(hours=24)
 ACTIVE_PHASES = {"working", "publishing", "ci", "finishing"}
 DRAINING_PHASES = {"finish_failed"}
+STOPPED_PHASES = {"parked", "blocked", "finish_failed"}
 
 
 def image_matches(mime, data):
@@ -796,16 +797,27 @@ class Symphony:
             self.stream_cache = (active_repo, text, markdown(text) if text else "")
         raw_buttons = self.runner.repo_buttons(active_repo) if active_repo else []
         raw_diagram = self.runner.diagram(active_repo) if active_repo else None
+        tasks = self.runner.status()
+        paused = self.runner.setting("paused")
+        work_by_repo = {
+            task["repo"]: "stopped" for task in tasks
+            if task["phase"] in STOPPED_PHASES or (paused and task["phase"] == "queued")
+        }
+        work_by_repo.update((task["repo"], "working") for task in tasks if task["phase"] in ACTIVE_PHASES)
+        for repo in (self.coordinator.active_repo(), self.compacting_repo):
+            if repo:
+                work_by_repo[repo] = "working"
         state = {
             "messages": messages,
             "busy": self.busy,
             "canInterrupt": bool(self.coordinator.turn_for(active_repo)),
             "stream": text,
             "streamHtml": self.stream_cache[2],
-            "tasks": self.runner.status(),
+            "tasks": tasks,
+            "workByRepo": work_by_repo,
             "signedIn": bool(self.coordinator.account),
             "login": login,
-            "paused": self.runner.setting("paused"),
+            "paused": paused,
             "view": self.runner.setting("view"),
             "repo": active_repo,
             "repoActivity": self.runner.repo_chat_latest(),

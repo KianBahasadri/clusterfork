@@ -153,6 +153,7 @@ class HistorySnapshotTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(temp.name)
         self.runner = Mock()
         self.runner.rows.return_value = []
+        self.runner.status.return_value = []
         self.runner.wake = Mock()
         self.runner.task.side_effect = ValueError("No approved plan.")
         self.runner.artifacts.return_value = self.root / "runs" / ISSUE

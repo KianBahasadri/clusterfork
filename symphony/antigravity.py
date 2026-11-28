@@ -26,6 +26,8 @@ DEFAULT_CHAT_MODEL = "gemini-4-neon-high"
 ESCALATION_MODEL = "gemini-4-hydrogen-xhigh"
 LOGIN_MODEL = "gemini-4-hydrogen-low"
 ESCALATION_QUOTA_MIN_LEFT = 20
+QUOTA_WINDOWS = ("5h", "weekly")
+PARTNER_QUOTA_WINDOWS = ("other5h", "otherWeekly")
 
 DEFAULT_MODELS = {
     "gemini-4-neon-high": "Gemini 4 Neon (High)",
@@ -221,8 +223,12 @@ def _code_assist_post(path, token, body):
         return json.loads(response.read().decode("utf-8"))
 
 
+def partner_model(model):
+    return model.lower().startswith(("claude-", "gpt-"))
+
+
 def fetch_code_assist_quota(token):
-    """Read live Antigravity quota windows (gemini-5h, gemini-weekly, other-weekly)."""
+    """Read the five-hour and weekly quotas for Gemini and Claude/GPT."""
     account = _code_assist_post(
         "loadCodeAssist",
         token,
@@ -238,52 +244,36 @@ def fetch_code_assist_quota(token):
         if error.code not in {400, 404, 405, 501}:
             raise
         data = {}
-    groups = data.get("groups") or []
-    limits = {}
+    groups = data.get("groups")
     if groups:
-        for group in groups:
-            g_id = str(group.get("groupId") or group.get("id") or group.get("name") or "").lower()
-            is_other = "other" in g_id or "claude" in g_id
-            for bucket in group.get("buckets") or []:
-                rem = bucket.get("remainingFraction")
-                if not (isinstance(rem, (int, float)) and not isinstance(rem, bool) and math.isfinite(rem)):
-                    continue
-                left = max(0, min(100, int(round(rem * 100))))
-                reset_epoch = _parse_iso_epoch(bucket.get("resetTime"))
-                window_hint = str(bucket.get("bucketId") or bucket.get("windowId") or bucket.get("period") or "").lower()
-                if is_other:
-                    key = "otherWeekly"
-                elif "5h" in window_hint or "hour" in window_hint or "short" in window_hint:
-                    key = "5h"
-                elif "week" in window_hint:
-                    key = "weekly"
-                elif reset_epoch is not None and reset_epoch - time.time() <= 21600:
-                    key = "5h"
-                else:
-                    key = "weekly"
-                prev = limits.get(key)
-                if prev is None or left < prev["left"]:
-                    limits[key] = {"left": left, "resetsAt": reset_epoch}
+        buckets = (
+            (bucket, str(group.get("groupId") or group.get("id") or group.get("name") or "").lower())
+            for group in groups for bucket in group.get("buckets") or []
+        )
     else:
         raw = _code_assist_post("retrieveUserQuota", token, {"project": project})
-        for bucket in raw.get("buckets") or []:
-            if bucket.get("tokenType", "REQUESTS") not in {"REQUESTS", "WTUS"}:
-                continue
-            rem = bucket.get("remainingFraction")
-            if not (isinstance(rem, (int, float)) and not isinstance(rem, bool) and math.isfinite(rem)):
-                continue
-            left = max(0, min(100, int(round(rem * 100))))
-            reset_epoch = _parse_iso_epoch(bucket.get("resetTime"))
-            model_id = str(bucket.get("modelId") or "").lower()
-            if "claude" in model_id or "gpt" in model_id:
-                key = "otherWeekly"
-            elif reset_epoch is not None and reset_epoch - time.time() <= 21600:
-                key = "5h"
-            else:
-                key = "weekly"
-            prev = limits.get(key)
-            if prev is None or left < prev["left"]:
-                limits[key] = {"left": left, "resetsAt": reset_epoch}
+        buckets = ((bucket, "") for bucket in raw.get("buckets") or []
+                   if bucket.get("tokenType", "REQUESTS") in {"REQUESTS", "WTUS"})
+    limits = {}
+    for bucket, group_id in buckets:
+        rem = bucket.get("remainingFraction")
+        if not (isinstance(rem, (int, float)) and not isinstance(rem, bool) and math.isfinite(rem)):
+            continue
+        left = max(0, min(100, int(round(rem * 100))))
+        reset_epoch = _parse_iso_epoch(bucket.get("resetTime"))
+        hint = str(bucket.get("bucketId") or bucket.get("windowId") or bucket.get("period") or "").lower()
+        partner = (hint.startswith(("3p-", "other-")) or group_id == "3p" or "other" in group_id
+                   or "claude" in group_id or partner_model(hint) or partner_model(str(bucket.get("modelId") or "")))
+        if "5h" in hint or "hour" in hint or "short" in hint:
+            window = 0
+        elif "week" in hint:
+            window = 1
+        else:
+            window = 0 if reset_epoch is not None and reset_epoch - time.time() <= 21600 else 1
+        key = (PARTNER_QUOTA_WINDOWS if partner else QUOTA_WINDOWS)[window]
+        prev = limits.get(key)
+        if prev is None or left < prev["left"]:
+            limits[key] = {"left": left, "resetsAt": reset_epoch}
     return limits, tier
 
 
@@ -463,9 +453,9 @@ class Antigravity:
     def can_auto_escalate(self):
         if not self.account:
             return False, "Antigravity is not signed in."
-        if self.usage_error:
+        if self.usage_error and not partner_model(self.usage_error["model"]):
             return False, self.usage_error.get("detail") or "Antigravity quota exhausted."
-        for window in ("5h", "weekly"):
+        for window in QUOTA_WINDOWS:
             entry = self.rate_limits.get(window)
             if isinstance(entry, dict) and isinstance(entry.get("left"), (int, float)):
                 if entry["left"] <= ESCALATION_QUOTA_MIN_LEFT:
@@ -474,6 +464,11 @@ class Antigravity:
                         f"(<= {ESCALATION_QUOTA_MIN_LEFT}% reserve)."
                     )
         return True, ""
+
+    def model_rate_limits(self, model):
+        keys = PARTNER_QUOTA_WINDOWS if partner_model(model) else QUOTA_WINDOWS
+        return {window: self.rate_limits[key] for window, key in zip(QUOTA_WINDOWS, keys)
+                if key in self.rate_limits}
 
     def status(self, repo=""):
         if not self.account:
@@ -492,21 +487,24 @@ class Antigravity:
             "model": display,
             "effort": "",
             "contextUsed": self.context_usages.get(repo),
-            "rateLimits": self.rate_limits,
+            "rateLimits": self.model_rate_limits(name),
             "turnTiming": self.turn_timings.get(repo, {}),
             "models": dict(self.models),
             "efforts": [],
         }
 
     def usage_alert(self):
+        model = self.current_model()
+        limits = self.model_rate_limits(model)
+        error = self.usage_error
+        if error and partner_model(error["model"]) != partner_model(model):
+            error = None
         windows = [
-            label for label in ("5h", "weekly")
-            if label in self.rate_limits and self.rate_limits[label]["left"] == 0
+            label for label, limit in limits.items() if limit["left"] == 0
         ]
         if windows:
             resets = [
-                self.rate_limits[label]["resetsAt"]
-                for label in windows if self.rate_limits[label].get("resetsAt") is not None
+                limits[label]["resetsAt"] for label in windows if limits[label].get("resetsAt") is not None
             ]
             return {
                 "active": True,
@@ -514,18 +512,18 @@ class Antigravity:
                 "windows": windows,
                 "resetsAt": max(resets) if resets else None,
                 "windowResets": {
-                    label: self.rate_limits[label].get("resetsAt") for label in windows
+                    label: limits[label].get("resetsAt") for label in windows
                 },
-                "detail": self.usage_error["detail"] if self.usage_error else "",
+                "detail": error["detail"] if error else "",
             }
-        if self.usage_error:
+        if error:
             return {
                 "active": True,
                 "source": "turn_error",
                 "windows": [],
                 "resetsAt": None,
                 "windowResets": {},
-                "detail": self.usage_error["detail"],
+                "detail": error["detail"],
             }
         return None
 
@@ -553,9 +551,9 @@ class Antigravity:
         self.runner.chat("system", " ".join(parts), repo=target)
         return True
 
-    def record_usage_error(self, message, repo=""):
+    def record_usage_error(self, message, repo="", model=None):
         detail = str(message or "").strip()[:500] or "Antigravity usage limit reached."
-        self.usage_error = {"detail": detail, "at": time.time()}
+        self.usage_error = {"detail": detail, "model": model or self.current_model(), "at": time.time()}
         posted = self._sync_usage_notice(repo=repo)
         self.status_wake.set()
         return posted
@@ -759,7 +757,8 @@ class Antigravity:
             return
         if limits:
             self.rate_limits = limits
-            if all(limits[k]["left"] > 0 for k in ("5h", "weekly") if k in limits):
+            error_limits = self.model_rate_limits(self.usage_error["model"]) if self.usage_error else {}
+            if error_limits and all(limit["left"] > 0 for limit in error_limits.values()):
                 self.usage_error = None
             self._sync_usage_notice()
         if tier:
@@ -1019,7 +1018,7 @@ class Antigravity:
         if exit_code or last_error:
             msg = last_error or f"Antigravity escalation exited {exit_code}."
             if is_usage_error(msg):
-                self.record_usage_error(msg, repo=repo)
+                self.record_usage_error(msg, repo=repo, model=chosen)
             raise RuntimeError(msg[:1000] + " See worker.log.")
         self.status_wake.set()
         return chosen

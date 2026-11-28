@@ -835,8 +835,9 @@ class SymphonyTests(unittest.IsolatedAsyncioTestCase):
                     {"bucketId": "gemini-5h", "remainingFraction": 0.72, "resetTime": future_short},
                     {"bucketId": "gemini-weekly", "remainingFraction": 0.45, "resetTime": future_short},
                 ]},
-                {"groupId": "other", "buckets": [
-                    {"bucketId": "other-weekly", "remainingFraction": 0.90, "resetTime": future_short},
+                {"buckets": [
+                    {"bucketId": "3p-5h", "remainingFraction": 0.87, "resetTime": future_short},
+                    {"bucketId": "3p-weekly", "remainingFraction": 0.90, "resetTime": future_short},
                 ]},
             ]},
         ]
@@ -845,6 +846,7 @@ class SymphonyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tier, "Pro")
         self.assertEqual(limits["5h"]["left"], 72)
         self.assertEqual(limits["weekly"]["left"], 45)
+        self.assertEqual(limits["other5h"]["left"], 87)
         self.assertEqual(limits["otherWeekly"]["left"], 90)
 
         agy = Antigravity(self.runner, None, home_dir=self.home)
@@ -869,7 +871,10 @@ class SymphonyTests(unittest.IsolatedAsyncioTestCase):
         await agy.connect()
         self.runner.save_setting("view", "project")
 
-        exhausted_limits = ({"5h": {"left": 0, "resetsAt": 1800000000}, "weekly": {"left": 40, "resetsAt": 1800500000}}, "Pro")
+        exhausted_limits = ({
+            "5h": {"left": 0, "resetsAt": 1800000000}, "weekly": {"left": 40, "resetsAt": 1800500000},
+            "other5h": {"left": 87, "resetsAt": 1800007200}, "otherWeekly": {"left": 94, "resetsAt": 1800507200},
+        }, "Pro")
         with patch("symphony.antigravity.fetch_code_assist_quota", return_value=exhausted_limits):
             await agy.refresh_quota()
             await agy.refresh_quota()
@@ -880,6 +885,14 @@ class SymphonyTests(unittest.IsolatedAsyncioTestCase):
         notices = [m for m in state["messages"] if m["role"] == "system"]
         self.assertEqual(len(notices), 1)
         self.assertIn("5h at 0%", notices[0]["text"])
+        self.runner.save_setting("model", "claude-sonnet-5-5-low")
+        claude = await app.state(0, project="project")
+        self.assertEqual(claude["coordinator"]["rateLimits"], {
+            "5h": exhausted_limits[0]["other5h"], "weekly": exhausted_limits[0]["otherWeekly"],
+        })
+        self.assertIsNone(claude["usageAlert"])
+        self.assertFalse(agy.can_auto_escalate()[0])
+        self.runner.save_setting("model", "gemini-4-neon-high")
 
         recovered_limits = ({"5h": {"left": 65, "resetsAt": 1800000000}, "weekly": {"left": 40, "resetsAt": 1800500000}}, "Pro")
         with patch("symphony.antigravity.fetch_code_assist_quota", return_value=recovered_limits):
@@ -1096,6 +1109,16 @@ class SymphonyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(global_state["repo"], "")
         self.assertEqual([m["text"] for m in global_state["messages"]], ["Global notice"])
         self.assertIn(REPO, global_state["repoActivity"])
+
+        with patch.object(self.runner, "status", return_value=[
+            {"repo": REPO, "phase": "parked"}, {"repo": REPO, "phase": "ci"},
+            {"repo": "owner/stopped", "phase": "finish_failed"}, {"repo": "owner/waiting", "phase": "queued"},
+        ]):
+            app.coordinator.turns["owner/chat"] = "turn"
+            state = await app.state(0, project="")
+            self.assertEqual(state["workByRepo"], {REPO: "working", "owner/stopped": "stopped", "owner/chat": "working"})
+            self.runner.save_setting("paused", "Quota exhausted")
+            self.assertEqual((await app.state(0, project=""))["workByRepo"]["owner/waiting"], "stopped")
 
         handler = object.__new__(Handler)
         handler.path = "/api/state?after=0&issues=r1&project="

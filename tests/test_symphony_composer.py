@@ -1278,7 +1278,7 @@ const nodes = new Map();
 const makeNode = (tag = "div", id = "") => {
   const node = {
     tag, id, textContent: "", innerHTML: "", value: "", hidden: false, disabled: false, open: false,
-    draggable: false, tabIndex: -1, href: "", src: "", alt: "", title: "", className: "",
+    draggable: false, tabIndex: -1, href: "", src: "", alt: "", title: "", className: "", scrollLeft: 0,
     dataset: {}, style: {setProperty() {}}, listeners: {}, children: [],
     classList: {add(...c) { node.className = [node.className, ...c].filter(Boolean).join(" "); }, remove() {}},
     addEventListener(t, h) { (this.listeners[t] ||= []).push(h); },
@@ -1298,6 +1298,7 @@ const makeNode = (tag = "div", id = "") => {
     },
     closest(sel) {
       if (sel === "aside") return this._aside ||= makeNode("aside");
+      if (sel === ".project-chip" && this.className.includes("project-chip")) return this;
       return this.hidden ? this : null;
     },
     getBoundingClientRect() { return {left: 0, right: 100, top: 0, bottom: 30, width: 100, height: 30}; },
@@ -1378,12 +1379,13 @@ vm.runInContext(fs.readFileSync(process.argv[3], "utf8"), ctx);
     {id: "proj-paused", name: "Sleeping", icon: "", repo: "owner/p", status: {name: "Paused", type: "backlog", color: "#888"}, issues: []},
     {id: "proj-b", name: "Beta", icon: "", repo: "owner/b", status: {name: "Backlog", type: "backlog", color: "#f2994a"}, issues: []},
   ];
+  vm.runInContext('workByRepo = {"owner/a": "working"}', ctx);
   ctx.updateProjects(projects, true);
   const reposEl = doc.getElementById("repos");
   const allTabs = reposEl.querySelectorAll('button[role="tab"]').map((t) => ({
     id: t.id, project: t.dataset.project, paused: t.dataset.paused || "",
-    hasDot: t.querySelectorAll(".project-status-dot").length > 0,
-    dotColor: t.querySelector(".project-status-dot")?.style?.backgroundColor || "",
+    status: t.querySelector(".project-status")?.dataset.status || "",
+    symbol: t.querySelector(".project-status")?.textContent || "",
   }));
   const pausedListHiddenBefore = doc.getElementById("paused-projects-list").hidden;
   doc.getElementById("paused-projects-toggle").listeners.click[0]();
@@ -1392,8 +1394,8 @@ vm.runInContext(fs.readFileSync(process.argv[3], "utf8"), ctx);
   // Drag Beta before Alpha
   const alphaTab = reposEl.querySelectorAll('button[role="tab"]').find((t) => t.dataset.project === "proj-a");
   const betaTab = reposEl.querySelectorAll('button[role="tab"]').find((t) => t.dataset.project === "proj-b");
-  betaTab.listeners.dragstart[0]({dataTransfer: {setData() {}, effectAllowed: ""}});
-  alphaTab.listeners.drop[0]({clientX: 10, preventDefault() {}});
+  betaTab.listeners.dragstart[0]({clientX: 50, dataTransfer: {setData() {}, effectAllowed: ""}});
+  reposEl.listeners.drop[0]({target: alphaTab, clientX: 10, clientY: 15, preventDefault() {}});
   const savedOrder = JSON.parse(localStorage.getItem("symphony.projectOrder") || "[]");
 
   // Switching to All repositories keeps combined issue + project pill
@@ -1452,10 +1454,11 @@ vm.runInContext(fs.readFileSync(process.argv[3], "utf8"), ctx);
         self.assertEqual(run.returncode, 0, run.stderr)
         res = json.loads(run.stdout)
         self.assertEqual(res["allTabs"][0], {
-            "id": "project-tab-all", "project": "", "paused": "", "hasDot": False, "dotColor": "",
+            "id": "project-tab-all", "project": "", "paused": "", "status": "", "symbol": "",
         })
         self.assertEqual([t["project"] for t in res["allTabs"][1:]], ["proj-a", "proj-b", "proj-paused"])
-        self.assertTrue(all(t["hasDot"] for t in res["allTabs"][1:]))
+        self.assertEqual([t["status"] for t in res["allTabs"][1:]], ["working", "idle", "stopped"])
+        self.assertEqual(res["allTabs"][2]["symbol"], "Zzz")
         self.assertTrue(res["pausedListHiddenBefore"])
         self.assertFalse(res["pausedListHiddenAfter"])
         self.assertEqual(res["savedOrder"], ["proj-b", "proj-a", "proj-paused"])
