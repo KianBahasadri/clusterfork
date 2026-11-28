@@ -23,8 +23,8 @@ PLAN_HEADING = re.compile(r"^ {0,3}##[ \t]+Proposed Plan[ \t]*#*[ \t]*$")
 HEADING = re.compile(r"^ {0,3}#{1,2}[ \t]+\S")
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 ISSUE_FIELDS = """
-    id identifier title url description priority estimate
-    state { name type } team { id } project { id }
+    id identifier title url description priority estimate updatedAt
+    state { id name type color } team { id } project { id }
 """
 HISTORY_FIELDS = """
     history(first: 100) {
@@ -202,7 +202,7 @@ class Linear:
         while True:
             data = await self.query("""query($after: String) {
                 projects(first: 50, after: $after) {
-                    nodes { id name icon description archivedAt externalLinks(first: 50) {
+                    nodes { id name icon description archivedAt status { id name type color } externalLinks(first: 50) {
                         nodes { url } pageInfo { hasNextPage }
                     } }
                     pageInfo { endCursor hasNextPage }
@@ -220,9 +220,16 @@ class Linear:
                     continue
                 repo = urls.pop()
                 icon = emojize(project["icon"] or "", language="alias")
+                raw_status = project.get("status") if isinstance(project.get("status"), dict) else None
+                status = {
+                    "name": raw_status.get("name") or "",
+                    "type": raw_status.get("type") or "",
+                    "color": raw_status.get("color") or "",
+                } if raw_status else None
                 repos.setdefault(repo, []).append({
                     "id": project["id"], "name": project["name"],
                     "icon": icon if is_emoji(icon) else "",
+                    "status": status,
                 })
             page = projects["pageInfo"]
             if not page["hasNextPage"]:
@@ -363,7 +370,7 @@ class Linear:
                     id name key archivedAt
                     issueEstimationType issueEstimationExtended issueEstimationAllowZero
                     states(first: 100, after: $after) {
-                        nodes { id name type archivedAt }
+                        nodes { id name type color position archivedAt }
                         pageInfo { endCursor hasNextPage }
                     }
                 }
@@ -496,7 +503,7 @@ class Linear:
 
     async def set_state(self, identifier, name, kind):
         issue = await self.issue(identifier)
-        if issue["state"] == {"name": name, "type": kind}:
+        if (issue["state"].get("name"), issue["state"].get("type")) == (name, kind):
             return
         if issue["state"]["type"] in CLOSED_STATES:
             raise ValueError(f"{identifier} is already {issue['state']['name']}.")
@@ -508,8 +515,25 @@ class Linear:
         if len(states) != 1:
             raise RuntimeError(f"The Linear team must have one {name} state.")
         updated = await self.update(issue["id"], stateId=states[0])
-        if updated["state"] != {"name": name, "type": kind}:
+        if (updated["state"].get("name"), updated["state"].get("type")) != (name, kind):
             raise RuntimeError(f"Linear did not move {identifier} to {name}.")
+
+    async def set_issue_state(self, identifier, state_id):
+        issue = await self.issue(identifier)
+        if (issue.get("state") or {}).get("id") == state_id:
+            return issue
+        team = await self.team_context(issue["team"]["id"])
+        target = next(
+            (state for state in team.get("states") or []
+             if not state.get("archivedAt") and state.get("id") == state_id),
+            None,
+        )
+        if target is None:
+            raise ValueError("Unknown Linear workflow state for this team.")
+        updated = await self.update(issue["id"], stateId=state_id)
+        if (updated.get("state") or {}).get("id") != state_id:
+            raise RuntimeError(f"Linear did not move {identifier} to {target.get('name') or state_id}.")
+        return updated
 
 
 async def stop_process(process):

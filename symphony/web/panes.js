@@ -24,7 +24,30 @@ function canceledOrder(a, b) {
 }
 
 function selectableProject(projects, selected) {
-  return projects.some((project) => project.id === selected) ? selected : (projects[0]?.id || "");
+  return selected && projects.some((project) => project.id === selected) ? selected : "";
+}
+
+function isPausedProject(project) {
+  const name = String(project?.status?.name || "").trim().toLowerCase();
+  const type = String(project?.status?.type || "").trim().toLowerCase();
+  return name === "paused" || type === "paused";
+}
+
+function orderProjects(projects, savedOrder = []) {
+  const rank = new Map();
+  if (Array.isArray(savedOrder)) {
+    savedOrder.forEach((id, index) => {
+      if (typeof id === "string" && id && !rank.has(id)) rank.set(id, index);
+    });
+  }
+  const sortGroup = (items) => items
+    .map((project, index) => ({project, index, saved: rank.has(project.id) ? rank.get(project.id) : Infinity}))
+    .toSorted((a, b) => a.saved - b.saved || a.index - b.index)
+    .map((entry) => entry.project);
+  return {
+    active: sortGroup(projects.filter((project) => !isPausedProject(project))),
+    paused: sortGroup(projects.filter((project) => isPausedProject(project))),
+  };
 }
 
 function partitionIssues(rows) {

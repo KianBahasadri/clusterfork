@@ -16,8 +16,14 @@ chat transcript.
 ## Queue, plan, and execute
 
 Open Symphony on the tailnet and sign in to Antigravity in **Config** (or via
-`/login`) if prompted. Choose a project chip in the page header. The desktop
-layout puts that project's Unsure and Backlog groups on the left, coordinator
+`/login`) if prompted. Choose **All repositories** or a project chip in the
+page header. Project chips show a color-coded Linear status dot, can be dragged to
+reorder (persisted in browser storage), and group any **Paused** projects into a
+dimmed, horizontally collapsible **Paused** section at the end. **All
+repositories** uses the global cross-repository session (`repo=""`), combines
+issues across enrolled projects with per-card project pills, and hides per-repo
+prompt buttons and diagrams while active. The desktop
+layout puts Unsure and Backlog groups on the left, coordinator
 chat in the middle, and Todo, In Progress, Done, Canceled, and Duplicate in the
 right-hand Queue panel. Each side panel has an independent header control that
 collapses it to a compact rail on desktop or a header row on narrow screens,
@@ -90,7 +96,9 @@ paginated Linear status history), optional proposed plan, and active worker
 phase/tier badge.
 
 Click an issue card to open its details in a modal (Issue tab and on-demand
-Execution tab). Details preload in the background (at most two at once) and
+Execution tab). On the Issue tab, click the workflow status control in
+Properties to change an issue's Linear state directly (`POST /api/issue-status`),
+blocked while a worker is actively running that issue. Details preload in the background (at most two at once) and
 share a versioned private cache keyed by `updatedAt`. Linear uploads stream
 through Symphony using server-side credentials. The Execution tab refreshes live
 while open and shows tracked stage totals, worker attempts, bounded redacted
@@ -116,12 +124,15 @@ Type `/` to see commands: `/run `, `/stats`, `/model `, `/new`, `/compact`,
 sends a message, Shift+Enter inserts a newline, and Up recalls previous inputs.
 Paste up to four PNG, JPEG, or WebP images (5 MiB each, 10 MiB total); accepted
 images are saved on the Symphony data volume and passed as file paths for the
-coordinator to inspect with `read_file`. Slash commands do not accept images.
+coordinator to inspect with `read_file`. Clicking an attached image in chat
+opens a viewport-fitted popup preview modal within the page rather than a new
+tab. Slash commands do not accept images.
 Submitting shows an accessible Sending status immediately and displays the
-canonical server-saved message without waiting for the next poll. Assistant
-Markdown renders incrementally in place with raw HTML escaped and unsafe URL
-schemes blocked; user and worker messages remain plain text. Use **Interrupt**
-(or `/interrupt`) to terminate an active coordinator subprocess cleanly.
+canonical server-saved message without waiting for the next poll. Coordinator
+compaction notices expand in place to reveal the captured compaction summary.
+Assistant Markdown renders incrementally in place with raw HTML escaped and
+unsafe URL schemes blocked; user and worker messages remain plain text. Use
+**Interrupt** (or `/interrupt`) to terminate an active coordinator subprocess cleanly.
 
 The composer status line shows the active Antigravity model, 5-hour and weekly
 quota windows (polled from Code Assist `loadCodeAssist` /

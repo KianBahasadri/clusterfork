@@ -180,6 +180,9 @@ def chat_message(row):
     except (TypeError, ValueError):
         meta = {}
     if isinstance(meta, dict) and meta:
+        if (meta.get("kind") == "compaction"
+                and isinstance(meta.get("compactionText"), str) and meta["compactionText"].strip()):
+            meta = {**meta, "compactionHtml": markdown(meta["compactionText"])}
         message["meta"] = meta
     if message["role"] == "assistant":
         message["html"] = markdown(message["text"])
@@ -652,15 +655,35 @@ class Symphony:
         self.runner.chat("system", f"Moved {issue_id} to Todo for automatic Flash dispatch.", repo=repo)
         return {"approved": issue_id, "repo": repo}
 
-    def resolve_repo(self, project="", repo=""):
+    async def update_issue_status(self, body):
+        if (not isinstance(body, dict) or set(body) != {"issue", "stateId"}
+                or not isinstance(body["issue"], str) or not ISSUE_ID.fullmatch(body["issue"])
+                or not isinstance(body["stateId"], str) or not body["stateId"].strip()):
+            raise ValueError("Expected an issue identifier and target stateId.")
+        issue_id = body["issue"]
+        state_id = body["stateId"].strip()
+        for row in self.runner.rows("SELECT phase FROM tasks WHERE issue=?", (issue_id,)):
+            if row["phase"] in ACTIVE_PHASES:
+                raise BusyError(f"Cannot change status of {issue_id} while a worker is {row['phase']}.")
+        _, repo = await self.live_issue(issue_id)
+        updated = await self.linear.set_issue_state(issue_id, state_id)
+        self.request_issue_refresh()
+        return {
+            "issue": issue_id,
+            "state": updated["state"],
+            "updatedAt": updated.get("updatedAt") or "",
+            "repo": repo,
+        }
+
+    def resolve_repo(self, project=None, repo=""):
         if repo and repo in self.repos:
             return repo
-        target = project or self.runner.setting("view")
+        if project == "":
+            return ""
+        target = project if project is not None else self.runner.setting("view")
         found = self.mapped_project(target) if target else None
         if found:
             return found[0]
-        if self.issue_snapshot:
-            return self.issue_snapshot[0].get("repo", "")
         return ""
 
     def active_login(self):
@@ -746,7 +769,7 @@ class Symphony:
             raise ValueError("Unsupported config action.")
         return await self.config_state()
 
-    async def state(self, after, issue_revision="", project="", repo=""):
+    async def state(self, after, issue_revision="", project=None, repo=""):
         active_login = self.active_login()
         login = {"url": active_login["url"]} if active_login else None
         active_repo = self.resolve_repo(project, repo)
@@ -1061,7 +1084,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         url = urlsplit(self.path)
-        params = parse_qs(url.query)
+        params = parse_qs(url.query, keep_blank_values=True)
         app = self.server.app
         try:
             if url.path in STATIC:
@@ -1082,7 +1105,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.json_response(self.run_async(app.state(
                     after,
                     params.get("issues", [""])[0],
-                    project=params.get("project", [""])[0],
+                    project=params["project"][0] if "project" in params else None,
                     repo=params.get("repo", [""])[0],
                 )))
             elif url.path == "/api/issue":
@@ -1146,7 +1169,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/internal/tool":
             self._handle_internal_tool()
             return
-        if self.path not in {"/api/chat", "/api/drain", "/api/config", "/api/approve"}:
+        if self.path not in {"/api/chat", "/api/drain", "/api/config", "/api/approve", "/api/issue-status"}:
             self.json_response({"error": "Page not found."}, 404)
             return
         if (self.headers.get("X-Symphony") != "1" or self.headers.get_content_type() != "application/json"
@@ -1156,7 +1179,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers["Content-Length"])
-            limit = (APPROVE_BODY_LIMIT if self.path == "/api/approve"
+            limit = (APPROVE_BODY_LIMIT if self.path in {"/api/approve", "/api/issue-status"}
                      else CONFIG_BODY_LIMIT if self.path == "/api/config"
                      else DRAIN_BODY_LIMIT if self.path == "/api/drain" else BODY_LIMIT)
             if not 0 < length <= limit:
@@ -1180,6 +1203,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/approve":
                 self.json_response(self.run_async(self.server.app.approve_plan(body)))
+                return
+            if self.path == "/api/issue-status":
+                self.json_response(self.run_async(self.server.app.update_issue_status(body)))
                 return
             if not isinstance(body, dict):
                 raise ValueError("Expected a chat message.")

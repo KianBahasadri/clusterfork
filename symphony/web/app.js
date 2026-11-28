@@ -56,7 +56,14 @@ const approvedPlans = new Set();
 const proposalErrors = new Map();
 const priorityIcons = ["ellipsis", "octagon-alert", "signal", "signal-medium", "signal-low"];
 let issueCache = new Map();
+let projectCache = new Map();
 let projectRepos = new Map();
+let currentProjects = [];
+let pausedProjectsOpen = false;
+let draggedProjectId = "";
+let draggedPaused = false;
+let suppressProjectClick = false;
+const PROJECT_ORDER_KEY = "symphony.projectOrder";
 let repoButtons = [];
 const armedButtons = new Map();
 let mermaidLoader = null;
@@ -149,6 +156,32 @@ function projectLabel(project) {
   glyph.setAttribute("aria-hidden", "true");
   label.append(glyph, element("span", project.name, "project-name"));
   return label;
+}
+
+function loadProjectOrder() {
+  try {
+    const raw = globalThis.localStorage?.getItem(PROJECT_ORDER_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveProjectOrder(ids) {
+  try {
+    globalThis.localStorage?.setItem(PROJECT_ORDER_KEY, JSON.stringify(ids));
+  } catch {
+    // Ignore storage unavailability.
+  }
+}
+
+function projectTabs() {
+  return [...(repos.querySelectorAll?.('button[role="tab"]') || [])];
+}
+
+function visibleProjectTabs() {
+  return projectTabs().filter((tab) => !tab.closest?.("[hidden]"));
 }
 
 async function api(path, options) {
@@ -382,6 +415,13 @@ function renderIssue(issue, today) {
     if (blocked) phase.dataset.tone = "danger";
     meta.append(phase);
   }
+  if (!selected && (issue.projectId || issue.project)) {
+    const project = projectCache.get(issue.projectId) || {name: issue.project, icon: ""};
+    const pill = element("span", "", "issue-pill issue-project");
+    pill.title = project.name;
+    pill.append(projectLabel(project));
+    meta.append(pill);
+  }
   preview.append(link, heading, meta);
   const cardRow = element("div", "", "issue-card-row");
   cardRow.append(preview);
@@ -495,6 +535,7 @@ async function proposePlan(issue, button) {
   pendingPlans.add(issue.identifier);
   button.disabled = true;
   const project = issue.projectId || selected;
+  if (!selected && project && projectRepos.has(project)) selectProject(project);
   try {
     await submit("Propose a plan for " + issue.identifier + ".", [], project);
   } finally {
@@ -602,20 +643,22 @@ function renderPanes() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const {backlogGroups, groups} = partitionIssues(rows);
-  backlog.replaceChildren(...(selected
-    ? backlogGroups.map((group) => renderIssueGroup(group.name, group.issues, today))
-    : [element("p", "No Linear project selected.", "muted")]));
+  backlog.replaceChildren(...backlogGroups.map((group) => renderIssueGroup(group.name, group.issues, today)));
   statusIssues.replaceChildren(...groups.map((group) => renderIssueGroup(group.name, group.issues, today)));
   if (focused) byId(focused)?.focus({preventScroll: true});
 }
 
 function renderUnreadChips() {
-  for (const tab of repos.children) {
+  let pausedHasUnread = false;
+  for (const tab of projectTabs()) {
     const repo = tab.dataset.repo || "";
     const unread = Boolean(repo && repo !== selectedRepo && unreadRepos.has(repo));
     tab.toggleAttribute("data-unread", unread);
     tab.setAttribute("aria-label", unread ? tab.title + " (unread activity)" : tab.title);
+    if (unread && tab.dataset.paused === "true") pausedHasUnread = true;
   }
+  const toggle = byId("paused-projects-toggle");
+  if (toggle) toggle.toggleAttribute("data-unread", !pausedProjectsOpen && pausedHasUnread);
 }
 
 function repoForProject(project = selected) {
@@ -818,34 +861,190 @@ function resetChatView(repo) {
   pendingChatScrollRepo = repo;
 }
 
+function syncProjectTabSelection() {
+  for (const tab of projectTabs()) {
+    const active = tab.dataset.project === selected;
+    tab.setAttribute("aria-selected", active);
+    tab.tabIndex = active ? 0 : -1;
+    if (active) {
+      backlog.setAttribute("aria-labelledby", tab.id);
+      statusIssues.setAttribute("aria-labelledby", tab.id);
+    }
+  }
+}
+
+function buildAllRepositoriesTab() {
+  const tab = element("button", "", "project-chip");
+  const label = element("span", "", "project-label");
+  label.append(icon("layers"), element("span", "All repositories", "project-name"));
+  tab.append(label);
+  tab.id = "project-tab-all";
+  tab.type = "button";
+  tab.setAttribute("role", "tab");
+  tab.setAttribute("aria-controls", "backlog status-issues");
+  tab.dataset.project = "";
+  tab.dataset.repo = "";
+  tab.title = "All repositories";
+  tab.setAttribute("aria-label", "All repositories");
+  tab.addEventListener("click", () => selectProject(""));
+  return tab;
+}
+
+function reorderChipList(projects, sourceId, targetId, position) {
+  const ids = projects.map((project) => project.id);
+  const from = ids.indexOf(sourceId);
+  const to = ids.indexOf(targetId);
+  if (from < 0 || to < 0 || from === to) return ids;
+  const next = ids.filter((id) => id !== sourceId);
+  const targetIndex = next.indexOf(targetId);
+  next.splice(position === "after" ? targetIndex + 1 : targetIndex, 0, sourceId);
+  return next;
+}
+
+function clearChipDropIndicators() {
+  for (const node of projectTabs()) {
+    delete node.dataset.drop;
+    delete node.dataset.dragging;
+  }
+}
+
+function buildProjectTab(project, index, paused, allActive, allPaused) {
+  const tab = element("button", "", "project-chip");
+  const label = projectLabel(project);
+  if (project.status && (project.status.color || project.status.name)) {
+    const dot = element("span", "", "project-status-dot");
+    dot.setAttribute("aria-hidden", "true");
+    if (project.status.color) dot.style.backgroundColor = project.status.color;
+    if (project.status.name) dot.dataset.status = project.status.name.toLowerCase();
+    label.append(dot);
+  }
+  tab.append(label);
+  tab.title = project.status?.name ? project.name + " · " + project.status.name : project.name;
+  tab.setAttribute("aria-label", tab.title);
+  tab.id = "project-tab-" + index;
+  tab.type = "button";
+  tab.setAttribute("role", "tab");
+  tab.setAttribute("aria-controls", "backlog status-issues");
+  tab.dataset.project = project.id;
+  tab.dataset.repo = project.repo || "";
+  if (paused) tab.dataset.paused = "true";
+  tab.draggable = true;
+  tab.addEventListener("click", () => {
+    if (suppressProjectClick) return;
+    selectProject(project.id);
+  });
+  tab.addEventListener("dragstart", (event) => {
+    draggedProjectId = project.id;
+    draggedPaused = paused;
+    suppressProjectClick = true;
+    tab.dataset.dragging = "true";
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", project.id);
+    }
+  });
+  tab.addEventListener("dragover", (event) => {
+    if (!draggedProjectId || draggedProjectId === project.id || draggedPaused !== paused) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    const box = tab.getBoundingClientRect();
+    const pos = event.clientX > box.left + box.width / 2 ? "after" : "before";
+    for (const other of projectTabs()) {
+      if (other !== tab) delete other.dataset.drop;
+    }
+    tab.dataset.drop = pos;
+  });
+  tab.addEventListener("dragleave", () => {
+    delete tab.dataset.drop;
+  });
+  tab.addEventListener("drop", (event) => {
+    if (!draggedProjectId || draggedProjectId === project.id || draggedPaused !== paused) return;
+    event.preventDefault();
+    const box = tab.getBoundingClientRect();
+    const pos = tab.dataset.drop || (event.clientX > box.left + box.width / 2 ? "after" : "before");
+    const sourceId = draggedProjectId;
+    draggedProjectId = "";
+    clearChipDropIndicators();
+    const group = paused ? allPaused : allActive;
+    const reorderedGroup = reorderChipList(group, sourceId, project.id, pos);
+    const fullOrder = paused
+      ? [...allActive.map((item) => item.id), ...reorderedGroup]
+      : [...reorderedGroup, ...allPaused.map((item) => item.id)];
+    saveProjectOrder(fullOrder);
+    renderProjectChips();
+    syncProjectTabSelection();
+    renderUnreadChips();
+  });
+  tab.addEventListener("dragend", () => {
+    draggedProjectId = "";
+    clearChipDropIndicators();
+    setTimeout(() => { suppressProjectClick = false; }, 0);
+  });
+  return tab;
+}
+
+function renderProjectChips() {
+  const focusedProject = repos.contains(document.activeElement)
+    ? document.activeElement?.dataset?.project : null;
+  const focusedPausedToggle = document.activeElement?.id === "paused-projects-toggle";
+  const ordered = typeof orderProjects === "function"
+    ? orderProjects(currentProjects, loadProjectOrder())
+    : {active: currentProjects, paused: []};
+  const {active, paused} = ordered;
+  if (paused.some((project) => project.id === selected)) pausedProjectsOpen = true;
+  const nodes = [buildAllRepositoriesTab()];
+  let index = 0;
+  for (const project of active) nodes.push(buildProjectTab(project, index++, false, active, paused));
+  if (paused.length) {
+    const section = element("div", "", "paused-projects-section");
+    const toggle = element("button", "", "paused-projects-toggle");
+    toggle.id = "paused-projects-toggle";
+    toggle.type = "button";
+    toggle.setAttribute("aria-expanded", String(pausedProjectsOpen));
+    toggle.setAttribute("aria-controls", "paused-projects-list");
+    toggle.title = pausedProjectsOpen ? "Hide paused projects" : "Show paused projects";
+    toggle.append(element("span", "Paused " + paused.length), icon("chevron-left"));
+    const list = element("div", "", "paused-projects-list");
+    list.id = "paused-projects-list";
+    list.hidden = !pausedProjectsOpen;
+    for (const project of paused) list.append(buildProjectTab(project, index++, true, active, paused));
+    toggle.addEventListener("click", () => {
+      pausedProjectsOpen = !pausedProjectsOpen;
+      toggle.setAttribute("aria-expanded", String(pausedProjectsOpen));
+      toggle.title = pausedProjectsOpen ? "Hide paused projects" : "Show paused projects";
+      list.hidden = !pausedProjectsOpen;
+      renderUnreadChips();
+    });
+    section.append(toggle, list);
+    nodes.push(section);
+  }
+  repos.replaceChildren(...nodes);
+  if (focusedPausedToggle) {
+    byId("paused-projects-toggle")?.focus({preventScroll: true});
+  } else if (focusedProject != null) {
+    projectTabs().find((tab) => tab.dataset.project === focusedProject)?.focus({preventScroll: true});
+  }
+}
+
 function updateProjects(projects, redraw) {
   const previous = issueCache.get(selected);
-  projectRepos = new Map(projects.map((project) => [project.id, project.repo || ""]));
+  currentProjects = projects;
+  projectCache = new Map(projects.map((project) => [project.id, project]));
+  projectRepos = new Map([["", ""], ...projects.map((project) => [project.id, project.repo || ""])]);
   issueCache = new Map(projects.map((project) => [project.id, project.issues]));
   issueCache.set("", projects.flatMap((project) => project.issues));
   preloadIssueDetails(issueCache.get(""));
-  const key = JSON.stringify(projects.map((project) => [project.id, project.repo, project.name, project.icon]));
+  const key = JSON.stringify(projects.map((project) => [
+    project.id, project.repo, project.name, project.icon,
+    project.status?.name || "", project.status?.type || "", project.status?.color || "",
+  ]));
   if (key === projectsKey) {
     if (redraw || JSON.stringify(previous) !== JSON.stringify(issueCache.get(selected))) renderPanes();
     return;
   }
   projectsKey = key;
   const focused = repos.contains(document.activeElement);
-  const choices = projects.map((project, index) => {
-    const tab = element("button", "", "project-chip");
-    tab.append(projectLabel(project));
-    tab.title = project.name;
-    tab.setAttribute("aria-label", project.name);
-    tab.id = "project-tab-" + index;
-    tab.type = "button";
-    tab.setAttribute("role", "tab");
-    tab.setAttribute("aria-controls", "backlog status-issues");
-    tab.dataset.project = project.id;
-    tab.dataset.repo = project.repo || "";
-    tab.addEventListener("click", () => selectProject(project.id));
-    return tab;
-  });
-  repos.replaceChildren(...choices);
+  renderProjectChips();
   selectProject(selectableProject(projects, selected));
   if (focused) repos.querySelector('[aria-selected="true"]')?.focus({preventScroll: true});
 }
@@ -865,15 +1064,15 @@ function selectProject(project) {
     selectedRepo = nextRepo;
     unreadRepos.delete(nextRepo);
   }
-  for (const tab of repos.children) {
-    const active = tab.dataset.project === project;
-    tab.setAttribute("aria-selected", active);
-    tab.tabIndex = active ? 0 : -1;
-    if (active) {
-      backlog.setAttribute("aria-labelledby", tab.id);
-      statusIssues.setAttribute("aria-labelledby", tab.id);
-    }
+  if (currentProjects.some((item) => item.id === project && typeof isPausedProject === "function" && isPausedProject(item))
+      && !pausedProjectsOpen) {
+    pausedProjectsOpen = true;
+    const toggle = byId("paused-projects-toggle");
+    const list = byId("paused-projects-list");
+    if (toggle) toggle.setAttribute("aria-expanded", "true");
+    if (list) list.hidden = false;
   }
+  syncProjectTabSelection();
   renderUnreadChips();
   renderRepoButtons(repoButtons, selectedRepo || "");
   renderPanes();
@@ -885,21 +1084,40 @@ function imageUrl(name) {
   return "/api/chat-image?name=" + encodeURIComponent(name);
 }
 
+let imageTrigger = null;
+
+function openImageModal(src, alt, trigger = null) {
+  const dialog = byId("image-dialog");
+  const img = byId("image-dialog-img");
+  const caption = byId("image-dialog-caption");
+  if (!dialog || !img) return;
+  imageTrigger = trigger || document.activeElement || null;
+  img.src = src;
+  img.alt = alt || "Attached image preview";
+  if (caption) caption.textContent = alt || "Image preview";
+  if (!dialog.open) dialog.showModal?.();
+  byId("image-close")?.focus?.({preventScroll: true});
+}
+
 function imageGallery(images, className) {
   const gallery = element("div", "", className);
   images.forEach((image, index) => {
-    const link = element("a", "", "message-image");
-    link.href = imageUrl(image.name);
-    link.target = "_blank";
-    link.rel = "noreferrer";
+    const button = element("button", "", "message-image");
+    button.type = "button";
+    const alt = "Attached image " + (index + 1);
+    const src = imageUrl(image.name);
+    button.setAttribute("aria-haspopup", "dialog");
+    button.setAttribute("aria-controls", "image-dialog");
+    button.setAttribute("aria-label", "Preview " + alt);
     const preview = element("img");
-    preview.src = imageUrl(image.name);
-    preview.alt = "Attached image " + (index + 1);
+    preview.src = src;
+    preview.alt = alt;
     preview.loading = "lazy";
     preview.addEventListener("load", keepBottom);
     preview.addEventListener("error", keepBottom);
-    link.append(preview);
-    gallery.append(link);
+    button.addEventListener("click", () => openImageModal(src, alt, button));
+    button.append(preview);
+    gallery.append(button);
   });
   return gallery;
 }
@@ -913,12 +1131,25 @@ function createMessage(item) {
   const label = {user: "You", assistant: "Coordinator", system: "Symphony", worker: "Worker"};
   const entry = element("article", "", "message " + role);
   if (Number.isFinite(Number(item.id))) entry.dataset.messageId = String(item.id);
-  const content = element("div", role === "assistant" ? "" : item.text || "", "message-text");
-  if (role === "assistant") {
-    content.classList.add("issue-markdown");
-    content.innerHTML = item.html || "";
+  const heading = element("h2", label[role] || "Symphony");
+  const compaction = item.meta?.kind === "compaction"
+    && (typeof item.meta.compactionHtml === "string" || typeof item.meta.compactionText === "string")
+    && (item.meta.compactionHtml || item.meta.compactionText);
+  if (compaction) {
+    const details = element("details", "", "compaction-details");
+    const summary = element("summary", item.text || "Coordinator context compacted.");
+    const body = element("div", item.meta.compactionHtml ? "" : (item.meta.compactionText || ""), "compaction-body issue-markdown");
+    if (item.meta.compactionHtml) body.innerHTML = item.meta.compactionHtml;
+    details.append(summary, body);
+    entry.append(heading, details);
+  } else {
+    const content = element("div", role === "assistant" ? "" : item.text || "", "message-text");
+    if (role === "assistant") {
+      content.classList.add("issue-markdown");
+      content.innerHTML = item.html || "";
+    }
+    entry.append(heading, content);
   }
-  entry.append(element("h2", label[role] || "Symphony"), content);
   if (item.meta?.kind === "plan_proposal" && item.meta.issue && item.meta.planHash) {
     const actions = element("div", "", "plan-proposal-actions");
     actions.dataset.issue = item.meta.issue;
@@ -1440,6 +1671,7 @@ function canAutoReload() {
   const hasOpenDialog = Boolean(
     byId("config-dialog")?.open
     || byId("issue-dialog")?.open
+    || byId("image-dialog")?.open
     || (openDialog && openDialog.id !== "main" && openDialog.tag !== "main")
   );
   return !sending
@@ -1502,10 +1734,11 @@ async function poll() {
   const pollRepo = selectedRepo;
   let delay = 3000;
   try {
+    const projectQuery = issueRevision ? "&project=" + encodeURIComponent(pollProject) : "";
     const state = await api(
       "/api/state?after=" + lastMessage
       + "&issues=" + encodeURIComponent(issueRevision)
-      + "&project=" + encodeURIComponent(pollProject)
+      + projectQuery
     );
     if (selectedRepo !== null && selectedRepo !== pollRepo) {
       pollAgain = true;
@@ -1590,7 +1823,9 @@ async function submit(text, images = [], project = selected) {
       headers: {"Content-Type": "application/json", "X-Symphony": "1"},
       body: JSON.stringify({text, project, images}),
     });
-    if (result.message) queueMessage(result.message);
+    if (result.message && (result.message.repo === undefined || selectedRepo === null || result.message.repo === selectedRepo)) {
+      queueMessage(result.message);
+    }
     wakePoll();
     return {ok: true, message: result.message || null};
   } catch (error) {
@@ -1611,9 +1846,12 @@ async function interruptTurn() {
 
 repos.addEventListener("keydown", (event) => {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-  const tabs = [...repos.children];
+  const tabs = visibleProjectTabs();
+  if (!tabs.length) return;
+  const current = tabs.indexOf(event.target);
+  if (current < 0) return;
   const offset = event.key === "ArrowLeft" ? -1 : 1;
-  let index = (tabs.indexOf(event.target) + offset + tabs.length) % tabs.length;
+  let index = (current + offset + tabs.length) % tabs.length;
   if (event.key === "Home") index = 0;
   if (event.key === "End") index = tabs.length - 1;
   event.preventDefault();
@@ -1897,6 +2135,27 @@ configDialog.addEventListener("close", () => {
   maybeAutoReload();
 });
 byId("issue-dialog")?.addEventListener("close", maybeAutoReload);
+const imageDialog = byId("image-dialog");
+byId("image-close")?.addEventListener("click", () => imageDialog?.close?.());
+let imageBackdropPressed = false;
+imageDialog?.addEventListener("pointerdown", (event) => {
+  const bounds = imageDialog.getBoundingClientRect?.();
+  if (!bounds) return;
+  imageBackdropPressed = event.target === imageDialog
+    && (event.clientX < bounds.left || event.clientX > bounds.right
+      || event.clientY < bounds.top || event.clientY > bounds.bottom);
+});
+imageDialog?.addEventListener("click", (event) => {
+  if (imageBackdropPressed && event.target === imageDialog) imageDialog.close?.();
+  imageBackdropPressed = false;
+});
+imageDialog?.addEventListener("close", () => {
+  const img = byId("image-dialog-img");
+  if (img) img.src = "";
+  imageTrigger?.focus?.({preventScroll: true});
+  imageTrigger = null;
+  maybeAutoReload();
+});
 backlogToggle.addEventListener("click", () => setPaneCollapsed("backlog", !backlogCollapsed));
 queueToggle.addEventListener("click", () => setPaneCollapsed("queue", !queueCollapsed));
 applyPaneState();

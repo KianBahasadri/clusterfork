@@ -160,14 +160,122 @@ function historyDescription(entry) {
   return changes.join(" · ") || "Updated the issue";
 }
 
+function issueStatusControl(issue) {
+  const states = Array.isArray(issue.team?.states) ? issue.team.states : [];
+  if (!states.length) {
+    const status = element("p", "", "issue-property");
+    status.append(stateIcon(issue.state), element("span", issue.state.name));
+    return status;
+  }
+  const picker = element("div", "", "issue-status-picker");
+  const trigger = element("button", "", "issue-status-button");
+  trigger.id = "issue-status-trigger";
+  trigger.type = "button";
+  trigger.setAttribute("aria-haspopup", "listbox");
+  trigger.setAttribute("aria-expanded", "false");
+  const renderTrigger = (state) => {
+    const label = element("span", "", "issue-status-current");
+    label.append(stateIcon(state), element("span", state.name));
+    const chevron = icon("chevron-left");
+    chevron.classList.add("issue-status-chevron");
+    trigger.replaceChildren(label, chevron);
+  };
+  renderTrigger(issue.state);
+  const menu = element("ul", "", "issue-status-menu");
+  menu.setAttribute("role", "listbox");
+  menu.setAttribute("aria-label", "Change status");
+  menu.hidden = true;
+  const err = element("p", "", "detail issue-status-error");
+  err.setAttribute("role", "alert");
+  err.hidden = true;
+
+  let saving = false;
+  const closeMenu = (restoreFocus = false) => {
+    menu.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+    if (restoreFocus) trigger.focus({preventScroll: true});
+  };
+  const syncSelected = (state) => {
+    for (const btn of menu.querySelectorAll('[role="option"]')) {
+      const selected = (state.id && btn.dataset.stateId === state.id) || btn.dataset.stateName === state.name;
+      btn.setAttribute("aria-selected", String(Boolean(selected)));
+    }
+  };
+  const selectState = async (targetState) => {
+    if (saving) return;
+    if ((issue.state.id && issue.state.id === targetState.id) || issue.state.name === targetState.name) {
+      closeMenu(true);
+      return;
+    }
+    saving = true;
+    err.textContent = "";
+    err.hidden = true;
+    trigger.disabled = true;
+    for (const btn of menu.querySelectorAll('[role="option"]')) btn.disabled = true;
+    try {
+      const result = await api("/api/issue-status", {
+        method: "POST",
+        headers: {"Content-Type": "application/json", "X-Symphony": "1"},
+        body: JSON.stringify({issue: issue.identifier, stateId: targetState.id}),
+      });
+      issue.state = result.state || targetState;
+      if (result.updatedAt) issue.updatedAt = result.updatedAt;
+      renderTrigger(issue.state);
+      syncSelected(issue.state);
+      for (const key of [...detailCache.keys()]) {
+        if (key.startsWith("/api/issue?id=" + encodeURIComponent(issue.identifier))) detailCache.delete(key);
+      }
+      closeMenu(true);
+      if (typeof wakePoll === "function") wakePoll();
+    } catch (error) {
+      err.textContent = error.message;
+      err.hidden = false;
+    } finally {
+      saving = false;
+      trigger.disabled = false;
+      for (const btn of menu.querySelectorAll('[role="option"]')) btn.disabled = false;
+    }
+  };
+  for (const state of states) {
+    const item = element("li");
+    const option = element("button", "", "issue-status-option");
+    option.type = "button";
+    option.setAttribute("role", "option");
+    option.dataset.stateId = state.id;
+    option.dataset.stateName = state.name;
+    option.append(stateIcon(state), element("span", state.name));
+    option.addEventListener("click", () => selectState(state));
+    item.append(option);
+    menu.append(item);
+  }
+  syncSelected(issue.state);
+  trigger.addEventListener("click", () => {
+    if (saving) return;
+    const opening = menu.hidden;
+    menu.hidden = !opening;
+    trigger.setAttribute("aria-expanded", String(opening));
+    if (opening) {
+      const current = menu.querySelector('[aria-selected="true"]') || menu.querySelector('[role="option"]');
+      current?.focus?.({preventScroll: true});
+    }
+  });
+  picker.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !menu.hidden) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeMenu(true);
+    }
+  });
+  picker.append(trigger, menu, err);
+  return picker;
+}
+
 function issueLayout(issue) {
   const layout = element("div", "", "issue-detail-layout");
   const body = element("div", "", "issue-detail-main");
   const properties = element("div", "", "issue-properties");
   const values = detailSection(properties, "Properties");
-  const status = element("p", "", "issue-property");
-  status.append(stateIcon(issue.state), element("span", issue.state.name));
-  values.append(status, issuePill(issue.priorityLabel, issue.priorityLabel, priorityIcons[issue.priority]),
+  values.append(issueStatusControl(issue), issuePill(issue.priorityLabel, issue.priorityLabel, priorityIcons[issue.priority]),
     issuePerson(issue.assignee));
   if (issue.delegate) values.append(issuePerson(issue.delegate));
   if (issue.estimate != null) values.append(issuePill(issue.estimate + " Points", "Estimate", "triangle"));
@@ -718,6 +826,13 @@ issueDialog.addEventListener("pointerdown", (event) => {
 issueDialog.addEventListener("click", (event) => {
   if (backdropPressed && event.target === issueDialog) issueDialog.close();
   backdropPressed = false;
+  const picker = issueContent.querySelector?.(".issue-status-picker");
+  const menu = picker?.querySelector?.(".issue-status-menu");
+  const trigger = picker?.querySelector?.("#issue-status-trigger");
+  if (menu && !menu.hidden && !picker.contains(event.target)) {
+    menu.hidden = true;
+    trigger?.setAttribute("aria-expanded", "false");
+  }
 });
 issueDialog.addEventListener("close", () => {
   detailRequest++;

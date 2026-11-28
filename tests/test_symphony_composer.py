@@ -1268,6 +1268,206 @@ console.log(JSON.stringify({
         self.assertIn("@media (prefers-reduced-motion: reduce)", css)
         self.assertIn("-webkit-background-clip: border-box;", css)
 
+    @unittest.skipUnless(shutil.which("node"), "Node is required for JavaScript checks.")
+    def test_header_chips_image_modal_compaction_and_issue_status_ui(self):
+        web = Path(__file__).resolve().parents[1] / "symphony/web"
+        probe = r"""
+const fs = require("fs");
+const vm = require("vm");
+const nodes = new Map();
+const makeNode = (tag = "div", id = "") => {
+  const node = {
+    tag, id, textContent: "", innerHTML: "", value: "", hidden: false, disabled: false, open: false,
+    draggable: false, tabIndex: -1, href: "", src: "", alt: "", title: "", className: "",
+    dataset: {}, style: {setProperty() {}}, listeners: {}, children: [],
+    classList: {add(...c) { node.className = [node.className, ...c].filter(Boolean).join(" "); }, remove() {}},
+    addEventListener(t, h) { (this.listeners[t] ||= []).push(h); },
+    setAttribute(n, v) { this[n] = String(v); },
+    getAttribute(n) { return this[n]; },
+    removeAttribute(n) { delete this[n]; },
+    toggleAttribute(n, f) { if (f) this[n] = ""; else delete this[n]; },
+    focus() { doc.activeElement = this; },
+    setSelectionRange() {},
+    contains(other) {
+      let cur = other;
+      while (cur) {
+        if (cur === this) return true;
+        cur = cur.parentNode;
+      }
+      return false;
+    },
+    closest(sel) {
+      if (sel === "aside") return this._aside ||= makeNode("aside");
+      return this.hidden ? this : null;
+    },
+    getBoundingClientRect() { return {left: 0, right: 100, top: 0, bottom: 30, width: 100, height: 30}; },
+    append(...items) { this.children.push(...items); node._relink(); },
+    prepend(...items) { this.children.unshift(...items); node._relink(); },
+    replaceChildren(...items) { this.children = items; node._relink(); },
+    _relink() { for (const c of this.children) if (c && typeof c === "object") c.parentNode = this; },
+    showModal() { this.open = true; },
+    close() { this.open = false; for (const h of this.listeners.close || []) h(); },
+    querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
+    querySelectorAll(sel) {
+      const out = [];
+      const match = (n) => {
+        if (!n || typeof n !== "object") return false;
+        if (sel === 'button[role="tab"]') return n.tag === "button" && n.role === "tab";
+        if (sel === '[role="option"]') return n.role === "option";
+        if (sel === '[aria-selected="true"]') return n["aria-selected"] === "true";
+        if (sel.startsWith(".")) return String(n.className || "").split(/\s+/).includes(sel.slice(1));
+        if (sel.startsWith("#")) return n.id === sel.slice(1);
+        return false;
+      };
+      for (const c of this.children) {
+        if (!c || typeof c !== "object") continue;
+        if (match(c)) out.push(c);
+        if (c.querySelectorAll) out.push(...c.querySelectorAll(sel));
+      }
+      return out;
+    },
+  };
+  return node;
+};
+const doc = {
+  activeElement: null,
+  getElementById(id) {
+    if (!nodes.has(id)) {
+      const created = nodes.get("repos")?.querySelector?.("#" + id);
+      if (created) return created;
+      nodes.set(id, makeNode(id.endsWith("dialog") ? "dialog" : "div", id));
+    }
+    return nodes.get(id);
+  },
+  createElement(tag) { return makeNode(tag); },
+  createElementNS(_ns, tag) { return makeNode(tag); },
+  querySelector() { return this.getElementById("main"); },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+};
+const store = new Map();
+const localStorage = {
+  getItem(k) { return store.has(k) ? store.get(k) : null; },
+  setItem(k, v) { store.set(k, String(v)); },
+};
+const statusPosts = [];
+const fetch = async (path, options = {}) => {
+  if (path === "/api/issue-status") {
+    statusPosts.push(JSON.parse(options.body));
+    return {ok: true, json: async () => ({issue: "KIAN-1", state: {id: "s-todo", name: "Todo", type: "unstarted", color: "#00f"}, updatedAt: "2026-11-28T13:00:00Z"})};
+  }
+  return {ok: true, json: async () => ({
+    messages: [], busy: false, canInterrupt: false, stream: "", streamHtml: "",
+    tasks: [], signedIn: true, login: null, paused: "", view: "", repo: "",
+    repoActivity: {}, coordinator: {}, issueError: "", updateAvailable: false, draining: false,
+  })};
+};
+const ctx = vm.createContext({
+  document: doc, localStorage, fetch, URL: globalThis.URL, URLSearchParams: globalThis.URLSearchParams,
+  location: {origin: "https://symphony.test"}, setInterval: () => 0, setTimeout, clearTimeout, console,
+});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), ctx);
+ctx.poll = () => {};
+vm.runInContext(fs.readFileSync(process.argv[3], "utf8"), ctx);
+(async () => {
+  const projects = [
+    {id: "proj-a", name: "Alpha", icon: "", repo: "owner/a", status: {name: "In Progress", type: "started", color: "#f2c94c"}, issues: [
+      {identifier: "KIAN-1", title: "One", url: "https://linear.app/a", state: {name: "Backlog", type: "backlog", color: "#bbb"}, priority: 2, priorityLabel: "High", estimate: 2, dueDate: null, labels: [], plan: null, planHtml: "", project: "Alpha", projectId: "proj-a"},
+    ]},
+    {id: "proj-paused", name: "Sleeping", icon: "", repo: "owner/p", status: {name: "Paused", type: "backlog", color: "#888"}, issues: []},
+    {id: "proj-b", name: "Beta", icon: "", repo: "owner/b", status: {name: "Backlog", type: "backlog", color: "#f2994a"}, issues: []},
+  ];
+  ctx.updateProjects(projects, true);
+  const reposEl = doc.getElementById("repos");
+  const allTabs = reposEl.querySelectorAll('button[role="tab"]').map((t) => ({
+    id: t.id, project: t.dataset.project, paused: t.dataset.paused || "",
+    hasDot: t.querySelectorAll(".project-status-dot").length > 0,
+    dotColor: t.querySelector(".project-status-dot")?.style?.backgroundColor || "",
+  }));
+  const pausedListHiddenBefore = doc.getElementById("paused-projects-list").hidden;
+  doc.getElementById("paused-projects-toggle").listeners.click[0]();
+  const pausedListHiddenAfter = doc.getElementById("paused-projects-list").hidden;
+
+  // Drag Beta before Alpha
+  const alphaTab = reposEl.querySelectorAll('button[role="tab"]').find((t) => t.dataset.project === "proj-a");
+  const betaTab = reposEl.querySelectorAll('button[role="tab"]').find((t) => t.dataset.project === "proj-b");
+  betaTab.listeners.dragstart[0]({dataTransfer: {setData() {}, effectAllowed: ""}});
+  alphaTab.listeners.drop[0]({clientX: 10, preventDefault() {}});
+  const savedOrder = JSON.parse(localStorage.getItem("symphony.projectOrder") || "[]");
+
+  // Switching to All repositories keeps combined issue + project pill
+  ctx.selectProject("");
+  const projectPills = doc.getElementById("backlog").querySelectorAll(".issue-project").length;
+
+  // Image modal opens and restores focus on close
+  const gallery = ctx.imageGallery([{name: "abc.png", type: "image/png"}], "message-images");
+  const imgBtn = gallery.children[0];
+  imgBtn.focus();
+  imgBtn.listeners.click[0]();
+  const imgOpen = doc.getElementById("image-dialog").open;
+  doc.getElementById("image-close").listeners.click[0]();
+  const imgClosed = !doc.getElementById("image-dialog").open;
+  const restoredImgFocus = doc.activeElement === imgBtn;
+
+  // Expandable compaction message
+  const compactEl = ctx.createMessage({
+    id: 10, role: "system", text: "Coordinator context compacted.",
+    meta: {kind: "compaction", compactionText: "Summary line", compactionHtml: "<p>Summary line</p>"},
+  });
+  const compactDetails = compactEl.querySelector(".compaction-details");
+
+  // Issue status picker updates Linear status via /api/issue-status
+  const layout = ctx.issueLayout({
+    identifier: "KIAN-1", title: "One", descriptionHtml: "", priority: 2, priorityLabel: "High",
+    assignee: null, labels: [], project: null, team: {name: "Kian", states: [
+      {id: "s-back", name: "Backlog", type: "backlog", color: "#bbb"},
+      {id: "s-todo", name: "Todo", type: "unstarted", color: "#00f"},
+    ]},
+    state: {id: "s-back", name: "Backlog", type: "backlog", color: "#bbb"},
+    children: [], relations: [], inverseRelations: [], releases: [], subscribers: [],
+    attachments: [], documents: [], comments: [], history: [], reactions: [], previousIdentifiers: [],
+    creator: null,
+  });
+  const trigger = layout.querySelector("#issue-status-trigger");
+  trigger.listeners.click[0]();
+  const options = layout.querySelectorAll('[role="option"]');
+  await options[1].listeners.click[0]();
+
+  console.log(JSON.stringify({
+    allTabs, pausedListHiddenBefore, pausedListHiddenAfter, savedOrder, projectPills,
+    imgOpen, imgClosed, restoredImgFocus,
+    compactSummary: compactDetails?.children?.[0]?.textContent || "",
+    compactHtml: compactDetails?.children?.[1]?.innerHTML || "",
+    compactOpen: compactDetails?.open,
+    statusPosts,
+    triggerAfter: trigger.textContent || trigger.querySelector(".issue-status-current")?.children?.[1]?.textContent || "",
+  }));
+})();
+"""
+        run = subprocess.run(
+            ["node", "-e", probe, str(web / "panes.js"), str(web / "app.js"), str(web / "issue.js")],
+            text=True, capture_output=True, check=False, timeout=15,
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        res = json.loads(run.stdout)
+        self.assertEqual(res["allTabs"][0], {
+            "id": "project-tab-all", "project": "", "paused": "", "hasDot": False, "dotColor": "",
+        })
+        self.assertEqual([t["project"] for t in res["allTabs"][1:]], ["proj-a", "proj-b", "proj-paused"])
+        self.assertTrue(all(t["hasDot"] for t in res["allTabs"][1:]))
+        self.assertTrue(res["pausedListHiddenBefore"])
+        self.assertFalse(res["pausedListHiddenAfter"])
+        self.assertEqual(res["savedOrder"], ["proj-b", "proj-a", "proj-paused"])
+        self.assertEqual(res["projectPills"], 1)
+        self.assertTrue(res["imgOpen"])
+        self.assertTrue(res["imgClosed"])
+        self.assertTrue(res["restoredImgFocus"])
+        self.assertEqual(res["compactSummary"], "Coordinator context compacted.")
+        self.assertEqual(res["compactHtml"], "<p>Summary line</p>")
+        self.assertFalse(res["compactOpen"])
+        self.assertEqual(res["statusPosts"], [{"issue": "KIAN-1", "stateId": "s-todo"}])
+
 
 if __name__ == "__main__":
     unittest.main()

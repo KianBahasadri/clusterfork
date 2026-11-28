@@ -2257,6 +2257,56 @@ class ChatBrowserTests(unittest.TestCase):
         self.assertFalse(self.page.locator("#diagram-error").is_hidden())
         self.assertEqual(self.page.locator("#diagram-canvas .diagram-svg").count(), 0)
 
+    def test_all_repositories_status_dots_paused_section_and_image_modal(self):
+        self.page.evaluate("""() => {
+          const projects = [
+            {id: "proj-a", name: "Repo A", icon: "", repo: "owner/a", status: {name: "In Progress", type: "started", color: "#f2c94c"}, issues: [
+              {identifier: "KIAN-1", title: "Alpha", url: "https://example.test/1", state: {name: "Backlog", type: "backlog", color: "#999"}, priority: 2, priorityLabel: "High", estimate: 2, dueDate: null, labels: [], plan: null, planHtml: "", project: "Repo A", projectId: "proj-a"},
+            ]},
+            {id: "proj-paused", name: "Sleeping", icon: "", repo: "owner/p", status: {name: "Paused", type: "backlog", color: "#888"}, issues: []},
+          ];
+          window.fetch = async (path) => {
+            const url = new URL(path, "https://example.test");
+            const proj = url.searchParams.get("project");
+            const repo = proj === "proj-a" ? "owner/a" : proj === "proj-paused" ? "owner/p" : "";
+            return {ok: true, json: async () => ({
+              messages: [{id: 1, role: "system", text: "Coordinator context compacted.", images: [], repo,
+                          meta: {kind: "compaction", compactionText: "Summary", compactionHtml: "<p>Summary</p>"}}],
+              busy: false, canInterrupt: false, stream: "", streamHtml: "", tasks: [],
+              signedIn: true, login: null, paused: "", view: "proj-a", repo, repoActivity: {},
+              coordinator: {}, issueError: "", updateAvailable: false, draining: false,
+              projects, issueRevision: "rev-chips",
+            })};
+          };
+        }""")
+        self.page.evaluate("async () => { await poll(); flushChat(); }")
+        self.assertEqual(self.page.locator("#project-tab-all").count(), 1)
+        self.assertEqual(self.page.locator(".project-status-dot").count(), 2)
+        self.assertTrue(self.page.locator("#paused-projects-list").is_hidden())
+        self.page.locator("#paused-projects-toggle").click()
+        self.assertFalse(self.page.locator("#paused-projects-list").is_hidden())
+        self.page.locator("#project-tab-all").click()
+        self.page.wait_for_function("selected === ''")
+        self.assertGreaterEqual(self.page.locator("#backlog .issue-project").count(), 1)
+
+        # Compaction details start collapsed and expand on click.
+        compaction = self.page.locator(".compaction-details").first
+        self.assertFalse(compaction.evaluate("el => el.open"))
+        compaction.locator("summary").click()
+        self.assertTrue(compaction.evaluate("el => el.open"))
+
+        # Image modal opens instead of new tab, fits viewport, and Escape closes + restores focus.
+        self.page.evaluate("""() => {
+          queueMessage({id: 2, role: "user", text: "Pic", images: [{name: "a.png", type: "image/png"}]});
+          flushChat();
+        }""")
+        img_btn = self.page.locator("button.message-image").first
+        img_btn.click()
+        self.assertTrue(self.page.evaluate("() => document.getElementById('image-dialog').open"))
+        self.page.keyboard.press("Escape")
+        self.assertFalse(self.page.evaluate("() => document.getElementById('image-dialog').open"))
+        self.assertTrue(self.page.evaluate("() => document.activeElement.classList.contains('message-image')"))
+
 
 if __name__ == "__main__":
     unittest.main()

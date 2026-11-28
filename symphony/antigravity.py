@@ -286,6 +286,36 @@ def fetch_code_assist_quota(token):
     return limits, tier
 
 
+def read_latest_compaction(conv_id, home_dir=None):
+    if not conv_id:
+        return None, ""
+    logs = Path(home_dir or Path.home()) / ".gemini" / "antigravity-cli" / "brain" / conv_id / ".system_generated" / "logs"
+    for filename in ("transcript_full.jsonl", "transcript.jsonl"):
+        path = logs / filename
+        if not path.is_file():
+            continue
+        latest_index, latest_content = None, ""
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as stream:
+                for line in stream:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except ValueError:
+                        continue
+                    if (isinstance(record, dict) and record.get("type") == "CHECKPOINT"
+                            and isinstance(record.get("content"), str) and record["content"].strip()):
+                        latest_index = record.get("step_index")
+                        latest_content = record["content"].strip()
+        except OSError:
+            continue
+        if latest_content:
+            return latest_index, latest_content
+    return None, ""
+
+
 class Antigravity:
     def __init__(self, runner, tool, alert_repo=None, *, home_dir=None, internal_token="",
                  internal_url="http://127.0.0.1:8080/internal/tool", agy_bin="agy"):
@@ -315,6 +345,7 @@ class Antigravity:
         self.injected_rules = {}
         self.native_rules = {}
         self.compacted_repos = set()
+        self.last_replies = {}
         self.usage_error = None
         self._notified_usage_key = ""
         self.turn_token_usage = {}
@@ -761,6 +792,7 @@ class Antigravity:
         self.turn_timings.pop(repo, None)
         self.context_usages.pop(repo, None)
         self.injected_rules.pop(repo, None)
+        self.last_replies.pop(repo, None)
         self.compacted_repos.discard(repo)
         self.runner.delete_thread(repo)
 
@@ -882,6 +914,7 @@ class Antigravity:
                 error_msg = str(result_payload.get("error") or stderr_text or f"Antigravity turn failed ({status}).")
                 raise RuntimeError(error_msg)
             reply = str(result_payload.get("response") or streamed or "").strip()
+            self.last_replies[repo] = reply
             if record_chat and reply:
                 self.runner.chat("assistant", reply, repo=repo)
             self.usage_error = None
@@ -891,6 +924,7 @@ class Antigravity:
 
         if exit_code:
             raise RuntimeError(stderr_text[:500] or f"Antigravity exited {exit_code}.")
+        self.last_replies[repo] = streamed.strip()
         if record_chat and streamed.strip():
             self.runner.chat("assistant", streamed.strip(), repo=repo)
         self.usage_error = None
@@ -909,10 +943,18 @@ class Antigravity:
         if not saved or not saved.get("thread_id"):
             self.runner.chat("system", "No active conversation to compact.", repo=repo)
             return "completed"
-        outcome = await self._run_turn(repo, "/compact", cwd, conv_id=saved["thread_id"], record_chat=False)
+        conv_id = saved["thread_id"]
+        before_index, _ = read_latest_compaction(conv_id, self.home_dir)
+        self.last_replies.pop(repo, None)
+        outcome = await self._run_turn(repo, "/compact", cwd, conv_id=conv_id, record_chat=False)
         if outcome == "completed":
             self.compacted_repos.add(repo)
-            self.runner.chat("system", "Coordinator context compacted.", repo=repo)
+            after_index, after_text = read_latest_compaction(conv_id, self.home_dir)
+            fallback = self.last_replies.get(repo, "").strip()
+            compaction_text = (after_text if (after_text and after_index != before_index)
+                               else (fallback or after_text))[:64000]
+            meta = {"kind": "compaction", "compactionText": compaction_text} if compaction_text else None
+            self.runner.chat("system", "Coordinator context compacted.", repo=repo, meta=meta)
         return outcome
 
     async def interrupt(self, repo):

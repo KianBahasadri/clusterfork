@@ -42,10 +42,12 @@ CONNECTIONS = {
         attachment { title url } addedLabels { name color } removedLabels { name color }
         relationChanges { identifier type }""",
 }
+STATE_TYPE_ORDER = {"triage": 0, "backlog": 1, "unstarted": 2, "started": 3, "completed": 4, "canceled": 5}
 FIELDS = """id identifier title url description priority priorityLabel estimate dueDate
     createdAt updatedAt startedAt completedAt canceledAt archivedAt snoozedUntilAt
     slaStartedAt slaBreachesAt slaType branchName previousIdentifiers
-    state { name type color } team { name key }
+    state { id name type color }
+    team { id name key states(first: 100) { nodes { id name type color position archivedAt } } }
     creator { """ + USER + " } assignee { " + USER + " } delegate { " + USER + """ }
     project { id name icon url }
     cycle { name number startsAt endsAt }
@@ -116,6 +118,24 @@ async def issue_details(linear, identifier):
     if issue["project"]:
         glyph = emojize(issue["project"]["icon"] or "", language="alias")
         issue["project"]["icon"] = glyph if is_emoji(glyph) else ""
+    team = issue.get("team")
+    if isinstance(team, dict):
+        raw_states = (team.get("states") or {}).get("nodes") if isinstance(team.get("states"), dict) else team.get("states")
+        states = []
+        if isinstance(raw_states, list):
+            for node in raw_states:
+                if not isinstance(node, dict) or node.get("archivedAt"):
+                    continue
+                if isinstance(node.get("id"), str) and isinstance(node.get("name"), str):
+                    states.append({
+                        "id": node["id"],
+                        "name": node["name"],
+                        "type": node.get("type") or "",
+                        "color": node.get("color") or "",
+                        "position": node.get("position") if isinstance(node.get("position"), (int, float)) else 0,
+                    })
+            states.sort(key=lambda item: (STATE_TYPE_ORDER.get(item["type"], 99), item["position"], item["name"]))
+        team["states"] = states
     return issue
 
 

@@ -1051,6 +1051,115 @@ class SymphonyTests(unittest.IsolatedAsyncioTestCase):
             await task
         self.assertEqual((await app.state(0, project="project"))["compacting"], "")
 
+    async def test_compact_captures_checkpoint_text_and_escapes_markdown_in_state(self):
+        self.seed_agy_token()
+        app = self.app()
+        app.repos[REPO] = [{"id": "project", "name": "Fixture"}]
+        conv_id = "conv-compact-1"
+        self.runner.save_thread(REPO, conv_id, TOOLS_HASH)
+        logs = self.home / ".gemini" / "antigravity-cli" / "brain" / conv_id / ".system_generated" / "logs"
+        logs.mkdir(parents=True)
+        (logs / "transcript_full.jsonl").write_text("\n".join([
+            json.dumps({"step_index": 1, "type": "USER_INPUT", "content": "hi"}),
+            json.dumps({"step_index": 2, "type": "CHECKPOINT", "content": "Old summary"}),
+        ]) + "\n")
+
+        async def append_checkpoint(repo, prompt, cwd, *, conv_id="", record_chat=True):
+            with (logs / "transcript_full.jsonl").open("a") as stream:
+                stream.write(json.dumps({
+                    "step_index": 5, "type": "CHECKPOINT",
+                    "content": "**New summary**\n\n<script>alert(1)</script>",
+                }) + "\n")
+            app.coordinator.last_replies[repo] = "Compacted."
+            return "completed"
+
+        with patch.object(app.coordinator, "_run_turn", side_effect=append_checkpoint):
+            await app.handle(REPO, "/compact", "/compact")
+        msgs = (await app.state(0, project="project"))["messages"]
+        self.assertEqual(msgs[-1]["text"], "Coordinator context compacted.")
+        self.assertEqual(msgs[-1]["meta"]["kind"], "compaction")
+        self.assertIn("**New summary**", msgs[-1]["meta"]["compactionText"])
+        self.assertIn("<strong>New summary</strong>", msgs[-1]["meta"]["compactionHtml"])
+        self.assertNotIn("<script>", msgs[-1]["meta"]["compactionHtml"])
+        self.assertIn("&lt;script&gt;", msgs[-1]["meta"]["compactionHtml"])
+
+    async def test_all_repositories_project_resolution_and_linear_project_status(self):
+        app = self.app()
+        app.repos = {REPO: [{"id": "alpha", "name": "Alpha", "status": {"name": "In Progress", "type": "started", "color": "#0f0"}}]}
+        self.runner.save_setting("view", "alpha")
+        self.runner.chat("system", "Global notice", repo="")
+        self.runner.chat("user", "Alpha msg", repo=REPO)
+        # Omitted project uses saved view; explicit project="" selects global cross-repo session.
+        self.assertEqual((await app.state(0))["repo"], REPO)
+        global_state = await app.state(0, project="")
+        self.assertEqual(global_state["repo"], "")
+        self.assertEqual([m["text"] for m in global_state["messages"]], ["Global notice"])
+        self.assertIn(REPO, global_state["repoActivity"])
+
+        handler = object.__new__(Handler)
+        handler.path = "/api/state?after=0&issues=r1&project="
+        sentinel = object()
+        handler.server = SimpleNamespace(app=SimpleNamespace(state=Mock(return_value=sentinel)))
+        handler.wfile = BytesIO()
+        handler.send_response = Mock()
+        handler.send_header = Mock()
+        handler.end_headers = Mock()
+        with patch.object(Handler, "run_async", return_value={"messages": []}) as run_async:
+            handler.do_GET()
+        handler.server.app.state.assert_called_once_with(0, "r1", project="", repo="")
+        run_async.assert_called_once_with(sentinel)
+
+        linear = Linear("fixture")
+        with patch.object(linear, "query", AsyncMock(return_value={
+            "projects": {
+                "nodes": [{
+                    "id": "p1", "name": "Clusterfork", "icon": ":rocket:", "description": "https://github.com/o/r",
+                    "archivedAt": None, "status": {"id": "s1", "name": "Paused", "type": "backlog", "color": "#999"},
+                    "externalLinks": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+                }],
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+            }
+        })):
+            repos, _ = await linear.projects()
+        self.assertEqual(repos["o/r"][0]["status"], {"name": "Paused", "type": "backlog", "color": "#999"})
+
+    async def test_update_issue_status_validates_guards_active_workers_and_mutates_linear(self):
+        app = self.app()
+        app.repos = {REPO: [{"id": "project", "name": "Fixture"}]}
+        live_issue = {
+            "id": "issue-uuid", "identifier": ISSUE, "updatedAt": "2026-11-28T10:00:00Z",
+            "state": {"id": "backlog", "name": "Backlog", "type": "backlog", "color": "#bbb"},
+            "team": {"id": "team"}, "project": {"id": "project"},
+        }
+        updated_issue = {
+            **live_issue, "updatedAt": "2026-11-28T10:01:00Z",
+            "state": {"id": "todo", "name": "Todo", "type": "unstarted", "color": "#ccc"},
+        }
+        with patch.object(app, "refresh_projects", new_callable=AsyncMock, return_value=app.repos), \
+             patch.object(app.linear, "issue", new_callable=AsyncMock, return_value=live_issue), \
+             patch.object(app.linear, "team_context", new_callable=AsyncMock, return_value=TEAM), \
+             patch.object(app.linear, "update", new_callable=AsyncMock, return_value=updated_issue) as update:
+            res = await app.update_issue_status({"issue": ISSUE, "stateId": "todo"})
+        self.assertEqual(res["issue"], ISSUE)
+        self.assertEqual(res["state"]["id"], "todo")
+        self.assertTrue(app.runner.issue_refresh.is_set())
+        update.assert_awaited_once_with("issue-uuid", stateId="todo")
+
+        with self.assertRaisesRegex(ValueError, "Unknown Linear workflow state"):
+            with patch.object(app, "refresh_projects", new_callable=AsyncMock, return_value=app.repos), \
+                 patch.object(app.linear, "issue", new_callable=AsyncMock, return_value=live_issue), \
+                 patch.object(app.linear, "team_context", new_callable=AsyncMock, return_value=TEAM):
+                await app.update_issue_status({"issue": ISSUE, "stateId": "nonexistent"})
+
+        self.runner.enqueue_adhoc(REPO, "Working task")
+        with self.runner.db:
+            self.runner.db.execute(
+                "INSERT INTO tasks(issue,project,repo,title,plan,phase,updated) VALUES (?,'project',?,'T','P','working',1)",
+                (ISSUE, REPO),
+            )
+        with self.assertRaises(BusyError):
+            await app.update_issue_status({"issue": ISSUE, "stateId": "todo"})
+
     # --- Shared AGENTS.md ---
 
     async def test_shared_defaults_precede_conflicting_repository_rules(self):
@@ -2327,7 +2436,36 @@ process.stdout.write(JSON.stringify({
         self.assertEqual([group["name"] for group in result["panes"]["backlogGroups"]], ["Unsure", "Backlog"])
         self.assertEqual([group["name"] for group in result["panes"]["groups"]],
                          ["Todo", "In Progress", "Done", "Canceled", "Duplicate"])
+        self.assertEqual(result["empty"], "")
+        self.assertEqual(result["invalid"], "")
+        self.assertEqual(result["valid"], "beta")
+        self.assertEqual(result["none"], "")
         self.assertEqual(result["delays"], [1000, 2000, 200, 200, 200, 2000, 2000, 2000, 0, 0])
+
+        order_script = """const fs = require("fs");
+const vm = require("vm");
+const context = vm.createContext({});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), context);
+const projects = [
+  {id: "a", name: "Alpha", status: {name: "In Progress", type: "started", color: "#0f0"}},
+  {id: "p1", name: "Paused One", status: {name: "Paused", type: "backlog", color: "#888"}},
+  {id: "b", name: "Beta", status: {name: "Backlog", type: "backlog", color: "#fa0"}},
+  {id: "c", name: "Gamma", status: null},
+  {id: "p2", name: "Paused Two", status: {name: "Backlog", type: "paused", color: "#777"}},
+];
+const orderProjects = vm.runInContext("orderProjects", context);
+const isPaused = vm.runInContext("isPausedProject", context);
+process.stdout.write(JSON.stringify({
+  pausedFlags: projects.map(isPaused),
+  ordered: orderProjects(projects, ["b", "p2", "a"]),
+}));
+"""
+        order_run = subprocess.run(["node", "-e", order_script, str(panes)],
+                                   text=True, capture_output=True, check=True)
+        order_res = json.loads(order_run.stdout)
+        self.assertEqual(order_res["pausedFlags"], [False, True, False, False, True])
+        self.assertEqual([p["id"] for p in order_res["ordered"]["active"]], ["b", "a", "c"])
+        self.assertEqual([p["id"] for p in order_res["ordered"]["paused"]], ["p2", "p1"])
 
         root = Path(__file__).resolve().parents[1] / "symphony/web"
         html = (root / "index.html").read_text()

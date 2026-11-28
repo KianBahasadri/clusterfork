@@ -22,6 +22,14 @@ class IssueDetailsTests(unittest.IsolatedAsyncioTestCase):
         issue = {
             "description": "# Context\n\n**Description**",
             "project": {"id": "project", "name": "Project", "icon": ":house_with_garden:"},
+            "team": {
+                "id": "team", "name": "Kian", "key": "KIAN",
+                "states": {"nodes": [
+                    {"id": "s-done", "name": "Done", "type": "completed", "color": "#5e6ad2", "position": 0, "archivedAt": None},
+                    {"id": "s-arch", "name": "Old", "type": "backlog", "color": "#000", "position": 0, "archivedAt": "2026-01-01"},
+                    {"id": "s-back", "name": "Backlog", "type": "backlog", "color": "#bec2c8", "position": 1, "archivedAt": None},
+                ]},
+            },
             **{name: {"nodes": [], "pageInfo": {"hasNextPage": True, "endCursor": name}}
                for name in CONNECTIONS},
         }
@@ -50,6 +58,7 @@ class IssueDetailsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context["project"]["icon"], "🏡")
         self.assertEqual(context["attachments"][0]["url"], asset_url(UPLOAD))
         self.assertEqual(context["children"], [{"id": "children"}])
+        self.assertEqual([s["id"] for s in context["team"]["states"]], ["s-back", "s-done"])
 
     async def test_invalid_and_missing_issues_are_reported(self):
         linear = SimpleNamespace(query=AsyncMock(return_value={"issue": None}))
