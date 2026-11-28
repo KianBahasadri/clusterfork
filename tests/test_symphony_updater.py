@@ -627,11 +627,7 @@ class KubernetesManifestTests(unittest.TestCase):
         docs = load_manifests("webhook-gateway.yaml")
         by_kind = {doc["kind"]: doc for doc in docs}
 
-        config = json.loads(by_kind["ConfigMap"]["data"]["serve.json"])
-        self.assertTrue(config["AllowFunnel"]["${TS_CERT_DOMAIN}:443"])
-        self.assertEqual(config["Web"]["${TS_CERT_DOMAIN}:443"]["Handlers"], {
-            "/webhooks/linear": {"Proxy": "http://symphony.symphony.svc.cluster.local:8082"},
-        })
+        self.assertNotIn("ConfigMap", by_kind)
 
         deploy = by_kind["Deployment"]
         self.assertEqual(deploy["metadata"]["name"], "symphony-webhook")
@@ -640,6 +636,8 @@ class KubernetesManifestTests(unittest.TestCase):
         self.assertIs(pod["automountServiceAccountToken"], False)
         self.assertEqual(pod["securityContext"]["runAsNonRoot"], True)
         self.assertEqual(pod["securityContext"]["seccompProfile"], {"type": "RuntimeDefault"})
+        volumes = {item["name"]: item for item in pod["volumes"]}
+        self.assertEqual(volumes["serve"]["secret"], {"secretName": "symphony-webhook-serve", "defaultMode": 0o440})
         container = pod["containers"][0]
         self.assertIn("@sha256:", container["image"])
         self.assertEqual(container["securityContext"]["allowPrivilegeEscalation"], False)
@@ -647,6 +645,7 @@ class KubernetesManifestTests(unittest.TestCase):
         self.assertEqual(container["securityContext"]["capabilities"], {"drop": ["ALL"]})
         env = {item["name"]: item for item in container["env"]}
         self.assertEqual(env["TS_USERSPACE"]["value"], "true")
+        self.assertEqual(env["TS_SERVE_CONFIG"]["value"], "/etc/tailscale/serve.json")
         self.assertEqual(env["TS_AUTHKEY"]["valueFrom"]["secretKeyRef"],
                          {"name": "symphony-webhook-tailnet", "key": "authkey"})
 
