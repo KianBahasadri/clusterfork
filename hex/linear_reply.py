@@ -10,9 +10,10 @@ from threading import Thread
 
 import gi
 
+gi.require_version("Adw", "1")
 gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gdk, Gio, GLib, Gtk, Pango
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
 from linear_images import MAX_IMAGES, MAX_IMAGE_BYTES, MAX_PIXELS, MAX_SIDE, MAX_TOTAL_BYTES, ImageContextError, validate_image
 from linear_issue import fetch_linear_projects, load_cached_projects, load_history
@@ -79,11 +80,32 @@ def style_tabs(display):
             color: alpha(@theme_fg_color, 0.72);
             border: 1px solid alpha(@theme_fg_color, 0.22);
         }
+        .hex-project-tray {
+            padding: 6px;
+            border-radius: 8px;
+            border: 1px solid alpha(@theme_fg_color, 0.14);
+            background: alpha(@theme_fg_color, 0.03);
+        }
         .hex-project-chip {
             min-height: 0;
+            min-width: 0;
             padding: 3px 10px;
             border-radius: 999px;
-            font-size: 0.9em;
+            font-size: 0.86em;
+            background-image: none;
+            box-shadow: none;
+            background-color: alpha(@theme_fg_color, 0.06);
+            border: 1px solid alpha(@theme_fg_color, 0.14);
+            color: alpha(@theme_fg_color, 0.86);
+        }
+        .hex-project-chip:hover {
+            background-color: alpha(@theme_fg_color, 0.12);
+        }
+        .hex-project-chip:checked {
+            background-color: @theme_selected_bg_color;
+            border-color: @theme_selected_bg_color;
+            color: @theme_selected_fg_color;
+            font-weight: 600;
         }
         .hex-history-card {
             padding: 10px;
@@ -116,7 +138,7 @@ def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None
     content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=14,
                       margin_bottom=14, margin_start=14, margin_end=14)
     linear = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-    tabs = stack = history_list = None
+    tabs = stack = history_list = project_scroll = None
     selected_project = None
     window_closed = False
     help_window = None
@@ -143,9 +165,12 @@ def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None
         tabs.set_action_widget(help_btn, Gtk.PackType.END)
         linear.set_margin_top(10)
         linear.append(question_label)
-        project_bar = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, column_spacing=6, row_spacing=6,
-                                  max_children_per_line=12, homogeneous=False)
-        linear.append(project_bar)
+        project_bar = Adw.WrapBox(child_spacing=6, line_spacing=6)
+        project_scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER,
+                                            propagate_natural_height=True, max_content_height=108)
+        project_scroll.add_css_class("hex-project-tray")
+        project_scroll.set_child(project_bar)
+        linear.append(project_scroll)
         tabs.append_page(linear, Gtk.Label(label="Linear"))
         tabs.append_page(typing_options(window, typing_error), Gtk.Label(label="Typing"))
         content.append(tabs)
@@ -245,7 +270,7 @@ def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None
             if name == selected_project:
                 btn.set_active(True)
             btn.connect("toggled", select_project, name)
-            project_bar.append(Gtk.FlowBoxChild(child=btn, can_focus=False))
+            project_bar.append(btn)
 
     def apply_projects(items):
         if not window_closed:
@@ -366,6 +391,8 @@ def build_dialog(window, question, submit_text, *, tab=None, closed=lambda: None
         paste.set_visible(not typing())
         if history_btn is not None:
             history_btn.set_visible(not typing())
+        if project_scroll is not None:
+            project_scroll.set_visible(not typing())
         previews.set_visible(bool(images) and not typing())
         placeholders.set_visible(typing())
         error.set_visible(False)
@@ -592,7 +619,7 @@ def typing_placeholders():
 
 def open_request(tab, token, submit, closed, *, typing_error=None):
     Gtk.init()
-    window = Gtk.Window(title="Hex Dictation", default_width=480)
+    window = Gtk.Window(title="Hex Dictation", default_width=520)
     present = build_dialog(window, "Describe the Linear issues to create or update.", submit,
                            tab=tab, closed=closed, typing_error=typing_error)
     present(tab, token)

@@ -196,7 +196,7 @@ literally instead of entity codes.
 The integration uses the Global Shortcuts portal and its host app registry. On
 GNOME, approve **Linear Dictation** and its numpad slash binding if the desktop
 prompts. The installed `hex-linear-issue.service` runs in the graphical user
-session and uses system Python with Gio, `notify-send`, GTK 4, Pillow, and
+session and uses system Python with Gio, `notify-send`, GTK 4, Libadwaita, Pillow, and
 OpenCode Go and Linear credentials. For each request the helper reads the shared
 Linear credential from `~/.config/clusterfork/.env`, honoring an environment
 override, and starts a short-lived private OpenCode server with it. Before
