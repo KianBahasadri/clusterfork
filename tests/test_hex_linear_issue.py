@@ -76,9 +76,11 @@ class LinearDictationTests(unittest.TestCase):
             return CompletedProcess(command, 0)
 
         logs = StringIO()
+        stages = []
         with patch.object(issue.subprocess, "run", side_effect=complete) as run, redirect_stderr(logs):
             attempt = issue.start_attempt_log(dictation)
-            result = issue.run_opencode(dictation, attempt)
+            result = issue.run_opencode(dictation, attempt, progress=lambda *args: stages.append(args))
+        self.assertEqual(stages, [(2, 4, "Connecting to Linear"), (3, 4, "Creating Linear issue")])
         self.assertEqual(result.notifications, (NOTICE,))
         self.assertEqual(result.text, "Created the issue.")
         self.assertIsNone(result.error)
@@ -419,13 +421,30 @@ class LinearDictationTests(unittest.TestCase):
         jobs.get.side_effect = [DICTATION, StopIteration]
         with (patch.object(shortcut, "file_dictation", return_value=result),
               patch.object(shortcut, "notify_saved_issue") as notify,
+              patch.object(shortcut, "progress_clear") as clear,
               patch.object(shortcut, "Thread") as thread,
               self.assertRaises(StopIteration)):
             shortcut.process_jobs(jobs, False)
         notify.assert_called_once_with(NOTICE, DICTATION.issue_id)
+        clear.assert_called_once_with(DICTATION.issue_id)
         pending = thread.call_args.kwargs["args"][1]
         self.assertEqual(pending.session_id, "ses_fixture123")
         self.assertEqual(pending.transcript, DICTATION.transcript)
+
+    def test_worker_updates_progress_on_completion_and_failure(self):
+        ok_result = issue.AgentResult("Done", "ses_fixture123", (NOTICE,))
+        err_result = issue.AgentResult("", None, (), error="Failed")
+        jobs = Mock()
+        jobs.get.side_effect = [DICTATION, DICTATION, StopIteration]
+        with (patch.object(shortcut, "file_dictation", side_effect=[ok_result, err_result]),
+              patch.object(shortcut, "notify_saved_issue"),
+              patch.object(shortcut, "record_history"),
+              patch.object(shortcut, "notify"),
+              patch.object(shortcut, "progress_update") as update,
+              self.assertRaises(StopIteration)):
+            shortcut.process_jobs(jobs, False)
+        self.assertEqual(update.call_args_list[0].args, (DICTATION.issue_id, 4, 4, "Created KIAN-3", "done"))
+        self.assertEqual(update.call_args_list[1].args, (DICTATION.issue_id, 4, 4, "Linear request failed", "error"))
 
     def test_workspace_tools_keep_project_context_and_upload_signed_image_bytes(self):
         script = r'''

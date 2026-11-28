@@ -191,12 +191,68 @@ class Variant {
     constructor(_type, value) { this.value = value; }
     deepUnpack() { return this.value; }
 }
-const Gio = {DBusCallFlags: {NO_AUTO_START: 1}};
-const GLib = {Variant, VariantType: class {}};
+const timers = new Map();
+let nextTimer = 1;
+const globalObj = {
+    stage: {context: {get_backend: () => ({get_default_seat: () => ({create_virtual_device: () => ({notify_keyval() {}})})})}},
+    display: {connect: () => 1, disconnect() {}, focus_window: null, list_all_windows: () => []},
+    get_pointer: () => [0, 0, 0],
+};
+const Clutter = {Orientation: {VERTICAL: 1, HORIZONTAL: 0}, InputDeviceType: {KEYBOARD_DEVICE: 0}, ModifierType: {}, KeyState: {PRESSED: 1, RELEASED: 0}, CURRENT_TIME: 0};
+const Gio = {
+    DBus: {session: {register_object: () => 1, unregister_object() {}}},
+    DBusNodeInfo: {new_for_xml: () => ({interfaces: [{}]})},
+    DBusCallFlags: {NO_AUTO_START: 1},
+    BusNameWatcherFlags: {NONE: 0},
+    bus_watch_name_on_connection: () => 7,
+    bus_unwatch_name() {},
+};
+const GLib = {
+    Variant,
+    VariantType: class {},
+    PRIORITY_DEFAULT: 0,
+    SOURCE_REMOVE: false,
+    timeout_add: (_prio, _ms, cb) => { const id = nextTimer++; timers.set(id, cb); return id; },
+    timeout_add_seconds: (_prio, _sec, cb) => { const id = nextTimer++; timers.set(id, cb); return id; },
+    Source: {remove: (id) => timers.delete(id)},
+};
+class FakeActor {
+    constructor(props = {}) {
+        Object.assign(this, props);
+        this.children = [];
+        this.signals = {};
+        this.destroyed = false;
+    }
+    connect(name, cb) { (this.signals[name] ||= []).push(cb); return 1; }
+    add_child(child) { this.children.push(child); }
+    insert_child_at_index(child, index) { this.children.splice(index, 0, child); }
+    destroy_all_children() { this.children = []; }
+    get_preferred_size() { return [276, 48 * Math.max(1, this.children.length), 276, 48 * Math.max(1, this.children.length)]; }
+    set_position(x, y) { this.pos = [x, y]; }
+    destroy() {
+        this.destroyed = true;
+        if (typeof mainBox !== 'undefined' && mainBox)
+            mainBox.children = mainBox.children.filter(item => item !== this);
+    }
+}
+const St = {BoxLayout: FakeActor, Label: FakeActor, Widget: FakeActor};
+const chromeCalls = [];
+const Main = {
+    sessionMode: {isLocked: false, connect: () => 2, disconnect() {}},
+    layoutManager: {
+        primaryIndex: 0,
+        getWorkAreaForMonitor: () => ({x: 0, y: 0, width: 1920, height: 1080}),
+        addChrome: (actor, opts) => chromeCalls.push({actor, opts}),
+        removeChrome() {},
+        connect: () => 3,
+        disconnect() {},
+    },
+};
 const source = readFileSync(process.argv[2], 'utf8')
     .replace(/^import .*;\n/gm, '')
     .replace('export default class', 'return class');
-const Extension = new Function('Gio', 'GLib', 'Extension', source)(Gio, GLib, class {});
+const Extension = new Function('Clutter', 'Gio', 'GLib', 'St', 'Extension', 'Main', 'global', source)(
+    Clutter, Gio, GLib, St, class {}, Main, globalObj);
 const focus = new Extension();
 focus._registration = 1;
 focus._windowInfo = () => [5, 6, 7, 'Editor'];
@@ -215,15 +271,15 @@ const connection = {
         return new Variant('tuple', result);
     },
 };
-async function denied(sender, method) {
+async function denied(sender, method, params = null) {
     let error;
-    await focus._handleCall(connection, sender, method, null, {
+    await focus._handleCall(connection, sender, method, params, {
         return_value() { assert.fail('Unexpected authorized response'); },
         return_dbus_error(name) { error = name; },
     });
     assert.equal(error, 'org.freedesktop.DBus.Error.AccessDenied');
 }
-for (const method of ['Get', 'Activate', 'Ready', 'Key', 'End'])
+for (const method of ['Get', 'Activate', 'Ready', 'Key', 'End', 'Progress', 'ProgressClear'])
     await denied(':1.41', method);
 let windowInfo;
 await focus._handleCall(connection, ':1.32', 'Get', null, {
@@ -233,8 +289,65 @@ await focus._handleCall(connection, ':1.32', 'Get', null, {
 assert.deepEqual(windowInfo, [5, 6, 7, 'Editor']);
 worker = 41;
 await denied(':1.32', 'Get');
+await denied(':1.32', 'Progress', new Variant('(suuss)', ['id-1', 1, 4, 'Queued', 'active']));
 worker = null;
 await denied(':1.32', 'Get');
+
+// Authorized progress updates: stack newer above older, sanitize text, fill segments, lock screen, auto-dismiss.
+worker = 32;
+focus.enable();
+let mainBox;
+await focus._handleCall(connection, ':1.32', 'Progress',
+    new Variant('(suuss)', ['req-1', 1, 4, 'Queued:\n<script>\x07first', 'active']),
+    {return_value() {}, return_dbus_error(e) { assert.fail(e); }});
+mainBox = focus._toastBox;
+assert.equal(chromeCalls[0].opts.affectsInputRegion, false);
+assert.equal(mainBox.reactive, false);
+assert.equal(mainBox.can_focus, false);
+assert.equal(mainBox.children.length, 1);
+assert.equal(mainBox.children[0].children[0].text, 'Queued: <script> first');
+assert.equal(mainBox.children[0].children[1].children.length, 4);
+
+await focus._handleCall(connection, ':1.32', 'Progress',
+    new Variant('(suuss)', ['req-2', 2, 4, 'Connecting', 'active']),
+    {return_value() {}, return_dbus_error(e) { assert.fail(e); }});
+assert.equal(mainBox.children.length, 2);
+// Newer card inserted at index 0 (above req-1).
+assert.equal(mainBox.children[0].children[0].text, 'Connecting');
+assert.equal(mainBox.children[1].children[0].text, 'Queued: <script> first');
+assert.deepEqual(mainBox.pos, [1920 - 276 - 16, 1080 - 96 - 16]);
+
+// Lock screen hides toast container; unlock restores it.
+Main.sessionMode.isLocked = true;
+focus._syncToastVisibility();
+assert.equal(mainBox.visible, false);
+Main.sessionMode.isLocked = false;
+focus._syncToastVisibility();
+assert.equal(mainBox.visible, true);
+
+// Completing req-1 schedules dismiss timer and removes it cleanly when fired.
+await focus._handleCall(connection, ':1.32', 'Progress',
+    new Variant('(suuss)', ['req-1', 4, 4, 'Created KIAN-1', 'done']),
+    {return_value() {}, return_dbus_error(e) { assert.fail(e); }});
+const req1Entry = focus._toasts.get('req-1');
+assert.ok(req1Entry.dismissId);
+const fired = timers.get(req1Entry.dismissId);
+timers.delete(req1Entry.dismissId);
+fired();
+assert.equal(focus._toasts.has('req-1'), false);
+assert.equal(mainBox.children.length, 1);
+
+// Cap at MAX_TOASTS (8) evicts oldest and disable() clears everything.
+for (let i = 0; i < 10; i++) {
+    await focus._handleCall(connection, ':1.32', 'Progress',
+        new Variant('(suuss)', [`cap-${i}`, 1, 4, `Req ${i}`, 'active']),
+        {return_value() {}, return_dbus_error(e) { assert.fail(e); }});
+}
+assert.equal(focus._toasts.size, 8);
+focus.disable();
+assert.equal(focus._toasts.size, 0);
+assert.equal(focus._toastBox, null);
+assert.equal(timers.size, 0);
 """
         extension = Path(__file__).resolve().parents[1] / "hex/gnome/hex-focus@clusterfork/extension.js"
         result = subprocess.run(["node", "--input-type=module", "-", str(extension)], input=script,

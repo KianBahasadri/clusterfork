@@ -311,7 +311,8 @@ class TypedRequestTests(unittest.TestCase):
     def test_typed_text_uses_the_same_queue_without_touching_the_microphone(self):
         jobs = SimpleQueue()
         text = "Create two independent issues.\nKeep the café details.\n"
-        with patch.object(shortcut, "hex_command") as hex_command:
+        with (patch.object(shortcut, "hex_command") as hex_command,
+              patch.object(shortcut, "progress_update") as progress):
             shortcut.submit_linear(jobs, Event(), text, "Project context", (), suggested_project="Clusterfork")
         request = jobs.get_nowait()
         self.assertEqual(request.transcript, text)
@@ -319,6 +320,7 @@ class TypedRequestTests(unittest.TestCase):
         self.assertEqual(request.suggested_project, "Clusterfork")
         self.assertEqual(UUID(request.issue_id).version, 4)
         self.assertIsNone(request.session_id)
+        progress.assert_called_once_with(request.issue_id, 1, 4, "Queued: Create two independent issues. Keep...", "active")
         hex_command.assert_not_called()
         self.assertTrue(jobs.empty())
 

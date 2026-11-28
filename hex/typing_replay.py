@@ -58,6 +58,25 @@ def bridge(method, signature=None, *args):
         raise TypingError("Sign out and back in to enable Hex typing.") from error
 
 
+def _focus_notice(method, signature, *args):
+    try:
+        from gi.repository import Gio, GLib
+
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        bus.call_sync("org.gnome.Shell", PATH, INTERFACE, method, GLib.Variant(signature, args),
+                      None, Gio.DBusCallFlags.NO_AUTO_START, 200, None)
+    except Exception:
+        pass
+
+
+def progress_update(request_id, step, total, label, state="active"):
+    _focus_notice("Progress", "(suuss)", request_id, step, total, label, state)
+
+
+def progress_clear(request_id=""):
+    _focus_notice("ProgressClear", "(s)", request_id)
+
+
 def accessibility():
     import gi
 

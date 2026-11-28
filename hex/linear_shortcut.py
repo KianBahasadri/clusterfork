@@ -19,7 +19,7 @@ from uuid import uuid4
 from linear_images import MAX_IMAGES, MAX_TOTAL_BYTES, ImageContextError, validate_image
 
 from linear_issue import Dictation, FilingError, ReplyNeeded, file_dictation, record_history
-from typing_replay import Playback, TypingError, capture_destination, on_main_thread
+from typing_replay import Playback, TypingError, capture_destination, on_main_thread, progress_clear, progress_update
 
 
 APP = "io.github.KianBahasadri.Clusterfork.LinearDictation"
@@ -132,13 +132,23 @@ def offer_reply(jobs, dictation, error):
         if entry := text_entry(question, environment):
             answer, images = entry
             answers = (*dictation.answers, (question, answer)) if answer.strip() else dictation.answers
-            jobs.put(replace(dictation, answers=answers,
-                             images=(*dictation.images, *images), image_use="attach" if (images or dictation.images) else dictation.image_use))
+            updated = replace(dictation, answers=answers,
+                              images=(*dictation.images, *images), image_use="attach" if (images or dictation.images) else dictation.image_use)
+            jobs.put(updated)
+            progress_update(dictation.issue_id, 1, 4, progress_excerpt(dictation.transcript, "Resuming"), "active")
     except FilingError as failure:
         notify("Linear dictation", str(failure))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as failure:
         print(f"Could not open a Linear dictation reply ({type(failure).__name__}).")
         notify("Linear dictation", "Could not open the reply. Check that notify-send and GTK 4 are installed.")
+
+
+def progress_excerpt(text, prefix):
+    summary = " ".join(text.split())
+    if not summary:
+        return prefix
+    full = f"{prefix}: {summary}"
+    return full if len(full) <= 46 else full[:43].rstrip() + "..."
 
 
 def request_from_text(transcript, title, request_id, images=(), suggested_project=None):
@@ -152,6 +162,7 @@ def submit_linear(jobs, stopping, text, title, images, suggested_project=None):
     try:
         if not stopping.is_set() and text.strip():
             jobs.put(request_from_text(text, title, request_id, images, suggested_project=suggested_project))
+            progress_update(request_id, 1, 4, progress_excerpt(text, "Queued"), "active")
             print(f"Hex Linear request {request_id} typed and queued.")
     except FilingError as error:
         notify("Linear request", str(error))
@@ -222,14 +233,23 @@ def process_jobs(jobs, dry_run):
     while True:
         dictation = jobs.get()
         try:
-            saved = file_dictation(dictation, dry_run=dry_run)
+            saved = file_dictation(
+                dictation,
+                dry_run=dry_run,
+                progress=lambda step, total, label: progress_update(
+                    dictation.issue_id, step, total, label, "active"
+                ),
+            )
         except ReplyNeeded as error:
+            progress_clear(dictation.issue_id)
             print(f"Hex Linear dictation {dictation.issue_id} needs a reply. See the desktop notification.")
             Thread(target=offer_reply, args=(jobs, dictation, error), daemon=True).start()
         except FilingError as error:
+            progress_update(dictation.issue_id, 4, 4, "Linear request failed", "error")
             print(f"Hex Linear dictation {dictation.issue_id} did not proceed. {error}")
             notify("Linear dictation", str(error))
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+            progress_update(dictation.issue_id, 4, 4, "Linear request failed", "error")
             print(f"Hex Linear dictation {dictation.issue_id} could not be confirmed ({type(error).__name__}).")
             notify("Linear dictation", "Could not confirm the requested issue changes. Check Linear and the service journal.")
         else:
@@ -239,15 +259,24 @@ def process_jobs(jobs, dry_run):
                 for item in saved.notifications:
                     notify_saved_issue(item, dictation.issue_id)
             if saved.error:
+                progress_update(dictation.issue_id, 4, 4, "Linear request failed", "error")
                 print(f"Hex Linear dictation {dictation.issue_id} could not complete. {saved.error}")
                 notify("Linear dictation could not complete", saved.error)
             elif saved.reply:
+                progress_clear(dictation.issue_id)
                 pending = replace(dictation, session_id=saved.session_id)
                 print(f"Hex Linear dictation {dictation.issue_id} needs a reply in {saved.session_id}.")
                 Thread(target=offer_reply, args=(jobs, pending, saved.reply), daemon=True).start()
             elif dry_run:
+                progress_update(dictation.issue_id, 4, 4, "Preview ready", "done")
                 print(saved.text)
                 notify("Linear dictation preview", saved.text[:1000])
+            else:
+                count = len(saved.notifications)
+                done_label = saved.notifications[0]["title"] if count == 1 else (
+                    f"Saved {count} issues" if count > 1 else "Done"
+                )
+                progress_update(dictation.issue_id, 4, 4, done_label, "done")
 
 
 def listen(dry_run):
@@ -388,6 +417,7 @@ def listen(dry_run):
         nonlocal hold_timer
         stopping.set()
         playback.cancel()
+        progress_clear("")
         if hold_timer is not None:
             GLib.source_remove(hold_timer)
             hold_timer = None

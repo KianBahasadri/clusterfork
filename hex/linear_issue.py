@@ -549,7 +549,7 @@ def linear_api_key():
     return token
 
 
-def run_opencode(dictation, attempt, *, dry_run=False):
+def run_opencode(dictation, attempt, *, dry_run=False, progress=None):
     binary = shutil.which("opencode") or Path.home() / ".opencode/bin/opencode"
     environment = {**os.environ, "PWD": str(WORKSPACE)}
     environment.pop("HEX_LINEAR_ATTACHMENT_DIR", None)
@@ -590,9 +590,13 @@ def run_opencode(dictation, attempt, *, dry_run=False):
             # The server defaults to WORKSPACE because it starts with that cwd;
             # run_opencode uses the same directory and server for the model turn.
             with private_server(binary, environment) as server:
+                if progress:
+                    progress(2, 4, "Connecting to Linear")
                 startup_error = wait_for_linear_mcp(server, attempt, token)
                 if startup_error:
                     return AgentResult("", None, (), error=startup_error)
+                if progress:
+                    progress(3, 4, "Creating Linear issue")
                 environment["OPENCODE_PASSWORD"] = server.password
                 command = command[:2] + ["--server", server.url] + command[2:]
                 result = subprocess.run(command, input=prompt, cwd=WORKSPACE, env=environment,
@@ -618,9 +622,9 @@ def run_opencode(dictation, attempt, *, dry_run=False):
     return result
 
 
-def file_dictation(dictation, *, dry_run=False):
+def file_dictation(dictation, *, dry_run=False, progress=None):
     attempt = start_attempt_log(dictation)
-    result = run_opencode(dictation, attempt, dry_run=dry_run)
+    result = run_opencode(dictation, attempt, dry_run=dry_run, progress=progress)
     if not dry_run and not (result.error or result.reply or result.notifications):
         result = replace(result, error="OpenCode finished without confirming a result. See the Hex service journal.")
     return result
